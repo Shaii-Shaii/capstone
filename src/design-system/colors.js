@@ -1,0 +1,92 @@
+const palette = {
+  silver: '#c9c8c8',
+  codGray: '#080808',
+  stiletto: '#97313a',
+  doveGray: '#646464',
+  white: '#ffffff',
+  transparent: 'transparent',
+};
+
+export const colors = {
+  palette,
+
+  // Foundational surfaces
+  backgroundCanvas: '#f4f1f1',
+  backgroundPrimary: palette.white,
+  backgroundSecondary: '#f0eded',
+  backgroundMuted: '#ece7e8',
+  backgroundDark: palette.codGray,
+  backgroundInverse: palette.codGray,
+  surfaceHero: palette.codGray,
+  surfaceCard: palette.white,
+  surfaceCardMuted: '#f8f6f6',
+  surfaceSoft: '#f5efef',
+  surfacePressed: 'rgba(151, 49, 58, 0.08)',
+  surfaceDisabled: '#efebeb',
+
+  // Brand accents
+  brandPrimary: palette.stiletto,
+  brandPrimarySoft: '#c9868d',
+  brandPrimaryMuted: '#e8d6d8',
+  brandSecondary: palette.doveGray,
+  dashboardDonorFrom: '#080808',
+  dashboardDonorTo: '#97313a',
+  dashboardPatientFrom: '#2d2223',
+  dashboardPatientTo: '#646464',
+  dashboardShellFrom: '#110d0d',
+  dashboardShellTo: '#2c1a1c',
+  dashboardDonorSoft: 'rgba(151, 49, 58, 0.16)',
+  dashboardPatientSoft: 'rgba(100, 100, 100, 0.16)',
+  donorCardFrom: '#ffffff',
+  donorCardTo: '#f7efef',
+  patientCardFrom: '#ffffff',
+  patientCardTo: '#f3f0f0',
+  heroFrom: palette.codGray,
+  heroTo: '#3e1a1f',
+  accentSoft: 'rgba(151, 49, 58, 0.12)',
+  accentStrong: 'rgba(151, 49, 58, 0.22)',
+  donorHeroBg: 'rgba(151, 49, 58, 0.15)',
+  patientHeroBg: 'rgba(100, 100, 100, 0.15)',
+  featureCardOverlay: 'rgba(8, 8, 8, 0.75)',
+
+  // Text
+  textPrimary: palette.codGray,
+  textSecondary: palette.doveGray,
+  textMuted: '#8a8181',
+  textLight: palette.white,
+  textInverse: palette.white,
+  textOnBrand: palette.white,
+  textHeroMuted: '#e8dede',
+  textHeroSoft: '#f1e5e6',
+  textDisabled: '#9a9393',
+  textError: palette.stiletto,
+  textSuccess: palette.stiletto,
+
+  // Actions
+  actionPrimary: palette.stiletto,
+  actionPrimaryPressed: '#7f2931',
+  actionPrimaryDisabled: '#cfa4a9',
+  actionSecondary: palette.codGray,
+  actionSecondaryPressed: '#272727',
+  actionGhost: palette.transparent,
+  actionGhostPressed: 'rgba(151, 49, 58, 0.10)',
+  actionDanger: palette.stiletto,
+  actionDangerPressed: '#6e232a',
+  actionDisabled: '#ddd8d8',
+  actionTextLink: palette.stiletto,
+
+  // Borders
+  borderSubtle: '#e1dcdc',
+  borderMuted: '#d3cccc',
+  borderStrong: '#b4abab',
+  borderDark: palette.doveGray,
+  borderFocus: palette.stiletto,
+  borderError: palette.stiletto,
+  borderDisabled: '#ddd8d8',
+
+  // Status + overlays
+  overlay: 'rgba(8, 8, 8, 0.48)',
+  focusRing: 'rgba(151, 49, 58, 0.16)',
+  whiteOverlay: 'rgba(255, 255, 255, 0.08)',
+  transparent: palette.transparent,
+};
