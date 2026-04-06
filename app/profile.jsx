@@ -71,7 +71,6 @@ export default function ProfileScreen() {
     saveSharedProfile,
     uploadAvatar,
     changePassword,
-    logout,
   } = useProfileActions();
 
   const [mode, setMode] = useState('view');
@@ -197,15 +196,6 @@ export default function ProfileScreen() {
     }
   };
 
-  const handleLogoutPress = async () => {
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    const result = await logout();
-    if (!result?.success) {
-      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      setFloatingFeedback('error', 'Logout Failed', result?.error || 'Unable to log out right now.');
-    }
-  };
-
   useEffect(() => {
     if (!saveSuccess && !passwordSuccess) return;
     if (successTimerRef.current) {
@@ -251,15 +241,6 @@ export default function ProfileScreen() {
               loading={isUploadingAvatar}
               leading={<AppIcon name="camera" state="muted" />}
               onPress={handlePhotoPress}
-              style={styles.overviewButton}
-            />
-            <AppButton
-              title="Log Out"
-              variant="danger"
-              size="md"
-              fullWidth={false}
-              leading={<AppIcon name="signOut" state="inverse" />}
-              onPress={handleLogoutPress}
               style={styles.overviewButton}
             />
           </View>
