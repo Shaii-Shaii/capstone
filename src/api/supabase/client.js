@@ -3,10 +3,12 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AppState, Platform } from 'react-native';
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
-const supabasePublishableKey = process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+const supabaseUrl = (process.env.EXPO_PUBLIC_SUPABASE_URL || '').trim();
+const supabasePublishableKey = (process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY || '').trim();
 const isWeb = Platform.OS === 'web';
 const canUseBrowserStorage = typeof window !== 'undefined';
+const hasSupabaseConfig = Boolean(supabaseUrl && supabasePublishableKey);
+const missingSupabaseConfigMessage = 'Supabase environment variables are not configured.';
 
 const webStorage = {
   async getItem(key) {
@@ -23,14 +25,121 @@ const webStorage = {
   },
 };
 
-export const supabase = createClient(supabaseUrl, supabasePublishableKey, {
-  auth: {
-    storage: isWeb ? webStorage : AsyncStorage,
-    autoRefreshToken: true,
-    persistSession: true,
-    detectSessionInUrl: false,
+const createSupabaseConfigError = () => new Error(missingSupabaseConfigMessage);
+
+const createFallbackQueryBuilder = (resultFactory = () => ({
+  data: null,
+  error: createSupabaseConfigError(),
+})) => {
+  let proxy;
+
+  const execute = () => Promise.resolve(resultFactory());
+
+  const target = {
+    then(onFulfilled, onRejected) {
+      return execute().then(onFulfilled, onRejected);
+    },
+    catch(onRejected) {
+      return execute().catch(onRejected);
+    },
+    finally(onFinally) {
+      return execute().finally(onFinally);
+    },
+  };
+
+  proxy = new Proxy(target, {
+    get(currentTarget, property) {
+      if (property in currentTarget) {
+        return currentTarget[property];
+      }
+
+      return (..._args) => proxy;
+    },
+  });
+
+  return proxy;
+};
+
+const createFallbackChannel = () => ({
+  on() {
+    return this;
+  },
+  subscribe() {
+    return this;
+  },
+  unsubscribe() {
+    return undefined;
   },
 });
+
+const createFallbackStorageBucket = () => ({
+  upload: async () => ({ data: null, error: createSupabaseConfigError() }),
+  download: async () => ({ data: null, error: createSupabaseConfigError() }),
+  remove: async () => ({ data: null, error: createSupabaseConfigError() }),
+  list: async () => ({ data: [], error: createSupabaseConfigError() }),
+  getPublicUrl: () => ({
+    data: { publicUrl: '' },
+    error: createSupabaseConfigError(),
+  }),
+});
+
+const createFallbackSupabaseClient = () => ({
+  auth: {
+    signInWithPassword: async () => ({ data: { user: null, session: null }, error: createSupabaseConfigError() }),
+    signUp: async () => ({ data: { user: null, session: null }, error: createSupabaseConfigError() }),
+    signOut: async () => ({ error: createSupabaseConfigError() }),
+    getSession: async () => ({ data: { session: null }, error: createSupabaseConfigError() }),
+    refreshSession: async () => ({ data: { session: null }, error: createSupabaseConfigError() }),
+    resetPasswordForEmail: async () => ({ data: null, error: createSupabaseConfigError() }),
+    updateUser: async () => ({ data: { user: null }, error: createSupabaseConfigError() }),
+    verifyOtp: async () => ({ data: { user: null, session: null }, error: createSupabaseConfigError() }),
+    resend: async () => ({ data: null, error: createSupabaseConfigError() }),
+    getUser: async () => ({ data: { user: null }, error: createSupabaseConfigError() }),
+    onAuthStateChange: () => ({
+      data: {
+        subscription: {
+          unsubscribe() {
+            return undefined;
+          },
+        },
+      },
+    }),
+    startAutoRefresh() {
+      return undefined;
+    },
+    stopAutoRefresh() {
+      return undefined;
+    },
+  },
+  functions: {
+    invoke: async () => ({ data: null, error: createSupabaseConfigError() }),
+  },
+  storage: {
+    from() {
+      return createFallbackStorageBucket();
+    },
+  },
+  channel() {
+    return createFallbackChannel();
+  },
+  removeChannel() {
+    return undefined;
+  },
+  from() {
+    return createFallbackQueryBuilder();
+  },
+});
+
+export const supabase = hasSupabaseConfig
+  ? createClient(supabaseUrl, supabasePublishableKey, {
+      auth: {
+        storage: isWeb ? webStorage : AsyncStorage,
+        autoRefreshToken: true,
+        persistSession: true,
+        detectSessionInUrl: false,
+      },
+    })
+  : createFallbackSupabaseClient();
 
 const parseStructuredErrorMessage = (value) => {
   if (typeof value !== 'string' || !value.trim()) return '';
@@ -206,7 +315,11 @@ export const invokeEdgeFunction = async (functionName, options = {}) => {
   return result;
 };
 
-if (!isWeb) {
+if (!hasSupabaseConfig && typeof console !== 'undefined') {
+  console.warn(missingSupabaseConfigMessage);
+}
+
+if (!isWeb && hasSupabaseConfig) {
   AppState.addEventListener('change', (state) => {
     if (state === 'active') {
       supabase.auth.startAutoRefresh();
