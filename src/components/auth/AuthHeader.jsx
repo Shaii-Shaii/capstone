@@ -3,7 +3,7 @@ import { View, StyleSheet, Text, Image } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { theme } from '../../design-system/theme';
 import { AppTextLink } from '../ui/AppTextLink';
-import systemLogo from '../../assets/images/system-logo.jpg';
+import donivraLogoNoText from '../../assets/images/donivra_logo_no_text.png';
 
 const HEADER_VARIANTS = {
   donor: {
@@ -57,10 +57,10 @@ export const AuthHeader = ({
         <View style={styles.visualTopRow}>
           <View style={styles.logoGroup}>
             <View style={styles.logoFrame}>
-              <Image source={systemLogo} style={styles.logoImage} resizeMode="cover" />
+              <Image source={donivraLogoNoText} style={styles.logoImage} resizeMode="contain" />
             </View>
             <View style={styles.visualCopy}>
-              <Text style={styles.brandName}>StrandShare</Text>
+              <Text style={styles.brandName}>Donivra</Text>
               <Text style={styles.brandTag}>Hair donation and support</Text>
             </View>
           </View>

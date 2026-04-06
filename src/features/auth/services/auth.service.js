@@ -1,5 +1,6 @@
 import * as AuthAPI from '../api/auth.api';
 import { getProfile } from '../../profile/services/profile.service';
+import { authMessages } from '../../../constants/auth';
 
 /**
  * Helper to translate raw Supabase errors into human-friendly strings
@@ -57,15 +58,20 @@ export const login = async (email, password, expectedRole) => {
       actualRole = fetchedProfile.role || actualRole;
     }
 
+    if (!actualRole) {
+      await AuthAPI.logoutUser();
+      throw new Error(authMessages.roleNotFound);
+    }
+
     if (expectedRole && actualRole && actualRole !== expectedRole) {
       // Force signout to block wrong-role access session persistence
       await AuthAPI.logoutUser();
       throw new Error(`This account is registered as a ${actualRole}. Please continue through the ${actualRole} login.`);
     }
 
-    return { user: authData.user, session: authData.session, profile, error: null };
+    return { user: authData.user, session: authData.session, profile, role: actualRole, error: null };
   } catch (error) {
-    return { user: null, session: null, profile: null, error: error.message, errorCode: error.code };
+    return { user: null, session: null, profile: null, role: null, error: error.message, errorCode: error.code };
   }
 };
 
@@ -77,19 +83,23 @@ export const register = async (email, password, additionalData = {}) => {
       first_name: additionalData.firstName,
       last_name: additionalData.lastName,
       phone: additionalData.phone,
+      street: additionalData.street,
+      barangay: additionalData.barangay,
+      city: additionalData.city,
+      province: additionalData.province,
+      region: additionalData.region,
+      country: additionalData.country,
+      latitude: additionalData.latitude ? Number(additionalData.latitude) : null,
+      longitude: additionalData.longitude ? Number(additionalData.longitude) : null,
     };
     
     const { data, error } = await AuthAPI.registerWithEmail({ email, password, metadata });
     if (error) throw getFriendlyError(error);
 
-    // Supabase may return an obfuscated user for an already-registered confirmed email
-    // instead of an explicit error when email confirmation is enabled.
     if (data?.user && !data?.session && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
       throw new Error("This email is already registered. Please log in instead.");
     }
-    
-    // Profile is created automatically by Supabase trigger `handle_new_user()`
-    
+
     return { user: data.user, session: data.session, error: null };
 
   } catch (error) {
@@ -109,9 +119,15 @@ export const verifyEmail = async (email, code) => {
       profile = fetchedProfile;
     }
 
-    return { user: data?.user, session: data?.session, profile, error: null };
+    return {
+      user: data?.user,
+      session: data?.session,
+      profile,
+      role: profile?.role || data?.user?.user_metadata?.role || null,
+      error: null,
+    };
   } catch (error) {
-    return { user: null, session: null, profile: null, error: error.message };
+    return { user: null, session: null, profile: null, role: null, error: error.message };
   }
 };
 
@@ -139,7 +155,7 @@ export const logout = async () => {
 export const sendPasswordReset = async (email) => {
   try {
     // Rely on application deep linking scheme for Expo Router redirection
-    const redirectTo = 'strandshare://auth/reset-password';
+    const redirectTo = 'donivra://auth/reset-password';
     const { error } = await AuthAPI.sendPasswordResetEmail({ email, redirectTo });
     if (error) throw getFriendlyError(error);
     return { success: true, error: null };
@@ -148,8 +164,13 @@ export const sendPasswordReset = async (email) => {
   }
 };
 
-export const updatePassword = async ({ newPassword, currentPassword }) => {
+export const updatePassword = async (payload) => {
   try {
+    const normalizedPayload = typeof payload === 'string'
+      ? { newPassword: payload, currentPassword: '' }
+      : (payload || {});
+    const { newPassword, currentPassword } = normalizedPayload;
+
     // currentPassword is captured for user confidence today and leaves a clean place
     // to add secure reauthentication later if the Supabase project requires it.
     void currentPassword;

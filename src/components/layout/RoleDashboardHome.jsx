@@ -12,6 +12,8 @@ import { DashboardFeatureCard } from '../ui/DashboardFeatureCard';
 import { DashboardInfoCard } from '../ui/DashboardInfoCard';
 import { AppCard } from '../ui/AppCard';
 import { AppIcon } from '../ui/AppIcon';
+import { useNotifications } from '../../hooks/useNotifications';
+import { useAuth } from '../../providers/AuthProvider';
 import { theme } from '../../design-system/theme';
 
 function renderDashboardSection({ section, content, role, onItemPress, onActionPress, index }) {
@@ -154,12 +156,12 @@ function renderDashboardSection({ section, content, role, onItemPress, onActionP
 export function RoleDashboardHome({ role, profile, navItems, content }) {
   const router = useRouter();
   const pathname = usePathname();
+  const { user } = useAuth();
+  const { unreadCount } = useNotifications({ role, userId: user?.id });
   const firstName = profile?.first_name || (role === 'donor' ? 'Donor' : 'Friend');
   const lastName = profile?.last_name || '';
   const avatarInitials = [firstName[0], lastName[0]].filter(Boolean).join('');
-  const readinessText = profile?.is_profile_completed ? 'Profile ready' : 'Profile in progress';
   const title = content.header.greeting === 'hello' ? `Hello, ${firstName}` : `Welcome back, ${firstName}`;
-  const statusChips = [content.header.leadChip, readinessText, content.header.trailChip].filter(Boolean);
   const hasSummaryCard = Boolean(content.summaryCard?.title) || Boolean(content.snapshotItems?.length);
 
   const handleNavPress = (item) => {
@@ -199,11 +201,11 @@ export function RoleDashboardHome({ role, profile, navItems, content }) {
           avatarInitials={avatarInitials}
           avatarUri={profile?.avatar_url}
           variant={role}
-          statusChips={statusChips}
           searchPlaceholder={content.header.searchPlaceholder}
           quickTools={quickTools}
           utilityActions={content.header.utilityActions?.map((item) => ({
             ...item,
+            badge: item.key === 'notifications' && unreadCount ? String(Math.min(unreadCount, 99)) : item.badge,
             onPress: item.route ? () => handleActionRoute(item.route) : undefined,
           }))}
           onSearchPress={() => handleActionRoute(role === 'donor' ? '/donor/donations' : '/patient/requests')}

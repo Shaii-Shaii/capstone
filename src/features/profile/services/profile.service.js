@@ -2,24 +2,47 @@ import * as ProfileAPI from '../api/profile.api';
 
 const OPTIONAL_ROLE_TABLES = {
   donor: 'donor_profiles',
-  patient: 'patient_profiles',
+  patient: 'patient_details',
 };
 
 const SYSTEM_ROLE_KEYS = new Set(['id', 'created_at', 'updated_at', 'user_id', 'profile_id']);
-
-const isMissingTableError = (error) => {
-  const message = error?.message?.toLowerCase?.() || '';
-  return message.includes('relation') && message.includes('does not exist');
-};
 
 const sanitizeSharedProfileUpdates = (updates = {}) => ({
   first_name: updates.first_name?.trim?.() || '',
   middle_name: updates.middle_name?.trim?.() || '',
   last_name: updates.last_name?.trim?.() || '',
   phone: updates.phone?.trim?.() || '',
+  street: updates.street?.trim?.() || '',
+  barangay: updates.barangay?.trim?.() || '',
+  region: updates.region?.trim?.() || '',
   city: updates.city?.trim?.() || '',
   province: updates.province?.trim?.() || '',
+  country: updates.country?.trim?.() || '',
 });
+
+const fetchRoleProfile = async (role, userId) => {
+  if (role === 'donor') {
+    return await ProfileAPI.fetchDonorProfileByUserId(userId);
+  }
+
+  if (role === 'patient') {
+    return await ProfileAPI.fetchPatientDetailsByUserId(userId);
+  }
+
+  return { data: null, error: null };
+};
+
+const updateRoleProfile = async (role, userId, updates) => {
+  if (role === 'donor') {
+    return await ProfileAPI.updateDonorProfile(userId, updates);
+  }
+
+  if (role === 'patient') {
+    return await ProfileAPI.updatePatientDetails(userId, updates);
+  }
+
+  return { data: null, error: null };
+};
 
 export const getProfile = async (userId) => {
   try {
@@ -41,13 +64,8 @@ export const getRoleProfile = async (userId, role) => {
       return { roleProfile: null, error: null };
     }
 
-    const { data, error } = await ProfileAPI.fetchOptionalRoleProfile(tableName, userId);
-    if (error) {
-      if (isMissingTableError(error)) {
-        return { roleProfile: null, error: null };
-      }
-      throw new Error(error.message);
-    }
+    const { data, error } = await fetchRoleProfile(role, userId);
+    if (error) throw new Error(error.message);
 
     return { roleProfile: data, error: null };
   } catch (error) {
@@ -76,13 +94,11 @@ export const saveProfile = async (userId, updates, role) => {
     const { data, error } = await ProfileAPI.updateProfile(userId, sharedUpdates);
     if (error) throw new Error(error.message);
 
-    const tableName = OPTIONAL_ROLE_TABLES[role];
+    const roleTableName = OPTIONAL_ROLE_TABLES[role];
     let roleProfile = null;
-    if (tableName && updates?.roleSpecific && Object.keys(updates.roleSpecific).length) {
-      const roleResult = await ProfileAPI.updateOptionalRoleProfile(tableName, userId, updates.roleSpecific);
-      if (roleResult.error && !isMissingTableError(roleResult.error)) {
-        throw new Error(roleResult.error.message);
-      }
+    if (roleTableName && updates?.roleSpecific && Object.keys(updates.roleSpecific).length) {
+      const roleResult = await updateRoleProfile(role, userId, updates.roleSpecific);
+      if (roleResult.error) throw new Error(roleResult.error.message);
       roleProfile = roleResult.data || null;
     }
 

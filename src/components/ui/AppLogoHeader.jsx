@@ -2,13 +2,14 @@ import React from 'react';
 import { View, Text, StyleSheet, Image, ImageBackground, useWindowDimensions } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { theme } from '../../design-system/theme';
-import systemLogo from '../../assets/images/system-logo.jpg';
+import donivraLogo from '../../assets/images/donivra_logo.png';
+import donivraLogoNoText from '../../assets/images/donivra_logo_no_text.png';
 import heroLanding from '../../assets/images/hero_landing.png';
 
 export const AppLogoHeader = ({
   title,
   subtitle,
-  eyebrow = 'Hair for Hope',
+  eyebrow = 'Donivra',
   showLogo = true,
   variant = 'authHero',
   align = 'center',
@@ -26,6 +27,7 @@ export const AppLogoHeader = ({
   const logoColors = isCompact || isAuthCard
     ? [theme.colors.brandPrimary, theme.colors.heroTo]
     : [theme.colors.heroFrom, theme.colors.heroTo];
+  const resolvedLogo = isCompact || isAuthCard ? donivraLogoNoText : donivraLogo;
 
   return (
     <View style={[styles.container, align === 'left' ? styles.leftAligned : null, style]}>
@@ -64,7 +66,7 @@ export const AppLogoHeader = ({
                 isAuthCard && isCompactScreen ? styles.logoFrameAuthCardCompact : null,
               ]}
             >
-              <Image source={systemLogo} style={styles.logoImage} resizeMode="cover" />
+              <Image source={resolvedLogo} style={styles.logoImage} resizeMode="contain" />
             </View>
             {!isCompact ? <View style={[styles.logoGlow]} /> : null}
           </LinearGradient>

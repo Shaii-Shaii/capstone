@@ -15,7 +15,7 @@ export const registerWithEmail = async ({ email, password, metadata }) => {
     password,
     options: {
       data: metadata,
-    }
+    },
   });
 };
 
@@ -32,21 +32,16 @@ export const sendPasswordResetEmail = async ({ email, redirectTo }) => {
 };
 
 export const updateUserPassword = async ({ newPassword }) => {
-  // Update the user's password directly (requires an active authenticated session from the deep link)
   return await supabase.auth.updateUser({ password: newPassword });
 };
 
 export const verifyEmailOtp = async ({ email, token }) => {
-  // type: 'signup' is correct for OTP-based email confirmation after signUp()
-  // type: 'email' is only for magic-link (passwordless) OTPs — do not use here
   return await supabase.auth.verifyOtp({ email, token, type: 'signup' });
 };
 
 export const resendSignupOtp = async ({ email }) => {
-  // No emailRedirectTo needed — this is OTP-based, not link-based
   return await supabase.auth.resend({
     type: 'signup',
     email,
   });
 };
-

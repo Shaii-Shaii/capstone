@@ -14,8 +14,6 @@ export const donorDashboardContent = {
     greeting: 'hello',
     subtitle: 'Your donation home',
     summary: '',
-    leadChip: '',
-    trailChip: '',
     searchPlaceholder: 'Search donor tools and updates',
     utilityActions: [
       { key: 'notifications', icon: 'notifications', badge: '2', route: '/donor/notifications' },
@@ -62,7 +60,7 @@ export const donorDashboardContent = {
         badgeText: 'Live',
         meta: 'Status',
         icon: 'donations',
-        route: '/donor/donations',
+        route: '/donor/status',
       },
       {
         key: 'prepare',
@@ -118,7 +116,7 @@ export const donorDashboardContent = {
       {
         key: 'review',
         title: 'Program Review',
-        description: 'Read how StrandShare guides donated hair toward real support journeys.',
+        description: 'Read how Donivra guides donated hair toward real support journeys.',
         badgeText: 'Read',
         meta: '2 min',
         icon: 'shield',
@@ -182,8 +180,6 @@ export const patientDashboardContent = {
     greeting: 'welcome',
     subtitle: 'Your support home',
     summary: '',
-    leadChip: '',
-    trailChip: '',
     searchPlaceholder: 'Search requests and support',
     utilityActions: [
       { key: 'notifications', icon: 'notifications', badge: '3', route: '/patient/notifications' },

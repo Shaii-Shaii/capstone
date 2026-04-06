@@ -13,11 +13,21 @@ import { VerifyEmailForm } from '../../src/components/auth/VerifyEmailForm';
 import { AuthHeader } from '../../src/components/auth/AuthHeader';
 import { AuthScreenLayout } from '../../src/components/auth/AuthScreenLayout';
 import { AppTextLink } from '../../src/components/ui/AppTextLink';
+import { FormProgressStepper } from '../../src/components/ui/FormProgressStepper';
 import { verifyEmailSchema } from '../../src/features/auth/validators/auth.schema';
-import { verifyEmail, resendVerifyEmail } from '../../src/features/auth/services/auth.service';
+import { logout, verifyEmail, resendVerifyEmail } from '../../src/features/auth/services/auth.service';
+import { syncPendingSignupDraft } from '../../src/features/auth/services/signupDraft.service';
+import { roleAuthConfig } from '../../src/constants/auth';
 import { theme } from '../../src/design-system/theme';
 
 const RESEND_DELAY = 30;
+const SIGNUP_STEPS = [
+  { key: 'personal', label: 'Personal Details', shortLabel: 'Personal' },
+  { key: 'address', label: 'Address Details', shortLabel: 'Address' },
+  { key: 'photo', label: 'Profile Photo', shortLabel: 'Photo' },
+  { key: 'password', label: 'Password', shortLabel: 'Password' },
+  { key: 'verify', label: 'OTP Verification', shortLabel: 'Verify' },
+];
 
 export default function VerifyEmailScreen() {
   const router = useRouter();
@@ -69,28 +79,17 @@ export default function VerifyEmailScreen() {
     );
   };
 
-  const routeAfterVerify = (session, profile) => {
-    if (session) {
-      const actualRole = profile?.role || role;
-      if (actualRole === 'donor') {
-        router.replace('/donor/home');
-      } else if (actualRole === 'patient') {
-        router.replace('/patient/home');
-      } else {
-        router.replace('/');
-      }
-    } else if (role === 'donor') {
-      router.replace('/donor/login');
-    } else {
-      router.replace('/patient/login');
-    }
+  const routeAfterVerify = (roleFromAuth) => {
+    const resolvedRole = roleFromAuth || role;
+    const loginRoute = roleAuthConfig[resolvedRole]?.routes?.login || '/auth/access';
+    router.replace(loginRoute);
   };
 
   const handleVerify = async (data) => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setIsVerifying(true);
     setStatusMessage('');
-    const { session, profile, error } = await verifyEmail(email, data.otp);
+    const { session, role: verifiedRole, error } = await verifyEmail(email, data.otp);
     setIsVerifying(false);
 
     if (error) {
@@ -102,7 +101,24 @@ export default function VerifyEmailScreen() {
 
     await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     setVerified(true);
-    setStatusMessage('Email verified. Taking you to the right next step...');
+    setStatusMessage('Email verified. Finishing your account details...');
+
+    if (session?.user?.id && email) {
+      const syncResult = await syncPendingSignupDraft({
+        userId: session.user.id,
+        email,
+        role: verifiedRole || role,
+      });
+
+      if (!syncResult.success) {
+        setStatusMessage('Email verified. Your account is ready, but some address details may need to be completed later.');
+      }
+    }
+
+    if (session) {
+      await logout();
+    }
+
     pulseScale.value = withSequence(
       withTiming(1.08, { duration: 160 }),
       withTiming(1, { duration: 180 }),
@@ -110,7 +126,7 @@ export default function VerifyEmailScreen() {
       withTiming(1, { duration: 160 })
     );
 
-    setTimeout(() => routeAfterVerify(session, profile), 900);
+    setTimeout(() => routeAfterVerify(verifiedRole), 900);
   };
 
   const handleResend = async () => {
@@ -140,19 +156,27 @@ export default function VerifyEmailScreen() {
         eyebrow="Email confirmation"
       />
 
-      <Animated.View entering={FadeInDown.duration(420)} style={shakeStyle}>
-        <View style={styles.formContainer}>
-          <VerifyEmailForm
-            schema={verifyEmailSchema}
-            emailContext={email}
-            onSubmit={handleVerify}
-            onResend={handleResend}
-            isLoading={isVerifying}
-            isResending={isResending}
-            resendCountdown={resendCountdown}
-            successMessage={statusMessage}
-          />
-        </View>
+      <FormProgressStepper
+        steps={SIGNUP_STEPS}
+        currentStep={4}
+        style={styles.stepper}
+      />
+
+      <Animated.View entering={FadeInDown.duration(420)}>
+        <Animated.View style={shakeStyle}>
+          <View style={styles.formContainer}>
+            <VerifyEmailForm
+              schema={verifyEmailSchema}
+              emailContext={email}
+              onSubmit={handleVerify}
+              onResend={handleResend}
+              isLoading={isVerifying}
+              isResending={isResending}
+              resendCountdown={resendCountdown}
+              successMessage={statusMessage}
+            />
+          </View>
+        </Animated.View>
       </Animated.View>
 
       {verified ? (
@@ -170,6 +194,9 @@ const styles = StyleSheet.create({
   formContainer: {
     marginTop: theme.spacing.md,
     width: '100%',
+  },
+  stepper: {
+    marginTop: theme.spacing.sm,
   },
   successWrap: {
     alignItems: 'center',

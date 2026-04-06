@@ -1,12 +1,27 @@
 export const roleAuthConfig = {
+  access: {
+    label: 'account',
+    login: {
+      title: 'Welcome back to Donivra',
+      subtitle: 'Sign in once and we will open the right donor or patient dashboard for your saved account role.',
+      eyebrow: 'Account login',
+      buttonText: 'Log in to Donivra',
+      footerQuestion: 'Need a new account?',
+      footerLink: 'Start from the landing page',
+    },
+    routes: {
+      login: '/auth/access',
+      landing: '/',
+    },
+  },
   donor: {
     label: 'donor',
     signup: {
       title: 'Create your donor account',
-      subtitle: 'Start your donor journey, manage preparation steps, and keep every appointment detail in one polished mobile flow.',
+      subtitle: 'Start your donor journey, manage preparation steps, and keep every appointment detail in one calm mobile flow built for giving.',
       eyebrow: 'Donor signup',
       buttonText: 'Create donor account',
-      footerQuestion: 'Already have a donor account?',
+      footerQuestion: 'Already have an account?',
       footerLink: 'Log in here',
     },
     login: {
@@ -27,10 +42,10 @@ export const roleAuthConfig = {
     label: 'patient',
     signup: {
       title: 'Create your patient account',
-      subtitle: 'Create a private patient account to manage support requests, updates, and care resources with confidence.',
+      subtitle: 'Create a private patient account to manage support requests, updates, and care resources with clarity and care.',
       eyebrow: 'Patient signup',
       buttonText: 'Create patient account',
-      footerQuestion: 'Already have a patient account?',
+      footerQuestion: 'Already have an account?',
       footerLink: 'Log in here',
     },
     login: {
@@ -49,9 +64,12 @@ export const roleAuthConfig = {
   },
 };
 
+export const getHomeRouteForRole = (role) => roleAuthConfig[role]?.routes?.home || '/';
+
 export const authMessages = {
   signupFailed: 'Please try again.',
   loginFailed: 'Please check your credentials.',
+  roleNotFound: 'We could not determine the account role for this user. Please try again or contact support.',
   verifyPromptTitle: 'Email Not Verified',
   verifyPromptBody: 'Please verify your email address before logging in.',
 };

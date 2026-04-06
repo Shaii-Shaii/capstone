@@ -19,7 +19,7 @@ export default function PatientSignupScreen() {
         subtitle={config.signup.subtitle}
         eyebrow={config.signup.eyebrow}
         role="patient"
-        backLabel="Back to access"
+        backLabel="Back to home"
         onBackPress={() => router.back()}
       />
 
@@ -35,7 +35,7 @@ export default function PatientSignupScreen() {
       <AuthFormFooter
         questionText={config.signup.footerQuestion}
         linkText={config.signup.footerLink}
-        onLinkPress={() => router.replace(config.routes.login)}
+        onLinkPress={() => router.replace('/auth/access')}
       />
     </AuthScreenLayout>
   );

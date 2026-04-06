@@ -23,6 +23,7 @@ export const appIconMap = {
   shield: 'shield-check-outline',
   chevronRight: 'chevron-right',
   camera: 'camera-outline',
+  retake: 'camera-retake-outline',
   donations: 'gift-outline',
   donationsActive: 'gift',
   appointment: 'calendar-clock-outline',

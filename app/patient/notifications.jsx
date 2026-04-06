@@ -1,13 +1,6 @@
 import React from 'react';
-import { DashboardModuleScreen } from '../../src/components/layout/DashboardModuleScreen';
-import { patientDashboardNavItems, patientPlaceholderModules } from '../../src/constants/dashboard';
+import { NotificationCenterScreen } from '../../src/components/layout/NotificationCenterScreen';
 
 export default function PatientNotificationsScreen() {
-  return (
-    <DashboardModuleScreen
-      role="patient"
-      navItems={patientDashboardNavItems}
-      module={patientPlaceholderModules.notifications}
-    />
-  );
+  return <NotificationCenterScreen role="patient" />;
 }

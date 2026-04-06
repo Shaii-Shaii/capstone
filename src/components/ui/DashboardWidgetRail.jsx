@@ -46,7 +46,11 @@ export const DashboardWidgetRail = ({
         contentContainerStyle,
       ]}
     >
-      {items.map((item, index) => renderItem(item, index, computedCardWidth, scrollX))}
+      {items.map((item, index) => (
+        <React.Fragment key={item?.key || `widget-${index}`}>
+          {renderItem(item, index, computedCardWidth, scrollX)}
+        </React.Fragment>
+      ))}
     </AnimatedScrollView>
   );
 };

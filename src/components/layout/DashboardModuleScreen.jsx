@@ -3,6 +3,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import { usePathname, useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { useAuth } from '../../providers/AuthProvider';
+import { useNotifications } from '../../hooks/useNotifications';
 import { theme } from '../../design-system/theme';
 import { DashboardLayout } from './DashboardLayout';
 import { DashboardHeader } from '../ui/DashboardHeader';
@@ -15,10 +16,10 @@ import { AppCard } from '../ui/AppCard';
 export function DashboardModuleScreen({ role, navItems, module }) {
   const router = useRouter();
   const pathname = usePathname();
-  const { profile } = useAuth();
+  const { user, profile } = useAuth();
+  const { unreadCount } = useNotifications({ role, userId: user?.id });
 
   const firstName = profile?.first_name || (role === 'donor' ? 'Donor' : 'Friend');
-  const statusText = profile?.is_profile_completed ? 'Profile ready' : 'Profile in progress';
   const avatarInitials = `${profile?.first_name?.[0] || firstName[0] || ''}${profile?.last_name?.[0] || ''}`.trim() || 'SS';
 
   const handleNavPress = (item) => {
@@ -47,7 +48,6 @@ export function DashboardModuleScreen({ role, navItems, module }) {
           avatarInitials={avatarInitials}
           avatarUri={profile?.avatar_url}
           variant={role}
-          statusChips={[role === 'donor' ? 'Donor journey' : 'Patient support', statusText, module.title]}
           searchPlaceholder={role === 'donor' ? 'Search donor tools, tracking, updates' : 'Search support, requests, updates'}
           quickTools={[
             {
@@ -61,7 +61,7 @@ export function DashboardModuleScreen({ role, navItems, module }) {
             {
               key: 'notifications',
               icon: 'notifications',
-              badge: role === 'donor' ? '2' : '3',
+              badge: unreadCount ? String(Math.min(unreadCount, 99)) : undefined,
               onPress: () => router.navigate(role === 'donor' ? '/donor/notifications' : '/patient/notifications'),
             },
           ]}

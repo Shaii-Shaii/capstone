@@ -49,8 +49,28 @@ export const useAuthSession = () => {
 
     // Initial load
     setIsLoading(true);
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      handleSessionData(session);
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      if (!session) {
+        handleSessionData(session);
+        return;
+      }
+
+      const { data, error } = await supabase.auth.refreshSession();
+      if (!error && data?.session) {
+        handleSessionData(data.session);
+        return;
+      }
+
+      if (!session?.refresh_token) {
+        handleSessionData(session);
+        return;
+      }
+
+      const retryResult = await supabase.auth.refreshSession({
+        refresh_token: session.refresh_token,
+      });
+
+      handleSessionData(retryResult.error ? session : (retryResult.data?.session || session));
     });
 
     // Handle updates

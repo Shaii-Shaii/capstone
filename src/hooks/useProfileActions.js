@@ -4,6 +4,8 @@ import { useAuth } from '../providers/AuthProvider';
 import { useAuthActions } from '../features/auth/hooks/useAuthActions';
 import { getProfileBundle, getVisibleRoleFields, saveAvatar, saveProfile } from '../features/profile/services/profile.service';
 
+const IMAGE_MEDIA_TYPES = ['images'];
+
 const formFromProfile = (profile) => ({
   firstName: profile?.first_name || '',
   middleName: profile?.middle_name || '',
@@ -75,7 +77,7 @@ export const useProfileActions = () => {
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: IMAGE_MEDIA_TYPES,
         allowsEditing: true,
         aspect: [1, 1],
         quality: 0.55,

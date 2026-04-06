@@ -1,0 +1,103 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { saveAvatar, saveProfile } from '../../profile/services/profile.service';
+
+const SIGNUP_DRAFT_STORAGE_KEY = 'donivra.signupDrafts';
+
+const normalizeEmailKey = (email) => email?.trim().toLowerCase() || '';
+
+const sanitizeDraft = (draft = {}) => ({
+  email: draft.email?.trim() || '',
+  role: draft.role || '',
+  firstName: draft.firstName?.trim() || '',
+  lastName: draft.lastName?.trim() || '',
+  phone: draft.phone?.trim() || '',
+  street: draft.street?.trim() || '',
+  barangay: draft.barangay?.trim() || '',
+  city: draft.city?.trim() || '',
+  province: draft.province?.trim() || '',
+  region: draft.region?.trim() || '',
+  country: draft.country?.trim() || 'Philippines',
+  latitude: draft.latitude?.trim?.() || '',
+  longitude: draft.longitude?.trim?.() || '',
+  profilePhoto: draft.profilePhoto?.trim?.() || '',
+});
+
+const readDraftMap = async () => {
+  try {
+    const raw = await AsyncStorage.getItem(SIGNUP_DRAFT_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (_error) {
+    return {};
+  }
+};
+
+const writeDraftMap = async (draftMap) => {
+  await AsyncStorage.setItem(SIGNUP_DRAFT_STORAGE_KEY, JSON.stringify(draftMap));
+};
+
+export const savePendingSignupDraft = async (draft) => {
+  const emailKey = normalizeEmailKey(draft?.email);
+  if (!emailKey) return;
+
+  const draftMap = await readDraftMap();
+  draftMap[emailKey] = sanitizeDraft(draft);
+  await writeDraftMap(draftMap);
+};
+
+export const getPendingSignupDraft = async (email) => {
+  const emailKey = normalizeEmailKey(email);
+  if (!emailKey) return null;
+
+  const draftMap = await readDraftMap();
+  return draftMap[emailKey] || null;
+};
+
+export const clearPendingSignupDraft = async (email) => {
+  const emailKey = normalizeEmailKey(email);
+  if (!emailKey) return;
+
+  const draftMap = await readDraftMap();
+  if (!(emailKey in draftMap)) return;
+  delete draftMap[emailKey];
+  await writeDraftMap(draftMap);
+};
+
+export const syncPendingSignupDraft = async ({ userId, email, role }) => {
+  try {
+    if (!userId || !email) {
+      return { success: false, error: 'Missing signup sync context.' };
+    }
+
+    const draft = await getPendingSignupDraft(email);
+    if (!draft) {
+      return { success: true, synced: false, error: null };
+    }
+
+    const result = await saveProfile(userId, {
+      first_name: draft.firstName,
+      middle_name: '',
+      last_name: draft.lastName,
+      phone: draft.phone,
+      city: draft.city,
+      province: draft.province,
+    }, role);
+
+    if (result.error) {
+      return { success: false, synced: false, error: result.error };
+    }
+
+    if (draft.profilePhoto) {
+      const avatarResult = await saveAvatar(userId, draft.profilePhoto);
+      if (avatarResult.error) {
+        return { success: false, synced: false, error: avatarResult.error };
+      }
+    }
+
+    await clearPendingSignupDraft(email);
+    return { success: true, synced: true, error: null };
+  } catch (error) {
+    return { success: false, synced: false, error: error.message || 'Failed to save signup details.' };
+  }
+};

@@ -99,24 +99,27 @@ export const StatusBanner = ({
     <Animated.View
       entering={isFloating ? FadeInUp.duration(theme.motion.cardEnter) : FadeInDown.duration(theme.motion.cardEnter)}
       exiting={FadeOutDown.duration(theme.motion.normal)}
-      style={[
-        styles.container,
-        isFloating ? styles.floatingCard : null,
-        { backgroundColor: config.backgroundColor },
-        style,
-        animatedStyle,
-      ]}
     >
-      <View style={[styles.iconWrap, isFloating ? styles.iconWrapFloating : null]}>
-        <AppIcon
-          name={icon || (variant === 'success' ? 'success' : variant === 'error' ? 'error' : 'shield')}
-          state={config.iconState}
-        />
-      </View>
-      <View style={styles.copyWrap}>
-        {title ? <Text style={[styles.title, { color: config.textColor }]}>{title}</Text> : null}
-        <Text style={[styles.message, { color: config.textColor }]}>{message}</Text>
-      </View>
+      <Animated.View
+        style={[
+          styles.container,
+          isFloating ? styles.floatingCard : null,
+          { backgroundColor: config.backgroundColor },
+          style,
+          animatedStyle,
+        ]}
+      >
+        <View style={[styles.iconWrap, isFloating ? styles.iconWrapFloating : null]}>
+          <AppIcon
+            name={icon || (variant === 'success' ? 'success' : variant === 'error' ? 'error' : 'shield')}
+            state={config.iconState}
+          />
+        </View>
+        <View style={styles.copyWrap}>
+          {title ? <Text style={[styles.title, { color: config.textColor }]}>{title}</Text> : null}
+          <Text style={[styles.message, { color: config.textColor }]}>{message}</Text>
+        </View>
+      </Animated.View>
     </Animated.View>
   );
 

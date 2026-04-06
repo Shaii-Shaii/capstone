@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, StyleSheet, Text, Pressable, Image, Alert, ScrollView, Modal, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, StyleSheet, Text, Pressable, Alert, ScrollView, Modal, KeyboardAvoidingView, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { Controller, useForm } from 'react-hook-form';
@@ -71,11 +71,11 @@ export default function ProfileScreen() {
     saveSharedProfile,
     uploadAvatar,
     changePassword,
+    logout,
   } = useProfileActions();
 
   const [mode, setMode] = useState('view');
   const [feedback, setFeedback] = useState(null);
-  const [imageFailed, setImageFailed] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [passwordSuccess, setPasswordSuccess] = useState(false);
   const successTimerRef = useRef(null);
@@ -109,7 +109,7 @@ export default function ProfileScreen() {
   const role = profile?.role || 'patient';
   const navItems = role === 'donor' ? donorDashboardNavItems : patientDashboardNavItems;
   const roleLabel = roleLabelMap[role] || 'Member';
-  const firstName = profile?.first_name || 'Hair for Hope';
+  const firstName = profile?.first_name || 'Donivra';
   const lastName = profile?.last_name || 'Member';
   const fullName = `${firstName} ${lastName}`.trim();
   const avatarInitials = `${firstName?.[0] || ''}${lastName?.[0] || ''}`.trim() || 'SS';
@@ -118,6 +118,14 @@ export default function ProfileScreen() {
       .map((field) => ({ ...field, value: profile?.[field.key] }))
       .filter((field) => field.value)
   ), [profile]);
+  const overviewRows = useMemo(() => (
+    [
+      { key: 'fullName', label: 'Full name', value: fullName },
+      { key: 'email', label: 'Email', value: user?.email || 'No email found' },
+      { key: 'role', label: 'Account type', value: roleLabel },
+      ...displayRows,
+    ]
+  ), [displayRows, fullName, roleLabel, user?.email]);
   const watchedNewPassword = passwordForm.watch('newPassword');
   const passwordStrengthMessage = getPasswordStrengthMessage(watchedNewPassword);
   const passwordStrengthVariant = watchedNewPassword
@@ -182,11 +190,19 @@ export default function ProfileScreen() {
 
     if (result.success) {
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      setImageFailed(false);
       setFloatingFeedback('success', 'Photo Updated', 'Your profile photo is now visible across your account.');
     } else {
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       setFloatingFeedback('error', 'Photo Update Failed', result.error || 'Unable to update your profile photo.');
+    }
+  };
+
+  const handleLogoutPress = async () => {
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    const result = await logout();
+    if (!result?.success) {
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      setFloatingFeedback('error', 'Logout Failed', result?.error || 'Unable to log out right now.');
     }
   };
 
@@ -216,53 +232,45 @@ export default function ProfileScreen() {
             avatarInitials={avatarInitials}
             avatarUri={profile?.avatar_url}
             variant={role === 'donor' ? 'donor' : 'patient'}
-            statusChips={[roleLabel, profile?.is_profile_completed ? 'Profile ready' : 'Profile in progress']}
           />
         )}
       >
         <AppCard variant={role === 'donor' ? 'donorTint' : 'patientTint'} radius="xl" padding="lg">
-          <View style={styles.profileTopRow}>
-            <View style={styles.avatarSection}>
-              {profile?.avatar_url && !imageFailed ? (
-                <Image
-                  source={{ uri: profile.avatar_url }}
-                  style={styles.avatarImage}
-                  onError={() => setImageFailed(true)}
-                />
-              ) : (
-                <View style={styles.avatarFallback}>
-                  <Text style={styles.avatarFallbackText}>{avatarInitials.toUpperCase().slice(0, 2)}</Text>
-                </View>
-              )}
-              <AppButton
-                title="Change Photo"
-                variant="outline"
-                size="md"
-                fullWidth={false}
-                loading={isUploadingAvatar}
-                leading={<AppIcon name="camera" state="muted" />}
-                onPress={handlePhotoPress}
-                style={styles.photoButton}
-              />
-            </View>
+          <DashboardSectionHeader
+            title="Account Overview"
+            description="Manage your saved details here without repeating the full profile card."
+            style={styles.sectionHeader}
+          />
 
-            <View style={styles.identitySection}>
-              <View style={styles.roleBadge}>
-                <AppIcon name="role" state="active" size="sm" />
-                <Text style={styles.roleBadgeText}>{roleLabel}</Text>
+          <View style={styles.overviewButtonRow}>
+            <AppButton
+              title="Change Photo"
+              variant="outline"
+              size="md"
+              fullWidth={false}
+              loading={isUploadingAvatar}
+              leading={<AppIcon name="camera" state="muted" />}
+              onPress={handlePhotoPress}
+              style={styles.overviewButton}
+            />
+            <AppButton
+              title="Log Out"
+              variant="danger"
+              size="md"
+              fullWidth={false}
+              leading={<AppIcon name="signOut" state="inverse" />}
+              onPress={handleLogoutPress}
+              style={styles.overviewButton}
+            />
+          </View>
+
+          <View style={styles.overviewList}>
+            {overviewRows.map((row) => (
+              <View key={row.key} style={styles.overviewRow}>
+                <Text style={styles.overviewLabel}>{row.label}</Text>
+                <Text style={styles.overviewValue}>{row.value}</Text>
               </View>
-              <Text style={styles.nameText}>{fullName}</Text>
-              <View style={styles.infoRow}>
-                <AppIcon name="email" state="muted" size="sm" />
-                <Text style={styles.infoText}>{user?.email || 'No email found'}</Text>
-              </View>
-              {displayRows.map((row) => (
-                <View key={row.key} style={styles.infoRow}>
-                  <AppIcon name={row.icon} state="muted" size="sm" />
-                  <Text style={styles.infoText}>{row.value}</Text>
-                </View>
-              ))}
-            </View>
+            ))}
           </View>
         </AppCard>
 
@@ -421,73 +429,39 @@ export default function ProfileScreen() {
 }
 
 const styles = StyleSheet.create({
-  profileTopRow: {
+  overviewButtonRow: {
     flexDirection: 'row',
-    gap: theme.spacing.lg,
-  },
-  avatarSection: {
-    alignItems: 'center',
-    gap: theme.spacing.md,
-  },
-  avatarImage: {
-    width: 92,
-    height: 92,
-    borderRadius: theme.radius.full,
-    backgroundColor: theme.colors.surfaceSoft,
-  },
-  avatarFallback: {
-    width: 92,
-    height: 92,
-    borderRadius: theme.radius.full,
-    backgroundColor: theme.colors.whiteOverlay,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: theme.colors.whiteOverlay,
-  },
-  avatarFallbackText: {
-    fontFamily: theme.typography.fontFamilyDisplay,
-    fontSize: theme.typography.semantic.titleSm,
-    color: theme.colors.textInverse,
-  },
-  photoButton: {
-    minWidth: 128,
-  },
-  identitySection: {
-    flex: 1,
+    flexWrap: 'wrap',
     gap: theme.spacing.sm,
+    marginBottom: theme.spacing.lg,
   },
-  roleBadge: {
-    alignSelf: 'flex-start',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.spacing.xs,
+  overviewButton: {
+    minWidth: 148,
+  },
+  overviewList: {
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.surfaceCard,
+    overflow: 'hidden',
+  },
+  overviewRow: {
+    gap: 4,
     paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.xs,
-    borderRadius: theme.radius.pill,
-    backgroundColor: theme.colors.brandPrimaryMuted,
+    paddingVertical: theme.spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.borderSubtle,
   },
-  roleBadgeText: {
+  overviewLabel: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.caption,
     fontWeight: theme.typography.weights.semibold,
-    color: theme.colors.brandPrimary,
-  },
-  nameText: {
-    fontFamily: theme.typography.fontFamilyDisplay,
-    fontSize: theme.typography.semantic.titleMd,
-    color: theme.colors.textPrimary,
-  },
-  infoRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.spacing.sm,
-  },
-  infoText: {
-    flex: 1,
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
+    letterSpacing: 0.3,
+    textTransform: 'uppercase',
     color: theme.colors.textSecondary,
+  },
+  overviewValue: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    color: theme.colors.textPrimary,
   },
   sectionHeader: {
     marginBottom: theme.spacing.lg,

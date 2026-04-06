@@ -21,7 +21,7 @@ const HEADER_VARIANTS = {
   },
   hero: {
     colors: [theme.colors.heroFrom, theme.colors.heroTo],
-    eyebrow: 'Hair for Hope',
+    eyebrow: 'Donivra',
     summaryBg: theme.colors.whiteOverlay,
     summaryText: theme.colors.textHeroSoft,
   },
@@ -33,7 +33,6 @@ export const DashboardHeader = ({
   avatarInitials,
   avatarUri,
   summary,
-  statusChips = [],
   utilityActions = [],
   quickTools = [],
   searchPlaceholder,
@@ -164,15 +163,6 @@ export const DashboardHeader = ({
         </View>
       ) : null}
 
-      {statusChips.length ? (
-        <View style={styles.bottomStrip}>
-          {statusChips.map((chip) => (
-            <View key={chip} style={styles.metricPill}>
-              <Text style={styles.metricLabel}>{chip}</Text>
-            </View>
-          ))}
-        </View>
-      ) : null}
     </LinearGradient>
   );
 };
@@ -367,23 +357,5 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.caption,
     lineHeight: theme.typography.compact.caption * theme.typography.lineHeights.relaxed,
-  },
-  bottomStrip: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: theme.spacing.xs,
-    marginTop: theme.spacing.sm,
-  },
-  metricPill: {
-    paddingHorizontal: theme.spacing.sm,
-    paddingVertical: 4,
-    borderRadius: theme.radius.pill,
-    backgroundColor: theme.colors.whiteOverlay,
-  },
-  metricLabel: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.compact.caption,
-    color: theme.colors.textInverse,
-    fontWeight: theme.typography.weights.medium,
   },
 });

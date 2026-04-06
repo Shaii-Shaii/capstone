@@ -1,13 +1,6 @@
 import React from 'react';
-import { DashboardModuleScreen } from '../../src/components/layout/DashboardModuleScreen';
-import { donorDashboardNavItems, donorPlaceholderModules } from '../../src/constants/dashboard';
+import { NotificationCenterScreen } from '../../src/components/layout/NotificationCenterScreen';
 
 export default function DonorNotificationsScreen() {
-  return (
-    <DashboardModuleScreen
-      role="donor"
-      navItems={donorDashboardNavItems}
-      module={donorPlaceholderModules.notifications}
-    />
-  );
+  return <NotificationCenterScreen role="donor" />;
 }
