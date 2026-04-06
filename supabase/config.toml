@@ -1,0 +1,8 @@
+[functions.generate-chatbot-reply]
+verify_jwt = false
+
+[functions.analyze-hair-submission]
+verify_jwt = false
+
+[functions.generate-wig-preview]
+verify_jwt = false
