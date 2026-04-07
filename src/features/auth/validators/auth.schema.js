@@ -136,20 +136,62 @@ export const baseSignupSchema = z.object({
     return;
   }
 
-  if (data.patientFlowMode !== 'linked') {
+  if (!['linked', 'manual'].includes(data.patientFlowMode)) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: 'Please confirm a valid hospital code first.',
+      message: 'Complete the patient code popup or continue with manual patient details.',
       path: ['patientFlowMode'],
     });
   }
 
-  if (!data.linkedPatientCode) {
+  if (data.patientFlowMode === 'linked' && !data.linkedPatientCode) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: 'Please confirm a valid hospital code first.',
       path: ['linkedPatientCode'],
     });
+  }
+
+  if (data.patientFlowMode === 'manual') {
+    if (!data.patientFirstName) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'First name is required',
+        path: ['patientFirstName'],
+      });
+    }
+
+    if (!data.patientLastName) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Last name is required',
+        path: ['patientLastName'],
+      });
+    }
+
+    if (!data.patientAge) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Age is required',
+        path: ['patientAge'],
+      });
+    }
+
+    if (!data.patientGender) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Gender is required',
+        path: ['patientGender'],
+      });
+    }
+
+    if (!data.patientMedicalCondition) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Medical condition is required',
+        path: ['patientMedicalCondition'],
+      });
+    }
   }
 });
 
