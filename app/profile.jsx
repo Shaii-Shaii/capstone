@@ -110,10 +110,10 @@ export default function ProfileScreen() {
   const role = profile?.role || 'patient';
   const navItems = role === 'donor' ? donorDashboardNavItems : patientDashboardNavItems;
   const roleLabel = roleLabelMap[role] || 'Member';
-  const firstName = profile?.first_name || 'Account';
-  const lastName = profile?.last_name || '';
+  const firstName = profile?.first_name || patientProfile?.first_name || '';
+  const lastName = profile?.last_name || patientProfile?.last_name || '';
   const fullName = `${firstName} ${lastName}`.trim();
-  const avatarInitials = `${firstName?.[0] || ''}${lastName?.[0] || ''}`.trim() || 'DA';
+  const avatarInitials = `${firstName?.[0] || ''}${lastName?.[0] || ''}`.trim();
   const displayRows = useMemo(() => (
     profileDisplayFields
       .map((field) => ({ ...field, value: profile?.[field.key] }))
@@ -121,7 +121,7 @@ export default function ProfileScreen() {
   ), [profile]);
   const overviewRows = useMemo(() => (
     [
-      { key: 'fullName', label: 'Full name', value: fullName },
+      fullName ? { key: 'fullName', label: 'Full name', value: fullName } : null,
       { key: 'email', label: 'Email', value: user?.email || 'Not available' },
       { key: 'role', label: 'Account type', value: roleLabel },
       patientProfile?.patient_code
@@ -228,7 +228,7 @@ export default function ProfileScreen() {
         header={(
           <DashboardHeader
             title="My Profile"
-            subtitle={user?.email || 'Account'}
+            subtitle={fullName || (patientProfile?.patient_code ? `Patient code ${patientProfile.patient_code}` : '')}
             summary=""
             avatarInitials={avatarInitials}
             avatarUri={profile?.avatar_url}

@@ -26,8 +26,9 @@ export function DonorDonationStatusScreen() {
     refreshTracking,
   } = useProcessTracking({ role: 'donor', userId: user?.id, databaseUserId: profile?.user_id });
 
-  const firstName = profile?.first_name || 'Donor';
-  const avatarInitials = `${profile?.first_name?.[0] || firstName[0] || ''}${profile?.last_name?.[0] || ''}`.trim() || 'SS';
+  const firstName = profile?.first_name || '';
+  const lastName = profile?.last_name || '';
+  const avatarInitials = `${firstName?.[0] || ''}${lastName?.[0] || ''}`.trim();
 
   const handleNavPress = (item) => {
     if (!item.route || item.route === '/donor/status') return;

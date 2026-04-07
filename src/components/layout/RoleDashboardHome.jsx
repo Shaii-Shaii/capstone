@@ -134,10 +134,9 @@ export function RoleDashboardHome({ role, profile, navItems, content }) {
   const { user, patientProfile, staffProfile } = useAuth();
   const { unreadCount } = useNotifications({ role, userId: user?.id, databaseUserId: profile?.user_id });
   const { tracker } = useProcessTracking({ role, userId: user?.id, databaseUserId: profile?.user_id });
-  const emailName = profile?.email?.split('@')?.[0] || user?.email?.split('@')?.[0] || '';
-  const firstName = profile?.first_name || patientProfile?.first_name || emailName || '';
-  const lastName = profile?.last_name || '';
-  const avatarInitials = [firstName[0], lastName[0]].filter(Boolean).join('') || emailName.slice(0, 2).toUpperCase() || 'DA';
+  const firstName = profile?.first_name || patientProfile?.first_name || '';
+  const lastName = profile?.last_name || patientProfile?.last_name || '';
+  const avatarInitials = [firstName[0], lastName[0]].filter(Boolean).join('');
   const title = content.header.greeting === 'hello'
     ? (firstName ? `Hello, ${firstName}` : 'Hello')
     : (firstName ? `Welcome back, ${firstName}` : 'Welcome back');

@@ -16,11 +16,12 @@ import { AppCard } from '../ui/AppCard';
 export function DashboardModuleScreen({ role, navItems, module }) {
   const router = useRouter();
   const pathname = usePathname();
-  const { user, profile } = useAuth();
+  const { user, profile, patientProfile } = useAuth();
   const { unreadCount } = useNotifications({ role, userId: user?.id, databaseUserId: profile?.user_id });
 
-  const firstName = profile?.first_name || (role === 'donor' ? 'Donor' : 'Patient');
-  const avatarInitials = `${profile?.first_name?.[0] || firstName[0] || ''}${profile?.last_name?.[0] || ''}`.trim() || 'SS';
+  const firstName = profile?.first_name || patientProfile?.first_name || '';
+  const lastName = profile?.last_name || patientProfile?.last_name || '';
+  const avatarInitials = `${firstName?.[0] || ''}${lastName?.[0] || ''}`.trim();
 
   const handleNavPress = (item) => {
     if (!item.route) return;

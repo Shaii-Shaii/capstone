@@ -16,7 +16,7 @@ import { theme } from '../../design-system/theme';
 
 export function NotificationCenterScreen({ role }) {
   const router = useRouter();
-  const { user, profile } = useAuth();
+  const { user, profile, patientProfile } = useAuth();
   const {
     notifications,
     unreadCount,
@@ -29,8 +29,9 @@ export function NotificationCenterScreen({ role }) {
   } = useNotifications({ role, userId: user?.id, databaseUserId: profile?.user_id });
 
   const navItems = role === 'donor' ? donorDashboardNavItems : patientDashboardNavItems;
-  const firstName = profile?.first_name || (role === 'donor' ? 'Donor' : 'Patient');
-  const avatarInitials = `${profile?.first_name?.[0] || firstName[0] || ''}${profile?.last_name?.[0] || ''}`.trim() || 'SS';
+  const firstName = profile?.first_name || patientProfile?.first_name || '';
+  const lastName = profile?.last_name || patientProfile?.last_name || '';
+  const avatarInitials = `${firstName?.[0] || ''}${lastName?.[0] || ''}`.trim();
 
   const handleNavPress = (item) => {
     if (!item.route) return;
@@ -53,7 +54,7 @@ export function NotificationCenterScreen({ role }) {
       header={(
         <DashboardHeader
           title="Notifications"
-          subtitle={profile?.first_name ? `${profile.first_name}'s updates` : 'Account updates'}
+          subtitle={firstName ? `${firstName}'s updates` : 'Account updates'}
           summary=""
           avatarInitials={avatarInitials}
           avatarUri={profile?.avatar_url}

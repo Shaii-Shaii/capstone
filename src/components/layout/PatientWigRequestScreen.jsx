@@ -648,8 +648,9 @@ export function PatientWigRequestScreen() {
   });
 
   const draftValues = useWatch({ control });
-  const firstName = profile?.first_name || 'Patient';
-  const avatarInitials = `${profile?.first_name?.[0] || firstName[0] || ''}${profile?.last_name?.[0] || ''}`.trim() || 'SS';
+  const firstName = profile?.first_name || patientProfile?.first_name || '';
+  const lastName = profile?.last_name || patientProfile?.last_name || '';
+  const avatarInitials = `${firstName?.[0] || ''}${lastName?.[0] || ''}`.trim();
   const hasCameraPermission = Boolean(cameraPermission?.granted);
   const shouldShowTracker = hasSubmittedRequest && Boolean(tracker || isLoadingTracking || trackingError);
   const shouldShowRecommendation = Boolean(preview || referenceImage?.uri || latestWigSpecification?.ai_picture_sample_url);
@@ -746,9 +747,10 @@ export function PatientWigRequestScreen() {
     return result;
   });
 
-  const headerSubtitle = hasSubmittedRequest
+  const requestStatusLabel = hasSubmittedRequest
     ? (latestWigRequest?.status ? `Status: ${String(latestWigRequest.status).replace(/_/g, ' ')}` : 'Latest wig request')
     : (patientProfile?.patient_code ? `Patient code ${patientProfile.patient_code}` : 'Create a wig request');
+  const headerSubtitle = firstName ? [firstName, requestStatusLabel].filter(Boolean).join(' • ') : requestStatusLabel;
 
   return (
     <DashboardLayout
