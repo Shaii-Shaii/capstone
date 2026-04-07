@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { saveAvatar, saveProfile } from '../../profile/services/profile.service';
+import { linkPatientRecordByCode, saveAvatar, saveProfile } from '../../profile/services/profile.service';
 
 const SIGNUP_DRAFT_STORAGE_KEY = 'donivra.signupDrafts';
 
@@ -8,13 +8,25 @@ const normalizeEmailKey = (email) => email?.trim().toLowerCase() || '';
 const sanitizeDraft = (draft = {}) => ({
   email: draft.email?.trim() || '',
   role: draft.role || '',
+  isPatient: draft.isPatient || '',
+  patientFlowMode: draft.patientFlowMode || '',
   firstName: draft.firstName?.trim() || '',
   lastName: draft.lastName?.trim() || '',
   phone: draft.phone?.trim() || '',
-  patientAge: draft.patientAge?.trim?.() || '',
+  linkedPatientCode: draft.linkedPatientCode?.trim?.() || '',
+  linkedPatientId: draft.linkedPatientId || '',
+  linkedPatientHospitalId: draft.linkedPatientHospitalId || '',
+  linkedPatientName: draft.linkedPatientName?.trim?.() || '',
+  linkedPatientCondition: draft.linkedPatientCondition?.trim?.() || '',
+  patientFirstName: draft.patientFirstName?.trim?.() || '',
+  patientMiddleName: draft.patientMiddleName?.trim?.() || '',
+  patientLastName: draft.patientLastName?.trim?.() || '',
+  patientSuffix: draft.patientSuffix?.trim?.() || '',
+  patientAge: draft.patientAge?.toString?.().trim?.() || '',
   patientGender: draft.patientGender?.trim?.() || '',
-  medicalCondition: draft.medicalCondition?.trim?.() || '',
-  hospitalId: draft.hospitalId?.trim?.() || '',
+  patientMedicalCondition: draft.patientMedicalCondition?.trim?.() || '',
+  patientPicture: draft.patientPicture?.trim?.() || '',
+  patientMedicalDocument: draft.patientMedicalDocument?.trim?.() || '',
   street: draft.street?.trim() || '',
   barangay: draft.barangay?.trim() || '',
   city: draft.city?.trim() || '',
@@ -79,25 +91,32 @@ export const syncPendingSignupDraft = async ({ userId, email, role }) => {
       return { success: true, synced: false, error: null };
     }
 
+    const manualPatientRoleSpecific = draft.isPatient === 'yes' && draft.patientFlowMode === 'manual'
+      ? {
+          first_name: draft.patientFirstName || draft.firstName,
+          middle_name: draft.patientMiddleName,
+          last_name: draft.patientLastName || draft.lastName,
+          suffix: draft.patientSuffix,
+          age: draft.patientAge ? Number(draft.patientAge) : null,
+          gender: draft.patientGender,
+          medical_condition: draft.patientMedicalCondition,
+          patient_picture: draft.patientPicture || draft.profilePhoto || '',
+          medical_document: draft.patientMedicalDocument || '',
+        }
+      : null;
+
     const result = await saveProfile(userId, {
       first_name: draft.firstName,
       middle_name: '',
       last_name: draft.lastName,
       phone: draft.phone,
+      street: draft.street,
+      barangay: draft.barangay,
+      region: draft.region,
+      country: draft.country,
       city: draft.city,
       province: draft.province,
-      roleSpecific: draft.role === 'patient'
-        ? {
-            first_name: draft.firstName,
-            middle_name: '',
-            last_name: draft.lastName,
-            age: draft.patientAge ? Number(draft.patientAge) : undefined,
-            gender: draft.patientGender || undefined,
-            medical_condition: draft.medicalCondition || undefined,
-            hospital_id: draft.hospitalId ? Number(draft.hospitalId) : undefined,
-            patient_picture: draft.profilePhoto || undefined,
-          }
-        : undefined,
+      roleSpecific: manualPatientRoleSpecific,
     }, role);
 
     if (result.error) {
@@ -108,6 +127,18 @@ export const syncPendingSignupDraft = async ({ userId, email, role }) => {
       const avatarResult = await saveAvatar(userId, draft.profilePhoto);
       if (avatarResult.error) {
         return { success: false, synced: false, error: avatarResult.error };
+      }
+    }
+
+    if (draft.isPatient === 'yes' && draft.patientFlowMode === 'linked' && draft.linkedPatientCode) {
+      const patientLinkResult = await linkPatientRecordByCode({
+        userId,
+        patientCode: draft.linkedPatientCode,
+        patientPicture: draft.patientPicture || draft.profilePhoto || '',
+      });
+
+      if (patientLinkResult.error) {
+        return { success: false, synced: false, error: patientLinkResult.error };
       }
     }
 

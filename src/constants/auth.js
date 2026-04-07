@@ -3,7 +3,7 @@ export const roleAuthConfig = {
     label: 'signup',
     signup: {
       title: 'Create your Donivra account',
-      subtitle: 'Use one guided signup flow, choose your account type inside the form, and continue to email verification.',
+      subtitle: 'Use one guided signup flow, answer whether you are a patient, and continue to email verification.',
       eyebrow: 'Account signup',
       buttonText: 'Create account',
       footerQuestion: 'Already have an account?',

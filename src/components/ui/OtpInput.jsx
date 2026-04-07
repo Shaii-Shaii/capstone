@@ -19,6 +19,8 @@ const OtpCell = ({
   error,
   success,
   disabled,
+  keyboardType,
+  autoCapitalize,
   inputRef,
   onFocus,
   onBlur,
@@ -71,10 +73,11 @@ const OtpCell = ({
         onBlur={onBlur}
         onChangeText={onChangeText}
         onKeyPress={onKeyPress}
-        keyboardType="number-pad"
+        keyboardType={keyboardType}
         maxLength={1}
         editable={!disabled}
         selectTextOnFocus={!disabled}
+        autoCapitalize={autoCapitalize}
       />
     </AnimatedView>
   );
@@ -87,6 +90,9 @@ export const OtpInput = ({
   error,
   disabled = false,
   success = false,
+  keyboardType = 'number-pad',
+  characterSet = 'numeric',
+  autoCapitalize,
   style,
 }) => {
   const [internalCode, setInternalCode] = useState(value || '');
@@ -122,12 +128,18 @@ export const OtpInput = ({
     );
   }, [success, successScale]);
 
+  const sanitizeInput = (text) => (
+    characterSet === 'alphanumeric'
+      ? text.toUpperCase().replace(/[^A-Z0-9]/g, '')
+      : text.replace(/[^0-9]/g, '')
+  );
+
   const containerStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: shakeX.value }, { scale: successScale.value }],
   }));
 
   const handleChange = async (text, index) => {
-    const cleanText = text.replace(/[^0-9]/g, '');
+    const cleanText = sanitizeInput(text);
 
     if (cleanText.length > 1) {
       const newCode = cleanText.substring(0, length);
@@ -174,6 +186,8 @@ export const OtpInput = ({
             error={error}
             success={success}
             disabled={disabled}
+            keyboardType={keyboardType}
+            autoCapitalize={autoCapitalize || (characterSet === 'alphanumeric' ? 'characters' : 'none')}
             inputRef={(ref) => {
               inputRefs.current[index] = ref;
             }}

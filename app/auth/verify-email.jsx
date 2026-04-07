@@ -17,15 +17,15 @@ import { FormProgressStepper } from '../../src/components/ui/FormProgressStepper
 import { verifyEmailSchema } from '../../src/features/auth/validators/auth.schema';
 import { logout, verifyEmail, resendVerifyEmail } from '../../src/features/auth/services/auth.service';
 import { syncPendingSignupDraft } from '../../src/features/auth/services/signupDraft.service';
-import { roleAuthConfig } from '../../src/constants/auth';
 import { theme } from '../../src/design-system/theme';
 
 const RESEND_DELAY = 30;
 const SIGNUP_STEPS = [
   { key: 'personal', label: 'Personal Details', shortLabel: 'Personal' },
   { key: 'address', label: 'Address Details', shortLabel: 'Address' },
+  { key: 'patient', label: 'Patient', shortLabel: 'Patient' },
   { key: 'photo', label: 'Profile Photo', shortLabel: 'Photo' },
-  { key: 'password', label: 'Password', shortLabel: 'Password' },
+  { key: 'confirm', label: 'Confirm', shortLabel: 'Confirm' },
   { key: 'verify', label: 'OTP Verification', shortLabel: 'Verify' },
 ];
 
@@ -79,10 +79,8 @@ export default function VerifyEmailScreen() {
     );
   };
 
-  const routeAfterVerify = (roleFromAuth) => {
-    const resolvedRole = roleFromAuth || role;
-    const loginRoute = roleAuthConfig[resolvedRole]?.routes?.login || '/auth/access';
-    router.replace(loginRoute);
+  const routeAfterVerify = () => {
+    router.replace('/auth/access');
   };
 
   const handleVerify = async (data) => {
@@ -126,7 +124,7 @@ export default function VerifyEmailScreen() {
       withTiming(1, { duration: 160 })
     );
 
-    setTimeout(() => routeAfterVerify(verifiedRole), 900);
+    setTimeout(() => routeAfterVerify(), 900);
   };
 
   const handleResend = async () => {
@@ -158,7 +156,7 @@ export default function VerifyEmailScreen() {
 
       <FormProgressStepper
         steps={SIGNUP_STEPS}
-        currentStep={4}
+        currentStep={5}
         style={styles.stepper}
       />
 

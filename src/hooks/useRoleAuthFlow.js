@@ -16,11 +16,7 @@ export const useRoleAuthFlow = (role) => {
   const expectedRole = role === 'donor' || role === 'patient' ? role : undefined;
 
   const handleSignup = async (data) => {
-    const selectedRole = expectedRole || data.role;
-    if (!selectedRole || !['donor', 'patient'].includes(selectedRole)) {
-      Alert.alert('Signup Incomplete', 'Please choose whether this account is for a donor or a patient.');
-      return;
-    }
+    const selectedRole = expectedRole || (data.isPatient === 'yes' ? 'patient' : 'donor');
 
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
@@ -37,10 +33,6 @@ export const useRoleAuthFlow = (role) => {
       latitude: data.latitude,
       longitude: data.longitude,
       profilePhoto: data.profilePhoto,
-      patientAge: data.patientAge,
-      patientGender: data.patientGender,
-      medicalCondition: data.medicalCondition,
-      hospitalId: data.hospitalId,
       role: selectedRole,
     });
 

@@ -24,17 +24,38 @@ export const coordinateField = z.string()
   .refine((value) => !value || !Number.isNaN(Number(value)), {
     message: 'Must be a valid coordinate',
   });
+const optionalTextField = z.string().trim().max(120, 'Max 120 characters allowed').optional().or(z.literal(''));
+const optionalLongTextField = z.string().trim().max(300, 'Max 300 characters allowed').optional().or(z.literal(''));
+const optionalNameField = z.union([nameField, z.literal('')]).optional();
+const patientAgeField = z.string()
+  .trim()
+  .optional()
+  .or(z.literal(''))
+  .refine((value) => !value || (/^\d+$/.test(value) && Number(value) > 0), {
+    message: 'Enter a valid age',
+  });
 
 export const signupDefaultValues = {
-  role: '',
   firstName: '',
   lastName: '',
   email: '',
   phone: '',
+  isPatient: '',
+  patientFlowMode: '',
+  linkedPatientCode: '',
+  linkedPatientId: '',
+  linkedPatientHospitalId: '',
+  linkedPatientName: '',
+  linkedPatientCondition: '',
+  patientFirstName: '',
+  patientMiddleName: '',
+  patientLastName: '',
+  patientSuffix: '',
   patientAge: '',
   patientGender: '',
-  medicalCondition: '',
-  hospitalId: '',
+  patientMedicalCondition: '',
+  patientPicture: '',
+  patientMedicalDocument: '',
   street: '',
   barangay: '',
   city: '',
@@ -68,21 +89,28 @@ export const resetPasswordSchema = z.object({
 
 // Shared Base Signup Schema
 export const baseSignupSchema = z.object({
-  role: z.string().trim().min(1, 'Please choose an account type').refine((value) => ['donor', 'patient'].includes(value), {
-    message: 'Please choose an account type',
-  }),
   firstName: nameField,
   lastName: nameField,
   email: emailField,
   phone: phoneField,
-  patientAge: z.string().trim().optional().or(z.literal('')).refine((value) => !value || (!Number.isNaN(Number(value)) && Number(value) > 0), {
-    message: 'Age must be a valid number',
+  isPatient: z.string().trim().min(1, 'Please answer whether you are a patient').refine((value) => ['yes', 'no'].includes(value), {
+    message: 'Please answer whether you are a patient',
   }),
-  patientGender: z.string().trim().optional().or(z.literal('')),
-  medicalCondition: z.string().trim().optional().or(z.literal('')),
-  hospitalId: z.string().trim().optional().or(z.literal('')).refine((value) => !value || !Number.isNaN(Number(value)), {
-    message: 'Hospital ID must be a valid number',
-  }),
+  patientFlowMode: z.string().trim().optional().or(z.literal('')),
+  linkedPatientCode: optionalTextField,
+  linkedPatientId: optionalTextField,
+  linkedPatientHospitalId: optionalTextField,
+  linkedPatientName: optionalLongTextField,
+  linkedPatientCondition: optionalLongTextField,
+  patientFirstName: optionalNameField,
+  patientMiddleName: optionalTextField,
+  patientLastName: optionalNameField,
+  patientSuffix: optionalTextField,
+  patientAge: patientAgeField,
+  patientGender: optionalTextField,
+  patientMedicalCondition: optionalLongTextField,
+  patientPicture: z.string().optional().or(z.literal('')),
+  patientMedicalDocument: z.string().optional().or(z.literal('')),
   street: addressField,
   barangay: addressField,
   city: addressField,
@@ -104,21 +132,23 @@ export const baseSignupSchema = z.object({
   message: 'Latitude and longitude should both be provided when coordinates are entered manually',
   path: ['longitude'],
 }).superRefine((data, ctx) => {
-  if (data.role !== 'patient') return;
+  if (data.isPatient !== 'yes') {
+    return;
+  }
 
-  if (!data.patientGender?.trim()) {
+  if (data.patientFlowMode !== 'linked') {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: 'Gender is required for patient signup',
-      path: ['patientGender'],
+      message: 'Please confirm a valid hospital code first.',
+      path: ['patientFlowMode'],
     });
   }
 
-  if (!data.medicalCondition?.trim()) {
+  if (!data.linkedPatientCode) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: 'Medical condition is required for patient signup',
-      path: ['medicalCondition'],
+      message: 'Please confirm a valid hospital code first.',
+      path: ['linkedPatientCode'],
     });
   }
 });

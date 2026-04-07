@@ -50,6 +50,22 @@ const normalizePatient = (row) => ({
   updated_at: row?.updated_at || null,
 });
 
+const normalizePatientLinkPreview = (row) => ({
+  id: row?.patient_id || null,
+  patient_id: row?.patient_id || null,
+  patient_code: row?.patient_code || '',
+  hospital_id: row?.hospital_id || null,
+  first_name: row?.first_name || '',
+  middle_name: row?.middle_name || '',
+  last_name: row?.last_name || '',
+  suffix: row?.suffix || '',
+  age: row?.age ?? null,
+  gender: row?.gender || '',
+  medical_condition: row?.medical_condition || '',
+  patient_picture: row?.patient_picture || '',
+  user_id: row?.user_id || null,
+});
+
 const getCurrentAuthMetadata = async () => {
   const { data } = await supabase.auth.getUser();
   return data?.user || null;
@@ -301,6 +317,24 @@ export const fetchPatientDetailsByUserId = async (userIdentifier) => {
   };
 };
 
+export const fetchPatientDetailsByCode = async (patientCode) => {
+  const normalizedCode = patientCode?.trim()?.toUpperCase();
+  if (!normalizedCode) {
+    return { data: null, error: new Error('Patient code is required.') };
+  }
+
+  const result = await supabase
+    .from('patients')
+    .select('*')
+    .ilike('patient_code', normalizedCode)
+    .maybeSingle();
+
+  return {
+    data: result.data ? normalizePatientLinkPreview(result.data) : null,
+    error: result.error,
+  };
+};
+
 export const createPatientDetails = async (payload) => {
   const systemUserResult = await resolveSystemUser(payload?.user_id);
   if (systemUserResult.error || !systemUserResult.data?.user_id) {
@@ -319,9 +353,11 @@ export const createPatientDetails = async (payload) => {
       middle_name: payload?.middle_name || profile?.middle_name || '',
       last_name: payload?.last_name || profile?.last_name || '',
       suffix: payload?.suffix || profile?.suffix || '',
+      age: payload?.age ?? null,
       gender: payload?.gender || profile?.gender || '',
       patient_picture: payload?.patient_picture || profile?.photo_path || null,
       medical_condition: payload?.medical_condition || null,
+      medical_document: payload?.medical_document || null,
     }])
     .select()
     .single();
@@ -386,6 +422,47 @@ export const updatePatientDetails = async (userIdentifier, updates) => {
       updated_at: new Date().toISOString(),
     })
     .eq('patient_id', refreshedPatient.data.patient_id)
+    .select()
+    .single();
+
+  return {
+    data: result.data ? normalizePatient(result.data) : null,
+    error: result.error,
+  };
+};
+
+export const linkPatientDetailsToUserByCode = async ({
+  userIdentifier,
+  patientCode,
+  patientPicture,
+}) => {
+  const systemUserResult = await resolveSystemUser(userIdentifier);
+  if (systemUserResult.error || !systemUserResult.data?.user_id) {
+    return { data: null, error: systemUserResult.error || new Error('System user could not be loaded.') };
+  }
+
+  const patientResult = await fetchPatientDetailsByCode(patientCode);
+  if (patientResult.error || !patientResult.data?.patient_id) {
+    return { data: null, error: patientResult.error || new Error('Patient record was not found.') };
+  }
+
+  if (patientResult.data.user_id && patientResult.data.user_id !== systemUserResult.data.user_id) {
+    return { data: null, error: new Error('This patient code is already linked to another account.') };
+  }
+
+  const updates = {
+    user_id: systemUserResult.data.user_id,
+    updated_at: new Date().toISOString(),
+  };
+
+  if (patientPicture) {
+    updates.patient_picture = patientPicture;
+  }
+
+  const result = await supabase
+    .from('patients')
+    .update(updates)
+    .eq('patient_id', patientResult.data.patient_id)
     .select()
     .single();
 

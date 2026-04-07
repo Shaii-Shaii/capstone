@@ -35,7 +35,7 @@ export default function LandingScreen() {
           <Text style={styles.brandTag}>Hair donation and support</Text>
           <Text style={styles.heroTitle}>Welcome to Donivra.</Text>
           <Text style={styles.heroSubtitle}>
-            Create one account, choose your account type during signup, and continue to the right dashboard.
+            Create one account, complete OTP verification, and then log in to continue.
           </Text>
 
           <View style={styles.actionStack}>

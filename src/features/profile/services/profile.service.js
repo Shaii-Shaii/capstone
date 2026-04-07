@@ -44,6 +44,41 @@ const updateRoleProfile = async (role, userId, updates) => {
   return { data: null, error: null };
 };
 
+export const getPatientLinkPreview = async (patientCode) => {
+  try {
+    const { data, error } = await ProfileAPI.fetchPatientDetailsByCode(patientCode);
+    if (error) throw new Error(error.message);
+    if (!data?.patient_id) {
+      throw new Error('We could not find a patient record for that code.');
+    }
+    if (data.user_id) {
+      throw new Error('This patient code is already linked to another account.');
+    }
+
+    return { patient: data, error: null };
+  } catch (error) {
+    return { patient: null, error: error.message };
+  }
+};
+
+export const linkPatientRecordByCode = async ({ userId, patientCode, patientPicture }) => {
+  try {
+    if (!userId) throw new Error('User ID is required');
+    if (!patientCode) throw new Error('Patient code is required');
+
+    const { data, error } = await ProfileAPI.linkPatientDetailsToUserByCode({
+      userIdentifier: userId,
+      patientCode,
+      patientPicture,
+    });
+
+    if (error) throw new Error(error.message);
+    return { patient: data, error: null };
+  } catch (error) {
+    return { patient: null, error: error.message };
+  }
+};
+
 export const getProfile = async (userId) => {
   try {
     if (!userId) throw new Error('User ID is required');
