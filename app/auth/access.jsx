@@ -15,11 +15,11 @@ export default function AccessScreen() {
     <AuthScreenLayout role="donor">
       <AuthHeader
         title={config.login.title}
-        subtitle={config.login.subtitle}
-        eyebrow={config.login.eyebrow}
+        subtitle=""
         role="access"
         backLabel="Back to home"
         onBackPress={() => router.replace('/')}
+        minimal={true}
       />
 
       <View style={authLayoutStyles.formSection}>
