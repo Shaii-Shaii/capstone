@@ -4,37 +4,38 @@ import { useRouter } from 'expo-router';
 import { AuthScreenLayout, authLayoutStyles } from '../../src/components/auth/AuthScreenLayout';
 import { AuthHeader } from '../../src/components/auth/AuthHeader';
 import { AuthFormFooter } from '../../src/components/auth/AuthFormFooter';
-import { LoginForm } from '../../src/components/auth/LoginForm';
+import { SignupForm } from '../../src/components/auth/SignupForm';
+import { unifiedSignupSchema } from '../../src/features/auth/validators/auth.schema';
 import { useRoleAuthFlow } from '../../src/hooks/useRoleAuthFlow';
 
-export default function AccessScreen() {
+export default function SignupScreen() {
   const router = useRouter();
-  const { config, handleLogin, isLoading } = useRoleAuthFlow('access');
+  const { config, handleSignup, isLoading } = useRoleAuthFlow('signup');
 
   return (
-    <AuthScreenLayout role="donor">
+    <AuthScreenLayout role="access">
       <AuthHeader
-        title={config.login.title}
-        subtitle={config.login.subtitle}
-        eyebrow={config.login.eyebrow}
+        title={config.signup.title}
+        subtitle={config.signup.subtitle}
+        eyebrow={config.signup.eyebrow}
         role="access"
         backLabel="Back to home"
         onBackPress={() => router.replace('/')}
       />
 
       <View style={authLayoutStyles.formSection}>
-        <LoginForm
-          onSubmit={handleLogin}
+        <SignupForm
+          schema={unifiedSignupSchema}
+          onSubmit={handleSignup}
           isLoading={isLoading}
-          onForgotPassword={() => router.push('/auth/forgot-password')}
-          buttonText={config.login.buttonText}
+          buttonText={config.signup.buttonText}
         />
       </View>
 
       <AuthFormFooter
-        questionText={config.login.footerQuestion}
-        linkText={config.login.footerLink}
-        onLinkPress={() => router.replace('/auth/signup')}
+        questionText={config.signup.footerQuestion}
+        linkText={config.signup.footerLink}
+        onLinkPress={() => router.replace('/auth/access')}
       />
     </AuthScreenLayout>
   );

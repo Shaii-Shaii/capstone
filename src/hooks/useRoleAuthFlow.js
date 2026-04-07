@@ -16,8 +16,9 @@ export const useRoleAuthFlow = (role) => {
   const expectedRole = role === 'donor' || role === 'patient' ? role : undefined;
 
   const handleSignup = async (data) => {
-    if (!expectedRole) {
-      Alert.alert('Signup Unavailable', 'Please start from the landing page and choose donor or patient signup.');
+    const selectedRole = expectedRole || data.role;
+    if (!selectedRole || !['donor', 'patient'].includes(selectedRole)) {
+      Alert.alert('Signup Incomplete', 'Please choose whether this account is for a donor or a patient.');
       return;
     }
 
@@ -36,27 +37,31 @@ export const useRoleAuthFlow = (role) => {
       latitude: data.latitude,
       longitude: data.longitude,
       profilePhoto: data.profilePhoto,
-      role: expectedRole,
+      patientAge: data.patientAge,
+      patientGender: data.patientGender,
+      medicalCondition: data.medicalCondition,
+      hospitalId: data.hospitalId,
+      role: selectedRole,
     });
 
     if (result.success) {
       await savePendingSignupDraft({
         ...data,
-        role: expectedRole,
+        role: selectedRole,
       });
 
       if (result.session && result.user?.id) {
         await syncPendingSignupDraft({
           userId: result.user.id,
           email: data.email,
-          role: expectedRole,
+          role: selectedRole,
         });
 
         await logout();
       }
 
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      router.replace(`/auth/verify-email?email=${encodeURIComponent(data.email)}&role=${expectedRole}`);
+      router.replace(`/auth/verify-email?email=${encodeURIComponent(data.email)}&role=${selectedRole}`);
       return;
     }
 

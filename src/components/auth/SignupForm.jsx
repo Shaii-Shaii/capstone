@@ -1,5 +1,5 @@
-import React, { useMemo, useState } from 'react';
-import { Alert, Image, StyleSheet, Text, View } from 'react-native';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Alert, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -15,44 +15,80 @@ import { getPasswordStrengthMessage } from '../../utils/passwordRules';
 
 const IMAGE_MEDIA_TYPES = ['images'];
 
-const SIGNUP_STEPS = [
-  {
-    key: 'personal',
-    label: 'Personal Details',
-    shortLabel: 'Personal',
-    fields: ['firstName', 'lastName', 'email', 'phone'],
-  },
-  {
-    key: 'address',
-    label: 'Address Details',
-    shortLabel: 'Address',
-    fields: ['street', 'barangay', 'city', 'province', 'region', 'country'],
-  },
-  {
-    key: 'photo',
-    label: 'Profile Photo',
-    shortLabel: 'Photo',
-    fields: [],
-  },
-  {
-    key: 'password',
-    label: 'Password',
-    shortLabel: 'Password',
-    fields: ['password', 'confirmPassword'],
-  },
-  {
-    key: 'verify',
-    label: 'OTP Verification',
-    shortLabel: 'Verify',
-    fields: [],
-  },
-];
+const buildSignupSteps = (role) => {
+  const steps = [
+    {
+      key: 'role',
+      label: 'Account Type',
+      shortLabel: 'Type',
+      fields: ['role'],
+    },
+    {
+      key: 'personal',
+      label: 'Personal Details',
+      shortLabel: 'Personal',
+      fields: ['firstName', 'lastName', 'email', 'phone'],
+    },
+  ];
 
-const renderStepCopy = (stepKey) => {
+  if (role === 'patient') {
+    steps.push({
+      key: 'patient',
+      label: 'Patient Details',
+      shortLabel: 'Patient',
+      fields: ['patientGender', 'medicalCondition', 'patientAge', 'hospitalId'],
+    });
+  }
+
+  steps.push(
+    {
+      key: 'address',
+      label: 'Address Details',
+      shortLabel: 'Address',
+      fields: ['street', 'barangay', 'city', 'province', 'region', 'country'],
+    },
+    {
+      key: 'photo',
+      label: 'Profile Photo',
+      shortLabel: 'Photo',
+      fields: [],
+    },
+    {
+      key: 'password',
+      label: 'Password',
+      shortLabel: 'Password',
+      fields: ['password', 'confirmPassword'],
+    },
+    {
+      key: 'verify',
+      label: 'OTP Verification',
+      shortLabel: 'Verify',
+      fields: [],
+    }
+  );
+
+  return steps;
+};
+
+const renderStepCopy = (stepKey, role) => {
+  if (stepKey === 'role') {
+    return {
+      title: 'Choose account type',
+      body: 'Select whether you are signing up as a donor or a patient before continuing.',
+    };
+  }
+
   if (stepKey === 'personal') {
     return {
       title: 'Basic details',
-      body: 'Start with your personal contact details so we can set up your donor account properly.',
+      body: 'Start with your contact details so we can create your account record properly.',
+    };
+  }
+
+  if (stepKey === 'patient') {
+    return {
+      title: 'Patient details',
+      body: 'Add the patient information needed for the patient record. Hospital ID is optional if not yet assigned.',
     };
   }
 
@@ -72,7 +108,9 @@ const renderStepCopy = (stepKey) => {
 
   return {
     title: 'Create your password',
-    body: 'Set a secure password before we send you to email verification.',
+    body: role === 'patient'
+      ? 'Set a secure password before we send you to email verification and finish the patient account setup.'
+      : 'Set a secure password before we send you to email verification.',
   };
 };
 
@@ -113,7 +151,23 @@ const PhotoStep = ({ value, onChange, isUploading }) => (
   </View>
 );
 
-export const SignupForm = ({ schema, onSubmit, isLoading, buttonText = 'Sign Up' }) => {
+const RoleOptionCard = ({ roleKey, title, description, icon, selected, onPress }) => (
+  <Pressable
+    onPress={onPress}
+    style={[styles.roleOptionCard, selected ? styles.roleOptionCardActive : null]}
+  >
+    <View style={[styles.roleOptionIconWrap, selected ? styles.roleOptionIconWrapActive : null]}>
+      <AppIcon name={icon} size="sm" state={selected ? 'inverse' : 'active'} />
+    </View>
+    <View style={styles.roleOptionCopy}>
+      <Text style={styles.roleOptionTitle}>{title}</Text>
+      <Text style={styles.roleOptionDescription}>{description}</Text>
+    </View>
+    {selected ? <AppIcon name="success" size="sm" state="success" /> : null}
+  </Pressable>
+);
+
+export const SignupForm = ({ schema, onSubmit, isLoading, buttonText = 'Create Account' }) => {
   const [currentStep, setCurrentStep] = useState(0);
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const { control, handleSubmit, setValue, watch, trigger, formState: { errors } } = useForm({
@@ -122,21 +176,29 @@ export const SignupForm = ({ schema, onSubmit, isLoading, buttonText = 'Sign Up'
     defaultValues: signupDefaultValues,
   });
 
-  const activeStep = SIGNUP_STEPS[currentStep];
-  const stepCopy = renderStepCopy(activeStep.key);
+  const selectedRole = watch('role');
+  const signupSteps = useMemo(() => buildSignupSteps(selectedRole), [selectedRole]);
+  const activeStep = signupSteps[currentStep];
+  const stepCopy = renderStepCopy(activeStep.key, selectedRole);
   const profilePhoto = watch('profilePhoto');
   const passwordValue = watch('password');
   const passwordStrengthMessage = getPasswordStrengthMessage(passwordValue);
 
+  useEffect(() => {
+    if (currentStep > signupSteps.length - 2) {
+      setCurrentStep(Math.max(0, signupSteps.length - 2));
+    }
+  }, [currentStep, signupSteps.length]);
+
   const handleNext = async () => {
     if (!activeStep.fields.length) {
-      setCurrentStep((current) => Math.min(current + 1, SIGNUP_STEPS.length - 2));
+      setCurrentStep((current) => Math.min(current + 1, signupSteps.length - 2));
       return;
     }
 
     const isValid = await trigger(activeStep.fields);
     if (!isValid) return;
-    setCurrentStep((current) => Math.min(current + 1, SIGNUP_STEPS.length - 2));
+    setCurrentStep((current) => Math.min(current + 1, signupSteps.length - 2));
   };
 
   const handleBack = () => {
@@ -178,17 +240,45 @@ export const SignupForm = ({ schema, onSubmit, isLoading, buttonText = 'Sign Up'
 
   const handleSkipPhoto = () => {
     setValue('profilePhoto', '', { shouldDirty: true });
-    setCurrentStep((current) => Math.min(current + 1, SIGNUP_STEPS.length - 2));
+    setCurrentStep((current) => Math.min(current + 1, signupSteps.length - 2));
   };
 
-  const submitLabel = useMemo(() => buttonText || 'Create donor account', [buttonText]);
+  const submitLabel = useMemo(() => buttonText || 'Create Account', [buttonText]);
 
   return (
     <View style={styles.container}>
-      <FormProgressStepper steps={SIGNUP_STEPS} currentStep={currentStep} style={styles.stepper} />
+      <FormProgressStepper steps={signupSteps} currentStep={currentStep} style={styles.stepper} />
 
       <View style={styles.stepCard}>
         <StepTitle title={stepCopy.title} body={stepCopy.body} />
+
+        {activeStep.key === 'role' ? (
+          <Controller
+            control={control}
+            name="role"
+            render={({ field: { value } }) => (
+              <View style={styles.roleOptionList}>
+                <RoleOptionCard
+                  roleKey="donor"
+                  title="Donor Account"
+                  description="For users who want to donate hair and manage donation-related steps."
+                  icon="heart"
+                  selected={value === 'donor'}
+                  onPress={() => setValue('role', 'donor', { shouldDirty: true, shouldValidate: true })}
+                />
+                <RoleOptionCard
+                  roleKey="patient"
+                  title="Patient Account"
+                  description="For users who need support, patient tracking, and wig request access."
+                  icon="support"
+                  selected={value === 'patient'}
+                  onPress={() => setValue('role', 'patient', { shouldDirty: true, shouldValidate: true })}
+                />
+                {errors.role?.message ? <Text style={styles.inlineErrorText}>{errors.role.message}</Text> : null}
+              </View>
+            )}
+          />
+        ) : null}
 
         {activeStep.key === 'personal' ? (
           <>
@@ -262,6 +352,81 @@ export const SignupForm = ({ schema, onSubmit, isLoading, buttonText = 'Sign Up'
                 />
               )}
             />
+          </>
+        ) : null}
+
+        {activeStep.key === 'patient' ? (
+          <>
+            <Controller
+              control={control}
+              name="patientGender"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <AppInput
+                  label="Gender"
+                  placeholder="Female"
+                  variant="filled"
+                  onBlur={onBlur}
+                  onChangeText={onChange}
+                  value={value}
+                  error={errors.patientGender?.message}
+                />
+              )}
+            />
+
+            <Controller
+              control={control}
+              name="medicalCondition"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <AppInput
+                  label="Medical Condition"
+                  placeholder="Alopecia"
+                  variant="filled"
+                  onBlur={onBlur}
+                  onChangeText={onChange}
+                  value={value}
+                  error={errors.medicalCondition?.message}
+                />
+              )}
+            />
+
+            <View style={styles.row}>
+              <Controller
+                control={control}
+                name="patientAge"
+                render={({ field: { onChange, onBlur, value } }) => (
+                  <AppInput
+                    label="Age"
+                    placeholder="18"
+                    keyboardType="number-pad"
+                    variant="filled"
+                    onBlur={onBlur}
+                    onChangeText={onChange}
+                    value={value}
+                    error={errors.patientAge?.message}
+                    helperText="Optional"
+                    style={styles.rowField}
+                  />
+                )}
+              />
+              <Controller
+                control={control}
+                name="hospitalId"
+                render={({ field: { onChange, onBlur, value } }) => (
+                  <AppInput
+                    label="Hospital ID"
+                    placeholder="12"
+                    keyboardType="number-pad"
+                    variant="filled"
+                    onBlur={onBlur}
+                    onChangeText={onChange}
+                    value={value}
+                    error={errors.hospitalId?.message}
+                    helperText="Optional"
+                    style={styles.rowField}
+                  />
+                )}
+              />
+            </View>
           </>
         ) : null}
 
@@ -346,7 +511,7 @@ export const SignupForm = ({ schema, onSubmit, isLoading, buttonText = 'Sign Up'
             ) : null}
           </View>
 
-          {currentStep < SIGNUP_STEPS.length - 2 ? (
+          {currentStep < signupSteps.length - 2 ? (
             <AppButton
               title="Next"
               fullWidth={false}
@@ -393,6 +558,58 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.compact.caption,
     lineHeight: theme.typography.compact.caption * theme.typography.lineHeights.relaxed,
     color: theme.colors.textSecondary,
+  },
+  roleOptionList: {
+    gap: theme.spacing.sm,
+  },
+  roleOptionCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.md,
+    borderRadius: theme.radius.xl,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+    backgroundColor: theme.colors.surfaceSoft,
+  },
+  roleOptionCardActive: {
+    borderColor: theme.colors.brandPrimary,
+    backgroundColor: theme.colors.brandPrimaryMuted,
+  },
+  roleOptionIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.backgroundPrimary,
+  },
+  roleOptionIconWrapActive: {
+    backgroundColor: theme.colors.brandPrimary,
+  },
+  roleOptionCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  roleOptionTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textPrimary,
+  },
+  roleOptionDescription: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    lineHeight: theme.typography.compact.caption * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textSecondary,
+  },
+  inlineErrorText: {
+    marginTop: 3,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    color: theme.colors.textError,
+    fontWeight: theme.typography.weights.medium,
   },
   row: {
     flexDirection: 'row',

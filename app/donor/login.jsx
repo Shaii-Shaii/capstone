@@ -34,7 +34,7 @@ export default function DonorLoginScreen() {
       <AuthFormFooter
         questionText={config.login.footerQuestion}
         linkText={config.login.footerLink}
-        onLinkPress={() => router.replace(config.routes.signup)}
+        onLinkPress={() => router.replace('/auth/signup')}
       />
     </AuthScreenLayout>
   );

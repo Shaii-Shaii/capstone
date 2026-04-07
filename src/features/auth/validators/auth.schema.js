@@ -26,10 +26,15 @@ export const coordinateField = z.string()
   });
 
 export const signupDefaultValues = {
+  role: '',
   firstName: '',
   lastName: '',
   email: '',
   phone: '',
+  patientAge: '',
+  patientGender: '',
+  medicalCondition: '',
+  hospitalId: '',
   street: '',
   barangay: '',
   city: '',
@@ -63,10 +68,21 @@ export const resetPasswordSchema = z.object({
 
 // Shared Base Signup Schema
 export const baseSignupSchema = z.object({
+  role: z.string().trim().min(1, 'Please choose an account type').refine((value) => ['donor', 'patient'].includes(value), {
+    message: 'Please choose an account type',
+  }),
   firstName: nameField,
   lastName: nameField,
   email: emailField,
   phone: phoneField,
+  patientAge: z.string().trim().optional().or(z.literal('')).refine((value) => !value || (!Number.isNaN(Number(value)) && Number(value) > 0), {
+    message: 'Age must be a valid number',
+  }),
+  patientGender: z.string().trim().optional().or(z.literal('')),
+  medicalCondition: z.string().trim().optional().or(z.literal('')),
+  hospitalId: z.string().trim().optional().or(z.literal('')).refine((value) => !value || !Number.isNaN(Number(value)), {
+    message: 'Hospital ID must be a valid number',
+  }),
   street: addressField,
   barangay: addressField,
   city: addressField,
@@ -87,11 +103,30 @@ export const baseSignupSchema = z.object({
 ), {
   message: 'Latitude and longitude should both be provided when coordinates are entered manually',
   path: ['longitude'],
+}).superRefine((data, ctx) => {
+  if (data.role !== 'patient') return;
+
+  if (!data.patientGender?.trim()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Gender is required for patient signup',
+      path: ['patientGender'],
+    });
+  }
+
+  if (!data.medicalCondition?.trim()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Medical condition is required for patient signup',
+      path: ['medicalCondition'],
+    });
+  }
 });
 
 // Role-Specific Signup Schemas (can add role-specific fields here later)
 export const patientSignupSchema = baseSignupSchema; // Patients might need extra medical consent fields later
 export const donorSignupSchema = baseSignupSchema; // Donors might need hair history fields later
+export const unifiedSignupSchema = baseSignupSchema;
 
 export const verifyEmailSchema = z.object({
   otp: z.string().length(6, 'OTP must be exactly 6 digits').regex(/^\d+$/, 'OTP must only contain numbers'),

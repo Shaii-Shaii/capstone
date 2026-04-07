@@ -11,6 +11,10 @@ const sanitizeDraft = (draft = {}) => ({
   firstName: draft.firstName?.trim() || '',
   lastName: draft.lastName?.trim() || '',
   phone: draft.phone?.trim() || '',
+  patientAge: draft.patientAge?.trim?.() || '',
+  patientGender: draft.patientGender?.trim?.() || '',
+  medicalCondition: draft.medicalCondition?.trim?.() || '',
+  hospitalId: draft.hospitalId?.trim?.() || '',
   street: draft.street?.trim() || '',
   barangay: draft.barangay?.trim() || '',
   city: draft.city?.trim() || '',
@@ -82,6 +86,18 @@ export const syncPendingSignupDraft = async ({ userId, email, role }) => {
       phone: draft.phone,
       city: draft.city,
       province: draft.province,
+      roleSpecific: draft.role === 'patient'
+        ? {
+            first_name: draft.firstName,
+            middle_name: '',
+            last_name: draft.lastName,
+            age: draft.patientAge ? Number(draft.patientAge) : undefined,
+            gender: draft.patientGender || undefined,
+            medical_condition: draft.medicalCondition || undefined,
+            hospital_id: draft.hospitalId ? Number(draft.hospitalId) : undefined,
+            patient_picture: draft.profilePhoto || undefined,
+          }
+        : undefined,
     }, role);
 
     if (result.error) {

@@ -1,4 +1,20 @@
 export const roleAuthConfig = {
+  signup: {
+    label: 'signup',
+    signup: {
+      title: 'Create your Donivra account',
+      subtitle: 'Use one guided signup flow, choose your account type inside the form, and continue to email verification.',
+      eyebrow: 'Account signup',
+      buttonText: 'Create account',
+      footerQuestion: 'Already have an account?',
+      footerLink: 'Log in here',
+    },
+    routes: {
+      signup: '/auth/signup',
+      login: '/auth/access',
+      landing: '/',
+    },
+  },
   access: {
     label: 'account',
     login: {
@@ -7,10 +23,11 @@ export const roleAuthConfig = {
       eyebrow: 'Account login',
       buttonText: 'Log in to Donivra',
       footerQuestion: 'Need a new account?',
-      footerLink: 'Start from the landing page',
+      footerLink: 'Sign up here',
     },
     routes: {
       login: '/auth/access',
+      signup: '/auth/signup',
       landing: '/',
     },
   },
@@ -33,7 +50,7 @@ export const roleAuthConfig = {
       footerLink: 'Sign up here',
     },
     routes: {
-      signup: '/donor/signup',
+      signup: '/auth/signup',
       login: '/donor/login',
       home: '/donor/home',
     },
@@ -57,7 +74,7 @@ export const roleAuthConfig = {
       footerLink: 'Sign up here',
     },
     routes: {
-      signup: '/patient/signup',
+      signup: '/auth/signup',
       login: '/patient/login',
       home: '/patient/home',
     },
