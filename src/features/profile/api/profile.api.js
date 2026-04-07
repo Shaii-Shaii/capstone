@@ -102,6 +102,18 @@ export const fetchSystemUserByAuthUserId = async (authUserId) => {
     .maybeSingle();
 };
 
+export const fetchSystemUserByEmail = async (email) => {
+  if (!email) {
+    return { data: null, error: new Error('Email is required.') };
+  }
+
+  return await supabase
+    .from('users')
+    .select('*')
+    .ilike('email', email.trim())
+    .maybeSingle();
+};
+
 export const createSystemUser = async ({ authUserId, email, role }) => {
   return await supabase
     .from('users')
@@ -111,6 +123,32 @@ export const createSystemUser = async ({ authUserId, email, role }) => {
       role: role || null,
       is_active: true,
     }])
+    .select()
+    .single();
+};
+
+export const linkSystemUserToAuthUserId = async ({ userId, authUserId, email, role }) => {
+  if (!userId || !authUserId) {
+    return { data: null, error: new Error('User ID and auth user ID are required.') };
+  }
+
+  const payload = {
+    auth_user_id: authUserId,
+    updated_at: new Date().toISOString(),
+  };
+
+  if (email) {
+    payload.email = email;
+  }
+
+  if (role) {
+    payload.role = role;
+  }
+
+  return await supabase
+    .from('users')
+    .update(payload)
+    .eq('user_id', userId)
     .select()
     .single();
 };
@@ -125,6 +163,26 @@ export const ensureSystemUserRecord = async ({ authUserId, email, role }) => {
     return existing;
   }
 
+  if (email) {
+    const existingByEmail = await fetchSystemUserByEmail(email);
+    if (existingByEmail.error) {
+      return existingByEmail;
+    }
+
+    if (existingByEmail.data?.user_id) {
+      const linkResult = await linkSystemUserToAuthUserId({
+        userId: existingByEmail.data.user_id,
+        authUserId,
+        email,
+        role: existingByEmail.data.role || role || null,
+      });
+
+      if (!linkResult.error) {
+        return linkResult;
+      }
+    }
+  }
+
   const createResult = await createSystemUser({
     authUserId,
     email: email || null,
@@ -137,7 +195,17 @@ export const ensureSystemUserRecord = async ({ authUserId, email, role }) => {
 
   const createErrorMessage = String(createResult.error?.message || '').toLowerCase();
   if (createErrorMessage.includes('duplicate') || createErrorMessage.includes('already exists')) {
-    return await fetchSystemUserByAuthUserId(authUserId);
+    const retryByAuthId = await fetchSystemUserByAuthUserId(authUserId);
+    if (retryByAuthId.data?.user_id || retryByAuthId.error) {
+      return retryByAuthId;
+    }
+
+    if (email) {
+      const retryByEmail = await fetchSystemUserByEmail(email);
+      if (retryByEmail.data?.user_id || retryByEmail.error) {
+        return retryByEmail;
+      }
+    }
   }
 
   return createResult;
