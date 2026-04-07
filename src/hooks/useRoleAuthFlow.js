@@ -68,7 +68,7 @@ export const useRoleAuthFlow = (role) => {
 
     if (result.success || result.user) {
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      const resolvedRole = result.role || result.profile?.role || result.user?.user_metadata?.role;
+      const resolvedRole = result.role || result.profile?.role;
 
       if (!resolvedRole) {
         Alert.alert('Login Failed', authMessages.roleNotFound);
@@ -82,7 +82,7 @@ export const useRoleAuthFlow = (role) => {
     await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
 
     if (result.errorCode === 'EMAIL_NOT_CONFIRMED' || (result.error && result.error.includes('verify your email'))) {
-      const verifyRole = expectedRole || result.role || result.profile?.role || result.user?.user_metadata?.role;
+      const verifyRole = expectedRole || result.role || result.profile?.role;
 
       Alert.alert(
         authMessages.verifyPromptTitle,

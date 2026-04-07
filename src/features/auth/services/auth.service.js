@@ -51,7 +51,7 @@ export const login = async (email, password, expectedRole) => {
     if (error) throw getFriendlyError(error);
     
     // Fetch profile to verify role
-    let actualRole = authData.user?.user_metadata?.role;
+    let actualRole = null;
     let profile = null;
     
     const { profile: fetchedProfile, error: profileError } = await getProfile(authData.user.id);
@@ -126,7 +126,7 @@ export const verifyEmail = async (email, code) => {
       user: data?.user,
       session: data?.session,
       profile,
-      role: profile?.role || data?.user?.user_metadata?.role || null,
+      role: profile?.role || null,
       error: null,
     };
   } catch (error) {
