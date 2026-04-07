@@ -24,7 +24,8 @@ export const FormProgressStepper = ({ steps = [], currentStep = 0, style }) => {
                 ]}>
                   <Text style={[
                     styles.nodeText,
-                    isHighlighted ? styles.nodeTextActive : null,
+                    isCompleted ? styles.nodeTextCompleted : null,
+                    isActive ? styles.nodeTextActive : null,
                   ]}>
                     {index + 1}
                   </Text>
@@ -89,6 +90,9 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: theme.typography.weights.bold,
     color: theme.colors.textSecondary,
+  },
+  nodeTextCompleted: {
+    color: theme.colors.textInverse,
   },
   nodeTextActive: {
     color: theme.colors.brandPrimary,
