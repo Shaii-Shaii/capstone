@@ -12,6 +12,7 @@ const sanitizeSharedProfileUpdates = (updates = {}) => ({
   middle_name: updates.middle_name?.trim?.() || '',
   last_name: updates.last_name?.trim?.() || '',
   phone: updates.phone?.trim?.() || '',
+  birthdate: updates.birthdate || '',
   street: updates.street?.trim?.() || '',
   barangay: updates.barangay?.trim?.() || '',
   region: updates.region?.trim?.() || '',

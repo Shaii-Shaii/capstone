@@ -1,6 +1,23 @@
 import { z } from 'zod';
 import { passwordRules } from '../../../utils/passwordRules';
 
+export const calculateAgeFromBirthdate = (birthdate) => {
+  if (!birthdate) return null;
+
+  const parsedDate = new Date(`${birthdate}T00:00:00`);
+  if (Number.isNaN(parsedDate.getTime())) return null;
+
+  const today = new Date();
+  let age = today.getFullYear() - parsedDate.getFullYear();
+  const monthDifference = today.getMonth() - parsedDate.getMonth();
+
+  if (monthDifference < 0 || (monthDifference === 0 && today.getDate() < parsedDate.getDate())) {
+    age -= 1;
+  }
+
+  return age >= 0 ? age : null;
+};
+
 // Shared Field Rules
 export const emailField = z.string().min(1, 'Email is required').email('Invalid email address');
 
@@ -17,6 +34,16 @@ export const passwordField = z.string()
 export const nameField = z.string().min(2, 'Must be at least 2 characters').max(50, 'Max 50 characters allowed');
 export const phoneField = z.string().min(10, 'Invalid phone number').max(15, 'Invalid phone number');
 export const addressField = z.string().trim().min(2, 'This field is required').max(120, 'Max 120 characters allowed');
+export const birthdateField = z.string()
+  .trim()
+  .min(1, 'Birthdate is required')
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD format')
+  .refine((value) => calculateAgeFromBirthdate(value) !== null, {
+    message: 'Enter a valid birthdate',
+  })
+  .refine((value) => (calculateAgeFromBirthdate(value) ?? 0) >= 18, {
+    message: 'You must be at least 18 years old to sign up',
+  });
 export const coordinateField = z.string()
   .trim()
   .optional()
@@ -40,6 +67,7 @@ export const signupDefaultValues = {
   lastName: '',
   email: '',
   phone: '',
+  birthdate: '',
   isPatient: '',
   patientFlowMode: '',
   linkedPatientCode: '',
@@ -93,6 +121,7 @@ export const baseSignupSchema = z.object({
   lastName: nameField,
   email: emailField,
   phone: phoneField,
+  birthdate: birthdateField,
   isPatient: z.string().trim().min(1, 'Please answer whether you are a patient').refine((value) => ['yes', 'no'].includes(value), {
     message: 'Please answer whether you are a patient',
   }),
@@ -166,14 +195,6 @@ export const baseSignupSchema = z.object({
         code: z.ZodIssueCode.custom,
         message: 'Last name is required',
         path: ['patientLastName'],
-      });
-    }
-
-    if (!data.patientAge) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'Age is required',
-        path: ['patientAge'],
       });
     }
 

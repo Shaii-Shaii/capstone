@@ -12,6 +12,7 @@ export const FormProgressStepper = ({ steps = [], currentStep = 0, style }) => {
         {safeSteps.map((step, index) => {
           const isCompleted = index < activeIndex;
           const isActive = index === activeIndex;
+          const isHighlighted = isCompleted || isActive;
 
           return (
             <React.Fragment key={step.key || step.label || index}>
@@ -23,14 +24,14 @@ export const FormProgressStepper = ({ steps = [], currentStep = 0, style }) => {
                 ]}>
                   <Text style={[
                     styles.nodeText,
-                    isCompleted || isActive ? styles.nodeTextActive : null,
+                    isHighlighted ? styles.nodeTextActive : null,
                   ]}>
                     {index + 1}
                   </Text>
                 </View>
                 <Text numberOfLines={1} style={[
                   styles.label,
-                  isActive ? styles.labelActive : null,
+                  isHighlighted ? styles.labelActive : null,
                 ]}>
                   {step.shortLabel || step.label || `Step ${index + 1}`}
                 </Text>
@@ -46,11 +47,7 @@ export const FormProgressStepper = ({ steps = [], currentStep = 0, style }) => {
         })}
       </View>
 
-      {safeSteps[activeIndex] ? (
-        <Text style={styles.caption}>
-          Step {activeIndex + 1} of {safeSteps.length}: {safeSteps[activeIndex].label}
-        </Text>
-      ) : null}
+      {safeSteps[activeIndex] ? <Text style={styles.caption}>{safeSteps[activeIndex].label}</Text> : null}
     </View>
   );
 };
@@ -64,13 +61,14 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
   },
   nodeWrap: {
-    width: 56,
+    flex: 1,
+    minWidth: 0,
     alignItems: 'center',
     gap: 6,
   },
   node: {
-    width: 28,
-    height: 28,
+    width: 30,
+    height: 30,
     borderRadius: theme.radius.full,
     alignItems: 'center',
     justifyContent: 'center',
@@ -98,7 +96,8 @@ const styles = StyleSheet.create({
   label: {
     textAlign: 'center',
     fontFamily: theme.typography.fontFamily,
-    fontSize: 10,
+    fontSize: 11,
+    lineHeight: 14,
     color: theme.colors.textMuted,
   },
   labelActive: {
@@ -107,7 +106,7 @@ const styles = StyleSheet.create({
   },
   connectorWrap: {
     flex: 1,
-    paddingTop: 13,
+    paddingTop: 15,
   },
   connector: {
     height: 2,
@@ -121,5 +120,6 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.caption,
     color: theme.colors.textSecondary,
+    fontWeight: theme.typography.weights.medium,
   },
 });

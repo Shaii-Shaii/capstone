@@ -24,6 +24,7 @@ export const useRoleAuthFlow = (role) => {
       firstName: data.firstName,
       lastName: data.lastName,
       phone: data.phone,
+      birthdate: data.birthdate,
       street: data.street,
       barangay: data.barangay,
       city: data.city,

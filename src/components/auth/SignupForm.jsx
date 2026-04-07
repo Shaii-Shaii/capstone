@@ -12,7 +12,7 @@ import { OtpInput } from '../ui/OtpInput';
 import { FormProgressStepper } from '../ui/FormProgressStepper';
 import { theme } from '../../design-system/theme';
 import { SignupAddressSection } from './SignupAddressSection';
-import { signupDefaultValues } from '../../features/auth/validators/auth.schema';
+import { calculateAgeFromBirthdate, signupDefaultValues } from '../../features/auth/validators/auth.schema';
 import { getPasswordStrengthMessage } from '../../utils/passwordRules';
 import { getPatientLinkPreview } from '../../features/profile/services/profile.service';
 
@@ -27,7 +27,7 @@ const normalizeCodeValue = (value) => value.toUpperCase().replace(/[^A-Z0-9]/g, 
 
 const getSteps = (isPatient, patientFlowMode) => {
   const steps = [
-    { key: 'personal', label: 'Personal Details', shortLabel: 'Personal', fields: ['firstName', 'lastName', 'email', 'phone'] },
+    { key: 'personal', label: 'Personal Details', shortLabel: 'Personal', fields: ['firstName', 'lastName', 'email', 'phone', 'birthdate'] },
     { key: 'address', label: 'Address', shortLabel: 'Address', fields: ['street', 'barangay', 'city', 'province', 'region', 'country'] },
     { key: 'patientQuestion', label: 'Patient', shortLabel: 'Patient', fields: ['isPatient'] },
   ];
@@ -37,7 +37,7 @@ const getSteps = (isPatient, patientFlowMode) => {
       key: 'patientManual',
       label: 'Patient Details',
       shortLabel: 'Details',
-      fields: ['patientFirstName', 'patientLastName', 'patientAge', 'patientGender', 'patientMedicalCondition'],
+      fields: ['patientFirstName', 'patientLastName', 'patientGender', 'patientMedicalCondition'],
     });
   }
 
@@ -51,12 +51,12 @@ const getSteps = (isPatient, patientFlowMode) => {
 };
 
 const getStepCopy = (key) => {
-  if (key === 'personal') return { title: 'Personal details', body: 'Start with the main account details needed for your Donivra profile.' };
-  if (key === 'address') return { title: 'Address', body: 'Use the existing address lookup flow, then adjust the returned fields only if needed.' };
-  if (key === 'patientQuestion') return { title: 'Are you a patient?', body: 'Answer this first so we know whether to open the hospital-code popup or continue normally.' };
-  if (key === 'patientManual') return { title: 'Manual patient details', body: 'Enter the patient details needed for your signup-linked patient record.' };
-  if (key === 'photo') return { title: 'Optional profile picture', body: 'Add a profile picture now if you want. You can also skip this step.' };
-  if (key === 'confirm') return { title: 'Confirm details', body: 'Review everything before account creation and OTP verification.' };
+  if (key === 'personal') return { title: 'Personal details', body: 'Enter the basic account details.' };
+  if (key === 'address') return { title: 'Address', body: 'Confirm your main address details.' };
+  if (key === 'patientQuestion') return { title: 'Are you a patient?', body: 'Choose yes or no to continue.' };
+  if (key === 'patientManual') return { title: 'Patient details', body: 'Enter the patient information for your account.' };
+  if (key === 'photo') return { title: 'Profile picture', body: 'This step is optional.' };
+  if (key === 'confirm') return { title: 'Confirm details', body: 'Review your information before verification.' };
   return { title: 'OTP verification', body: 'The verification step comes after account submission.' };
 };
 
@@ -119,6 +119,15 @@ const ImagePickerBlock = ({ value, onPress, loading, emptyTitle, emptyBody, butt
   </View>
 );
 
+const ReadOnlyValue = ({ label, value }) => (
+  <View style={styles.readOnlyField}>
+    <Text style={styles.readOnlyLabel}>{label}</Text>
+    <View style={styles.readOnlyShell}>
+      <Text style={styles.readOnlyValue}>{value || 'Not available'}</Text>
+    </View>
+  </View>
+);
+
 const PatientCodeModal = ({
   visible,
   codeValue,
@@ -137,9 +146,11 @@ const PatientCodeModal = ({
       <View style={styles.modalCenterWrap}>
         <View style={styles.modalCardWrap}>
           <View style={styles.modalTopRow}>
-            <Text style={styles.modalTitle}>Please enter hospital code received on your email</Text>
+            <Text style={styles.modalTitle}>Enter your hospital code</Text>
             <AppTextLink title="Close" variant="muted" onPress={onClose} />
           </View>
+
+          <Text style={styles.modalBody}>Please enter hospital code received on your email</Text>
 
           <OtpInput
             length={6}
@@ -203,12 +214,14 @@ export const SignupForm = ({ schema, onSubmit, isLoading, buttonText = 'Create A
   const patientFlowMode = watch('patientFlowMode');
   const profilePhoto = watch('profilePhoto');
   const patientPicture = watch('patientPicture');
+  const birthdate = watch('birthdate');
   const passwordValue = watch('password');
   const allValues = watch();
   const steps = useMemo(() => getSteps(isPatient, patientFlowMode), [isPatient, patientFlowMode]);
   const activeStep = steps[currentStep];
   const stepCopy = getStepCopy(activeStep.key);
   const passwordStrengthMessage = getPasswordStrengthMessage(passwordValue);
+  const derivedAge = useMemo(() => calculateAgeFromBirthdate(birthdate), [birthdate]);
 
   useEffect(() => {
     if (currentStep > steps.length - 2) {
@@ -490,6 +503,23 @@ export const SignupForm = ({ schema, onSubmit, isLoading, buttonText = 'Create A
                   />
                 )}
               />
+
+              <Controller
+                control={control}
+                name="birthdate"
+                render={({ field: { onChange, onBlur, value } }) => (
+                  <AppInput
+                    label="Birthdate"
+                    placeholder="YYYY-MM-DD"
+                    variant="filled"
+                    helperText="You must be at least 18 years old."
+                    onBlur={onBlur}
+                    onChangeText={onChange}
+                    value={value}
+                    error={errors.birthdate?.message}
+                  />
+                )}
+              />
             </>
           ) : null}
 
@@ -506,13 +536,13 @@ export const SignupForm = ({ schema, onSubmit, isLoading, buttonText = 'Create A
             <View style={styles.stack}>
               <ChoiceCard
                 title="Yes"
-                description="Open the popup to verify and link your patient details."
+                description="Link an existing patient record."
                 selected={isPatient === 'yes'}
                 onPress={() => handlePatientAnswer('yes')}
               />
               <ChoiceCard
                 title="No"
-                description="Continue directly to the next signup step."
+                description="Continue to the next step."
                 selected={isPatient === 'no'}
                 onPress={() => handlePatientAnswer('no')}
               />
@@ -609,23 +639,9 @@ export const SignupForm = ({ schema, onSubmit, isLoading, buttonText = 'Create A
               </View>
 
               <View style={styles.row}>
-                <Controller
-                  control={control}
-                  name="patientAge"
-                  render={({ field: { onChange, onBlur, value } }) => (
-                    <AppInput
-                      label="Age"
-                      placeholder="18"
-                      keyboardType="number-pad"
-                      variant="filled"
-                      onBlur={onBlur}
-                      onChangeText={onChange}
-                      value={value}
-                      error={errors.patientAge?.message}
-                      style={styles.rowField}
-                    />
-                  )}
-                />
+                <View style={styles.rowField}>
+                  <ReadOnlyValue label="Age" value={derivedAge ? String(derivedAge) : ''} />
+                </View>
                 <Controller
                   control={control}
                   name="patientGender"
@@ -706,6 +722,7 @@ export const SignupForm = ({ schema, onSubmit, isLoading, buttonText = 'Create A
                   { label: 'Last name', value: summary.lastName },
                   { label: 'Email', value: summary.email },
                   { label: 'Mobile number', value: summary.phone },
+                  { label: 'Birthdate', value: summary.birthdate },
                 ]}
               />
 
@@ -738,7 +755,7 @@ export const SignupForm = ({ schema, onSubmit, isLoading, buttonText = 'Create A
                         { label: 'Patient middle name', value: summary.patientMiddleName },
                         { label: 'Patient last name', value: summary.patientLastName },
                         { label: 'Suffix', value: summary.patientSuffix },
-                        { label: 'Age', value: summary.patientAge },
+                        { label: 'Age', value: derivedAge ? String(derivedAge) : '' },
                         { label: 'Gender', value: summary.patientGender },
                         { label: 'Medical condition', value: summary.patientMedicalCondition },
                         { label: 'Patient picture', value: summary.patientPicture ? 'Added' : 'Skipped' },
@@ -851,6 +868,11 @@ const styles = StyleSheet.create({
   },
   stepCard: {
     gap: theme.spacing.sm,
+    padding: theme.spacing.md,
+    borderRadius: theme.radius.xl,
+    backgroundColor: theme.colors.surfaceCard,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
   },
   stepHeader: {
     gap: theme.spacing.xs,
@@ -989,6 +1011,29 @@ const styles = StyleSheet.create({
     minHeight: 96,
     textAlignVertical: 'top',
   },
+  readOnlyField: {
+    gap: theme.spacing.xs,
+  },
+  readOnlyLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.label,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textPrimary,
+  },
+  readOnlyShell: {
+    minHeight: theme.inputs.minHeightCompact,
+    borderRadius: theme.radius.xl,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+    backgroundColor: theme.colors.surfaceSoft,
+    justifyContent: 'center',
+    paddingHorizontal: theme.spacing.inputPaddingXCompact,
+  },
+  readOnlyValue: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.body,
+    color: theme.colors.textPrimary,
+  },
   linkedRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1050,6 +1095,12 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamilyDisplay,
     fontSize: theme.typography.compact.bodyLg,
     color: theme.colors.textPrimary,
+  },
+  modalBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    lineHeight: theme.typography.compact.caption * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textSecondary,
   },
   modalCodeInput: {
     marginVertical: 0,

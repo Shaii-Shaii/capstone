@@ -19,6 +19,7 @@ export default function SignupScreen() {
         subtitle={config.signup.subtitle}
         eyebrow={config.signup.eyebrow}
         role="access"
+        minimal={true}
         backLabel="Back to home"
         onBackPress={() => router.replace('/')}
       />

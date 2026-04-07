@@ -36,6 +36,7 @@ export const AuthHeader = ({
   backLabel,
   onBackPress,
   role = 'default',
+  minimal = false,
 }) => {
   const config = HEADER_VARIANTS[role] || HEADER_VARIANTS.default;
 
@@ -45,42 +46,50 @@ export const AuthHeader = ({
         <AppTextLink title={backLabel} variant="muted" onPress={onBackPress} style={styles.backLink} />
       ) : null}
 
-      <LinearGradient
-        colors={config.colors}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={styles.visualCard}
-      >
-        <View style={styles.glowPrimary} />
-        <View style={styles.glowSecondary} />
-
-        <View style={styles.visualTopRow}>
-          <View style={styles.logoGroup}>
-            <View style={styles.logoFrame}>
-              <Image source={donivraLogoNoText} style={styles.logoImage} resizeMode="contain" />
-            </View>
-            <View style={styles.visualCopy}>
-              <Text style={styles.brandName}>Donivra</Text>
-              <Text style={styles.brandTag}>Hair donation and support</Text>
-            </View>
-          </View>
-
-          {eyebrow ? (
-            <View style={styles.eyebrowPill}>
-              <Text style={styles.eyebrowText}>{eyebrow}</Text>
-            </View>
-          ) : null}
-        </View>
-
-        <View style={styles.chipRow}>
-          <View style={styles.heroChip}>
-            <Text style={styles.heroChipText}>{config.chipOne}</Text>
-          </View>
-          <View style={styles.heroChip}>
-            <Text style={styles.heroChipText}>{config.chipTwo}</Text>
+      {minimal ? (
+        <View style={styles.minimalLogoWrap}>
+          <View style={styles.minimalLogoFrame}>
+            <Image source={donivraLogoNoText} style={styles.logoImage} resizeMode="contain" />
           </View>
         </View>
-      </LinearGradient>
+      ) : (
+        <LinearGradient
+          colors={config.colors}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.visualCard}
+        >
+          <View style={styles.glowPrimary} />
+          <View style={styles.glowSecondary} />
+
+          <View style={styles.visualTopRow}>
+            <View style={styles.logoGroup}>
+              <View style={styles.logoFrame}>
+                <Image source={donivraLogoNoText} style={styles.logoImage} resizeMode="contain" />
+              </View>
+              <View style={styles.visualCopy}>
+                <Text style={styles.brandName}>Donivra</Text>
+                <Text style={styles.brandTag}>Hair donation and support</Text>
+              </View>
+            </View>
+
+            {eyebrow ? (
+              <View style={styles.eyebrowPill}>
+                <Text style={styles.eyebrowText}>{eyebrow}</Text>
+              </View>
+            ) : null}
+          </View>
+
+          <View style={styles.chipRow}>
+            <View style={styles.heroChip}>
+              <Text style={styles.heroChipText}>{config.chipOne}</Text>
+            </View>
+            <View style={styles.heroChip}>
+              <Text style={styles.heroChipText}>{config.chipTwo}</Text>
+            </View>
+          </View>
+        </LinearGradient>
+      )}
 
       <View style={styles.copyBlock}>
         <Text style={styles.title}>{title}</Text>
@@ -103,6 +112,18 @@ const styles = StyleSheet.create({
     padding: theme.spacing.md,
     overflow: 'hidden',
     ...theme.shadows.soft,
+  },
+  minimalLogoWrap: {
+    alignItems: 'center',
+  },
+  minimalLogoFrame: {
+    width: 72,
+    height: 72,
+    borderRadius: 24,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+    backgroundColor: theme.colors.backgroundPrimary,
   },
   glowPrimary: {
     position: 'absolute',

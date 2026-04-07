@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { linkPatientRecordByCode, saveAvatar, saveProfile } from '../../profile/services/profile.service';
+import { calculateAgeFromBirthdate } from '../validators/auth.schema';
 
 const SIGNUP_DRAFT_STORAGE_KEY = 'donivra.signupDrafts';
 
@@ -13,6 +14,7 @@ const sanitizeDraft = (draft = {}) => ({
   firstName: draft.firstName?.trim() || '',
   lastName: draft.lastName?.trim() || '',
   phone: draft.phone?.trim() || '',
+  birthdate: draft.birthdate?.trim?.() || '',
   linkedPatientCode: draft.linkedPatientCode?.trim?.() || '',
   linkedPatientId: draft.linkedPatientId || '',
   linkedPatientHospitalId: draft.linkedPatientHospitalId || '',
@@ -97,7 +99,7 @@ export const syncPendingSignupDraft = async ({ userId, email, role }) => {
           middle_name: draft.patientMiddleName,
           last_name: draft.patientLastName || draft.lastName,
           suffix: draft.patientSuffix,
-          age: draft.patientAge ? Number(draft.patientAge) : null,
+          age: calculateAgeFromBirthdate(draft.birthdate),
           gender: draft.patientGender,
           medical_condition: draft.patientMedicalCondition,
           patient_picture: draft.patientPicture || draft.profilePhoto || '',
@@ -110,6 +112,7 @@ export const syncPendingSignupDraft = async ({ userId, email, role }) => {
       middle_name: '',
       last_name: draft.lastName,
       phone: draft.phone,
+      birthdate: draft.birthdate,
       street: draft.street,
       barangay: draft.barangay,
       region: draft.region,
