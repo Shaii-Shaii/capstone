@@ -134,10 +134,13 @@ export function RoleDashboardHome({ role, profile, navItems, content }) {
   const { user, patientProfile, staffProfile } = useAuth();
   const { unreadCount } = useNotifications({ role, userId: user?.id, databaseUserId: profile?.user_id });
   const { tracker } = useProcessTracking({ role, userId: user?.id, databaseUserId: profile?.user_id });
-  const firstName = profile?.first_name || (role === 'donor' ? 'Donor' : 'Patient');
+  const emailName = profile?.email?.split('@')?.[0] || user?.email?.split('@')?.[0] || '';
+  const firstName = profile?.first_name || patientProfile?.first_name || emailName || '';
   const lastName = profile?.last_name || '';
-  const avatarInitials = [firstName[0], lastName[0]].filter(Boolean).join('');
-  const title = content.header.greeting === 'hello' ? `Hello, ${firstName}` : `Welcome back, ${firstName}`;
+  const avatarInitials = [firstName[0], lastName[0]].filter(Boolean).join('') || emailName.slice(0, 2).toUpperCase() || 'DA';
+  const title = content.header.greeting === 'hello'
+    ? (firstName ? `Hello, ${firstName}` : 'Hello')
+    : (firstName ? `Welcome back, ${firstName}` : 'Welcome back');
   const summaryCard = {
     eyebrow: role === 'patient'
       ? (patientProfile?.patient_code ? `Code ${patientProfile.patient_code}` : 'Patient account')
