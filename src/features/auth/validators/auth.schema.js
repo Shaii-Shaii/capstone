@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { passwordRules } from '../../../utils/passwordRules';
+import { isCommonPassword, normalizePasswordComparable, passwordRules } from '../../../utils/passwordRules';
 
 export const calculateAgeFromBirthdate = (birthdate) => {
   if (!birthdate) return null;
@@ -29,6 +29,9 @@ export const passwordField = z.string()
   .regex(passwordRules.hasSpecialChar, 'Password must contain at least one special character')
   .refine((value) => !value.toLowerCase().includes('password'), {
     message: 'Password cannot contain the word "password"',
+  })
+  .refine((value) => !isCommonPassword(value), {
+    message: 'This password is too common. Choose a more unique password',
   });
 
 export const nameField = z.string().min(2, 'Must be at least 2 characters').max(50, 'Max 50 characters allowed');
@@ -61,6 +64,16 @@ const patientAgeField = z.string()
   .refine((value) => !value || (/^\d+$/.test(value) && Number(value) > 0), {
     message: 'Enter a valid age',
   });
+
+const passwordMatchesUserContext = (password, values = []) => {
+  const normalizedPassword = normalizePasswordComparable(password);
+  if (!normalizedPassword) return false;
+
+  return values.some((value) => {
+    const normalizedValue = normalizePasswordComparable(value);
+    return normalizedValue.length >= 3 && normalizedPassword.includes(normalizedValue);
+  });
+};
 
 export const signupDefaultValues = {
   firstName: '',
@@ -161,6 +174,24 @@ export const baseSignupSchema = z.object({
   message: 'Latitude and longitude should both be provided when coordinates are entered manually',
   path: ['longitude'],
 }).superRefine((data, ctx) => {
+  const passwordContextValues = [
+    data.firstName,
+    data.lastName,
+    data.email,
+    data.phone,
+    data.birthdate,
+    data.patientFirstName,
+    data.patientLastName,
+  ];
+
+  if (passwordMatchesUserContext(data.password, passwordContextValues)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Password cannot contain your personal details such as name, email, phone, or birthdate.',
+      path: ['password'],
+    });
+  }
+
   if (data.isPatient !== 'yes') {
     return;
   }
