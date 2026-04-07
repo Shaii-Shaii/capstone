@@ -59,12 +59,18 @@ export const authLayoutStyles = StyleSheet.create({
 
 const styles = StyleSheet.create({
   screenContent: {
+    flexGrow: 1,
+    justifyContent: 'center',
     paddingBottom: theme.spacing.section,
   },
   screenContentCompact: {
+    flexGrow: 1,
+    justifyContent: 'center',
     paddingBottom: theme.spacing.xl,
   },
   container: {
+    flex: 1,
+    justifyContent: 'center',
     paddingTop: theme.spacing.sm,
     paddingBottom: theme.spacing.sm,
   },
