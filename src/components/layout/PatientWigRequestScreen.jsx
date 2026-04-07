@@ -648,8 +648,9 @@ export function PatientWigRequestScreen() {
   });
 
   const draftValues = useWatch({ control });
-  const firstName = profile?.first_name || patientProfile?.first_name || '';
-  const lastName = profile?.last_name || patientProfile?.last_name || '';
+  const firstName = (profile?.first_name || patientProfile?.first_name || '').trim();
+  const lastName = (profile?.last_name || patientProfile?.last_name || '').trim();
+  const avatarUri = profile?.avatar_url || profile?.photo_path || patientProfile?.patient_picture || '';
   const avatarInitials = `${firstName?.[0] || ''}${lastName?.[0] || ''}`.trim();
   const hasCameraPermission = Boolean(cameraPermission?.granted);
   const shouldShowTracker = hasSubmittedRequest && Boolean(tracker || isLoadingTracking || trackingError);
@@ -755,11 +756,11 @@ export function PatientWigRequestScreen() {
       onNavPress={handleNavPress}
       header={(
         <DashboardHeader
-          title={firstName || 'Account'}
+          title="Requests"
           subtitle=""
           summary=""
           avatarInitials={avatarInitials}
-          avatarUri={profile?.avatar_url}
+          avatarUri={avatarUri}
           variant="patient"
           minimal={true}
           showAvatar={false}

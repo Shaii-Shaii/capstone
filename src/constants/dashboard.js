@@ -244,12 +244,7 @@ export const patientDashboardContent = {
     ],
   },
   sections: [
-    {
-      key: 'request-status',
-      kind: 'info',
-      dataKey: 'requestStatus',
-      cardWidth: 208,
-    },
+    
   ],
 };
 

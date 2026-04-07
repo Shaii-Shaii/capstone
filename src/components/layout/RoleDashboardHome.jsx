@@ -134,8 +134,8 @@ export function RoleDashboardHome({ role, profile, navItems, content }) {
   const { user, patientProfile, staffProfile } = useAuth();
   const { unreadCount } = useNotifications({ role, userId: user?.id, databaseUserId: profile?.user_id });
   const { tracker } = useProcessTracking({ role, userId: user?.id, databaseUserId: profile?.user_id });
-  const firstName = profile?.first_name || patientProfile?.first_name || '';
-  const lastName = profile?.last_name || patientProfile?.last_name || '';
+  const firstName = (profile?.first_name || patientProfile?.first_name || '').trim();
+  const lastName = (profile?.last_name || patientProfile?.last_name || '').trim();
   const avatarUri = profile?.avatar_url || profile?.photo_path || patientProfile?.patient_picture || '';
   const avatarInitials = [firstName[0], lastName[0]].filter(Boolean).join('');
   const welcomeTitle = content.header.greeting === 'hello'

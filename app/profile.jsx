@@ -111,10 +111,11 @@ export default function ProfileScreen() {
   const role = profile?.role || 'patient';
   const navItems = role === 'donor' ? donorDashboardNavItems : patientDashboardNavItems;
   const roleLabel = roleLabelMap[role] || 'Member';
-  const firstName = profile?.first_name || patientProfile?.first_name || '';
-  const middleName = profile?.middle_name || patientProfile?.middle_name || '';
-  const lastName = profile?.last_name || patientProfile?.last_name || '';
+  const firstName = (profile?.first_name || patientProfile?.first_name || '').trim();
+  const middleName = (profile?.middle_name || patientProfile?.middle_name || '').trim();
+  const lastName = (profile?.last_name || patientProfile?.last_name || '').trim();
   const suffix = profile?.suffix || patientProfile?.suffix || '';
+  const avatarUri = profile?.avatar_url || profile?.photo_path || patientProfile?.patient_picture || '';
   const avatarInitials = `${firstName?.[0] || ''}${lastName?.[0] || ''}`.trim();
   const overviewRows = useMemo(() => (
     [
@@ -263,11 +264,11 @@ export default function ProfileScreen() {
         onNavPress={handleNavPress}
         header={(
           <DashboardHeader
-            title={firstName || 'Account'}
+            title="Profile"
             subtitle=""
             summary=""
             avatarInitials={avatarInitials}
-            avatarUri={profile?.avatar_url}
+            avatarUri={avatarUri}
             variant={role === 'donor' ? 'donor' : 'patient'}
             minimal={role === 'patient'}
             showAvatar={role === 'patient' ? false : undefined}
