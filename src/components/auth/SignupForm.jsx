@@ -20,6 +20,7 @@ import { getPatientLinkPreview } from '../../features/profile/services/profile.s
 const IMAGE_MEDIA_TYPES = ['images'];
 const EARLIEST_BIRTH_YEAR = 1900;
 const WEEKDAY_LABELS = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
+const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 const formatDateValue = (date) => {
   const year = date.getFullYear();
@@ -58,11 +59,6 @@ const formatBirthdateLabel = (value) => {
   });
 };
 
-const getMonthLabel = (value) => value.toLocaleDateString('en-PH', {
-  month: 'long',
-  year: 'numeric',
-});
-
 const startOfMonth = (value) => new Date(value.getFullYear(), value.getMonth(), 1);
 
 const isSameDay = (firstDate, secondDate) => (
@@ -93,6 +89,29 @@ const buildCalendarDays = (monthDate, minimumDate, maximumDate) => {
       isDisabled,
     };
   });
+};
+
+const getYearPageStart = (year) => {
+  const pageSize = 12;
+  return Math.max(EARLIEST_BIRTH_YEAR, year - ((year - EARLIEST_BIRTH_YEAR) % pageSize));
+};
+
+const buildYearOptions = (rangeStart, maximumYear) => Array.from({ length: 12 }, (_, index) => {
+  const year = rangeStart + index;
+
+  return {
+    key: `year-${year}`,
+    label: String(year),
+    value: year,
+    isDisabled: year > maximumYear,
+  };
+});
+
+const isMonthSelectable = (year, monthIndex, minimumDate, maximumDate) => {
+  const monthStart = new Date(year, monthIndex, 1);
+  const monthEnd = new Date(year, monthIndex + 1, 0);
+
+  return monthStart <= maximumDate && monthEnd >= minimumDate;
 };
 
 const buildPatientFullName = (patient) => [patient?.first_name, patient?.middle_name, patient?.last_name, patient?.suffix]
@@ -293,9 +312,11 @@ export const SignupForm = ({ schema, onSubmit, isLoading, buttonText = 'Create A
   const [isUploadingPatientPicture, setIsUploadingPatientPicture] = useState(false);
   const [isPatientModalOpen, setIsPatientModalOpen] = useState(false);
   const [isWebBirthdatePickerOpen, setIsWebBirthdatePickerOpen] = useState(false);
+  const [webCalendarView, setWebCalendarView] = useState('days');
   const [isIosBirthdatePickerOpen, setIsIosBirthdatePickerOpen] = useState(false);
   const [iosBirthdateDraft, setIosBirthdateDraft] = useState(getLatestEligibleBirthdate);
   const [webCalendarMonth, setWebCalendarMonth] = useState(getLatestEligibleBirthdate);
+  const [webYearRangeStart, setWebYearRangeStart] = useState(getYearPageStart(getLatestEligibleBirthdate().getFullYear()));
   const [patientCodeInput, setPatientCodeInput] = useState('');
   const [patientLookupPreview, setPatientLookupPreview] = useState(null);
   const [linkedPatientPreview, setLinkedPatientPreview] = useState(null);
@@ -326,6 +347,10 @@ export const SignupForm = ({ schema, onSubmit, isLoading, buttonText = 'Create A
   const webCalendarDays = useMemo(
     () => buildCalendarDays(webCalendarMonth, earliestBirthdate, latestEligibleBirthdate),
     [webCalendarMonth, earliestBirthdate, latestEligibleBirthdate]
+  );
+  const webYearOptions = useMemo(
+    () => buildYearOptions(webYearRangeStart, latestEligibleBirthdate.getFullYear()),
+    [webYearRangeStart, latestEligibleBirthdate]
   );
 
   useEffect(() => {
@@ -384,6 +409,8 @@ export const SignupForm = ({ schema, onSubmit, isLoading, buttonText = 'Create A
 
     if (Platform.OS === 'web') {
       setWebCalendarMonth(initialDate);
+      setWebYearRangeStart(getYearPageStart(initialDate.getFullYear()));
+      setWebCalendarView('days');
       setIsWebBirthdatePickerOpen(true);
       return;
     }
@@ -1024,54 +1051,179 @@ export const SignupForm = ({ schema, onSubmit, isLoading, buttonText = 'Create A
                 <Pressable
                   onPress={() => setWebCalendarMonth((currentValue) => new Date(currentValue.getFullYear(), currentValue.getMonth() - 1, 1))}
                   style={({ pressed }) => [styles.calendarNavButton, pressed ? styles.dateFieldShellPressed : null]}
+                  hitSlop={6}
                   disabled={startOfMonth(webCalendarMonth) <= startOfMonth(earliestBirthdate)}
                 >
                   <AppIcon name="chevron-left" state="muted" />
                 </Pressable>
 
-                <Text style={styles.calendarMonthLabel}>{getMonthLabel(webCalendarMonth)}</Text>
+                <View style={styles.calendarTitleWrap}>
+                  <Pressable
+                    onPress={() => setWebCalendarView('months')}
+                    style={({ pressed }) => [styles.calendarTitleButton, pressed ? styles.dateFieldShellPressed : null]}
+                  >
+                    <Text style={styles.calendarMonthLabel}>
+                      {webCalendarMonth.toLocaleDateString('en-PH', { month: 'long' })}
+                    </Text>
+                    <AppIcon name="chevron-down" size="sm" state="muted" />
+                  </Pressable>
+
+                  <Pressable
+                    onPress={() => {
+                      setWebYearRangeStart(getYearPageStart(webCalendarMonth.getFullYear()));
+                      setWebCalendarView('years');
+                    }}
+                    style={({ pressed }) => [styles.calendarTitleButton, pressed ? styles.dateFieldShellPressed : null]}
+                  >
+                    <Text style={styles.calendarMonthLabel}>{webCalendarMonth.getFullYear()}</Text>
+                    <AppIcon name="chevron-down" size="sm" state="muted" />
+                  </Pressable>
+                </View>
 
                 <Pressable
                   onPress={() => setWebCalendarMonth((currentValue) => new Date(currentValue.getFullYear(), currentValue.getMonth() + 1, 1))}
                   style={({ pressed }) => [styles.calendarNavButton, pressed ? styles.dateFieldShellPressed : null]}
+                  hitSlop={6}
                   disabled={startOfMonth(webCalendarMonth) >= startOfMonth(latestEligibleBirthdate)}
                 >
                   <AppIcon name="chevron-right" state="muted" />
                 </Pressable>
               </View>
 
-              <View style={styles.calendarWeekRow}>
-                {WEEKDAY_LABELS.map((label) => (
-                  <Text key={label} style={styles.calendarWeekLabel}>{label}</Text>
-                ))}
-              </View>
+              {webCalendarView === 'days' ? (
+                <>
+                  <View style={styles.calendarWeekRow}>
+                    {WEEKDAY_LABELS.map((label) => (
+                      <Text key={label} style={styles.calendarWeekLabel}>{label}</Text>
+                    ))}
+                  </View>
 
-              <View style={styles.calendarGrid}>
-                {webCalendarDays.map((day) => (
-                  <Pressable
-                    key={day.key}
-                    disabled={day.isDisabled}
-                    onPress={() => {
-                      applyBirthdateValue(day.value);
-                      setIsWebBirthdatePickerOpen(false);
-                    }}
-                    style={({ pressed }) => [
-                      styles.calendarDayButton,
-                      day.isDisabled ? styles.calendarDayButtonDisabled : null,
-                      isSameDay(day.value, selectedBirthdate) ? styles.calendarDayButtonSelected : null,
-                      pressed && !day.isDisabled ? styles.dateFieldShellPressed : null,
-                    ]}
-                  >
-                    <Text style={[
-                      styles.calendarDayLabel,
-                      day.isDisabled ? styles.calendarDayLabelDisabled : null,
-                      isSameDay(day.value, selectedBirthdate) ? styles.calendarDayLabelSelected : null,
-                    ]}>
-                      {day.label}
+                  <View style={styles.calendarGrid}>
+                    {webCalendarDays.map((day) => (
+                      <Pressable
+                        key={day.key}
+                        disabled={day.isDisabled}
+                        onPress={() => {
+                          applyBirthdateValue(day.value);
+                          setIsWebBirthdatePickerOpen(false);
+                        }}
+                        style={({ pressed }) => [
+                          styles.calendarDayButton,
+                          day.isDisabled ? styles.calendarDayButtonDisabled : null,
+                          isSameDay(day.value, selectedBirthdate) ? styles.calendarDayButtonSelected : null,
+                          pressed && !day.isDisabled ? styles.dateFieldShellPressed : null,
+                        ]}
+                      >
+                        <Text style={[
+                          styles.calendarDayLabel,
+                          day.isDisabled ? styles.calendarDayLabelDisabled : null,
+                          isSameDay(day.value, selectedBirthdate) ? styles.calendarDayLabelSelected : null,
+                        ]}>
+                          {day.label}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                </>
+              ) : null}
+
+              {webCalendarView === 'months' ? (
+                <View style={styles.calendarOptionGrid}>
+                  {MONTH_LABELS.map((monthLabel, monthIndex) => {
+                    const isDisabled = !isMonthSelectable(
+                      webCalendarMonth.getFullYear(),
+                      monthIndex,
+                      earliestBirthdate,
+                      latestEligibleBirthdate
+                    );
+                    const isSelected = selectedBirthdate
+                      && selectedBirthdate.getFullYear() === webCalendarMonth.getFullYear()
+                      && selectedBirthdate.getMonth() === monthIndex;
+
+                    return (
+                      <Pressable
+                        key={monthLabel}
+                        disabled={isDisabled}
+                        onPress={() => {
+                          setWebCalendarMonth(new Date(webCalendarMonth.getFullYear(), monthIndex, 1));
+                          setWebCalendarView('days');
+                        }}
+                        style={({ pressed }) => [
+                          styles.calendarOptionButton,
+                          isDisabled ? styles.calendarDayButtonDisabled : null,
+                          isSelected ? styles.calendarDayButtonSelected : null,
+                          pressed && !isDisabled ? styles.dateFieldShellPressed : null,
+                        ]}
+                      >
+                        <Text style={[
+                          styles.calendarOptionLabel,
+                          isDisabled ? styles.calendarDayLabelDisabled : null,
+                          isSelected ? styles.calendarDayLabelSelected : null,
+                        ]}>
+                          {monthLabel}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              ) : null}
+
+              {webCalendarView === 'years' ? (
+                <View style={styles.stack}>
+                  <View style={styles.calendarRangeRow}>
+                    <Pressable
+                      onPress={() => setWebYearRangeStart((currentValue) => Math.max(EARLIEST_BIRTH_YEAR, currentValue - 12))}
+                      style={({ pressed }) => [styles.calendarNavButton, pressed ? styles.dateFieldShellPressed : null]}
+                      disabled={webYearRangeStart <= EARLIEST_BIRTH_YEAR}
+                    >
+                      <AppIcon name="chevron-left" state="muted" />
+                    </Pressable>
+
+                    <Text style={styles.calendarRangeLabel}>
+                      {webYearRangeStart} - {Math.min(webYearRangeStart + 11, latestEligibleBirthdate.getFullYear())}
                     </Text>
-                  </Pressable>
-                ))}
-              </View>
+
+                    <Pressable
+                      onPress={() => setWebYearRangeStart((currentValue) => Math.min(getYearPageStart(latestEligibleBirthdate.getFullYear()), currentValue + 12))}
+                      style={({ pressed }) => [styles.calendarNavButton, pressed ? styles.dateFieldShellPressed : null]}
+                      disabled={webYearRangeStart + 11 >= latestEligibleBirthdate.getFullYear()}
+                    >
+                      <AppIcon name="chevron-right" state="muted" />
+                    </Pressable>
+                  </View>
+
+                  <View style={styles.calendarOptionGrid}>
+                    {webYearOptions.map((yearOption) => {
+                      const isSelected = selectedBirthdate?.getFullYear() === yearOption.value;
+
+                      return (
+                        <Pressable
+                          key={yearOption.key}
+                          disabled={yearOption.isDisabled}
+                          onPress={() => {
+                            setWebCalendarMonth(new Date(yearOption.value, webCalendarMonth.getMonth(), 1));
+                            setWebCalendarView('months');
+                          }}
+                          style={({ pressed }) => [
+                            styles.calendarOptionButton,
+                            yearOption.isDisabled ? styles.calendarDayButtonDisabled : null,
+                            isSelected ? styles.calendarDayButtonSelected : null,
+                            pressed && !yearOption.isDisabled ? styles.dateFieldShellPressed : null,
+                          ]}
+                        >
+                          <Text style={[
+                            styles.calendarOptionLabel,
+                            yearOption.isDisabled ? styles.calendarDayLabelDisabled : null,
+                            isSelected ? styles.calendarDayLabelSelected : null,
+                          ]}>
+                            {yearOption.label}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </View>
+              ) : null}
 
               <Text style={styles.calendarHint}>Only dates for users aged 18 and above are available.</Text>
             </View>
@@ -1361,6 +1513,25 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: theme.spacing.sm,
   },
+  calendarTitleWrap: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: theme.spacing.xs,
+  },
+  calendarTitleButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: theme.spacing.xs,
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.surfaceSoft,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+  },
   calendarNavButton: {
     width: 40,
     height: 40,
@@ -1372,8 +1543,6 @@ const styles = StyleSheet.create({
     borderColor: theme.colors.borderSubtle,
   },
   calendarMonthLabel: {
-    flex: 1,
-    textAlign: 'center',
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.body,
     fontWeight: theme.typography.weights.semibold,
@@ -1396,6 +1565,13 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     rowGap: theme.spacing.xs,
     marginTop: theme.spacing.xs,
+  },
+  calendarOptionGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    rowGap: theme.spacing.sm,
+    columnGap: theme.spacing.xs,
+    marginTop: theme.spacing.sm,
   },
   calendarDayButton: {
     width: '14.2857%',
@@ -1421,6 +1597,36 @@ const styles = StyleSheet.create({
   calendarDayLabelSelected: {
     color: theme.colors.textInverse,
     fontWeight: theme.typography.weights.semibold,
+  },
+  calendarOptionButton: {
+    width: '31%',
+    minHeight: 42,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: theme.radius.xl,
+    backgroundColor: theme.colors.surfaceSoft,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+  },
+  calendarOptionLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    color: theme.colors.textPrimary,
+    fontWeight: theme.typography.weights.medium,
+  },
+  calendarRangeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+  },
+  calendarRangeLabel: {
+    flex: 1,
+    textAlign: 'center',
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textPrimary,
   },
   calendarHint: {
     fontFamily: theme.typography.fontFamily,
