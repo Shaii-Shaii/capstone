@@ -184,6 +184,32 @@ const DateField = ({ label, value, helperText, error, onPress }) => (
   </View>
 );
 
+const WebDateField = ({ label, value, helperText, error, minimumDate, maximumDate, onChange }) => (
+  <View style={styles.dateFieldWrap}>
+    <Text style={styles.readOnlyLabel}>{label}</Text>
+    <input
+      type="date"
+      value={value || ''}
+      min={formatDateValue(minimumDate)}
+      max={formatDateValue(maximumDate)}
+      aria-label={label}
+      onClick={(event) => {
+        event.currentTarget.showPicker?.();
+      }}
+      onFocus={(event) => {
+        event.currentTarget.showPicker?.();
+      }}
+      onChange={(event) => onChange(event.target.value)}
+      style={styles.webDateInput}
+    />
+    {error ? (
+      <Text style={styles.errorText}>{error}</Text>
+    ) : helperText ? (
+      <Text style={styles.helperText}>{helperText}</Text>
+    ) : null}
+  </View>
+);
+
 const PatientCodeModal = ({
   visible,
   codeValue,
@@ -601,12 +627,12 @@ export const SignupForm = ({ schema, onSubmit, isLoading, buttonText = 'Create A
                 name="birthdate"
                 render={({ field: { value } }) => (
                   Platform.OS === 'web' ? (
-                    <AppInput
+                    <WebDateField
                       label="Birthdate"
-                      placeholder="YYYY-MM-DD"
-                      variant="filled"
-                      helperText="Use YYYY-MM-DD. You must be at least 18 years old."
-                      onChangeText={(nextValue) => setValue('birthdate', nextValue, {
+                      helperText="Select your birthdate. You must be at least 18 years old."
+                      minimumDate={earliestBirthdate}
+                      maximumDate={latestEligibleBirthdate}
+                      onChange={(nextValue) => setValue('birthdate', nextValue, {
                         shouldDirty: true,
                         shouldTouch: true,
                         shouldValidate: true,
@@ -1231,6 +1257,19 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.caption,
     color: theme.colors.textSecondary,
+  },
+  webDateInput: {
+    minHeight: theme.inputs.minHeightCompact,
+    width: '100%',
+    borderRadius: theme.radius.xl,
+    borderWidth: 1,
+    borderColor: theme.colors.transparent,
+    backgroundColor: theme.colors.surfaceSoft,
+    paddingLeft: theme.spacing.inputPaddingXCompact,
+    paddingRight: theme.spacing.inputPaddingXCompact,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.body,
+    color: theme.colors.textPrimary,
   },
   footerRow: {
     flexDirection: 'row',
