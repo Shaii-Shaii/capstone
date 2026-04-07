@@ -238,6 +238,37 @@ export default function ProfileScreen() {
     user?.email,
   ]);
   const watchedNewPassword = passwordForm.watch('newPassword');
+  const editablePreviewRows = useMemo(() => (
+    [
+      fullName ? { key: 'preview_name', label: 'Name', value: fullName } : null,
+      profile?.birthdate ? { key: 'preview_birthdate', label: 'Birthdate', value: profile.birthdate } : null,
+      (profile?.contact_number || profile?.phone)
+        ? { key: 'preview_phone', label: 'Contact Number', value: profile?.contact_number || profile?.phone }
+        : null,
+      [profile?.street, profile?.barangay, profile?.city, profile?.province, profile?.region, profile?.country]
+        .filter(Boolean)
+        .length
+        ? {
+            key: 'preview_address',
+            label: 'Address',
+            value: [profile?.street, profile?.barangay, profile?.city, profile?.province, profile?.region, profile?.country]
+              .filter(Boolean)
+              .join(', '),
+          }
+        : null,
+    ].filter(Boolean)
+  ), [
+    fullName,
+    profile?.birthdate,
+    profile?.contact_number,
+    profile?.phone,
+    profile?.street,
+    profile?.barangay,
+    profile?.city,
+    profile?.province,
+    profile?.region,
+    profile?.country,
+  ]);
   const actionItems = useMemo(() => (
     [
       ...(!isPatient && hasOrganization ? [{
@@ -344,6 +375,20 @@ export default function ProfileScreen() {
     }, 1400);
   }, [passwordSuccess, saveSuccess]);
 
+  useEffect(() => {
+    if (mode === 'edit') {
+      profileForm.reset(defaultValues);
+    }
+
+    if (mode === 'password') {
+      passwordForm.reset({
+        currentPassword: '',
+        newPassword: '',
+        confirmPassword: '',
+      });
+    }
+  }, [defaultValues, mode, passwordForm, profileForm]);
+
   return (
     <>
       <DashboardLayout
@@ -428,7 +473,7 @@ export default function ProfileScreen() {
                 <ScrollView
                   style={styles.modalScroll}
                   contentContainerStyle={styles.modalScrollContent}
-                  showsVerticalScrollIndicator={false}
+                  showsVerticalScrollIndicator={true}
                   keyboardShouldPersistTaps="handled"
                 >
                   {mode === 'edit' ? (
@@ -442,6 +487,18 @@ export default function ProfileScreen() {
                       <View style={styles.editHintWrap}>
                         <Text style={styles.editHintText}>Locked: name, birthday</Text>
                         <Text style={styles.editHintText}>Editable: contact number, address</Text>
+                      </View>
+
+                      <View style={styles.editPreviewCard}>
+                        <Text style={styles.editPreviewTitle}>Current details</Text>
+                        <View style={styles.editPreviewList}>
+                          {editablePreviewRows.map((row) => (
+                            <View key={row.key} style={styles.editPreviewRow}>
+                              <Text style={styles.editPreviewLabel}>{row.label}</Text>
+                              <Text style={styles.editPreviewValue}>{row.value}</Text>
+                            </View>
+                          ))}
+                        </View>
                       </View>
 
                       {profileFieldConfig.map((field) => (
@@ -678,7 +735,7 @@ const styles = StyleSheet.create({
     color: theme.colors.textSecondary,
   },
   modalCard: {
-    maxHeight: '82%',
+    maxHeight: '90%',
     width: '100%',
     alignSelf: 'center',
     maxWidth: theme.layout.authCardMaxWidth,
@@ -687,7 +744,8 @@ const styles = StyleSheet.create({
     maxHeight: '100%',
   },
   modalScrollContent: {
-    paddingBottom: theme.spacing.xs,
+    flexGrow: 1,
+    paddingBottom: theme.spacing.lg,
   },
   modalKeyboardWrap: {
     flex: 1,
@@ -700,5 +758,41 @@ const styles = StyleSheet.create({
   },
   modalBackdrop: {
     ...StyleSheet.absoluteFillObject,
+  },
+  editPreviewCard: {
+    marginBottom: theme.spacing.md,
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.surfaceSoft,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.md,
+    gap: theme.spacing.sm,
+  },
+  editPreviewTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textPrimary,
+  },
+  editPreviewList: {
+    gap: theme.spacing.sm,
+  },
+  editPreviewRow: {
+    gap: 2,
+  },
+  editPreviewLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.semibold,
+    letterSpacing: 0.3,
+    textTransform: 'uppercase',
+    color: theme.colors.textSecondary,
+  },
+  editPreviewValue: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textPrimary,
   },
 });
