@@ -27,9 +27,6 @@ export default function LandingScreen() {
       <View style={styles.container}>
         <View style={styles.panel}>
           <View style={styles.visualSection}>
-            <View style={styles.visualDotOne} />
-            <View style={styles.visualDotTwo} />
-            <View style={styles.visualDotThree} />
             <View style={styles.logoWrap}>
               <Image source={donivraLogoNoText} style={styles.logo} resizeMode="contain" />
             </View>
@@ -38,14 +35,11 @@ export default function LandingScreen() {
           <View style={styles.contentSection}>
             <View style={styles.brandBlock}>
               <Text style={styles.brandName}>Donivra</Text>
-              <Text style={styles.brandTag}>Hair donation and support</Text>
             </View>
 
             <View style={styles.copyBlock}>
-              <Text style={styles.heroTitle}>Welcome to Donivra.</Text>
-              <Text style={styles.heroSubtitle}>
-                Create your account or log in to continue.
-              </Text>
+              <Text style={styles.heroTitle}>Welcome</Text>
+              <Text style={styles.heroSubtitle}>Sign up or log in to continue.</Text>
             </View>
 
             <View style={styles.actionStack}>
@@ -99,40 +93,10 @@ const styles = StyleSheet.create({
     ...theme.shadows.card,
   },
   visualSection: {
-    flex: 0.52,
-    minHeight: 240,
+    flex: 0.48,
+    minHeight: 220,
     alignItems: 'center',
     justifyContent: 'center',
-    position: 'relative',
-  },
-  visualDotOne: {
-    position: 'absolute',
-    top: 18,
-    left: 6,
-    width: 12,
-    height: 12,
-    borderRadius: theme.radius.full,
-    borderWidth: 2,
-    borderColor: theme.colors.brandPrimaryMuted,
-  },
-  visualDotTwo: {
-    position: 'absolute',
-    top: 36,
-    right: 18,
-    width: 10,
-    height: 10,
-    borderRadius: theme.radius.full,
-    backgroundColor: theme.colors.brandPrimary,
-  },
-  visualDotThree: {
-    position: 'absolute',
-    bottom: 24,
-    left: 34,
-    width: 14,
-    height: 14,
-    borderRadius: theme.radius.full,
-    borderWidth: 1.5,
-    borderColor: theme.colors.borderMuted,
   },
   logoWrap: {
     width: 184,
@@ -156,19 +120,12 @@ const styles = StyleSheet.create({
   },
   brandBlock: {
     alignItems: 'center',
-    gap: theme.spacing.xs,
   },
   brandName: {
     fontFamily: theme.typography.fontFamilyDisplay,
     fontSize: 40,
     lineHeight: 44,
     color: theme.colors.textPrimary,
-    textAlign: 'center',
-  },
-  brandTag: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.compact.bodySm,
-    color: theme.colors.textSecondary,
     textAlign: 'center',
   },
   copyBlock: {

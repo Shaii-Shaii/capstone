@@ -129,10 +129,19 @@ export const getCurrentAccountBundle = async (userId) => {
       ProfileAPI.fetchHospitalStaffByUserId(userId),
     ]);
 
+    const linkedHospitalId = patientError
+      ? (staffError ? null : staffProfile?.hospital_id || null)
+      : (patientProfile?.hospital_id || staffProfile?.hospital_id || null);
+
+    const { data: hospitalProfile, error: hospitalError } = linkedHospitalId
+      ? await ProfileAPI.fetchHospitalRepresentativeById(linkedHospitalId)
+      : { data: null, error: null };
+
     return {
       profile,
       patientProfile: patientError ? null : patientProfile,
       staffProfile: staffError ? null : staffProfile,
+      hospitalProfile: hospitalError ? null : hospitalProfile,
       databaseUserId: profile?.user_id || null,
       error: null,
     };
@@ -141,6 +150,7 @@ export const getCurrentAccountBundle = async (userId) => {
       profile: null,
       patientProfile: null,
       staffProfile: null,
+      hospitalProfile: null,
       databaseUserId: null,
       error: error.message,
     };

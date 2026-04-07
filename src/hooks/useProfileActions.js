@@ -23,7 +23,7 @@ const formFromProfile = (profile) => ({
 });
 
 export const useProfileActions = () => {
-  const { user, profile, patientProfile, staffProfile, refreshProfile } = useAuth();
+  const { user, profile, patientProfile, staffProfile, hospitalProfile, refreshProfile } = useAuth();
   const { logout, updatePassword, isLoading: isAuthLoading } = useAuthActions();
   const [roleProfile, setRoleProfile] = useState(null);
   const [visibleRoleFields, setVisibleRoleFields] = useState([]);
@@ -52,12 +52,6 @@ export const useProfileActions = () => {
 
     setIsSavingProfile(true);
     const payload = {
-      first_name: values.firstName,
-      middle_name: values.middleName,
-      last_name: values.lastName,
-      suffix: values.suffix,
-      birthdate: values.birthdate,
-      gender: values.gender,
       phone: values.phone,
       street: values.street,
       barangay: values.barangay,
@@ -132,6 +126,7 @@ export const useProfileActions = () => {
     profile,
     patientProfile,
     staffProfile,
+    hospitalProfile,
     roleProfile,
     visibleRoleFields,
     defaultValues,

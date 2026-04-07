@@ -67,6 +67,7 @@ export default function ProfileScreen() {
     profile,
     patientProfile,
     staffProfile,
+    hospitalProfile,
     defaultValues,
     isSavingProfile,
     isChangingPassword,
@@ -133,14 +134,40 @@ export default function ProfileScreen() {
   ), [profile]);
   const overviewRows = useMemo(() => (
     [
+      profile?.user_id ? { key: 'user_id', label: 'User ID', value: String(profile.user_id) } : null,
+      profile?.auth_user_id ? { key: 'auth_user_id', label: 'Auth user ID', value: profile.auth_user_id } : null,
+      profile?.user_details_id ? { key: 'user_details_id', label: 'User details ID', value: String(profile.user_details_id) } : null,
       fullName ? { key: 'full_name', label: 'Full name', value: fullName } : null,
       { key: 'email', label: 'Email', value: user?.email || 'Not available' },
       { key: 'role', label: 'Account type', value: roleLabel },
       { key: 'account_status', label: 'Account status', value: profile?.is_active ? 'Active' : 'Inactive' },
       profile?.created_at ? { key: 'created_at', label: 'Created at', value: profile.created_at } : null,
+      profile?.updated_at ? { key: 'updated_at', label: 'Updated at', value: profile.updated_at } : null,
       profile?.access_start ? { key: 'access_start', label: 'Access start', value: profile.access_start } : null,
       profile?.access_end ? { key: 'access_end', label: 'Access end', value: profile.access_end } : null,
+      profile?.user_details_created_at ? { key: 'details_created_at', label: 'Details created at', value: profile.user_details_created_at } : null,
+      profile?.user_details_updated_at ? { key: 'details_updated_at', label: 'Details updated at', value: profile.user_details_updated_at } : null,
       ...displayRows,
+      hospitalProfile?.hospital_name
+        ? { key: 'hospital_name', label: 'Hospital name', value: hospitalProfile.hospital_name }
+        : null,
+      hospitalProfile?.contact_number
+        ? { key: 'hospital_contact', label: 'Hospital contact', value: hospitalProfile.contact_number }
+        : null,
+      [hospitalProfile?.street, hospitalProfile?.barangay, hospitalProfile?.city, hospitalProfile?.region, hospitalProfile?.country]
+        .filter(Boolean)
+        .length
+        ? {
+            key: 'hospital_address',
+            label: 'Hospital address',
+            value: [hospitalProfile?.street, hospitalProfile?.barangay, hospitalProfile?.city, hospitalProfile?.region, hospitalProfile?.country]
+              .filter(Boolean)
+              .join(', '),
+          }
+        : null,
+      patientProfile?.patient_id
+        ? { key: 'patient_id', label: 'Patient ID', value: String(patientProfile.patient_id) }
+        : null,
       patientProfile?.patient_code
         ? { key: 'patient_code', label: 'Patient code', value: patientProfile.patient_code }
         : null,
@@ -159,25 +186,55 @@ export default function ProfileScreen() {
       patientProfile?.medical_document
         ? { key: 'medical_document', label: 'Medical document', value: patientProfile.medical_document }
         : null,
+      patientProfile?.created_at
+        ? { key: 'patient_created_at', label: 'Patient created at', value: patientProfile.created_at }
+        : null,
+      patientProfile?.updated_at
+        ? { key: 'patient_updated_at', label: 'Patient updated at', value: patientProfile.updated_at }
+        : null,
+      staffProfile?.link_id
+        ? { key: 'staff_link_id', label: 'Hospital staff link ID', value: String(staffProfile.link_id) }
+        : null,
       staffProfile?.hospital_id
         ? { key: 'staff_hospital', label: 'Assigned hospital', value: String(staffProfile.hospital_id) }
+        : null,
+      staffProfile?.assigned_date
+        ? { key: 'staff_assigned_date', label: 'Assigned date', value: staffProfile.assigned_date }
         : null,
     ].filter(Boolean)
   ), [
     displayRows,
     fullName,
+    hospitalProfile?.barangay,
+    hospitalProfile?.city,
+    hospitalProfile?.contact_number,
+    hospitalProfile?.country,
+    hospitalProfile?.hospital_name,
+    hospitalProfile?.region,
+    hospitalProfile?.street,
+    patientProfile?.patient_id,
     patientProfile?.hospital_id,
     patientProfile?.age,
+    patientProfile?.created_at,
     patientProfile?.gender,
     patientProfile?.medical_document,
     patientProfile?.medical_condition,
     patientProfile?.patient_code,
+    patientProfile?.updated_at,
     profile?.access_end,
     profile?.access_start,
     profile?.created_at,
+    profile?.updated_at,
     profile?.is_active,
+    profile?.auth_user_id,
+    profile?.user_details_created_at,
+    profile?.user_details_id,
+    profile?.user_details_updated_at,
+    profile?.user_id,
     roleLabel,
+    staffProfile?.assigned_date,
     staffProfile?.hospital_id,
+    staffProfile?.link_id,
     user?.email,
   ]);
   const watchedNewPassword = passwordForm.watch('newPassword');
@@ -378,9 +435,14 @@ export default function ProfileScreen() {
                     <>
                       <DashboardSectionHeader
                         title="Edit Profile"
-                        description="Update your saved details."
+                        description="Only address and contact number can be changed here."
                         style={styles.sectionHeader}
                       />
+
+                      <View style={styles.editHintWrap}>
+                        <Text style={styles.editHintText}>Locked: name, birthday</Text>
+                        <Text style={styles.editHintText}>Editable: contact number, address</Text>
+                      </View>
 
                       {profileFieldConfig.map((field) => (
                         <Controller
@@ -394,6 +456,7 @@ export default function ProfileScreen() {
                               keyboardType={field.keyboardType}
                               variant="filled"
                               helperText={field.helperText}
+                              disabled={field.editable === false}
                               value={controllerField.value}
                               onChangeText={controllerField.onChange}
                               onBlur={controllerField.onBlur}
@@ -539,6 +602,15 @@ const styles = StyleSheet.create({
   },
   actionList: {
     gap: theme.spacing.sm,
+  },
+  editHintWrap: {
+    gap: 2,
+    marginBottom: theme.spacing.md,
+  },
+  editHintText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    color: theme.colors.textSecondary,
   },
   actionRow: {
     flexDirection: 'row',

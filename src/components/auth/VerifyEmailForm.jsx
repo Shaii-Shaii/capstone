@@ -19,7 +19,7 @@ export const VerifyEmailForm = ({ schema, emailContext, onSubmit, onResend, isLo
   return (
     <View style={styles.container}>
       <Text style={styles.subtitle}>
-        We sent a 6-digit code to <Text style={styles.emailText}>{emailContext}</Text>.
+        Enter the 6-digit code sent to <Text style={styles.emailText}>{emailContext}</Text>.
       </Text>
       {successMessage ? <Text style={styles.successText}>{successMessage}</Text> : null}
 
@@ -43,7 +43,7 @@ export const VerifyEmailForm = ({ schema, emailContext, onSubmit, onResend, isLo
       />
 
       <AppButton
-        title="Verify Email"
+        title="Verify"
         onPress={handleSubmit(onSubmit)}
         loading={isLoading}
         disabled={isLoading || isResending}
@@ -53,7 +53,7 @@ export const VerifyEmailForm = ({ schema, emailContext, onSubmit, onResend, isLo
 
       <View style={styles.resendRow}>
         <AppTextLink
-          title={resendCountdown > 0 ? `Resend available in ${resendCountdown}s` : 'Resend Code'}
+          title={resendCountdown > 0 ? `Resend in ${resendCountdown}s` : 'Resend Code'}
           onPress={onResend}
           disabled={resendCountdown > 0 || isLoading || isResending}
           variant="muted"

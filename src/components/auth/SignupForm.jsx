@@ -147,13 +147,13 @@ const getSteps = (isPatient, patientFlowMode) => {
 };
 
 const getStepCopy = (key) => {
-  if (key === 'personal') return { title: 'Personal details', body: 'Enter the basic account details.' };
-  if (key === 'address') return { title: 'Address', body: 'Confirm your main address details.' };
-  if (key === 'patientQuestion') return { title: 'Are you a patient?', body: 'Choose yes or no to continue.' };
-  if (key === 'patientManual') return { title: 'Patient details', body: 'Enter the patient information for your account.' };
-  if (key === 'photo') return { title: 'Profile picture', body: 'This step is optional.' };
-  if (key === 'confirm') return { title: 'Confirm details', body: 'Review your information before verification.' };
-  return { title: 'OTP verification', body: 'The verification step comes after account submission.' };
+  if (key === 'personal') return { title: 'Personal details', body: 'Add your account details.' };
+  if (key === 'address') return { title: 'Address', body: 'Confirm your address.' };
+  if (key === 'patientQuestion') return { title: 'Are you a patient?', body: '' };
+  if (key === 'patientManual') return { title: 'Patient details', body: 'Add the patient details for your account.' };
+  if (key === 'photo') return { title: 'Profile picture', body: 'Add a photo or skip this step.' };
+  if (key === 'confirm') return { title: 'Confirm details', body: 'Check your details before verification.' };
+  return { title: 'OTP verification', body: 'Verify your email to finish signup.' };
 };
 
 const ChoiceCard = ({ title, description, selected, onPress }) => (
@@ -263,7 +263,7 @@ const PatientCodeModal = ({
             <AppTextLink title="Close" variant="muted" onPress={onClose} />
           </View>
 
-          <Text style={styles.modalBody}>Please enter hospital code received on your email</Text>
+          <Text style={styles.modalBody}>Enter the 6-digit code sent to your email.</Text>
 
           <OtpInput
             length={6}
@@ -282,7 +282,7 @@ const PatientCodeModal = ({
 
           {!preview ? (
             <AppButton
-              title="Validate Code"
+              title="Validate"
               variant="secondary"
               loading={isValidating}
               leading={<AppIcon name="shield" state="muted" />}
@@ -294,7 +294,7 @@ const PatientCodeModal = ({
             <View style={styles.stack}>
               <PreviewCard patient={preview} />
               <AppButton
-                title="Confirm Patient Details"
+                title="Confirm"
                 leading={<AppIcon name="success" state="inverse" />}
                 onPress={onConfirm}
               />
@@ -598,7 +598,7 @@ export const SignupForm = ({ schema, onSubmit, isLoading, buttonText = 'Create A
         <View style={styles.stepCard}>
           <View style={styles.stepHeader}>
             <Text style={styles.stepTitle}>{stepCopy.title}</Text>
-            <Text style={styles.stepBody}>{stepCopy.body}</Text>
+            {stepCopy.body ? <Text style={styles.stepBody}>{stepCopy.body}</Text> : null}
           </View>
 
           {activeStep.key === 'personal' ? (
@@ -682,7 +682,7 @@ export const SignupForm = ({ schema, onSubmit, isLoading, buttonText = 'Create A
                     <DateField
                       label="Birthdate"
                       value={formatBirthdateLabel(value)}
-                      helperText="Select your birthdate. You must be at least 18 years old."
+                      helperText="You must be at least 18 years old."
                       error={errors.birthdate?.message}
                       onPress={openBirthdatePicker}
                     />
@@ -713,13 +713,13 @@ export const SignupForm = ({ schema, onSubmit, isLoading, buttonText = 'Create A
             <View style={styles.stack}>
               <ChoiceCard
                 title="Yes"
-                description="Link an existing patient record."
+                description="Link your patient record."
                 selected={isPatient === 'yes'}
                 onPress={() => handlePatientAnswer('yes')}
               />
               <ChoiceCard
                 title="No"
-                description="Continue to the next step."
+                description="Continue without patient linking."
                 selected={isPatient === 'no'}
                 onPress={() => handlePatientAnswer('no')}
               />
@@ -730,10 +730,10 @@ export const SignupForm = ({ schema, onSubmit, isLoading, buttonText = 'Create A
                   <PreviewCard patient={linkedPatientPreview} />
                   <View style={styles.linkedRow}>
                     <AppIcon name="success" state="success" />
-                    <Text style={styles.linkedText}>This patient record will be linked to your account after signup.</Text>
+                    <Text style={styles.linkedText}>This record will be linked after signup.</Text>
                   </View>
                   <AppButton
-                    title="Open Patient Popup"
+                    title="Open Popup"
                     variant="outline"
                     leading={<AppIcon name="edit" state="muted" />}
                     onPress={() => setIsPatientModalOpen(true)}
@@ -864,8 +864,8 @@ export const SignupForm = ({ schema, onSubmit, isLoading, buttonText = 'Create A
                     value={patientPicture}
                     onPress={() => pickImage('patientPicture', setIsUploadingPatientPicture)}
                     loading={isUploadingPatientPicture}
-                    emptyTitle="No patient picture selected"
-                    emptyBody="Add a patient picture if you want to include one with the patient record."
+                    emptyTitle="No patient picture"
+                    emptyBody="Add a patient picture if needed."
                     buttonTitle="Upload Patient Picture"
                   />
                 )}
@@ -883,7 +883,7 @@ export const SignupForm = ({ schema, onSubmit, isLoading, buttonText = 'Create A
                   onPress={() => pickImage('profilePhoto', setIsUploadingPhoto)}
                   loading={isUploadingPhoto}
                   emptyTitle="No photo selected"
-                  emptyBody="This step is optional. You can upload a profile photo now or skip it."
+                  emptyBody="Add a profile photo now or skip this step."
                   buttonTitle="Upload Photo"
                 />
               )}
@@ -1225,7 +1225,6 @@ export const SignupForm = ({ schema, onSubmit, isLoading, buttonText = 'Create A
                 </View>
               ) : null}
 
-              <Text style={styles.calendarHint}>Only dates for users aged 18 and above are available.</Text>
             </View>
           </View>
         </View>
@@ -1260,7 +1259,7 @@ export const SignupForm = ({ schema, onSubmit, isLoading, buttonText = 'Create A
               />
 
               <AppButton
-                title="Use This Birthdate"
+                title="Use Date"
                 onPress={() => {
                   applyBirthdateValue(iosBirthdateDraft);
                   setIsIosBirthdatePickerOpen(false);

@@ -23,9 +23,16 @@ export const commonPasswordBlocklist = [
   'iloveyou',
 ];
 
+export const reusedPasswordMessage = 'Please choose a new password that is different from your current password.';
+
 export const normalizePasswordComparable = (value) => String(value || '')
   .toLowerCase()
   .replace(/[^a-z0-9]/g, '');
+
+export const isPasswordReuse = (currentPassword, nextPassword) => {
+  if (!currentPassword || !nextPassword) return false;
+  return String(currentPassword) === String(nextPassword);
+};
 
 export const isCommonPassword = (password) => {
   const normalizedPassword = normalizePasswordComparable(password);

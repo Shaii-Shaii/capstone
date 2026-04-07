@@ -2,13 +2,6 @@ import React, { useEffect, useState } from 'react';
 import { View, StyleSheet, Alert, Text } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
-import Animated, {
-  FadeInDown,
-  useAnimatedStyle,
-  useSharedValue,
-  withSequence,
-  withTiming,
-} from 'react-native-reanimated';
 import { VerifyEmailForm } from '../../src/components/auth/VerifyEmailForm';
 import { AuthHeader } from '../../src/components/auth/AuthHeader';
 import { AuthScreenLayout } from '../../src/components/auth/AuthScreenLayout';
@@ -39,8 +32,6 @@ export default function VerifyEmailScreen() {
   const [resendCountdown, setResendCountdown] = useState(RESEND_DELAY);
   const [verified, setVerified] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
-  const shakeX = useSharedValue(0);
-  const pulseScale = useSharedValue(1);
 
   useEffect(() => {
     if (!email) {
@@ -58,26 +49,7 @@ export default function VerifyEmailScreen() {
     return () => clearInterval(timer);
   }, [resendCountdown]);
 
-  const shakeStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: shakeX.value }],
-  }));
-
-  const successStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: pulseScale.value }],
-    opacity: verified ? 1 : 0,
-  }));
-
   if (!email) return null;
-
-  const triggerShake = () => {
-    shakeX.value = withSequence(
-      withTiming(-10, { duration: 45 }),
-      withTiming(10, { duration: 45 }),
-      withTiming(-8, { duration: 45 }),
-      withTiming(8, { duration: 45 }),
-      withTiming(0, { duration: 45 })
-    );
-  };
 
   const routeAfterVerify = () => {
     router.replace('/auth/access');
@@ -93,13 +65,12 @@ export default function VerifyEmailScreen() {
     if (error) {
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       setStatusMessage(error);
-      triggerShake();
       return;
     }
 
     await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     setVerified(true);
-    setStatusMessage('Email verified. Finishing your account details...');
+    setStatusMessage('Email verified. Redirecting to login...');
 
     if (session?.user?.id && email) {
       const syncResult = await syncPendingSignupDraft({
@@ -109,20 +80,13 @@ export default function VerifyEmailScreen() {
       });
 
       if (!syncResult.success) {
-        setStatusMessage('Email verified. Your account is ready, but some address details may need to be completed later.');
+        setStatusMessage('Email verified. Redirecting to login...');
       }
     }
 
     if (session) {
       await logout();
     }
-
-    pulseScale.value = withSequence(
-      withTiming(1.08, { duration: 160 }),
-      withTiming(1, { duration: 180 }),
-      withTiming(1.04, { duration: 140 }),
-      withTiming(1, { duration: 160 })
-    );
 
     setTimeout(() => routeAfterVerify(), 900);
   };
@@ -137,7 +101,6 @@ export default function VerifyEmailScreen() {
     if (error) {
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       setStatusMessage(error);
-      triggerShake();
     } else {
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setStatusMessage('A new verification code has been sent.');
@@ -150,7 +113,7 @@ export default function VerifyEmailScreen() {
       <AppTextLink title="Back" variant="muted" onPress={() => router.back()} />
       <AuthHeader
         title="Verify your email"
-        subtitle="Enter the 6-digit code to continue securely."
+        subtitle="Enter the 6-digit code to continue."
         eyebrow="Email confirmation"
       />
 
@@ -160,30 +123,20 @@ export default function VerifyEmailScreen() {
         style={styles.stepper}
       />
 
-      <Animated.View entering={FadeInDown.duration(420)}>
-        <Animated.View style={shakeStyle}>
-          <View style={styles.formContainer}>
-            <VerifyEmailForm
-              schema={verifyEmailSchema}
-              emailContext={email}
-              onSubmit={handleVerify}
-              onResend={handleResend}
-              isLoading={isVerifying}
-              isResending={isResending}
-              resendCountdown={resendCountdown}
-              successMessage={statusMessage}
-            />
-          </View>
-        </Animated.View>
-      </Animated.View>
+      <View style={styles.formContainer}>
+        <VerifyEmailForm
+          schema={verifyEmailSchema}
+          emailContext={email}
+          onSubmit={handleVerify}
+          onResend={handleResend}
+          isLoading={isVerifying}
+          isResending={isResending}
+          resendCountdown={resendCountdown}
+          successMessage={statusMessage}
+        />
+      </View>
 
-      {verified ? (
-        <Animated.View style={[styles.successWrap, successStyle]}>
-          <View style={styles.successCircle}>
-            <Text style={styles.successMark}>OK</Text>
-          </View>
-        </Animated.View>
-      ) : null}
+      {verified ? <Text style={styles.readyText}>Your account is ready.</Text> : null}
     </AuthScreenLayout>
   );
 }
@@ -196,23 +149,11 @@ const styles = StyleSheet.create({
   stepper: {
     marginTop: theme.spacing.sm,
   },
-  successWrap: {
-    alignItems: 'center',
+  readyText: {
     marginTop: theme.spacing.md,
-  },
-  successCircle: {
-    width: 62,
-    height: 62,
-    borderRadius: theme.radius.full,
-    backgroundColor: theme.colors.brandPrimaryMuted,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  successMark: {
+    textAlign: 'center',
     fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodyLg,
-    fontWeight: theme.typography.weights.bold,
-    color: theme.colors.brandPrimary,
-    letterSpacing: 0.8,
+    fontSize: theme.typography.compact.bodySm,
+    color: theme.colors.textSecondary,
   },
 });

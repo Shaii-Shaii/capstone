@@ -7,6 +7,7 @@ const AuthContext = createContext({
   profile: null,
   patientProfile: null,
   staffProfile: null,
+  hospitalProfile: null,
   databaseUserId: null,
   isLoading: true,
   refreshProfile: async () => null,

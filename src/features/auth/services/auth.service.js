@@ -1,6 +1,8 @@
 import * as AuthAPI from '../api/auth.api';
 import { getProfile } from '../../profile/services/profile.service';
 import { authMessages } from '../../../constants/auth';
+import * as Linking from 'expo-linking';
+import { isPasswordReuse, reusedPasswordMessage } from '../../../utils/passwordRules';
 
 /**
  * Helper to translate raw Supabase errors into human-friendly strings
@@ -20,10 +22,10 @@ const getFriendlyError = (error) => {
     return err;
   }
   if (msg.toLowerCase().includes('same password')) {
-    return new Error('Please choose a new password that is different from your current password.');
+    return new Error(reusedPasswordMessage);
   }
   if (msg.toLowerCase().includes('new password should be different')) {
-    return new Error('Please choose a new password that is different from your current password.');
+    return new Error(reusedPasswordMessage);
   }
   if (msg.toLowerCase().includes('weak password')) {
     return new Error('Your new password is too weak. Use uppercase, lowercase, numbers, and a special character.');
@@ -153,10 +155,19 @@ export const logout = async () => {
   }
 };
 
+export const getCurrentSessionStatus = async () => {
+  try {
+    const { data, error } = await AuthAPI.getCurrentSession();
+    if (error) throw getFriendlyError(error);
+    return { session: data?.session || null, error: null };
+  } catch (error) {
+    return { session: null, error: error.message };
+  }
+};
+
 export const sendPasswordReset = async (email) => {
   try {
-    // Rely on application deep linking scheme for Expo Router redirection
-    const redirectTo = 'donivra://auth/reset-password';
+    const redirectTo = Linking.createURL('/auth/reset-password');
     const { error } = await AuthAPI.sendPasswordResetEmail({ email, redirectTo });
     if (error) throw getFriendlyError(error);
     return { success: true, error: null };
@@ -172,9 +183,10 @@ export const updatePassword = async (payload) => {
       : (payload || {});
     const { newPassword, currentPassword } = normalizedPayload;
 
-    // currentPassword is captured for user confidence today and leaves a clean place
-    // to add secure reauthentication later if the Supabase project requires it.
-    void currentPassword;
+    if (isPasswordReuse(currentPassword, newPassword)) {
+      throw new Error(reusedPasswordMessage);
+    }
+
     const { error } = await AuthAPI.updateUserPassword({ newPassword });
     if (error) throw getFriendlyError(error);
     return { success: true, error: null };

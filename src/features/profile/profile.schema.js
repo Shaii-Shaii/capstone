@@ -1,16 +1,10 @@
 import { z } from 'zod';
-import { nameField, passwordField, phoneField } from '../auth/validators/auth.schema';
+import { passwordField, phoneField } from '../auth/validators/auth.schema';
+import { isPasswordReuse, reusedPasswordMessage } from '../../utils/passwordRules';
 
 export const optionalTextField = z.string().max(80, 'Too long').optional().or(z.literal(''));
-export const optionalDateField = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD').optional().or(z.literal(''));
 
 export const profileUpdateSchema = z.object({
-  firstName: nameField,
-  middleName: optionalTextField,
-  lastName: nameField,
-  suffix: optionalTextField,
-  birthdate: optionalDateField,
-  gender: optionalTextField,
   phone: phoneField,
   street: optionalTextField,
   barangay: optionalTextField,
@@ -27,4 +21,7 @@ export const changePasswordSchema = z.object({
 }).refine((data) => data.newPassword === data.confirmPassword, {
   message: "Passwords don't match",
   path: ['confirmPassword'],
+}).refine((data) => !isPasswordReuse(data.currentPassword, data.newPassword), {
+  message: reusedPasswordMessage,
+  path: ['newPassword'],
 });

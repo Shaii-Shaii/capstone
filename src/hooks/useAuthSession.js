@@ -8,6 +8,7 @@ export const useAuthSession = () => {
   const [profile, setProfile] = useState(null);
   const [patientProfile, setPatientProfile] = useState(null);
   const [staffProfile, setStaffProfile] = useState(null);
+  const [hospitalProfile, setHospitalProfile] = useState(null);
   const [databaseUserId, setDatabaseUserId] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -19,11 +20,13 @@ export const useAuthSession = () => {
       profile: userProfile,
       patientProfile: nextPatientProfile,
       staffProfile: nextStaffProfile,
+      hospitalProfile: nextHospitalProfile,
       databaseUserId: nextDatabaseUserId,
     } = await getCurrentAccountBundle(targetUserId);
     setProfile(userProfile);
     setPatientProfile(nextPatientProfile);
     setStaffProfile(nextStaffProfile);
+    setHospitalProfile(nextHospitalProfile);
     setDatabaseUserId(nextDatabaseUserId);
     return userProfile;
   }, [user?.id]);
@@ -39,6 +42,7 @@ export const useAuthSession = () => {
           setProfile(null);
           setPatientProfile(null);
           setStaffProfile(null);
+          setHospitalProfile(null);
           setDatabaseUserId(null);
           setIsLoading(false);
         }
@@ -55,12 +59,14 @@ export const useAuthSession = () => {
           profile: userProfile,
           patientProfile: nextPatientProfile,
           staffProfile: nextStaffProfile,
+          hospitalProfile: nextHospitalProfile,
           databaseUserId: nextDatabaseUserId,
         } = await getCurrentAccountBundle(newSession.user.id);
         if (mounted) {
           setProfile(userProfile);
           setPatientProfile(nextPatientProfile);
           setStaffProfile(nextStaffProfile);
+          setHospitalProfile(nextHospitalProfile);
           setDatabaseUserId(nextDatabaseUserId);
           setIsLoading(false);
         }
@@ -69,6 +75,7 @@ export const useAuthSession = () => {
           setProfile(null);
           setPatientProfile(null);
           setStaffProfile(null);
+          setHospitalProfile(null);
           setDatabaseUserId(null);
           setIsLoading(false);
         }
@@ -120,6 +127,7 @@ export const useAuthSession = () => {
     profile,
     patientProfile,
     staffProfile,
+    hospitalProfile,
     databaseUserId,
     isLoading,
     refreshProfile,

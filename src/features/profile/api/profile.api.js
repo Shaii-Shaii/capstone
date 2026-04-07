@@ -31,6 +31,9 @@ const normalizeSystemUser = (row, details = null) => ({
   avatar_url: details?.photo_path || '',
   photo_path: details?.photo_path || '',
   joined_date: details?.joined_date || null,
+  user_details_id: details?.user_details_id || null,
+  user_details_created_at: details?.created_at || null,
+  user_details_updated_at: details?.updated_at || null,
 });
 
 const normalizePatient = (row) => ({
@@ -58,6 +61,21 @@ const normalizeHospitalStaff = (row) => ({
   hospital_id: row?.hospital_id || null,
   user_id: row?.user_id || null,
   assigned_date: row?.assigned_date || null,
+});
+
+const normalizeHospitalRepresentative = (row) => ({
+  id: row?.hospital_id || null,
+  hospital_id: row?.hospital_id || null,
+  hospital_name: row?.hospital_name || '',
+  hospital_logo: row?.hospital_logo || '',
+  country: row?.country || '',
+  region: row?.region || '',
+  city: row?.city || '',
+  barangay: row?.barangay || '',
+  street: row?.street || '',
+  contact_number: row?.contact_number || '',
+  created_at: row?.created_at || null,
+  updated_at: row?.updated_at || null,
 });
 
 const normalizePatientLinkPreview = (row) => ({
@@ -379,6 +397,23 @@ export const fetchHospitalStaffByUserId = async (userIdentifier) => {
 
   return {
     data: result.data ? normalizeHospitalStaff(result.data) : null,
+    error: result.error,
+  };
+};
+
+export const fetchHospitalRepresentativeById = async (hospitalId) => {
+  if (!hospitalId) {
+    return { data: null, error: null };
+  }
+
+  const result = await supabase
+    .from('H-Representatives')
+    .select('*')
+    .eq('hospital_id', hospitalId)
+    .maybeSingle();
+
+  return {
+    data: result.data ? normalizeHospitalRepresentative(result.data) : null,
     error: result.error,
   };
 };

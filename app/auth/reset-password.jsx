@@ -15,7 +15,26 @@ import { theme } from '../../src/design-system/theme';
 
 export default function ResetPasswordScreen() {
   const router = useRouter();
-  const { updatePassword, isLoading } = useAuthActions();
+  const { updatePassword, getCurrentSessionStatus, isLoading } = useAuthActions();
+  const [isCheckingSession, setIsCheckingSession] = React.useState(true);
+  const [hasResetSession, setHasResetSession] = React.useState(false);
+
+  React.useEffect(() => {
+    let mounted = true;
+
+    const checkSession = async () => {
+      const result = await getCurrentSessionStatus();
+      if (!mounted) return;
+      setHasResetSession(Boolean(result.success && result.session));
+      setIsCheckingSession(false);
+    };
+
+    checkSession();
+
+    return () => {
+      mounted = false;
+    };
+  }, [getCurrentSessionStatus]);
 
   const { control, handleSubmit, formState: { errors } } = useForm({
     resolver: zodResolver(resetPasswordSchema),
@@ -42,56 +61,73 @@ export default function ResetPasswordScreen() {
       <AppTextLink title="Back" variant="muted" onPress={() => router.back()} />
       <AuthHeader
         title="Create a new password"
-        subtitle="Choose a password that feels secure and easy to keep private."
+        subtitle={hasResetSession ? 'Choose your new password.' : 'Open this screen from a valid reset link.'}
         eyebrow="Password reset"
       />
 
-      <View style={authLayoutStyles.formSection}>
-        <View style={styles.passwordSection}>
+      {isCheckingSession ? (
+        <View style={authLayoutStyles.formSection}>
+          <Text style={styles.infoText}>Checking your reset link...</Text>
+        </View>
+      ) : hasResetSession ? (
+        <View style={authLayoutStyles.formSection}>
+          <View style={styles.passwordSection}>
+            <Controller
+              control={control}
+              name="password"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <PasswordInput
+                  label="New Password"
+                  placeholder="Create a strong password"
+                  variant="filled"
+                  onBlur={onBlur}
+                  onChangeText={onChange}
+                  value={value}
+                  error={errors.password?.message}
+                />
+              )}
+            />
+            <Text style={styles.passwordHint}>
+              Must be at least 8 characters and include uppercase, lowercase, numbers, and symbols.
+            </Text>
+          </View>
+
           <Controller
             control={control}
-            name="password"
+            name="confirmPassword"
             render={({ field: { onChange, onBlur, value } }) => (
               <PasswordInput
-                label="New Password"
-                placeholder="Create a strong password"
+                label="Confirm New Password"
+                placeholder="Retype password"
                 variant="filled"
                 onBlur={onBlur}
                 onChangeText={onChange}
                 value={value}
-                error={errors.password?.message}
+                error={errors.confirmPassword?.message}
               />
             )}
           />
-          <Text style={styles.passwordHint}>
-            Must be at least 8 characters and include uppercase, lowercase, numbers, and symbols.
-          </Text>
+
+          <AppButton
+            title="Update password"
+            onPress={handleSubmit(handlePasswordUpdate)}
+            loading={isLoading}
+            size="lg"
+            style={styles.submitBtn}
+          />
         </View>
-
-        <Controller
-          control={control}
-          name="confirmPassword"
-          render={({ field: { onChange, onBlur, value } }) => (
-            <PasswordInput
-              label="Confirm New Password"
-              placeholder="Retype password"
-              variant="filled"
-              onBlur={onBlur}
-              onChangeText={onChange}
-              value={value}
-              error={errors.confirmPassword?.message}
-            />
-          )}
-        />
-
-        <AppButton
-          title="Update password"
-          onPress={handleSubmit(handlePasswordUpdate)}
-          loading={isLoading}
-          size="lg"
-          style={styles.submitBtn}
-        />
-      </View>
+      ) : (
+        <View style={authLayoutStyles.formSection}>
+          <Text style={styles.infoText}>This reset link is invalid or has expired.</Text>
+          <AppButton
+            title="Request new reset link"
+            variant="secondary"
+            onPress={() => router.replace('/auth/forgot-password')}
+            style={styles.submitBtn}
+          />
+          <AppTextLink title="Back to login" variant="muted" onPress={() => router.replace('/auth/access')} />
+        </View>
+      )}
     </AuthScreenLayout>
   );
 }
@@ -106,6 +142,12 @@ const styles = StyleSheet.create({
     color: theme.colors.textSecondary,
     marginTop: -theme.spacing.sm,
     lineHeight: theme.typography.semantic.caption * theme.typography.lineHeights.normal,
+  },
+  infoText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    color: theme.colors.textSecondary,
+    lineHeight: theme.typography.semantic.body * theme.typography.lineHeights.relaxed,
   },
   submitBtn: {
     marginTop: theme.spacing.lg,

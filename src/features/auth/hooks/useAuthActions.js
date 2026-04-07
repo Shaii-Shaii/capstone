@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import * as AuthService from '../services/auth.service';
 
 /**
@@ -29,15 +29,32 @@ export const useAuthActions = () => {
     }
   };
 
-  const login = (email, password, expectedRole) => handleAuthAction(AuthService.login, email, password, expectedRole);
+  const login = useCallback(
+    (email, password, expectedRole) => handleAuthAction(AuthService.login, email, password, expectedRole),
+    []
+  );
   
-  const register = (email, password, additionalData) => handleAuthAction(AuthService.register, email, password, additionalData);
+  const register = useCallback(
+    (email, password, additionalData) => handleAuthAction(AuthService.register, email, password, additionalData),
+    []
+  );
   
-  const logout = () => handleAuthAction(AuthService.logout);
+  const logout = useCallback(() => handleAuthAction(AuthService.logout), []);
   
-  const sendPasswordReset = (email) => handleAuthAction(AuthService.sendPasswordReset, email);
+  const getCurrentSessionStatus = useCallback(
+    () => handleAuthAction(AuthService.getCurrentSessionStatus),
+    []
+  );
+
+  const sendPasswordReset = useCallback(
+    (email) => handleAuthAction(AuthService.sendPasswordReset, email),
+    []
+  );
   
-  const updatePassword = (payload) => handleAuthAction(AuthService.updatePassword, payload);
+  const updatePassword = useCallback(
+    (payload) => handleAuthAction(AuthService.updatePassword, payload),
+    []
+  );
 
   return {
     isLoading,
@@ -45,6 +62,7 @@ export const useAuthActions = () => {
     login,
     register,
     logout,
+    getCurrentSessionStatus,
     sendPasswordReset,
     updatePassword,
     clearError: () => setError(null)

@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { View, StyleSheet, Alert, Text } from 'react-native';
 import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
-import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { AuthScreenLayout, authLayoutStyles } from '../../src/components/auth/AuthScreenLayout';
@@ -47,7 +46,7 @@ export default function ForgotPasswordScreen() {
       <AppTextLink title="Back" variant="muted" onPress={() => router.back()} />
       <AuthHeader
         title="Reset your password"
-        subtitle="Enter your email address and we'll send a secure link for the next step."
+        subtitle="Enter your email to receive a reset link."
         eyebrow="Password recovery"
       />
 
@@ -64,7 +63,7 @@ export default function ForgotPasswordScreen() {
                 autoCapitalize="none"
                 autoCorrect={false}
                 variant="filled"
-                helperText="Use the same email you used when creating your account."
+                helperText="Use your registered email."
                 onBlur={onBlur}
                 onChangeText={onChange}
                 value={value}
@@ -82,28 +81,28 @@ export default function ForgotPasswordScreen() {
           />
         </View>
       ) : (
-        <Animated.View entering={FadeInDown.duration(320)} style={styles.successContainer}>
+        <View style={styles.successContainer}>
           <View style={styles.successBadge}>
             <Text style={styles.successBadgeText}>Email sent</Text>
           </View>
           <Text style={styles.successBody}>
-            If your account exists, your inbox now has the reset instructions.
+            If your account exists, check your inbox for the reset link.
           </Text>
           <AppButton
-            title="Back to login selection"
+            title="Back to login"
             variant="secondary"
             onPress={() => router.replace('/auth/access')}
           />
-        </Animated.View>
+        </View>
       )}
 
-      <Animated.View entering={FadeIn.delay(120).duration(320)} style={styles.footerRow}>
+      <View style={styles.footerRow}>
         <AppTextLink
-          title="Back to account access"
+          title="Back to login"
           variant="muted"
           onPress={() => router.replace('/auth/access')}
         />
-      </Animated.View>
+      </View>
     </AuthScreenLayout>
   );
 }

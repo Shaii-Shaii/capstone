@@ -4,6 +4,8 @@ export const profileFieldConfig = [
     formKey: 'firstName',
     label: 'First Name',
     placeholder: 'Juan',
+    editable: false,
+    helperText: 'Locked from signup.',
   },
   {
     key: 'middle_name',
@@ -11,12 +13,16 @@ export const profileFieldConfig = [
     label: 'Middle Name',
     placeholder: 'Santos',
     optional: true,
+    editable: false,
+    helperText: 'Locked from signup.',
   },
   {
     key: 'last_name',
     formKey: 'lastName',
     label: 'Last Name',
     placeholder: 'Dela Cruz',
+    editable: false,
+    helperText: 'Locked from signup.',
   },
   {
     key: 'suffix',
@@ -24,6 +30,8 @@ export const profileFieldConfig = [
     label: 'Suffix',
     placeholder: 'Jr.',
     optional: true,
+    editable: false,
+    helperText: 'Locked from signup.',
   },
   {
     key: 'birthdate',
@@ -31,6 +39,8 @@ export const profileFieldConfig = [
     label: 'Birthdate',
     placeholder: 'YYYY-MM-DD',
     optional: true,
+    editable: false,
+    helperText: 'Locked from signup.',
   },
   {
     key: 'gender',
@@ -38,6 +48,8 @@ export const profileFieldConfig = [
     label: 'Gender',
     placeholder: 'Female',
     optional: true,
+    editable: false,
+    helperText: 'Not editable here.',
   },
   {
     key: 'phone',
@@ -45,6 +57,8 @@ export const profileFieldConfig = [
     label: 'Mobile Number',
     placeholder: '09123456789',
     keyboardType: 'phone-pad',
+    editable: true,
+    helperText: 'Editable.',
   },
   {
     key: 'street',
@@ -52,6 +66,8 @@ export const profileFieldConfig = [
     label: 'Street',
     placeholder: 'Street address',
     optional: true,
+    editable: true,
+    helperText: 'Editable.',
   },
   {
     key: 'barangay',
@@ -59,6 +75,8 @@ export const profileFieldConfig = [
     label: 'Barangay',
     placeholder: 'Barangay',
     optional: true,
+    editable: true,
+    helperText: 'Editable.',
   },
   {
     key: 'region',
@@ -66,6 +84,8 @@ export const profileFieldConfig = [
     label: 'Region',
     placeholder: 'Region',
     optional: true,
+    editable: true,
+    helperText: 'Editable.',
   },
   {
     key: 'city',
@@ -73,6 +93,8 @@ export const profileFieldConfig = [
     label: 'City',
     placeholder: 'Quezon City',
     optional: true,
+    editable: true,
+    helperText: 'Editable.',
   },
   {
     key: 'province',
@@ -80,6 +102,8 @@ export const profileFieldConfig = [
     label: 'Province',
     placeholder: 'Metro Manila',
     optional: true,
+    editable: true,
+    helperText: 'Editable.',
   },
   {
     key: 'country',
@@ -87,6 +111,8 @@ export const profileFieldConfig = [
     label: 'Country',
     placeholder: 'Philippines',
     optional: true,
+    editable: true,
+    helperText: 'Editable.',
   },
 ];
 
@@ -115,7 +141,7 @@ export const profileActionConfig = [
     key: 'edit',
     icon: 'editProfile',
     title: 'Edit Profile',
-    description: 'Update your name, contact details, and location information.',
+    description: 'Update your address and contact number.',
   },
   {
     key: 'password',
