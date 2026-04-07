@@ -38,6 +38,7 @@ export const DashboardHeader = ({
   searchPlaceholder,
   onSearchPress,
   variant = 'hero',
+  minimal = false,
 }) => {
   const { logout, isLoading } = useAuthActions();
   const { height } = useWindowDimensions();
@@ -68,7 +69,7 @@ export const DashboardHeader = ({
     >
       <View style={styles.topRow}>
         <View style={styles.identityRow}>
-          {avatarUri || avatarInitials ? (
+          {!minimal && (avatarUri || avatarInitials) ? (
             <View key={avatarUri || avatarInitials} style={[styles.avatar, compact ? styles.avatarCompact : null]}>
               {avatarUri && !imageFailed ? (
                 <Image
@@ -83,11 +84,11 @@ export const DashboardHeader = ({
             </View>
           ) : null}
           <View style={styles.textContainer}>
-            <Text style={styles.eyebrow}>{config.eyebrow}</Text>
+            {!minimal ? <Text style={styles.eyebrow}>{config.eyebrow}</Text> : null}
             <Text numberOfLines={1} style={[styles.title, compact ? styles.titleCompact : null]}>
               {title}
             </Text>
-            {subtitle ? <Text numberOfLines={1} style={styles.subtitle}>{subtitle}</Text> : null}
+            {!minimal && subtitle ? <Text numberOfLines={1} style={styles.subtitle}>{subtitle}</Text> : null}
           </View>
         </View>
 
@@ -117,7 +118,7 @@ export const DashboardHeader = ({
         </View>
       </View>
 
-      {searchPlaceholder ? (
+      {!minimal && searchPlaceholder ? (
         <Pressable
           onPress={async () => {
             await Haptics.selectionAsync();
@@ -139,7 +140,7 @@ export const DashboardHeader = ({
         </Pressable>
       ) : null}
 
-      {quickTools.length ? (
+      {!minimal && quickTools.length ? (
         <View style={styles.quickToolRow}>
           {quickTools.map((item) => (
             <Pressable
@@ -157,7 +158,7 @@ export const DashboardHeader = ({
         </View>
       ) : null}
 
-      {summary ? (
+      {!minimal && summary ? (
         <View style={[styles.summaryCard, compact ? styles.summaryCardCompact : null, { backgroundColor: config.summaryBg }]}>
           <Text numberOfLines={2} style={[styles.summaryText, { color: config.summaryText }]}>{summary}</Text>
         </View>

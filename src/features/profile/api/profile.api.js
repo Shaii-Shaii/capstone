@@ -141,6 +141,23 @@ export const fetchUserDetailsBySystemUserId = async (systemUserId) => {
     .maybeSingle();
 };
 
+const buildUserDetailsMetadataPayload = (metadata = {}) => ({
+  first_name: metadata.first_name || '',
+  middle_name: metadata.middle_name || '',
+  last_name: metadata.last_name || '',
+  suffix: metadata.suffix || '',
+  birthdate: metadata.birthdate || null,
+  gender: metadata.gender || '',
+  contact_number: metadata.phone || '',
+  street: metadata.street || '',
+  barangay: metadata.barangay || '',
+  city: metadata.city || '',
+  province: metadata.province || '',
+  region: metadata.region || '',
+  country: metadata.country || 'Philippines',
+  joined_date: metadata.joined_date || new Date().toISOString().slice(0, 10),
+});
+
 export const ensureUserDetailsBySystemUserId = async (systemUser) => {
   if (!systemUser?.user_id) {
     return { data: null, error: new Error('System user is required.') };
@@ -148,7 +165,32 @@ export const ensureUserDetailsBySystemUserId = async (systemUser) => {
 
   const existing = await fetchUserDetailsBySystemUserId(systemUser.user_id);
   if (existing.data?.user_details_id) {
-    return existing;
+    const authUser = await getCurrentAuthMetadata();
+    const metadataPayload = buildUserDetailsMetadataPayload(authUser?.user_metadata || {});
+    const backfillPayload = Object.fromEntries(
+      Object.entries(metadataPayload).filter(([key, value]) => {
+        const currentValue = existing.data?.[key];
+        const hasCurrentValue = currentValue !== null && currentValue !== undefined && currentValue !== '';
+        const hasFallbackValue = value !== null && value !== undefined && value !== '';
+        return !hasCurrentValue && hasFallbackValue;
+      })
+    );
+
+    if (!Object.keys(backfillPayload).length) {
+      return existing;
+    }
+
+    const updateResult = await supabase
+      .from('user_details')
+      .update({
+        ...backfillPayload,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('user_id', systemUser.user_id)
+      .select()
+      .maybeSingle();
+
+    return updateResult.error ? existing : updateResult;
   }
 
   if (existing.error) {
@@ -156,25 +198,12 @@ export const ensureUserDetailsBySystemUserId = async (systemUser) => {
   }
 
   const authUser = await getCurrentAuthMetadata();
-  const metadata = authUser?.user_metadata || {};
+  const metadataPayload = buildUserDetailsMetadataPayload(authUser?.user_metadata || {});
   const createResult = await supabase
     .from('user_details')
     .insert([{
       user_id: systemUser.user_id,
-      first_name: metadata.first_name || '',
-      middle_name: metadata.middle_name || '',
-      last_name: metadata.last_name || '',
-      suffix: metadata.suffix || '',
-      birthdate: metadata.birthdate || null,
-      gender: metadata.gender || '',
-      contact_number: metadata.phone || '',
-      street: metadata.street || '',
-      barangay: metadata.barangay || '',
-      city: metadata.city || '',
-      province: metadata.province || '',
-      region: metadata.region || '',
-      country: metadata.country || 'Philippines',
-      joined_date: metadata.joined_date || new Date().toISOString().slice(0, 10),
+      ...metadataPayload,
     }])
     .select()
     .single();

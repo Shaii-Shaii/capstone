@@ -25,11 +25,11 @@ function SupportTip({ icon, text }) {
 
 export function PatientSupportChatScreen() {
   const router = useRouter();
-  const { user, profile, patientProfile } = useAuth();
+  const { user, profile } = useAuth();
   const { unreadCount } = useNotifications({ role: 'patient', userId: user?.id, databaseUserId: profile?.user_id });
 
-  const firstName = profile?.first_name || patientProfile?.first_name || '';
-  const lastName = profile?.last_name || patientProfile?.last_name || '';
+  const firstName = profile?.first_name || '';
+  const lastName = profile?.last_name || '';
   const avatarInitials = `${firstName?.[0] || ''}${lastName?.[0] || ''}`.trim();
 
   const handleNavPress = (item) => {
@@ -45,24 +45,13 @@ export function PatientSupportChatScreen() {
       onNavPress={handleNavPress}
       header={(
         <DashboardHeader
-          title="Support Center"
-          subtitle={
-            firstName
-              ? [firstName, patientProfile?.patient_code ? `Patient code ${patientProfile.patient_code}` : 'Support'].join(' • ')
-              : (patientProfile?.patient_code ? `Patient code ${patientProfile.patient_code}` : 'Patient support')
-          }
+          title={firstName || 'Account'}
+          subtitle=""
           summary=""
           avatarInitials={avatarInitials}
           avatarUri={profile?.avatar_url}
           variant="patient"
-          quickTools={[
-            {
-              key: 'profile',
-              label: 'Profile',
-              icon: 'profile',
-              onPress: () => router.navigate('/profile'),
-            },
-          ]}
+          minimal={true}
           utilityActions={[
             {
               key: 'notifications',
@@ -74,34 +63,9 @@ export function PatientSupportChatScreen() {
         />
       )}
     >
-      <AppCard variant="patientTint" radius="xl" padding="lg">
-        <Text style={styles.eyebrow}>Support</Text>
-        <Text style={styles.heroTitle}>Use the chat bubble for help.</Text>
-        <Text style={styles.heroBody}>Ask about requests, updates, or next steps.</Text>
-      </AppCard>
-
       <AppCard variant="elevated" radius="xl" padding="lg">
         <DashboardSectionHeader
-          title="How Support Works"
-          description="Quick support from any patient screen."
-          style={styles.sectionHeader}
-        />
-
-        <View style={styles.badgeRow}>
-          <AppIcon name="message-text-outline" state="active" size="sm" />
-          <Text style={styles.badgeText}>Tap the chat bubble on the lower right to open quick support</Text>
-        </View>
-
-        <View style={styles.tipList}>
-          <SupportTip icon="requests" text="Check request status." />
-          <SupportTip icon="support" text="Ask about requirements and next steps." />
-          <SupportTip icon="notifications" text="Use notifications for pushed updates." />
-        </View>
-      </AppCard>
-
-      <AppCard variant="elevated" radius="xl" padding="lg">
-        <DashboardSectionHeader
-          title="Helpful Shortcuts"
+          title="Support"
           description="Open the next screen."
           style={styles.sectionHeader}
         />
@@ -120,6 +84,11 @@ export function PatientSupportChatScreen() {
             onPress={() => router.navigate('/patient/notifications')}
             leading={<AppIcon name="notifications" state="muted" />}
           />
+        </View>
+
+        <View style={styles.tipList}>
+          <SupportTip icon="support" text="Use the chat bubble for help." />
+          <SupportTip icon="requests" text="Check request status here." />
         </View>
       </AppCard>
     </DashboardLayout>

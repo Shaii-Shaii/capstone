@@ -53,13 +53,13 @@ export function NotificationCenterScreen({ role }) {
       onNavPress={handleNavPress}
       header={(
         <DashboardHeader
-          title="Notifications"
-          subtitle={firstName ? `${firstName}'s updates` : 'Account updates'}
+          title={role === 'patient' ? (firstName || 'Account') : 'Notifications'}
+          subtitle={role === 'patient' ? '' : (firstName ? `${firstName}'s updates` : 'Account updates')}
           summary=""
           avatarInitials={avatarInitials}
           avatarUri={profile?.avatar_url}
           variant={role}
-          quickTools={[
+          quickTools={role === 'patient' ? [] : [
             {
               key: 'profile',
               label: 'Profile',
@@ -67,6 +67,7 @@ export function NotificationCenterScreen({ role }) {
               onPress: () => router.navigate('/profile'),
             },
           ]}
+          minimal={role === 'patient'}
           utilityActions={[
             {
               key: 'notifications',

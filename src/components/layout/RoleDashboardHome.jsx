@@ -137,9 +137,10 @@ export function RoleDashboardHome({ role, profile, navItems, content }) {
   const firstName = profile?.first_name || patientProfile?.first_name || '';
   const lastName = profile?.last_name || patientProfile?.last_name || '';
   const avatarInitials = [firstName[0], lastName[0]].filter(Boolean).join('');
-  const title = content.header.greeting === 'hello'
+  const welcomeTitle = content.header.greeting === 'hello'
     ? (firstName ? `Hello, ${firstName}` : 'Hello')
     : (firstName ? `Welcome back, ${firstName}` : 'Welcome back');
+  const headerTitle = role === 'patient' ? (firstName || 'Account') : welcomeTitle;
   const summaryCard = {
     eyebrow: role === 'patient'
       ? (patientProfile?.patient_code ? `Code ${patientProfile.patient_code}` : 'Patient account')
@@ -215,13 +216,14 @@ export function RoleDashboardHome({ role, profile, navItems, content }) {
       onNavPress={handleNavPress}
       header={(
         <DashboardHeader
-          title={title}
-          subtitle={content.header.subtitle}
+          title={headerTitle}
+          subtitle={role === 'patient' ? '' : content.header.subtitle}
           summary={content.header.summary}
           avatarInitials={avatarInitials}
           avatarUri={profile?.avatar_url}
           variant={role}
-          quickTools={quickTools}
+          quickTools={role === 'patient' ? [] : quickTools}
+          minimal={role === 'patient'}
           utilityActions={content.header.utilityActions?.map((item) => ({
             ...item,
             badge: item.key === 'notifications' && unreadCount ? String(Math.min(unreadCount, 99)) : item.badge,

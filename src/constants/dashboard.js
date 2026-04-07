@@ -258,19 +258,6 @@ export const patientDashboardContent = {
       kind: 'grid',
       dataKey: 'quickActions',
     },
-    {
-      key: 'request-status',
-      kind: 'info',
-      dataKey: 'requestStatus',
-      cardWidth: 184,
-    },
-    {
-      key: 'account',
-      kind: 'actions',
-      dataKey: 'account',
-      compact: false,
-      cardWidth: 188,
-    },
   ],
 };
 

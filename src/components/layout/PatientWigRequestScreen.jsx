@@ -747,11 +747,6 @@ export function PatientWigRequestScreen() {
     return result;
   });
 
-  const requestStatusLabel = hasSubmittedRequest
-    ? (latestWigRequest?.status ? `Status: ${String(latestWigRequest.status).replace(/_/g, ' ')}` : 'Latest wig request')
-    : (patientProfile?.patient_code ? `Patient code ${patientProfile.patient_code}` : 'Create a wig request');
-  const headerSubtitle = firstName ? [firstName, requestStatusLabel].filter(Boolean).join(' • ') : requestStatusLabel;
-
   return (
     <DashboardLayout
       navItems={patientDashboardNavItems}
@@ -760,20 +755,13 @@ export function PatientWigRequestScreen() {
       onNavPress={handleNavPress}
       header={(
         <DashboardHeader
-          title="Request a Wig"
-          subtitle={headerSubtitle}
+          title={firstName || 'Account'}
+          subtitle=""
           summary=""
           avatarInitials={avatarInitials}
           avatarUri={profile?.avatar_url}
           variant="patient"
-          quickTools={[
-            {
-              key: 'profile',
-              label: 'Profile',
-              icon: 'profile',
-              onPress: () => router.navigate('/profile'),
-            },
-          ]}
+          minimal={true}
           utilityActions={[
             {
               key: 'notifications',

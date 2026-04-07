@@ -16,6 +16,7 @@ import { AppIcon } from '../src/components/ui/AppIcon';
 import { StatusBanner } from '../src/components/ui/StatusBanner';
 import { DashboardSectionHeader } from '../src/components/ui/DashboardSectionHeader';
 import { useProfileActions } from '../src/hooks/useProfileActions';
+import { useNotifications } from '../src/hooks/useNotifications';
 import { theme } from '../src/design-system/theme';
 import { getPasswordStrengthMessage } from '../src/utils/passwordRules';
 import {
@@ -74,6 +75,7 @@ export default function ProfileScreen() {
     uploadAvatar,
     changePassword,
   } = useProfileActions();
+  const { unreadCount } = useNotifications({ role: profile?.role, userId: user?.id, databaseUserId: profile?.user_id });
 
   const [mode, setMode] = useState('view');
   const [feedback, setFeedback] = useState(null);
@@ -227,12 +229,21 @@ export default function ProfileScreen() {
         onNavPress={handleNavPress}
         header={(
           <DashboardHeader
-            title="My Profile"
-            subtitle={fullName || (patientProfile?.patient_code ? `Patient code ${patientProfile.patient_code}` : '')}
+            title={firstName || 'Account'}
+            subtitle=""
             summary=""
             avatarInitials={avatarInitials}
             avatarUri={profile?.avatar_url}
             variant={role === 'donor' ? 'donor' : 'patient'}
+            minimal={role === 'patient'}
+            utilityActions={role === 'patient' ? [
+              {
+                key: 'notifications',
+                icon: 'notifications',
+                badge: unreadCount ? String(Math.min(unreadCount, 99)) : undefined,
+                onPress: () => router.navigate('/patient/notifications'),
+              },
+            ] : []}
           />
         )}
       >
