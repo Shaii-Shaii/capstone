@@ -110,6 +110,8 @@ export default function ProfileScreen() {
   }, []);
 
   const role = profile?.role || 'patient';
+  const isPatient = role === 'patient';
+  const hasOrganization = !isPatient && Boolean(staffProfile?.hospital_id);
   const navItems = role === 'donor' ? donorDashboardNavItems : patientDashboardNavItems;
   const roleLabel = roleLabelMap[role] || 'Member';
   const firstName = (profile?.first_name || patientProfile?.first_name || '').trim();
@@ -179,6 +181,23 @@ export default function ProfileScreen() {
     user?.email,
   ]);
   const watchedNewPassword = passwordForm.watch('newPassword');
+  const actionItems = useMemo(() => (
+    [
+      ...(!isPatient && hasOrganization ? [{
+        key: 'organization',
+        icon: 'support',
+        title: 'Open Organization',
+        description: `Go to hospital ID ${staffProfile?.hospital_id}.`,
+      }] : []),
+      ...(!isPatient && !hasOrganization ? [{
+        key: 'completeSetup',
+        icon: 'editProfile',
+        title: 'Complete Account Setup',
+        description: 'Finish your account details.',
+      }] : []),
+      ...profileActionConfig,
+    ]
+  ), [hasOrganization, isPatient, staffProfile?.hospital_id]);
   const passwordStrengthMessage = getPasswordStrengthMessage(watchedNewPassword);
   const passwordStrengthVariant = watchedNewPassword
     ? passwordStrengthMessage === 'Strong password'
@@ -203,6 +222,14 @@ export default function ProfileScreen() {
   const handleActionPress = async (item) => {
     await Haptics.selectionAsync();
     setFeedback(null);
+    if (item.key === 'organization') {
+      router.navigate('/donor/home');
+      return;
+    }
+    if (item.key === 'completeSetup') {
+      setMode('edit');
+      return;
+    }
     setMode(item.key === 'edit' ? 'edit' : 'password');
   };
 
@@ -326,7 +353,7 @@ export default function ProfileScreen() {
           />
 
           <View style={styles.actionList}>
-            {profileActionConfig.map((item) => (
+            {actionItems.map((item) => (
               <ActionRow key={item.key} item={item} onPress={handleActionPress} />
             ))}
           </View>

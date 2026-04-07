@@ -10,6 +10,7 @@ import { DashboardActionCard } from '../ui/DashboardActionCard';
 import { DashboardFeatureCard } from '../ui/DashboardFeatureCard';
 import { DashboardInfoCard } from '../ui/DashboardInfoCard';
 import { AppCard } from '../ui/AppCard';
+import { AppButton } from '../ui/AppButton';
 import { AppIcon } from '../ui/AppIcon';
 import { useNotifications } from '../../hooks/useNotifications';
 import { useProcessTracking } from '../../hooks/useProcessTracking';
@@ -138,6 +139,7 @@ export function RoleDashboardHome({ role, profile, navItems, content }) {
   const lastName = (profile?.last_name || patientProfile?.last_name || '').trim();
   const avatarUri = profile?.avatar_url || profile?.photo_path || patientProfile?.patient_picture || '';
   const avatarInitials = [firstName[0], lastName[0]].filter(Boolean).join('');
+  const needsAccountSetup = role !== 'patient' && !staffProfile?.hospital_id;
   const welcomeTitle = content.header.greeting === 'hello'
     ? (firstName ? `Hello, ${firstName}` : 'Hello')
     : (firstName ? `Welcome back, ${firstName}` : 'Welcome back');
@@ -236,6 +238,21 @@ export function RoleDashboardHome({ role, profile, navItems, content }) {
         />
       )}
     >
+      {needsAccountSetup ? (
+        <AppCard variant="donorTint" radius="xl" padding="md" style={styles.setupCard}>
+          <View style={styles.setupCopy}>
+            <Text style={styles.setupTitle}>Complete Account Setup</Text>
+            <Text style={styles.setupBody}>Finish your profile before organization-linked access.</Text>
+          </View>
+          <AppButton
+            title="Open Profile"
+            fullWidth={false}
+            onPress={() => handleActionRoute('/profile')}
+            leading={<AppIcon name="profile" state="inverse" />}
+          />
+        </AppCard>
+      ) : null}
+
       {hasSummaryCard ? (
         <AppCard variant={role === 'donor' ? 'donorTint' : 'patientTint'} radius="xl" padding="xs">
           {summaryCard.eyebrow ? (
@@ -355,5 +372,26 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.compact.caption,
     color: theme.colors.textPrimary,
     fontWeight: theme.typography.weights.semibold,
+  },
+  setupCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.md,
+  },
+  setupCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  setupTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textPrimary,
+  },
+  setupBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    color: theme.colors.textSecondary,
   },
 });
