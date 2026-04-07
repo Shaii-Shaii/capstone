@@ -10,9 +10,16 @@ const formFromProfile = (profile) => ({
   firstName: profile?.first_name || '',
   middleName: profile?.middle_name || '',
   lastName: profile?.last_name || '',
+  suffix: profile?.suffix || '',
+  birthdate: profile?.birthdate || '',
+  gender: profile?.gender || '',
   phone: profile?.phone || '',
+  street: profile?.street || '',
+  barangay: profile?.barangay || '',
+  region: profile?.region || '',
   city: profile?.city || '',
   province: profile?.province || '',
+  country: profile?.country || '',
 });
 
 export const useProfileActions = () => {
@@ -48,9 +55,16 @@ export const useProfileActions = () => {
       first_name: values.firstName,
       middle_name: values.middleName,
       last_name: values.lastName,
+      suffix: values.suffix,
+      birthdate: values.birthdate,
+      gender: values.gender,
       phone: values.phone,
+      street: values.street,
+      barangay: values.barangay,
+      region: values.region,
       city: values.city,
       province: values.province,
+      country: values.country,
     };
 
     const result = await saveProfile(user.id, payload, profile?.role);

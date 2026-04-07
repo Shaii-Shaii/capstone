@@ -4,7 +4,6 @@ export const profileFieldConfig = [
     formKey: 'firstName',
     label: 'First Name',
     placeholder: 'Juan',
-    helperText: 'Use the name you want shown in your account.',
   },
   {
     key: 'middle_name',
@@ -20,11 +19,53 @@ export const profileFieldConfig = [
     placeholder: 'Dela Cruz',
   },
   {
+    key: 'suffix',
+    formKey: 'suffix',
+    label: 'Suffix',
+    placeholder: 'Jr.',
+    optional: true,
+  },
+  {
+    key: 'birthdate',
+    formKey: 'birthdate',
+    label: 'Birthdate',
+    placeholder: 'YYYY-MM-DD',
+    optional: true,
+  },
+  {
+    key: 'gender',
+    formKey: 'gender',
+    label: 'Gender',
+    placeholder: 'Female',
+    optional: true,
+  },
+  {
     key: 'phone',
     formKey: 'phone',
     label: 'Mobile Number',
     placeholder: '09123456789',
     keyboardType: 'phone-pad',
+  },
+  {
+    key: 'street',
+    formKey: 'street',
+    label: 'Street',
+    placeholder: 'Street address',
+    optional: true,
+  },
+  {
+    key: 'barangay',
+    formKey: 'barangay',
+    label: 'Barangay',
+    placeholder: 'Barangay',
+    optional: true,
+  },
+  {
+    key: 'region',
+    formKey: 'region',
+    label: 'Region',
+    placeholder: 'Region',
+    optional: true,
   },
   {
     key: 'city',
@@ -38,6 +79,13 @@ export const profileFieldConfig = [
     formKey: 'province',
     label: 'Province',
     placeholder: 'Metro Manila',
+    optional: true,
+  },
+  {
+    key: 'country',
+    formKey: 'country',
+    label: 'Country',
+    placeholder: 'Philippines',
     optional: true,
   },
 ];
@@ -83,7 +131,18 @@ export const roleLabelMap = {
 };
 
 export const profileDisplayFields = [
+  { key: 'first_name', label: 'First name', icon: 'profile' },
+  { key: 'middle_name', label: 'Middle name', icon: 'profile' },
+  { key: 'last_name', label: 'Last name', icon: 'profile' },
+  { key: 'suffix', label: 'Suffix', icon: 'profile' },
+  { key: 'birthdate', label: 'Birthdate', icon: 'profile' },
+  { key: 'gender', label: 'Gender', icon: 'profile' },
   { key: 'phone', label: 'Phone', icon: 'phone' },
+  { key: 'street', label: 'Street', icon: 'profile' },
+  { key: 'barangay', label: 'Barangay', icon: 'profile' },
+  { key: 'region', label: 'Region', icon: 'profile' },
   { key: 'city', label: 'City', icon: 'city' },
   { key: 'province', label: 'Province', icon: 'province' },
+  { key: 'country', label: 'Country', icon: 'profile' },
+  { key: 'joined_date', label: 'Joined date', icon: 'profile' },
 ];

@@ -22,6 +22,7 @@ import { getPasswordStrengthMessage } from '../src/utils/passwordRules';
 import {
   passwordFieldConfig,
   profileActionConfig,
+  profileDisplayFields,
   profileFieldConfig,
   roleLabelMap,
 } from '../src/constants/profile';
@@ -117,60 +118,64 @@ export default function ProfileScreen() {
   const suffix = profile?.suffix || patientProfile?.suffix || '';
   const avatarUri = profile?.avatar_url || profile?.photo_path || patientProfile?.patient_picture || '';
   const avatarInitials = `${firstName?.[0] || ''}${lastName?.[0] || ''}`.trim();
+  const fullName = [firstName, middleName, lastName, suffix].filter(Boolean).join(' ');
+  const displayRows = useMemo(() => (
+    profileDisplayFields
+      .map((field) => {
+        if (field.key === 'phone') {
+          return { ...field, value: profile?.contact_number || profile?.phone || '' };
+        }
+        return { ...field, value: profile?.[field.key] || '' };
+      })
+      .filter((field) => field.value)
+  ), [profile]);
   const overviewRows = useMemo(() => (
     [
+      fullName ? { key: 'full_name', label: 'Full name', value: fullName } : null,
       { key: 'email', label: 'Email', value: user?.email || 'Not available' },
       { key: 'role', label: 'Account type', value: roleLabel },
-      firstName ? { key: 'first_name', label: 'First name', value: firstName } : null,
-      middleName ? { key: 'middle_name', label: 'Middle name', value: middleName } : null,
-      lastName ? { key: 'last_name', label: 'Last name', value: lastName } : null,
-      suffix ? { key: 'suffix', label: 'Suffix', value: suffix } : null,
-      profile?.birthdate ? { key: 'birthdate', label: 'Birthdate', value: profile.birthdate } : null,
-      (profile?.contact_number || profile?.phone)
-        ? { key: 'contact_number', label: 'Mobile number', value: profile.contact_number || profile.phone }
-        : null,
-      profile?.gender ? { key: 'gender', label: 'Gender', value: profile.gender } : null,
-      profile?.street ? { key: 'street', label: 'Street', value: profile.street } : null,
-      profile?.barangay ? { key: 'barangay', label: 'Barangay', value: profile.barangay } : null,
-      profile?.city ? { key: 'city', label: 'City', value: profile.city } : null,
-      profile?.province ? { key: 'province', label: 'Province', value: profile.province } : null,
-      profile?.region ? { key: 'region', label: 'Region', value: profile.region } : null,
-      profile?.country ? { key: 'country', label: 'Country', value: profile.country } : null,
-      profile?.joined_date ? { key: 'joined_date', label: 'Joined date', value: profile.joined_date } : null,
+      { key: 'account_status', label: 'Account status', value: profile?.is_active ? 'Active' : 'Inactive' },
+      profile?.created_at ? { key: 'created_at', label: 'Created at', value: profile.created_at } : null,
+      profile?.access_start ? { key: 'access_start', label: 'Access start', value: profile.access_start } : null,
+      profile?.access_end ? { key: 'access_end', label: 'Access end', value: profile.access_end } : null,
+      ...displayRows,
       patientProfile?.patient_code
         ? { key: 'patient_code', label: 'Patient code', value: patientProfile.patient_code }
         : null,
       patientProfile?.hospital_id
         ? { key: 'patient_hospital', label: 'Hospital ID', value: String(patientProfile.hospital_id) }
         : null,
+      patientProfile?.age
+        ? { key: 'patient_age', label: 'Patient age', value: String(patientProfile.age) }
+        : null,
+      patientProfile?.gender
+        ? { key: 'patient_gender', label: 'Patient gender', value: patientProfile.gender }
+        : null,
       patientProfile?.medical_condition
         ? { key: 'medical_condition', label: 'Medical condition', value: patientProfile.medical_condition }
+        : null,
+      patientProfile?.medical_document
+        ? { key: 'medical_document', label: 'Medical document', value: patientProfile.medical_document }
         : null,
       staffProfile?.hospital_id
         ? { key: 'staff_hospital', label: 'Assigned hospital', value: String(staffProfile.hospital_id) }
         : null,
     ].filter(Boolean)
   ), [
-    firstName,
-    lastName,
-    middleName,
+    displayRows,
+    fullName,
     patientProfile?.hospital_id,
+    patientProfile?.age,
+    patientProfile?.gender,
+    patientProfile?.medical_document,
     patientProfile?.medical_condition,
     patientProfile?.patient_code,
-    profile?.barangay,
-    profile?.birthdate,
-    profile?.city,
-    profile?.contact_number,
-    profile?.country,
-    profile?.gender,
-    profile?.joined_date,
-    profile?.phone,
-    profile?.province,
-    profile?.region,
-    profile?.street,
+    profile?.access_end,
+    profile?.access_start,
+    profile?.created_at,
+    profile?.is_active,
     roleLabel,
     staffProfile?.hospital_id,
-    suffix,
     user?.email,
   ]);
   const watchedNewPassword = passwordForm.watch('newPassword');

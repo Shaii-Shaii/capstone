@@ -10,6 +10,8 @@ const normalizeSystemUser = (row, details = null) => ({
   email: row?.email || '',
   role: row?.role || '',
   is_active: row?.is_active ?? true,
+  access_start: row?.access_start || null,
+  access_end: row?.access_end || null,
   created_at: row?.created_at || null,
   updated_at: row?.updated_at || null,
   first_name: details?.first_name || '',
