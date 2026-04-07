@@ -39,12 +39,14 @@ export const DashboardHeader = ({
   onSearchPress,
   variant = 'hero',
   minimal = false,
+  showAvatar,
 }) => {
   const { logout, isLoading } = useAuthActions();
   const { height } = useWindowDimensions();
   const compact = height < 760;
   const config = HEADER_VARIANTS[variant] || HEADER_VARIANTS.hero;
   const [imageFailed, setImageFailed] = React.useState(false);
+  const shouldShowAvatar = showAvatar ?? !minimal;
 
   React.useEffect(() => {
     setImageFailed(false);
@@ -69,7 +71,7 @@ export const DashboardHeader = ({
     >
       <View style={styles.topRow}>
         <View style={styles.identityRow}>
-          {!minimal && (avatarUri || avatarInitials) ? (
+          {shouldShowAvatar ? (
             <View key={avatarUri || avatarInitials} style={[styles.avatar, compact ? styles.avatarCompact : null]}>
               {avatarUri && !imageFailed ? (
                 <Image
@@ -78,8 +80,10 @@ export const DashboardHeader = ({
                   resizeMode="cover"
                   onError={() => setImageFailed(true)}
                 />
-              ) : (
+              ) : avatarInitials ? (
                 <Text style={styles.avatarText}>{avatarInitials.toUpperCase().slice(0, 2)}</Text>
+              ) : (
+                <AppIcon name="profile" size="md" state="inverse" />
               )}
             </View>
           ) : null}

@@ -136,11 +136,14 @@ export function RoleDashboardHome({ role, profile, navItems, content }) {
   const { tracker } = useProcessTracking({ role, userId: user?.id, databaseUserId: profile?.user_id });
   const firstName = profile?.first_name || patientProfile?.first_name || '';
   const lastName = profile?.last_name || patientProfile?.last_name || '';
+  const avatarUri = profile?.avatar_url || profile?.photo_path || patientProfile?.patient_picture || '';
   const avatarInitials = [firstName[0], lastName[0]].filter(Boolean).join('');
   const welcomeTitle = content.header.greeting === 'hello'
     ? (firstName ? `Hello, ${firstName}` : 'Hello')
     : (firstName ? `Welcome back, ${firstName}` : 'Welcome back');
-  const headerTitle = role === 'patient' ? (firstName || 'Account') : welcomeTitle;
+  const headerTitle = role === 'patient'
+    ? (firstName ? `Welcome, ${firstName}` : 'Welcome')
+    : welcomeTitle;
   const summaryCard = {
     eyebrow: role === 'patient'
       ? (patientProfile?.patient_code ? `Code ${patientProfile.patient_code}` : 'Patient account')
@@ -183,7 +186,7 @@ export function RoleDashboardHome({ role, profile, navItems, content }) {
         }
       : null,
   ].filter(Boolean);
-  const hasSummaryCard = Boolean(summaryCard.title) || Boolean(snapshotItems.length);
+  const hasSummaryCard = role !== 'patient' && (Boolean(summaryCard.title) || Boolean(snapshotItems.length));
 
   const handleNavPress = (item) => {
     if (!item.route || item.route === pathname) return;
@@ -220,10 +223,11 @@ export function RoleDashboardHome({ role, profile, navItems, content }) {
           subtitle={role === 'patient' ? '' : content.header.subtitle}
           summary={content.header.summary}
           avatarInitials={avatarInitials}
-          avatarUri={profile?.avatar_url}
+          avatarUri={avatarUri}
           variant={role}
           quickTools={role === 'patient' ? [] : quickTools}
           minimal={role === 'patient'}
+          showAvatar={role === 'patient' ? true : undefined}
           utilityActions={content.header.utilityActions?.map((item) => ({
             ...item,
             badge: item.key === 'notifications' && unreadCount ? String(Math.min(unreadCount, 99)) : item.badge,

@@ -762,6 +762,7 @@ export function PatientWigRequestScreen() {
           avatarUri={profile?.avatar_url}
           variant="patient"
           minimal={true}
+          showAvatar={false}
           utilityActions={[
             {
               key: 'notifications',

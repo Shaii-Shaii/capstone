@@ -22,7 +22,6 @@ import { getPasswordStrengthMessage } from '../src/utils/passwordRules';
 import {
   passwordFieldConfig,
   profileActionConfig,
-  profileDisplayFields,
   profileFieldConfig,
   roleLabelMap,
 } from '../src/constants/profile';
@@ -113,31 +112,66 @@ export default function ProfileScreen() {
   const navItems = role === 'donor' ? donorDashboardNavItems : patientDashboardNavItems;
   const roleLabel = roleLabelMap[role] || 'Member';
   const firstName = profile?.first_name || patientProfile?.first_name || '';
+  const middleName = profile?.middle_name || patientProfile?.middle_name || '';
   const lastName = profile?.last_name || patientProfile?.last_name || '';
-  const fullName = `${firstName} ${lastName}`.trim();
+  const suffix = profile?.suffix || patientProfile?.suffix || '';
   const avatarInitials = `${firstName?.[0] || ''}${lastName?.[0] || ''}`.trim();
-  const displayRows = useMemo(() => (
-    profileDisplayFields
-      .map((field) => ({ ...field, value: profile?.[field.key] }))
-      .filter((field) => field.value)
-  ), [profile]);
   const overviewRows = useMemo(() => (
     [
-      fullName ? { key: 'fullName', label: 'Full name', value: fullName } : null,
       { key: 'email', label: 'Email', value: user?.email || 'Not available' },
       { key: 'role', label: 'Account type', value: roleLabel },
+      firstName ? { key: 'first_name', label: 'First name', value: firstName } : null,
+      middleName ? { key: 'middle_name', label: 'Middle name', value: middleName } : null,
+      lastName ? { key: 'last_name', label: 'Last name', value: lastName } : null,
+      suffix ? { key: 'suffix', label: 'Suffix', value: suffix } : null,
+      profile?.birthdate ? { key: 'birthdate', label: 'Birthdate', value: profile.birthdate } : null,
+      (profile?.contact_number || profile?.phone)
+        ? { key: 'contact_number', label: 'Mobile number', value: profile.contact_number || profile.phone }
+        : null,
+      profile?.gender ? { key: 'gender', label: 'Gender', value: profile.gender } : null,
+      profile?.street ? { key: 'street', label: 'Street', value: profile.street } : null,
+      profile?.barangay ? { key: 'barangay', label: 'Barangay', value: profile.barangay } : null,
+      profile?.city ? { key: 'city', label: 'City', value: profile.city } : null,
+      profile?.province ? { key: 'province', label: 'Province', value: profile.province } : null,
+      profile?.region ? { key: 'region', label: 'Region', value: profile.region } : null,
+      profile?.country ? { key: 'country', label: 'Country', value: profile.country } : null,
+      profile?.joined_date ? { key: 'joined_date', label: 'Joined date', value: profile.joined_date } : null,
       patientProfile?.patient_code
         ? { key: 'patient_code', label: 'Patient code', value: patientProfile.patient_code }
         : null,
       patientProfile?.hospital_id
         ? { key: 'patient_hospital', label: 'Hospital ID', value: String(patientProfile.hospital_id) }
         : null,
+      patientProfile?.medical_condition
+        ? { key: 'medical_condition', label: 'Medical condition', value: patientProfile.medical_condition }
+        : null,
       staffProfile?.hospital_id
         ? { key: 'staff_hospital', label: 'Assigned hospital', value: String(staffProfile.hospital_id) }
         : null,
-      ...displayRows,
     ].filter(Boolean)
-  ), [displayRows, fullName, patientProfile?.hospital_id, patientProfile?.patient_code, roleLabel, staffProfile?.hospital_id, user?.email]);
+  ), [
+    firstName,
+    lastName,
+    middleName,
+    patientProfile?.hospital_id,
+    patientProfile?.medical_condition,
+    patientProfile?.patient_code,
+    profile?.barangay,
+    profile?.birthdate,
+    profile?.city,
+    profile?.contact_number,
+    profile?.country,
+    profile?.gender,
+    profile?.joined_date,
+    profile?.phone,
+    profile?.province,
+    profile?.region,
+    profile?.street,
+    roleLabel,
+    staffProfile?.hospital_id,
+    suffix,
+    user?.email,
+  ]);
   const watchedNewPassword = passwordForm.watch('newPassword');
   const passwordStrengthMessage = getPasswordStrengthMessage(watchedNewPassword);
   const passwordStrengthVariant = watchedNewPassword
@@ -236,6 +270,7 @@ export default function ProfileScreen() {
             avatarUri={profile?.avatar_url}
             variant={role === 'donor' ? 'donor' : 'patient'}
             minimal={role === 'patient'}
+            showAvatar={role === 'patient' ? false : undefined}
             utilityActions={role === 'patient' ? [
               {
                 key: 'notifications',
@@ -249,8 +284,8 @@ export default function ProfileScreen() {
       >
         <AppCard variant={role === 'donor' ? 'donorTint' : 'patientTint'} radius="xl" padding="lg">
           <DashboardSectionHeader
-            title="Account Overview"
-            description="Saved account details."
+            title="Overview"
+            description=""
             style={styles.sectionHeader}
           />
 
@@ -279,8 +314,8 @@ export default function ProfileScreen() {
 
         <AppCard variant="elevated" radius="xl" padding="lg">
           <DashboardSectionHeader
-            title="Account Actions"
-            description="Manage your account."
+            title="Actions"
+            description=""
             style={styles.sectionHeader}
           />
 

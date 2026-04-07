@@ -68,6 +68,7 @@ export function NotificationCenterScreen({ role }) {
             },
           ]}
           minimal={role === 'patient'}
+          showAvatar={role === 'patient' ? false : undefined}
           utilityActions={[
             {
               key: 'notifications',

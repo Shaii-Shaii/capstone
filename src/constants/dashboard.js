@@ -144,7 +144,7 @@ export const donorDashboardContent = {
 export const patientDashboardContent = {
   header: {
     greeting: 'welcome',
-    subtitle: 'Support home',
+    subtitle: '',
     summary: '',
     utilityActions: [
       { key: 'notifications', icon: 'notifications', badge: '3', route: '/patient/notifications' },
@@ -197,32 +197,23 @@ export const patientDashboardContent = {
   },
   requestStatus: {
     title: 'Next Steps',
-    description: 'Latest patient steps.',
+    description: '',
     items: [
       {
         key: 'readiness',
-        title: 'Profile Ready',
-        description: 'Current contact details help support updates reach you clearly.',
-        badgeText: 'Ready',
-        meta: 'Account health',
+        title: 'Profile',
+        description: 'Check your saved details.',
+        badgeText: 'Account',
+        meta: 'Review',
         icon: 'success',
         route: '/profile',
       },
       {
         key: 'care',
-        title: 'Support Notes',
-        description: 'Review the practical information you may need before the next update.',
-        badgeText: 'Tip',
-        meta: 'Guidance',
-        icon: 'shield',
-        route: '/patient/support',
-      },
-      {
-        key: 'timeline',
-        title: 'Next Update',
-        description: 'Return to your request progress to keep the support timeline visible.',
-        badgeText: 'Status',
-        meta: 'Request timeline',
+        title: 'Request Status',
+        description: 'Track your current request.',
+        badgeText: 'Live',
+        meta: 'Status',
         icon: 'requests',
         route: '/patient/requests',
       },
@@ -254,9 +245,10 @@ export const patientDashboardContent = {
   },
   sections: [
     {
-      key: 'quick-actions',
-      kind: 'grid',
-      dataKey: 'quickActions',
+      key: 'request-status',
+      kind: 'info',
+      dataKey: 'requestStatus',
+      cardWidth: 208,
     },
   ],
 };

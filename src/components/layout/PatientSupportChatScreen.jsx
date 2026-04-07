@@ -3,8 +3,6 @@ import { StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { DashboardLayout } from './DashboardLayout';
 import { DashboardHeader } from '../ui/DashboardHeader';
-import { DashboardSectionHeader } from '../ui/DashboardSectionHeader';
-import { AppCard } from '../ui/AppCard';
 import { AppButton } from '../ui/AppButton';
 import { AppIcon } from '../ui/AppIcon';
 import { useNotifications } from '../../hooks/useNotifications';
@@ -12,24 +10,13 @@ import { theme } from '../../design-system/theme';
 import { patientDashboardNavItems } from '../../constants/dashboard';
 import { useAuth } from '../../providers/AuthProvider';
 
-function SupportTip({ icon, text }) {
-  return (
-    <View style={styles.tipRow}>
-      <View style={styles.tipIconWrap}>
-        <AppIcon name={icon} state="active" size="sm" />
-      </View>
-      <Text style={styles.tipText}>{text}</Text>
-    </View>
-  );
-}
-
 export function PatientSupportChatScreen() {
   const router = useRouter();
-  const { user, profile } = useAuth();
+  const { user, profile, patientProfile } = useAuth();
   const { unreadCount } = useNotifications({ role: 'patient', userId: user?.id, databaseUserId: profile?.user_id });
 
-  const firstName = profile?.first_name || '';
-  const lastName = profile?.last_name || '';
+  const firstName = profile?.first_name || patientProfile?.first_name || '';
+  const lastName = profile?.last_name || patientProfile?.last_name || '';
   const avatarInitials = `${firstName?.[0] || ''}${lastName?.[0] || ''}`.trim();
 
   const handleNavPress = (item) => {
@@ -52,6 +39,7 @@ export function PatientSupportChatScreen() {
           avatarUri={profile?.avatar_url}
           variant="patient"
           minimal={true}
+          showAvatar={false}
           utilityActions={[
             {
               key: 'notifications',
@@ -63,13 +51,8 @@ export function PatientSupportChatScreen() {
         />
       )}
     >
-      <AppCard variant="elevated" radius="xl" padding="lg">
-        <DashboardSectionHeader
-          title="Support"
-          description="Open the next screen."
-          style={styles.sectionHeader}
-        />
-
+      <View style={styles.actionWrap}>
+        <Text style={styles.helpText}>Use the chat bubble for help.</Text>
         <View style={styles.actionRow}>
           <AppButton
             title="Open Wig Requests"
@@ -85,79 +68,16 @@ export function PatientSupportChatScreen() {
             leading={<AppIcon name="notifications" state="muted" />}
           />
         </View>
-
-        <View style={styles.tipList}>
-          <SupportTip icon="support" text="Use the chat bubble for help." />
-          <SupportTip icon="requests" text="Check request status here." />
-        </View>
-      </AppCard>
+      </View>
     </DashboardLayout>
   );
 }
 
 const styles = StyleSheet.create({
-  eyebrow: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.caption,
-    fontWeight: theme.typography.weights.semibold,
-    color: theme.colors.textSecondary,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-    marginBottom: theme.spacing.xs,
+  actionWrap: {
+    gap: theme.spacing.md,
   },
-  heroTitle: {
-    fontFamily: theme.typography.fontFamilyDisplay,
-    fontSize: theme.typography.semantic.bodyLg,
-    color: theme.colors.textPrimary,
-    marginBottom: 4,
-  },
-  heroBody: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
-    color: theme.colors.textSecondary,
-  },
-  sectionHeader: {
-    marginBottom: theme.spacing.md,
-  },
-  badgeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.spacing.xs,
-    marginBottom: theme.spacing.md,
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.xs,
-    borderRadius: theme.radius.pill,
-    backgroundColor: theme.colors.surfaceSoft,
-    alignSelf: 'flex-start',
-  },
-  badgeText: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.caption,
-    color: theme.colors.textPrimary,
-    fontWeight: theme.typography.weights.semibold,
-  },
-  tipList: {
-    gap: theme.spacing.sm,
-  },
-  tipRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: theme.spacing.sm,
-    padding: theme.spacing.md,
-    borderRadius: theme.radius.lg,
-    backgroundColor: theme.colors.surfaceSoft,
-  },
-  tipIconWrap: {
-    width: 28,
-    height: 28,
-    borderRadius: theme.radius.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: theme.colors.backgroundPrimary,
-  },
-  tipText: {
-    flex: 1,
+  helpText: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.bodySm,
     lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
