@@ -154,8 +154,11 @@ export const ensureUserDetailsBySystemUserId = async (systemUser) => {
     .insert([{
       user_id: systemUser.user_id,
       first_name: metadata.first_name || '',
+      middle_name: metadata.middle_name || '',
       last_name: metadata.last_name || '',
+      suffix: metadata.suffix || '',
       birthdate: metadata.birthdate || null,
+      gender: metadata.gender || '',
       contact_number: metadata.phone || '',
       street: metadata.street || '',
       barangay: metadata.barangay || '',
@@ -163,6 +166,7 @@ export const ensureUserDetailsBySystemUserId = async (systemUser) => {
       province: metadata.province || '',
       region: metadata.region || '',
       country: metadata.country || 'Philippines',
+      joined_date: metadata.joined_date || new Date().toISOString().slice(0, 10),
     }])
     .select()
     .single();
@@ -256,7 +260,9 @@ export const updateProfile = async (authUserId, updates) => {
     first_name: updates.first_name ?? undefined,
     middle_name: updates.middle_name ?? undefined,
     last_name: updates.last_name ?? undefined,
+    suffix: updates.suffix ?? undefined,
     birthdate: updates.birthdate ?? undefined,
+    gender: updates.gender ?? undefined,
     contact_number: updates.phone ?? updates.contact_number ?? undefined,
     city: updates.city ?? undefined,
     province: updates.province ?? undefined,
@@ -264,6 +270,7 @@ export const updateProfile = async (authUserId, updates) => {
     barangay: updates.barangay ?? undefined,
     region: updates.region ?? undefined,
     country: updates.country ?? undefined,
+    joined_date: updates.joined_date ?? undefined,
     photo_path: updates.avatar_url ?? updates.photo_path ?? undefined,
     updated_at: new Date().toISOString(),
   };

@@ -7,18 +7,27 @@ const OPTIONAL_ROLE_TABLES = {
 
 const SYSTEM_ROLE_KEYS = new Set(['id', 'created_at', 'updated_at', 'user_id', 'profile_id']);
 
+const normalizeOptionalString = (value) => {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  return typeof value === 'string' ? value.trim() : value;
+};
+
 const sanitizeSharedProfileUpdates = (updates = {}) => ({
-  first_name: updates.first_name?.trim?.() || '',
-  middle_name: updates.middle_name?.trim?.() || '',
-  last_name: updates.last_name?.trim?.() || '',
-  phone: updates.phone?.trim?.() || '',
-  birthdate: updates.birthdate || '',
-  street: updates.street?.trim?.() || '',
-  barangay: updates.barangay?.trim?.() || '',
-  region: updates.region?.trim?.() || '',
-  city: updates.city?.trim?.() || '',
-  province: updates.province?.trim?.() || '',
-  country: updates.country?.trim?.() || '',
+  first_name: normalizeOptionalString(updates.first_name),
+  middle_name: normalizeOptionalString(updates.middle_name),
+  last_name: normalizeOptionalString(updates.last_name),
+  suffix: normalizeOptionalString(updates.suffix),
+  phone: normalizeOptionalString(updates.phone),
+  birthdate: updates.birthdate ?? undefined,
+  gender: normalizeOptionalString(updates.gender),
+  street: normalizeOptionalString(updates.street),
+  barangay: normalizeOptionalString(updates.barangay),
+  region: normalizeOptionalString(updates.region),
+  city: normalizeOptionalString(updates.city),
+  province: normalizeOptionalString(updates.province),
+  country: normalizeOptionalString(updates.country),
+  joined_date: updates.joined_date ?? undefined,
 });
 
 const fetchRoleProfile = async (role, userId) => {

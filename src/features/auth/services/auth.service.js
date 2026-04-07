@@ -82,6 +82,7 @@ export const register = async (email, password, additionalData = {}) => {
       role: additionalData.role,
       first_name: additionalData.firstName,
       last_name: additionalData.lastName,
+      birthdate: additionalData.birthdate,
       phone: additionalData.phone,
       street: additionalData.street,
       barangay: additionalData.barangay,
