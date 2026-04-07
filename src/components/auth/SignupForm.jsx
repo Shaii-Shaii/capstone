@@ -19,6 +19,7 @@ import { getPatientLinkPreview } from '../../features/profile/services/profile.s
 
 const IMAGE_MEDIA_TYPES = ['images'];
 const EARLIEST_BIRTH_YEAR = 1900;
+const WEEKDAY_LABELS = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
 
 const formatDateValue = (date) => {
   const year = date.getFullYear();
@@ -54,6 +55,43 @@ const formatBirthdateLabel = (value) => {
     year: 'numeric',
     month: 'long',
     day: 'numeric',
+  });
+};
+
+const getMonthLabel = (value) => value.toLocaleDateString('en-PH', {
+  month: 'long',
+  year: 'numeric',
+});
+
+const startOfMonth = (value) => new Date(value.getFullYear(), value.getMonth(), 1);
+
+const isSameDay = (firstDate, secondDate) => (
+  Boolean(firstDate)
+  && Boolean(secondDate)
+  && firstDate.getFullYear() === secondDate.getFullYear()
+  && firstDate.getMonth() === secondDate.getMonth()
+  && firstDate.getDate() === secondDate.getDate()
+);
+
+const buildCalendarDays = (monthDate, minimumDate, maximumDate) => {
+  const monthStart = startOfMonth(monthDate);
+  const monthEnd = new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 0);
+  const leadingEmptySlots = monthStart.getDay();
+  const totalSlots = Math.ceil((leadingEmptySlots + monthEnd.getDate()) / 7) * 7;
+
+  return Array.from({ length: totalSlots }, (_, index) => {
+    const dayOffset = index - leadingEmptySlots + 1;
+    const cellDate = new Date(monthDate.getFullYear(), monthDate.getMonth(), dayOffset);
+    const inMonth = cellDate.getMonth() === monthDate.getMonth();
+    const isDisabled = !inMonth || cellDate < minimumDate || cellDate > maximumDate;
+
+    return {
+      key: `${formatDateValue(cellDate)}-${index}`,
+      label: String(cellDate.getDate()),
+      value: cellDate,
+      inMonth,
+      isDisabled,
+    };
   });
 };
 
@@ -184,32 +222,6 @@ const DateField = ({ label, value, helperText, error, onPress }) => (
   </View>
 );
 
-const WebDateField = ({ label, value, helperText, error, minimumDate, maximumDate, onChange }) => (
-  <View style={styles.dateFieldWrap}>
-    <Text style={styles.readOnlyLabel}>{label}</Text>
-    <input
-      type="date"
-      value={value || ''}
-      min={formatDateValue(minimumDate)}
-      max={formatDateValue(maximumDate)}
-      aria-label={label}
-      onClick={(event) => {
-        event.currentTarget.showPicker?.();
-      }}
-      onFocus={(event) => {
-        event.currentTarget.showPicker?.();
-      }}
-      onChange={(event) => onChange(event.target.value)}
-      style={styles.webDateInput}
-    />
-    {error ? (
-      <Text style={styles.errorText}>{error}</Text>
-    ) : helperText ? (
-      <Text style={styles.helperText}>{helperText}</Text>
-    ) : null}
-  </View>
-);
-
 const PatientCodeModal = ({
   visible,
   codeValue,
@@ -280,8 +292,10 @@ export const SignupForm = ({ schema, onSubmit, isLoading, buttonText = 'Create A
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const [isUploadingPatientPicture, setIsUploadingPatientPicture] = useState(false);
   const [isPatientModalOpen, setIsPatientModalOpen] = useState(false);
+  const [isWebBirthdatePickerOpen, setIsWebBirthdatePickerOpen] = useState(false);
   const [isIosBirthdatePickerOpen, setIsIosBirthdatePickerOpen] = useState(false);
   const [iosBirthdateDraft, setIosBirthdateDraft] = useState(getLatestEligibleBirthdate);
+  const [webCalendarMonth, setWebCalendarMonth] = useState(getLatestEligibleBirthdate);
   const [patientCodeInput, setPatientCodeInput] = useState('');
   const [patientLookupPreview, setPatientLookupPreview] = useState(null);
   const [linkedPatientPreview, setLinkedPatientPreview] = useState(null);
@@ -308,6 +322,11 @@ export const SignupForm = ({ schema, onSubmit, isLoading, buttonText = 'Create A
   const derivedAge = useMemo(() => calculateAgeFromBirthdate(birthdate), [birthdate]);
   const latestEligibleBirthdate = useMemo(() => getLatestEligibleBirthdate(), []);
   const earliestBirthdate = useMemo(() => getEarliestBirthdate(), []);
+  const selectedBirthdate = useMemo(() => parseDateValue(birthdate), [birthdate]);
+  const webCalendarDays = useMemo(
+    () => buildCalendarDays(webCalendarMonth, earliestBirthdate, latestEligibleBirthdate),
+    [webCalendarMonth, earliestBirthdate, latestEligibleBirthdate]
+  );
 
   useEffect(() => {
     if (currentStep > steps.length - 2) {
@@ -362,6 +381,12 @@ export const SignupForm = ({ schema, onSubmit, isLoading, buttonText = 'Create A
 
   const openBirthdatePicker = () => {
     const initialDate = parseDateValue(getValues('birthdate')) || latestEligibleBirthdate;
+
+    if (Platform.OS === 'web') {
+      setWebCalendarMonth(initialDate);
+      setIsWebBirthdatePickerOpen(true);
+      return;
+    }
 
     if (Platform.OS === 'android') {
       DateTimePickerAndroid.open({
@@ -627,18 +652,12 @@ export const SignupForm = ({ schema, onSubmit, isLoading, buttonText = 'Create A
                 name="birthdate"
                 render={({ field: { value } }) => (
                   Platform.OS === 'web' ? (
-                    <WebDateField
+                    <DateField
                       label="Birthdate"
+                      value={formatBirthdateLabel(value)}
                       helperText="Select your birthdate. You must be at least 18 years old."
-                      minimumDate={earliestBirthdate}
-                      maximumDate={latestEligibleBirthdate}
-                      onChange={(nextValue) => setValue('birthdate', nextValue, {
-                        shouldDirty: true,
-                        shouldTouch: true,
-                        shouldValidate: true,
-                      })}
-                      value={value}
                       error={errors.birthdate?.message}
+                      onPress={openBirthdatePicker}
                     />
                   ) : (
                     <DateField
@@ -987,6 +1006,80 @@ export const SignupForm = ({ schema, onSubmit, isLoading, buttonText = 'Create A
       />
 
       <Modal
+        visible={isWebBirthdatePickerOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setIsWebBirthdatePickerOpen(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <Pressable style={StyleSheet.absoluteFillObject} onPress={() => setIsWebBirthdatePickerOpen(false)} />
+          <View style={styles.calendarModalWrap}>
+            <View style={styles.modalCardWrap}>
+              <View style={styles.modalTopRow}>
+                <Text style={styles.modalTitle}>Select birthdate</Text>
+                <AppTextLink title="Close" variant="muted" onPress={() => setIsWebBirthdatePickerOpen(false)} />
+              </View>
+
+              <View style={styles.calendarHeaderRow}>
+                <Pressable
+                  onPress={() => setWebCalendarMonth((currentValue) => new Date(currentValue.getFullYear(), currentValue.getMonth() - 1, 1))}
+                  style={({ pressed }) => [styles.calendarNavButton, pressed ? styles.dateFieldShellPressed : null]}
+                  disabled={startOfMonth(webCalendarMonth) <= startOfMonth(earliestBirthdate)}
+                >
+                  <AppIcon name="chevron-left" state="muted" />
+                </Pressable>
+
+                <Text style={styles.calendarMonthLabel}>{getMonthLabel(webCalendarMonth)}</Text>
+
+                <Pressable
+                  onPress={() => setWebCalendarMonth((currentValue) => new Date(currentValue.getFullYear(), currentValue.getMonth() + 1, 1))}
+                  style={({ pressed }) => [styles.calendarNavButton, pressed ? styles.dateFieldShellPressed : null]}
+                  disabled={startOfMonth(webCalendarMonth) >= startOfMonth(latestEligibleBirthdate)}
+                >
+                  <AppIcon name="chevron-right" state="muted" />
+                </Pressable>
+              </View>
+
+              <View style={styles.calendarWeekRow}>
+                {WEEKDAY_LABELS.map((label) => (
+                  <Text key={label} style={styles.calendarWeekLabel}>{label}</Text>
+                ))}
+              </View>
+
+              <View style={styles.calendarGrid}>
+                {webCalendarDays.map((day) => (
+                  <Pressable
+                    key={day.key}
+                    disabled={day.isDisabled}
+                    onPress={() => {
+                      applyBirthdateValue(day.value);
+                      setIsWebBirthdatePickerOpen(false);
+                    }}
+                    style={({ pressed }) => [
+                      styles.calendarDayButton,
+                      day.isDisabled ? styles.calendarDayButtonDisabled : null,
+                      isSameDay(day.value, selectedBirthdate) ? styles.calendarDayButtonSelected : null,
+                      pressed && !day.isDisabled ? styles.dateFieldShellPressed : null,
+                    ]}
+                  >
+                    <Text style={[
+                      styles.calendarDayLabel,
+                      day.isDisabled ? styles.calendarDayLabelDisabled : null,
+                      isSameDay(day.value, selectedBirthdate) ? styles.calendarDayLabelSelected : null,
+                    ]}>
+                      {day.label}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+
+              <Text style={styles.calendarHint}>Only dates for users aged 18 and above are available.</Text>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
         visible={isIosBirthdatePickerOpen}
         transparent
         animationType="fade"
@@ -1258,18 +1351,82 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.compact.caption,
     color: theme.colors.textSecondary,
   },
-  webDateInput: {
-    minHeight: theme.inputs.minHeightCompact,
+  calendarModalWrap: {
     width: '100%',
-    borderRadius: theme.radius.xl,
-    borderWidth: 1,
-    borderColor: theme.colors.transparent,
+    maxWidth: 360,
+  },
+  calendarHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+  },
+  calendarNavButton: {
+    width: 40,
+    height: 40,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: theme.colors.surfaceSoft,
-    paddingLeft: theme.spacing.inputPaddingXCompact,
-    paddingRight: theme.spacing.inputPaddingXCompact,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+  },
+  calendarMonthLabel: {
+    flex: 1,
+    textAlign: 'center',
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.body,
+    fontWeight: theme.typography.weights.semibold,
     color: theme.colors.textPrimary,
+  },
+  calendarWeekRow: {
+    flexDirection: 'row',
+    marginTop: theme.spacing.xs,
+  },
+  calendarWeekLabel: {
+    width: '14.2857%',
+    textAlign: 'center',
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textSecondary,
+  },
+  calendarGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    rowGap: theme.spacing.xs,
+    marginTop: theme.spacing.xs,
+  },
+  calendarDayButton: {
+    width: '14.2857%',
+    aspectRatio: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: theme.radius.full,
+  },
+  calendarDayButtonDisabled: {
+    opacity: 0.28,
+  },
+  calendarDayButtonSelected: {
+    backgroundColor: theme.colors.brandPrimary,
+  },
+  calendarDayLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    color: theme.colors.textPrimary,
+  },
+  calendarDayLabelDisabled: {
+    color: theme.colors.textMuted,
+  },
+  calendarDayLabelSelected: {
+    color: theme.colors.textInverse,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  calendarHint: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    lineHeight: theme.typography.compact.caption * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textSecondary,
   },
   footerRow: {
     flexDirection: 'row',
