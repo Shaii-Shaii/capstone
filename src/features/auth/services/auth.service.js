@@ -1,5 +1,6 @@
 import * as AuthAPI from '../api/auth.api';
 import { getProfile } from '../../profile/services/profile.service';
+import { ensureSystemUserRecord } from '../../profile/api/profile.api';
 import { authMessages } from '../../../constants/auth';
 import * as Linking from 'expo-linking';
 import { isPasswordReuse, reusedPasswordMessage } from '../../../utils/passwordRules';
@@ -54,10 +55,26 @@ export const login = async (email, password, expectedRole) => {
     let actualRole = null;
     let profile = null;
     
-    const { profile: fetchedProfile, error: profileError } = await getProfile(authData.user.id);
+    let { profile: fetchedProfile, error: profileError } = await getProfile(authData.user.id);
+    if (profileError && String(profileError).toLowerCase().includes('not linked to an app user record')) {
+      const ensureSystemUserResult = await ensureSystemUserRecord({
+        authUserId: authData.user.id,
+        email: authData.user.email || email,
+        role: authData.user?.user_metadata?.role || null,
+      });
+
+      if (ensureSystemUserResult.error) {
+        throw new Error(ensureSystemUserResult.error.message || authMessages.roleNotFound);
+      }
+
+      const retryProfileResult = await getProfile(authData.user.id);
+      fetchedProfile = retryProfileResult.profile;
+      profileError = retryProfileResult.error;
+    }
+
     if (!profileError && fetchedProfile) {
       profile = fetchedProfile;
-      actualRole = fetchedProfile.role || actualRole;
+      actualRole = fetchedProfile.role || null;
     }
 
     if (!actualRole) {

@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { linkPatientRecordByCode, saveAvatar, saveProfile } from '../../profile/services/profile.service';
+import { ensureSystemUserRecord, ensureUserDetailsRecord } from '../../profile/api/profile.api';
 import { calculateAgeFromBirthdate } from '../validators/auth.schema';
 
 const SIGNUP_DRAFT_STORAGE_KEY = 'donivra.signupDrafts';
@@ -110,6 +111,49 @@ export const syncPendingSignupDraft = async ({ userId, email, role }) => {
           medical_document: draft.patientMedicalDocument || '',
         }
       : null;
+
+    const systemUserResult = await ensureSystemUserRecord({
+      authUserId: userId,
+      email,
+      role,
+    });
+
+    if (systemUserResult.error || !systemUserResult.data?.user_id) {
+      return {
+        success: false,
+        synced: false,
+        error: systemUserResult.error?.message || 'The app user record could not be created.',
+      };
+    }
+
+    const userDetailsResult = await ensureUserDetailsRecord({
+      systemUserId: systemUserResult.data.user_id,
+      details: {
+        first_name: draft.firstName,
+        middle_name: draft.middleName,
+        last_name: draft.lastName,
+        suffix: draft.suffix,
+        birthdate: draft.birthdate,
+        gender: draft.gender,
+        street: draft.street,
+        region: draft.region,
+        barangay: draft.barangay,
+        city: draft.city,
+        province: draft.province,
+        country: draft.country,
+        contact_number: draft.phone,
+        joined_date: draft.joinedDate,
+        photo_path: draft.profilePhoto || null,
+      },
+    });
+
+    if (userDetailsResult.error) {
+      return {
+        success: false,
+        synced: false,
+        error: userDetailsResult.error.message || 'The user details record could not be created.',
+      };
+    }
 
     const result = await saveProfile(userId, {
       first_name: draft.firstName,

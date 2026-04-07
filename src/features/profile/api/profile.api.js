@@ -115,6 +115,34 @@ export const createSystemUser = async ({ authUserId, email, role }) => {
     .single();
 };
 
+export const ensureSystemUserRecord = async ({ authUserId, email, role }) => {
+  if (!authUserId) {
+    return { data: null, error: new Error('Auth user ID is required.') };
+  }
+
+  const existing = await fetchSystemUserByAuthUserId(authUserId);
+  if (existing.data?.user_id || existing.error) {
+    return existing;
+  }
+
+  const createResult = await createSystemUser({
+    authUserId,
+    email: email || null,
+    role: role || null,
+  });
+
+  if (!createResult.error) {
+    return createResult;
+  }
+
+  const createErrorMessage = String(createResult.error?.message || '').toLowerCase();
+  if (createErrorMessage.includes('duplicate') || createErrorMessage.includes('already exists')) {
+    return await fetchSystemUserByAuthUserId(authUserId);
+  }
+
+  return createResult;
+};
+
 export const ensureSystemUserByAuthUserId = async (authUserId) => {
   if (!authUserId) {
     return { data: null, error: new Error('Auth user ID is required.') };
@@ -147,6 +175,58 @@ export const ensureUserDetailsBySystemUserId = async (systemUser) => {
   }
 
   return { data: null, error: null };
+};
+
+export const createUserDetails = async ({ systemUserId, details = {} }) => {
+  if (!systemUserId) {
+    return { data: null, error: new Error('System user ID is required.') };
+  }
+
+  return await supabase
+    .from('user_details')
+    .insert([{
+      user_id: systemUserId,
+      first_name: details.first_name || '',
+      middle_name: details.middle_name || '',
+      last_name: details.last_name || '',
+      suffix: details.suffix || '',
+      birthdate: details.birthdate || null,
+      gender: details.gender || '',
+      street: details.street || '',
+      region: details.region || '',
+      barangay: details.barangay || '',
+      city: details.city || '',
+      province: details.province || '',
+      country: details.country || '',
+      contact_number: details.contact_number || '',
+      joined_date: details.joined_date || null,
+      photo_path: details.photo_path || null,
+    }])
+    .select()
+    .single();
+};
+
+export const ensureUserDetailsRecord = async ({ systemUserId, details = {} }) => {
+  if (!systemUserId) {
+    return { data: null, error: new Error('System user ID is required.') };
+  }
+
+  const existing = await fetchUserDetailsBySystemUserId(systemUserId);
+  if (existing.data?.user_details_id || existing.error) {
+    return existing;
+  }
+
+  const createResult = await createUserDetails({ systemUserId, details });
+  if (!createResult.error) {
+    return createResult;
+  }
+
+  const createErrorMessage = String(createResult.error?.message || '').toLowerCase();
+  if (createErrorMessage.includes('duplicate') || createErrorMessage.includes('already exists')) {
+    return await fetchUserDetailsBySystemUserId(systemUserId);
+  }
+
+  return createResult;
 };
 
 export const resolveSystemUser = async (userIdentifier, options = {}) => {
