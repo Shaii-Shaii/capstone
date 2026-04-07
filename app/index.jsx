@@ -26,16 +26,21 @@ export default function LandingScreen() {
       contentStyle={styles.screenContent}
     >
       <View style={styles.container}>
-        <AppCard variant="elevated" radius="xl" padding="lg" style={styles.heroCard}>
-          <View style={styles.logoWrap}>
-            <Image source={donivraLogoNoText} style={styles.logo} resizeMode="contain" />
+        <AppCard variant="elevated" radius="xl" padding="lg" style={styles.panel}>
+          <View style={styles.brandBlock}>
+            <View style={styles.logoWrap}>
+              <Image source={donivraLogoNoText} style={styles.logo} resizeMode="contain" />
+            </View>
+
+            <View style={styles.brandCopy}>
+              <Text style={styles.brandName}>Donivra</Text>
+              <Text style={styles.brandTag}>Hair donation and support</Text>
+            </View>
           </View>
 
-          <Text style={styles.brandName}>Donivra</Text>
-          <Text style={styles.brandTag}>Hair donation and support</Text>
           <Text style={styles.heroTitle}>Welcome to Donivra.</Text>
           <Text style={styles.heroSubtitle}>
-            Create one account, complete OTP verification, and then log in to continue.
+            Create your account or log in to continue.
           </Text>
 
           <View style={styles.actionStack}>
@@ -66,33 +71,37 @@ const styles = StyleSheet.create({
   screenContent: {
     paddingHorizontal: 0,
     paddingTop: 0,
-    paddingBottom: theme.spacing.md,
-    justifyContent: 'flex-start',
+    paddingBottom: 0,
+    justifyContent: 'center',
   },
   container: {
     flex: 1,
-    gap: theme.spacing.sm,
-    paddingTop: theme.spacing.sm,
-    paddingBottom: theme.spacing.sm,
+    justifyContent: 'center',
     paddingHorizontal: theme.layout.screenPaddingX,
+    paddingVertical: theme.spacing.lg,
   },
-  heroCard: {
-    alignItems: 'center',
-    gap: theme.spacing.sm,
+  panel: {
+    gap: theme.spacing.md,
     paddingTop: theme.spacing.xl,
     paddingBottom: theme.spacing.xl,
+    minHeight: 440,
     justifyContent: 'center',
-    minHeight: 420,
+  },
+  brandBlock: {
+    alignItems: 'flex-start',
+    gap: theme.spacing.md,
+  },
+  brandCopy: {
+    gap: 2,
   },
   logoWrap: {
-    width: 72,
-    height: 72,
-    borderRadius: 24,
+    width: 84,
+    height: 84,
+    borderRadius: 26,
     overflow: 'hidden',
     backgroundColor: theme.colors.surfaceSoft,
     borderWidth: 1,
     borderColor: theme.colors.borderSubtle,
-    marginBottom: theme.spacing.xs,
   },
   logo: {
     width: '100%',
@@ -100,33 +109,34 @@ const styles = StyleSheet.create({
   },
   brandName: {
     fontFamily: theme.typography.fontFamilyDisplay,
-    fontSize: theme.typography.semantic.titleMd,
+    fontSize: 34,
+    lineHeight: 38,
     color: theme.colors.textPrimary,
   },
   brandTag: {
     fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.compact.caption,
+    fontSize: theme.typography.compact.bodySm,
     color: theme.colors.textSecondary,
-    marginBottom: theme.spacing.sm,
   },
   heroTitle: {
-    textAlign: 'center',
+    textAlign: 'left',
     fontFamily: theme.typography.fontFamilyDisplay,
     fontSize: theme.typography.semantic.titleSm,
     lineHeight: theme.typography.semantic.titleSm * theme.typography.lineHeights.tight,
     color: theme.colors.textPrimary,
+    marginTop: theme.spacing.sm,
   },
   heroSubtitle: {
-    textAlign: 'center',
+    textAlign: 'left',
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.bodySm,
     lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
     color: theme.colors.textSecondary,
-    maxWidth: 320,
+    maxWidth: 340,
   },
   actionStack: {
     width: '100%',
     gap: theme.spacing.sm,
-    marginTop: theme.spacing.md,
+    marginTop: theme.spacing.lg,
   },
 });
