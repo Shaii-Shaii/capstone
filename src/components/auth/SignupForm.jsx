@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, Image, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, Image, Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import * as ImagePicker from 'expo-image-picker';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -17,6 +18,44 @@ import { getPasswordStrengthMessage } from '../../utils/passwordRules';
 import { getPatientLinkPreview } from '../../features/profile/services/profile.service';
 
 const IMAGE_MEDIA_TYPES = ['images'];
+const EARLIEST_BIRTH_YEAR = 1900;
+
+const formatDateValue = (date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+
+  return `${year}-${month}-${day}`;
+};
+
+const parseDateValue = (value) => {
+  if (!value) return null;
+
+  const parsedDate = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(parsedDate.getTime())) return null;
+
+  return parsedDate;
+};
+
+const getLatestEligibleBirthdate = () => {
+  const date = new Date();
+  date.setHours(0, 0, 0, 0);
+  date.setFullYear(date.getFullYear() - 18);
+  return date;
+};
+
+const getEarliestBirthdate = () => new Date(EARLIEST_BIRTH_YEAR, 0, 1);
+
+const formatBirthdateLabel = (value) => {
+  const parsedDate = parseDateValue(value);
+  if (!parsedDate) return '';
+
+  return parsedDate.toLocaleDateString('en-PH', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
+};
 
 const buildPatientFullName = (patient) => [patient?.first_name, patient?.middle_name, patient?.last_name, patient?.suffix]
   .filter(Boolean)
@@ -128,6 +167,23 @@ const ReadOnlyValue = ({ label, value }) => (
   </View>
 );
 
+const DateField = ({ label, value, helperText, error, onPress }) => (
+  <View style={styles.dateFieldWrap}>
+    <Text style={styles.readOnlyLabel}>{label}</Text>
+    <Pressable onPress={onPress} style={({ pressed }) => [styles.dateFieldShell, pressed ? styles.dateFieldShellPressed : null]}>
+      <Text style={[styles.dateFieldValue, !value ? styles.dateFieldPlaceholder : null]}>
+        {value || 'Select birthdate'}
+      </Text>
+      <AppIcon name="calendar-month-outline" state="muted" />
+    </Pressable>
+    {error ? (
+      <Text style={styles.errorText}>{error}</Text>
+    ) : helperText ? (
+      <Text style={styles.helperText}>{helperText}</Text>
+    ) : null}
+  </View>
+);
+
 const PatientCodeModal = ({
   visible,
   codeValue,
@@ -198,6 +254,8 @@ export const SignupForm = ({ schema, onSubmit, isLoading, buttonText = 'Create A
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const [isUploadingPatientPicture, setIsUploadingPatientPicture] = useState(false);
   const [isPatientModalOpen, setIsPatientModalOpen] = useState(false);
+  const [isIosBirthdatePickerOpen, setIsIosBirthdatePickerOpen] = useState(false);
+  const [iosBirthdateDraft, setIosBirthdateDraft] = useState(getLatestEligibleBirthdate);
   const [patientCodeInput, setPatientCodeInput] = useState('');
   const [patientLookupPreview, setPatientLookupPreview] = useState(null);
   const [linkedPatientPreview, setLinkedPatientPreview] = useState(null);
@@ -222,6 +280,8 @@ export const SignupForm = ({ schema, onSubmit, isLoading, buttonText = 'Create A
   const stepCopy = getStepCopy(activeStep.key);
   const passwordStrengthMessage = getPasswordStrengthMessage(passwordValue);
   const derivedAge = useMemo(() => calculateAgeFromBirthdate(birthdate), [birthdate]);
+  const latestEligibleBirthdate = useMemo(() => getLatestEligibleBirthdate(), []);
+  const earliestBirthdate = useMemo(() => getEarliestBirthdate(), []);
 
   useEffect(() => {
     if (currentStep > steps.length - 2) {
@@ -265,6 +325,38 @@ export const SignupForm = ({ schema, onSubmit, isLoading, buttonText = 'Create A
 
   const nextStep = () => setCurrentStep((value) => Math.min(value + 1, steps.length - 2));
   const backStep = () => setCurrentStep((value) => Math.max(value - 1, 0));
+
+  const applyBirthdateValue = (selectedDate) => {
+    setValue('birthdate', formatDateValue(selectedDate), {
+      shouldDirty: true,
+      shouldTouch: true,
+      shouldValidate: true,
+    });
+  };
+
+  const openBirthdatePicker = () => {
+    const initialDate = parseDateValue(getValues('birthdate')) || latestEligibleBirthdate;
+
+    if (Platform.OS === 'android') {
+      DateTimePickerAndroid.open({
+        value: initialDate,
+        mode: 'date',
+        display: 'calendar',
+        maximumDate: latestEligibleBirthdate,
+        minimumDate: earliestBirthdate,
+        onChange: (event, selectedDate) => {
+          if (event.type !== 'set' || !selectedDate) return;
+          applyBirthdateValue(selectedDate);
+        },
+      });
+      return;
+    }
+
+    if (Platform.OS === 'ios') {
+      setIosBirthdateDraft(initialDate);
+      setIsIosBirthdatePickerOpen(true);
+    }
+  };
 
   const pickImage = async (fieldName, setUploading) => {
     try {
@@ -507,17 +599,30 @@ export const SignupForm = ({ schema, onSubmit, isLoading, buttonText = 'Create A
               <Controller
                 control={control}
                 name="birthdate"
-                render={({ field: { onChange, onBlur, value } }) => (
-                  <AppInput
-                    label="Birthdate"
-                    placeholder="YYYY-MM-DD"
-                    variant="filled"
-                    helperText="You must be at least 18 years old."
-                    onBlur={onBlur}
-                    onChangeText={onChange}
-                    value={value}
-                    error={errors.birthdate?.message}
-                  />
+                render={({ field: { value } }) => (
+                  Platform.OS === 'web' ? (
+                    <AppInput
+                      label="Birthdate"
+                      placeholder="YYYY-MM-DD"
+                      variant="filled"
+                      helperText="Use YYYY-MM-DD. You must be at least 18 years old."
+                      onChangeText={(nextValue) => setValue('birthdate', nextValue, {
+                        shouldDirty: true,
+                        shouldTouch: true,
+                        shouldValidate: true,
+                      })}
+                      value={value}
+                      error={errors.birthdate?.message}
+                    />
+                  ) : (
+                    <DateField
+                      label="Birthdate"
+                      value={formatBirthdateLabel(value)}
+                      helperText="You must be at least 18 years old."
+                      error={errors.birthdate?.message}
+                      onPress={openBirthdatePicker}
+                    />
+                  )
                 )}
               />
             </>
@@ -854,6 +959,46 @@ export const SignupForm = ({ schema, onSubmit, isLoading, buttonText = 'Create A
         errorMessage={patientLookupError}
         isValidating={isValidatingPatientCode}
       />
+
+      <Modal
+        visible={isIosBirthdatePickerOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setIsIosBirthdatePickerOpen(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <Pressable style={StyleSheet.absoluteFillObject} onPress={() => setIsIosBirthdatePickerOpen(false)} />
+          <View style={styles.modalCenterWrap}>
+            <View style={styles.modalCardWrap}>
+              <View style={styles.modalTopRow}>
+                <Text style={styles.modalTitle}>Select birthdate</Text>
+                <AppTextLink title="Close" variant="muted" onPress={() => setIsIosBirthdatePickerOpen(false)} />
+              </View>
+
+              <DateTimePicker
+                value={iosBirthdateDraft}
+                mode="date"
+                display="spinner"
+                maximumDate={latestEligibleBirthdate}
+                minimumDate={earliestBirthdate}
+                onChange={(_, selectedDate) => {
+                  if (selectedDate) {
+                    setIosBirthdateDraft(selectedDate);
+                  }
+                }}
+              />
+
+              <AppButton
+                title="Use This Birthdate"
+                onPress={() => {
+                  applyBirthdateValue(iosBirthdateDraft);
+                  setIsIosBirthdatePickerOpen(false);
+                }}
+              />
+            </View>
+          </View>
+        </View>
+      </Modal>
     </>
   );
 };
@@ -1014,11 +1159,39 @@ const styles = StyleSheet.create({
   readOnlyField: {
     gap: theme.spacing.xs,
   },
+  dateFieldWrap: {
+    marginBottom: theme.spacing.sm,
+    gap: theme.spacing.xs,
+  },
   readOnlyLabel: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.label,
     fontWeight: theme.typography.weights.semibold,
     color: theme.colors.textPrimary,
+  },
+  dateFieldShell: {
+    minHeight: theme.inputs.minHeightCompact,
+    borderRadius: theme.radius.xl,
+    borderWidth: 1,
+    borderColor: theme.colors.transparent,
+    backgroundColor: theme.colors.surfaceSoft,
+    paddingHorizontal: theme.spacing.inputPaddingXCompact,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+  },
+  dateFieldShellPressed: {
+    opacity: 0.92,
+  },
+  dateFieldValue: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.body,
+    color: theme.colors.textPrimary,
+  },
+  dateFieldPlaceholder: {
+    color: theme.colors.textMuted,
   },
   readOnlyShell: {
     minHeight: theme.inputs.minHeightCompact,
@@ -1052,6 +1225,12 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.compact.caption,
     color: theme.colors.textError,
     fontWeight: theme.typography.weights.medium,
+  },
+  helperText: {
+    marginTop: theme.spacing.xs,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    color: theme.colors.textSecondary,
   },
   footerRow: {
     flexDirection: 'row',
