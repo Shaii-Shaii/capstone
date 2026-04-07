@@ -12,7 +12,7 @@ export const dashboardSampleImages = {
 export const donorDashboardContent = {
   header: {
     greeting: 'hello',
-    subtitle: 'Your donation home',
+    subtitle: 'Donation home',
     summary: '',
     utilityActions: [
       { key: 'notifications', icon: 'notifications', badge: '2', route: '/donor/notifications' },
@@ -23,7 +23,7 @@ export const donorDashboardContent = {
   snapshotItems: [],
   quickActions: {
     title: 'Main Actions',
-    description: 'Go directly to the next donor step.',
+    description: 'Open the next donor step.',
     items: [
       {
         key: 'status',
@@ -65,7 +65,7 @@ export const donorDashboardContent = {
   },
   progress: {
     title: 'Next Steps',
-    description: 'Keep the donor flow focused.',
+    description: 'Latest donor steps.',
     items: [
       {
         key: 'prep',
@@ -97,7 +97,7 @@ export const donorDashboardContent = {
   },
   account: {
     title: 'Account',
-    description: 'Profile and dashboard tools.',
+    description: 'Profile tools.',
     items: [
       {
         key: 'profile',
@@ -144,7 +144,7 @@ export const donorDashboardContent = {
 export const patientDashboardContent = {
   header: {
     greeting: 'welcome',
-    subtitle: 'Your support home',
+    subtitle: 'Support home',
     summary: '',
     utilityActions: [
       { key: 'notifications', icon: 'notifications', badge: '3', route: '/patient/notifications' },
@@ -155,7 +155,7 @@ export const patientDashboardContent = {
   snapshotItems: [],
   quickActions: {
     title: 'Main Actions',
-    description: 'Go directly to the next patient step.',
+    description: 'Open the next patient step.',
     items: [
       {
         key: 'submit',
@@ -197,7 +197,7 @@ export const patientDashboardContent = {
   },
   requestStatus: {
     title: 'Next Steps',
-    description: 'Keep the support flow focused.',
+    description: 'Latest patient steps.',
     items: [
       {
         key: 'readiness',
@@ -230,7 +230,7 @@ export const patientDashboardContent = {
   },
   account: {
     title: 'Account',
-    description: 'Profile and patient tools.',
+    description: 'Profile tools.',
     items: [
       {
         key: 'profile',

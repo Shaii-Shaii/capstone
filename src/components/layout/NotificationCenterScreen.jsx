@@ -26,7 +26,7 @@ export function NotificationCenterScreen({ role }) {
     refreshNotifications,
     readNotification,
     readAllNotifications,
-  } = useNotifications({ role, userId: user?.id });
+  } = useNotifications({ role, userId: user?.id, databaseUserId: profile?.user_id });
 
   const navItems = role === 'donor' ? donorDashboardNavItems : patientDashboardNavItems;
   const firstName = profile?.first_name || (role === 'donor' ? 'Donor' : 'Patient');
@@ -53,7 +53,7 @@ export function NotificationCenterScreen({ role }) {
       header={(
         <DashboardHeader
           title="Notifications"
-          subtitle="Important status changes and system updates stay visible here."
+          subtitle={profile?.first_name ? `${profile.first_name}'s updates` : 'Account updates'}
           summary=""
           avatarInitials={avatarInitials}
           avatarUri={profile?.avatar_url}
@@ -74,23 +74,19 @@ export function NotificationCenterScreen({ role }) {
               onPress: () => {},
             },
           ]}
-          onSearchPress={() => {}}
-          searchPlaceholder={role === 'donor' ? 'Search donor updates and logistics' : 'Search patient updates and request changes'}
         />
       )}
     >
       <AppCard variant={role === 'donor' ? 'donorTint' : 'patientTint'} radius="xl" padding="lg">
-        <Text style={styles.eyebrow}>Notification Center</Text>
+        <Text style={styles.eyebrow}>Notifications</Text>
         <Text style={styles.heroTitle}>{unreadCount ? `${unreadCount} unread update${unreadCount > 1 ? 's' : ''}` : 'All caught up'}</Text>
-        <Text style={styles.heroBody}>
-          Submission, screening, logistics, wig request, allocation, and certificate updates appear here as they change.
-        </Text>
+        <Text style={styles.heroBody}>Latest account activity.</Text>
       </AppCard>
 
       <AppCard variant="elevated" radius="xl" padding="lg">
         <DashboardSectionHeader
           title="Recent Notifications"
-          description="This feed reflects the latest backend status changes for your donor or patient journey."
+          description="Linked to your current account."
           style={styles.sectionHeader}
         />
 
@@ -124,9 +120,9 @@ export function NotificationCenterScreen({ role }) {
 
         {isLoadingNotifications ? (
           <StatusBanner
-            message="Loading the latest notification updates."
+            message="Loading updates."
             variant="info"
-            title="Checking notifications"
+            title="Checking"
             style={styles.inlineBanner}
           />
         ) : null}
@@ -150,9 +146,7 @@ export function NotificationCenterScreen({ role }) {
           <View style={styles.emptyState}>
             <AppIcon name="bell-outline" state="muted" />
             <Text style={styles.emptyTitle}>No notifications yet</Text>
-            <Text style={styles.emptyBody}>
-              Important submission, logistics, wig request, and certificate updates will appear here once your records start moving.
-            </Text>
+            <Text style={styles.emptyBody}>Updates will appear here.</Text>
           </View>
         )}
       </AppCard>

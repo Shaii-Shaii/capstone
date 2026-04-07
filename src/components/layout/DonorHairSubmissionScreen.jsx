@@ -519,7 +519,7 @@ export function DonorHairSubmissionScreen() {
   const [isCapturingPhoto, setIsCapturingPhoto] = useState(false);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const { user, profile } = useAuth();
-  const { unreadCount } = useNotifications({ role: 'donor', userId: user?.id });
+  const { unreadCount } = useNotifications({ role: 'donor', userId: user?.id, databaseUserId: profile?.user_id });
   const {
     photos,
     requiredViews,
@@ -622,6 +622,7 @@ export function DonorHairSubmissionScreen() {
       header={(
         <DashboardHeader
           title="Hair Donation"
+          subtitle="Save one donation record"
           summary=""
           avatarInitials={avatarInitials}
           avatarUri={profile?.avatar_url}
@@ -663,9 +664,7 @@ export function DonorHairSubmissionScreen() {
               <AppIcon name="sparkle" state="active" />
             </View>
             <Text style={styles.landingHeroTitle}>Analyze My Hair</Text>
-            <Text style={styles.landingHeroBody}>
-              Use camera or upload a photo for AI screening. The analyzer will guide the capture flow for you.
-            </Text>
+            <Text style={styles.landingHeroBody}>Use camera or upload for guided screening.</Text>
 
             <View style={styles.reminderRow}>
               {ANALYZER_REMINDERS.map((item) => (
@@ -682,9 +681,7 @@ export function DonorHairSubmissionScreen() {
               style={styles.primaryAnalyzerButton}
             />
 
-            <Text style={styles.landingHeroFootnote}>
-              Camera and Upload are both available inside the analyzer module.
-            </Text>
+            <Text style={styles.landingHeroFootnote}>Camera and upload are both available.</Text>
           </View>
         </AppCard>
       ) : (

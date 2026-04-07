@@ -25,8 +25,8 @@ function SupportTip({ icon, text }) {
 
 export function PatientSupportChatScreen() {
   const router = useRouter();
-  const { user, profile } = useAuth();
-  const { unreadCount } = useNotifications({ role: 'patient', userId: user?.id });
+  const { user, profile, patientProfile } = useAuth();
+  const { unreadCount } = useNotifications({ role: 'patient', userId: user?.id, databaseUserId: profile?.user_id });
 
   const firstName = profile?.first_name || 'Patient';
   const avatarInitials = `${profile?.first_name?.[0] || firstName[0] || ''}${profile?.last_name?.[0] || ''}`.trim() || 'SS';
@@ -45,7 +45,7 @@ export function PatientSupportChatScreen() {
       header={(
         <DashboardHeader
           title="Support Center"
-          subtitle="Quick help, request guidance, and status answers stay available from every patient screen."
+          subtitle={patientProfile?.patient_code ? `Patient code ${patientProfile.patient_code}` : 'Patient support'}
           summary=""
           avatarInitials={avatarInitials}
           avatarUri={profile?.avatar_url}
@@ -66,23 +66,19 @@ export function PatientSupportChatScreen() {
               onPress: () => router.navigate('/patient/notifications'),
             },
           ]}
-          onSearchPress={() => {}}
-          searchPlaceholder="Search support and patient updates"
         />
       )}
     >
       <AppCard variant="patientTint" radius="xl" padding="lg">
-        <Text style={styles.eyebrow}>Quick Inquiry</Text>
-        <Text style={styles.heroTitle}>Use the floating chat bubble for fast help.</Text>
-        <Text style={styles.heroBody}>
-          The messenger-style bubble stays available across the signed-in app so you can ask about wig requests, updates, or practical support without leaving your current screen.
-        </Text>
+        <Text style={styles.eyebrow}>Support</Text>
+        <Text style={styles.heroTitle}>Use the chat bubble for help.</Text>
+        <Text style={styles.heroBody}>Ask about requests, updates, or next steps.</Text>
       </AppCard>
 
       <AppCard variant="elevated" radius="xl" padding="lg">
         <DashboardSectionHeader
           title="How Support Works"
-          description="Keep the shared support flow consistent no matter where you are in the patient dashboard."
+          description="Quick support from any patient screen."
           style={styles.sectionHeader}
         />
 
@@ -92,16 +88,16 @@ export function PatientSupportChatScreen() {
         </View>
 
         <View style={styles.tipList}>
-          <SupportTip icon="requests" text="Ask for request status updates while staying on the current screen." />
-          <SupportTip icon="support" text="Get practical guidance about requirements, timelines, and next steps." />
-          <SupportTip icon="notifications" text="Use notifications for pushed updates and the chat bubble for immediate questions." />
+          <SupportTip icon="requests" text="Check request status." />
+          <SupportTip icon="support" text="Ask about requirements and next steps." />
+          <SupportTip icon="notifications" text="Use notifications for pushed updates." />
         </View>
       </AppCard>
 
       <AppCard variant="elevated" radius="xl" padding="lg">
         <DashboardSectionHeader
           title="Helpful Shortcuts"
-          description="Open the patient areas that usually go hand in hand with support questions."
+          description="Open the next screen."
           style={styles.sectionHeader}
         />
 

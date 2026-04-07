@@ -16,7 +16,7 @@ const formFromProfile = (profile) => ({
 });
 
 export const useProfileActions = () => {
-  const { user, profile, refreshProfile } = useAuth();
+  const { user, profile, patientProfile, staffProfile, refreshProfile } = useAuth();
   const { logout, updatePassword, isLoading: isAuthLoading } = useAuthActions();
   const [roleProfile, setRoleProfile] = useState(null);
   const [visibleRoleFields, setVisibleRoleFields] = useState([]);
@@ -116,6 +116,8 @@ export const useProfileActions = () => {
   return {
     user,
     profile,
+    patientProfile,
+    staffProfile,
     roleProfile,
     visibleRoleFields,
     defaultValues,

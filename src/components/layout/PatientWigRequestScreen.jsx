@@ -609,15 +609,15 @@ export function PatientWigRequestScreen() {
   const [isCapturingPhoto, setIsCapturingPhoto] = useState(false);
   const [isGenerationModalOpen, setIsGenerationModalOpen] = useState(false);
   const [selectedOptionId, setSelectedOptionId] = useState('');
-  const { user, profile } = useAuth();
-  const { unreadCount } = useNotifications({ role: 'patient', userId: user?.id });
+  const { user, profile, patientProfile } = useAuth();
+  const { unreadCount } = useNotifications({ role: 'patient', userId: user?.id, databaseUserId: profile?.user_id });
   const {
     tracker,
     trackingError,
     isLoadingTracking,
     isRefreshingTracking,
     refreshTracking,
-  } = useProcessTracking({ role: 'patient', userId: user?.id });
+  } = useProcessTracking({ role: 'patient', userId: user?.id, databaseUserId: profile?.user_id });
   const {
     latestWigRequest,
     latestWigSpecification,
@@ -747,8 +747,8 @@ export function PatientWigRequestScreen() {
   });
 
   const headerSubtitle = hasSubmittedRequest
-    ? 'Track your wig request and review the latest patient-side wig suggestion.'
-    : 'Open the front-photo capture flow, complete the hidden request details, and review the white wig preview result.';
+    ? (latestWigRequest?.status ? `Status: ${String(latestWigRequest.status).replace(/_/g, ' ')}` : 'Latest wig request')
+    : (patientProfile?.patient_code ? `Patient code ${patientProfile.patient_code}` : 'Create a wig request');
 
   return (
     <DashboardLayout

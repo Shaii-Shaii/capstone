@@ -12,6 +12,7 @@ import { DashboardInfoCard } from '../ui/DashboardInfoCard';
 import { AppCard } from '../ui/AppCard';
 import { AppIcon } from '../ui/AppIcon';
 import { useNotifications } from '../../hooks/useNotifications';
+import { useProcessTracking } from '../../hooks/useProcessTracking';
 import { useAuth } from '../../providers/AuthProvider';
 import { theme } from '../../design-system/theme';
 
@@ -130,13 +131,56 @@ function renderDashboardSection({ section, content, role, onItemPress, onActionP
 export function RoleDashboardHome({ role, profile, navItems, content }) {
   const router = useRouter();
   const pathname = usePathname();
-  const { user } = useAuth();
-  const { unreadCount } = useNotifications({ role, userId: user?.id });
-  const firstName = profile?.first_name || (role === 'donor' ? 'Donor' : 'Friend');
+  const { user, patientProfile, staffProfile } = useAuth();
+  const { unreadCount } = useNotifications({ role, userId: user?.id, databaseUserId: profile?.user_id });
+  const { tracker } = useProcessTracking({ role, userId: user?.id, databaseUserId: profile?.user_id });
+  const firstName = profile?.first_name || (role === 'donor' ? 'Donor' : 'Patient');
   const lastName = profile?.last_name || '';
   const avatarInitials = [firstName[0], lastName[0]].filter(Boolean).join('');
   const title = content.header.greeting === 'hello' ? `Hello, ${firstName}` : `Welcome back, ${firstName}`;
-  const hasSummaryCard = Boolean(content.summaryCard?.title) || Boolean(content.snapshotItems?.length);
+  const summaryCard = {
+    eyebrow: role === 'patient'
+      ? (patientProfile?.patient_code ? `Code ${patientProfile.patient_code}` : 'Patient account')
+      : 'Current status',
+    title: tracker?.summary?.label || (role === 'patient' ? 'No request yet' : 'No submission yet'),
+    body: tracker?.summary?.helperText
+      || (role === 'patient'
+        ? 'Your linked request updates show here.'
+        : 'Your latest donation updates show here.'),
+  };
+  const snapshotItems = [
+    {
+      key: 'updates',
+      label: 'Updates',
+      value: unreadCount ? String(unreadCount) : '0',
+      icon: 'notifications',
+    },
+    tracker?.summary?.referenceValue
+      ? {
+          key: 'reference',
+          label: tracker.summary.referenceLabel || 'Reference',
+          value: tracker.summary.referenceValue,
+          icon: role === 'patient' ? 'requests' : 'donations',
+        }
+      : null,
+    role === 'patient' && patientProfile?.hospital_id
+      ? {
+          key: 'hospital',
+          label: 'Hospital',
+          value: `ID ${patientProfile.hospital_id}`,
+          icon: 'support',
+        }
+      : null,
+    role !== 'patient' && staffProfile?.hospital_id
+      ? {
+          key: 'assignment',
+          label: 'Hospital',
+          value: `ID ${staffProfile.hospital_id}`,
+          icon: 'support',
+        }
+      : null,
+  ].filter(Boolean);
+  const hasSummaryCard = Boolean(summaryCard.title) || Boolean(snapshotItems.length);
 
   const handleNavPress = (item) => {
     if (!item.route || item.route === pathname) return;
@@ -186,16 +230,16 @@ export function RoleDashboardHome({ role, profile, navItems, content }) {
     >
       {hasSummaryCard ? (
         <AppCard variant={role === 'donor' ? 'donorTint' : 'patientTint'} radius="xl" padding="xs">
-          {content.summaryCard?.eyebrow ? (
+          {summaryCard.eyebrow ? (
             <Text style={[styles.summaryEyebrow, role === 'donor' ? styles.summaryEyebrowDonor : null]}>
-              {content.summaryCard.eyebrow}
+              {summaryCard.eyebrow}
             </Text>
           ) : null}
-          {content.summaryCard?.title ? <Text style={styles.summaryTitle}>{content.summaryCard.title}</Text> : null}
-          {content.summaryCard?.body ? <Text style={styles.summaryBody}>{content.summaryCard.body}</Text> : null}
-          {content.snapshotItems?.length ? (
+          {summaryCard.title ? <Text style={styles.summaryTitle}>{summaryCard.title}</Text> : null}
+          {summaryCard.body ? <Text style={styles.summaryBody}>{summaryCard.body}</Text> : null}
+          {snapshotItems.length ? (
             <View style={styles.snapshotRow}>
-              {content.snapshotItems.map((item) => (
+              {snapshotItems.map((item) => (
                 <View key={item.key} style={styles.snapshotPill}>
                   <View style={[styles.snapshotIconWrap, role === 'donor' ? styles.snapshotIconWrapDonor : null]}>
                     <AppIcon name={item.icon} size="sm" state={role === 'donor' ? 'active' : 'muted'} />

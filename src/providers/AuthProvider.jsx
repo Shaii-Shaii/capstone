@@ -5,6 +5,9 @@ const AuthContext = createContext({
   user: null,
   session: null,
   profile: null,
+  patientProfile: null,
+  staffProfile: null,
+  databaseUserId: null,
   isLoading: true,
   refreshProfile: async () => null,
 });

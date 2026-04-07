@@ -17,9 +17,9 @@ export function DashboardModuleScreen({ role, navItems, module }) {
   const router = useRouter();
   const pathname = usePathname();
   const { user, profile } = useAuth();
-  const { unreadCount } = useNotifications({ role, userId: user?.id });
+  const { unreadCount } = useNotifications({ role, userId: user?.id, databaseUserId: profile?.user_id });
 
-  const firstName = profile?.first_name || (role === 'donor' ? 'Donor' : 'Friend');
+  const firstName = profile?.first_name || (role === 'donor' ? 'Donor' : 'Patient');
   const avatarInitials = `${profile?.first_name?.[0] || firstName[0] || ''}${profile?.last_name?.[0] || ''}`.trim() || 'SS';
 
   const handleNavPress = (item) => {

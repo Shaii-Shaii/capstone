@@ -50,6 +50,14 @@ const normalizePatient = (row) => ({
   updated_at: row?.updated_at || null,
 });
 
+const normalizeHospitalStaff = (row) => ({
+  id: row?.link_id || null,
+  link_id: row?.link_id || null,
+  hospital_id: row?.hospital_id || null,
+  user_id: row?.user_id || null,
+  assigned_date: row?.assigned_date || null,
+});
+
 const normalizePatientLinkPreview = (row) => ({
   id: row?.patient_id || null,
   patient_id: row?.patient_id || null,
@@ -322,6 +330,24 @@ export const fetchPatientDetailsByUserId = async (userIdentifier) => {
 
   return {
     data: result.data ? normalizePatient(result.data) : null,
+    error: result.error,
+  };
+};
+
+export const fetchHospitalStaffByUserId = async (userIdentifier) => {
+  const systemUserResult = await resolveSystemUser(userIdentifier, { ensure: false });
+  if (systemUserResult.error || !systemUserResult.data?.user_id) {
+    return { data: null, error: systemUserResult.error || new Error('System user could not be loaded.') };
+  }
+
+  const result = await supabase
+    .from('hospital_staff')
+    .select('*')
+    .eq('user_id', systemUserResult.data.user_id)
+    .maybeSingle();
+
+  return {
+    data: result.data ? normalizeHospitalStaff(result.data) : null,
     error: result.error,
   };
 };

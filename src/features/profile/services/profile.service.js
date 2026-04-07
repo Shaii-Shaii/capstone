@@ -1,10 +1,5 @@
 import * as ProfileAPI from '../api/profile.api';
 
-const OPTIONAL_ROLE_TABLES = {
-  donor: 'donor_profiles',
-  patient: 'patient_details',
-};
-
 const SYSTEM_ROLE_KEYS = new Set(['id', 'created_at', 'updated_at', 'user_id', 'profile_id']);
 
 const normalizeOptionalString = (value) => {
@@ -31,10 +26,6 @@ const sanitizeSharedProfileUpdates = (updates = {}) => ({
 });
 
 const fetchRoleProfile = async (role, userId) => {
-  if (role === 'donor') {
-    return await ProfileAPI.fetchDonorProfileByUserId(userId);
-  }
-
   if (role === 'patient') {
     return await ProfileAPI.fetchPatientDetailsByUserId(userId);
   }
@@ -43,10 +34,6 @@ const fetchRoleProfile = async (role, userId) => {
 };
 
 const updateRoleProfile = async (role, userId, updates) => {
-  if (role === 'donor') {
-    return await ProfileAPI.updateDonorProfile(userId, updates);
-  }
-
   if (role === 'patient') {
     return await ProfileAPI.updatePatientDetails(userId, updates);
   }
@@ -104,8 +91,7 @@ export const getProfile = async (userId) => {
 
 export const getRoleProfile = async (userId, role) => {
   try {
-    const tableName = OPTIONAL_ROLE_TABLES[role];
-    if (!tableName || !userId) {
+    if (!userId || role !== 'patient') {
       return { roleProfile: null, error: null };
     }
 
@@ -131,6 +117,36 @@ export const getProfileBundle = async (userId, role) => {
   };
 };
 
+export const getCurrentAccountBundle = async (userId) => {
+  try {
+    const { profile, error: profileError } = await getProfile(userId);
+    if (profileError) {
+      throw new Error(profileError);
+    }
+
+    const [{ data: patientProfile, error: patientError }, { data: staffProfile, error: staffError }] = await Promise.all([
+      ProfileAPI.fetchPatientDetailsByUserId(userId),
+      ProfileAPI.fetchHospitalStaffByUserId(userId),
+    ]);
+
+    return {
+      profile,
+      patientProfile: patientError ? null : patientProfile,
+      staffProfile: staffError ? null : staffProfile,
+      databaseUserId: profile?.user_id || null,
+      error: null,
+    };
+  } catch (error) {
+    return {
+      profile: null,
+      patientProfile: null,
+      staffProfile: null,
+      databaseUserId: null,
+      error: error.message,
+    };
+  }
+};
+
 export const saveProfile = async (userId, updates, role) => {
   try {
     if (!userId) throw new Error('User ID is required');
@@ -139,9 +155,8 @@ export const saveProfile = async (userId, updates, role) => {
     const { data, error } = await ProfileAPI.updateProfile(userId, sharedUpdates);
     if (error) throw new Error(error.message);
 
-    const roleTableName = OPTIONAL_ROLE_TABLES[role];
     let roleProfile = null;
-    if (roleTableName && updates?.roleSpecific && Object.keys(updates.roleSpecific).length) {
+    if (role === 'patient' && updates?.roleSpecific && Object.keys(updates.roleSpecific).length) {
       const roleResult = await updateRoleProfile(role, userId, updates.roleSpecific);
       if (roleResult.error) throw new Error(roleResult.error.message);
       roleProfile = roleResult.data || null;

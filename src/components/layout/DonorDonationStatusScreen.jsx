@@ -17,14 +17,14 @@ import { theme } from '../../design-system/theme';
 export function DonorDonationStatusScreen() {
   const router = useRouter();
   const { user, profile } = useAuth();
-  const { unreadCount } = useNotifications({ role: 'donor', userId: user?.id });
+  const { unreadCount } = useNotifications({ role: 'donor', userId: user?.id, databaseUserId: profile?.user_id });
   const {
     tracker,
     trackingError,
     isLoadingTracking,
     isRefreshingTracking,
     refreshTracking,
-  } = useProcessTracking({ role: 'donor', userId: user?.id });
+  } = useProcessTracking({ role: 'donor', userId: user?.id, databaseUserId: profile?.user_id });
 
   const firstName = profile?.first_name || 'Donor';
   const avatarInitials = `${profile?.first_name?.[0] || firstName[0] || ''}${profile?.last_name?.[0] || ''}`.trim() || 'SS';
@@ -43,7 +43,7 @@ export function DonorDonationStatusScreen() {
       header={(
         <DashboardHeader
           title="Donation Status"
-          subtitle="Follow your donation from submission to logistics, assessment, and bundle tracking."
+          subtitle={tracker?.summary?.helperText || 'Latest donation update'}
           summary=""
           avatarInitials={avatarInitials}
           avatarUri={profile?.avatar_url}
@@ -64,17 +64,13 @@ export function DonorDonationStatusScreen() {
               onPress: () => router.navigate('/donor/notifications'),
             },
           ]}
-          onSearchPress={() => {}}
-          searchPlaceholder="Search donation status and milestones"
         />
       )}
     >
       <AppCard variant="donorTint" radius="xl" padding="lg">
-        <Text style={styles.eyebrow}>Donation Progress</Text>
+        <Text style={styles.eyebrow}>Donation</Text>
         <Text style={styles.heroTitle}>{tracker?.summary?.label || 'Waiting for your first saved submission'}</Text>
-        <Text style={styles.heroBody}>
-          This screen is dedicated to your donation timeline. Upload and save hair on the donation screen first, then return here for live status updates.
-        </Text>
+        <Text style={styles.heroBody}>{tracker?.summary?.referenceValue || 'Save a submission to start tracking.'}</Text>
 
         {!tracker ? (
           <View style={styles.actionRow}>
@@ -100,7 +96,7 @@ export function DonorDonationStatusScreen() {
       <AppCard variant="elevated" radius="xl" padding="lg">
         <DashboardSectionHeader
           title="What Happens Next"
-          description="Each update on this page is linked to your latest saved donation record."
+          description="Each update comes from your latest saved donation."
           style={styles.sectionHeader}
         />
 
@@ -109,19 +105,19 @@ export function DonorDonationStatusScreen() {
             <View style={styles.noteIconWrap}>
               <AppIcon name="success" state="active" size="sm" />
             </View>
-            <Text style={styles.noteText}>Submission appears here right after you save your hair review.</Text>
+            <Text style={styles.noteText}>Submission appears here after save.</Text>
           </View>
           <View style={styles.noteRow}>
             <View style={styles.noteIconWrap}>
               <AppIcon name="appointment" state="active" size="sm" />
             </View>
-            <Text style={styles.noteText}>Pickup, courier, and receiving updates will show under logistics when they are recorded.</Text>
+            <Text style={styles.noteText}>Logistics updates appear when recorded.</Text>
           </View>
           <View style={styles.noteRow}>
             <View style={styles.noteIconWrap}>
               <AppIcon name="shield" state="active" size="sm" />
             </View>
-            <Text style={styles.noteText}>QA and bundle movement events continue updating here as the donation progresses.</Text>
+            <Text style={styles.noteText}>QA and bundle updates continue here.</Text>
           </View>
         </View>
       </AppCard>

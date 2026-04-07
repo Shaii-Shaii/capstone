@@ -7,7 +7,7 @@ import {
 } from '../features/notification.service';
 import { resolveDatabaseUserId } from '../features/profile/api/profile.api';
 
-export const useNotifications = ({ role, userId }) => {
+export const useNotifications = ({ role, userId, databaseUserId: preferredDatabaseUserId = null }) => {
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [isLoadingNotifications, setIsLoadingNotifications] = useState(false);
@@ -24,6 +24,11 @@ export const useNotifications = ({ role, userId }) => {
         return;
       }
 
+      if (preferredDatabaseUserId) {
+        if (isMounted) setDatabaseUserId(preferredDatabaseUserId);
+        return;
+      }
+
       const result = await resolveDatabaseUserId(userId, { ensure: false });
       if (isMounted) {
         setDatabaseUserId(result.data || null);
@@ -35,7 +40,7 @@ export const useNotifications = ({ role, userId }) => {
     return () => {
       isMounted = false;
     };
-  }, [userId]);
+  }, [preferredDatabaseUserId, userId]);
 
   const refreshNotifications = useCallback(async ({ silent = false } = {}) => {
     if (!userId || !role) return;

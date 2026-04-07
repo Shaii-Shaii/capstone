@@ -3,7 +3,7 @@ import { supabase } from '../api/supabase/client';
 import { getProcessTracking } from '../features/processTracking.service';
 import { resolveDatabaseUserId } from '../features/profile/api/profile.api';
 
-export const useProcessTracking = ({ role, userId }) => {
+export const useProcessTracking = ({ role, userId, databaseUserId: preferredDatabaseUserId = null }) => {
   const [tracker, setTracker] = useState(null);
   const [trackingError, setTrackingError] = useState(null);
   const [isLoadingTracking, setIsLoadingTracking] = useState(false);
@@ -19,6 +19,11 @@ export const useProcessTracking = ({ role, userId }) => {
         return;
       }
 
+      if (preferredDatabaseUserId) {
+        if (isMounted) setDatabaseUserId(preferredDatabaseUserId);
+        return;
+      }
+
       const result = await resolveDatabaseUserId(userId, { ensure: false });
       if (isMounted) {
         setDatabaseUserId(result.data || null);
@@ -30,7 +35,7 @@ export const useProcessTracking = ({ role, userId }) => {
     return () => {
       isMounted = false;
     };
-  }, [userId]);
+  }, [preferredDatabaseUserId, userId]);
 
   const loadTracking = useCallback(async ({ silent = false } = {}) => {
     if (!userId || !role) return { success: false, error: 'Session is not ready.' };

@@ -64,6 +64,8 @@ export default function ProfileScreen() {
   const {
     user,
     profile,
+    patientProfile,
+    staffProfile,
     defaultValues,
     isSavingProfile,
     isChangingPassword,
@@ -108,10 +110,10 @@ export default function ProfileScreen() {
   const role = profile?.role || 'patient';
   const navItems = role === 'donor' ? donorDashboardNavItems : patientDashboardNavItems;
   const roleLabel = roleLabelMap[role] || 'Member';
-  const firstName = profile?.first_name || 'Donivra';
-  const lastName = profile?.last_name || 'Member';
+  const firstName = profile?.first_name || 'Account';
+  const lastName = profile?.last_name || '';
   const fullName = `${firstName} ${lastName}`.trim();
-  const avatarInitials = `${firstName?.[0] || ''}${lastName?.[0] || ''}`.trim() || 'SS';
+  const avatarInitials = `${firstName?.[0] || ''}${lastName?.[0] || ''}`.trim() || 'DA';
   const displayRows = useMemo(() => (
     profileDisplayFields
       .map((field) => ({ ...field, value: profile?.[field.key] }))
@@ -120,11 +122,20 @@ export default function ProfileScreen() {
   const overviewRows = useMemo(() => (
     [
       { key: 'fullName', label: 'Full name', value: fullName },
-      { key: 'email', label: 'Email', value: user?.email || 'No email found' },
+      { key: 'email', label: 'Email', value: user?.email || 'Not available' },
       { key: 'role', label: 'Account type', value: roleLabel },
+      patientProfile?.patient_code
+        ? { key: 'patient_code', label: 'Patient code', value: patientProfile.patient_code }
+        : null,
+      patientProfile?.hospital_id
+        ? { key: 'patient_hospital', label: 'Hospital ID', value: String(patientProfile.hospital_id) }
+        : null,
+      staffProfile?.hospital_id
+        ? { key: 'staff_hospital', label: 'Assigned hospital', value: String(staffProfile.hospital_id) }
+        : null,
       ...displayRows,
-    ]
-  ), [displayRows, fullName, roleLabel, user?.email]);
+    ].filter(Boolean)
+  ), [displayRows, fullName, patientProfile?.hospital_id, patientProfile?.patient_code, roleLabel, staffProfile?.hospital_id, user?.email]);
   const watchedNewPassword = passwordForm.watch('newPassword');
   const passwordStrengthMessage = getPasswordStrengthMessage(watchedNewPassword);
   const passwordStrengthVariant = watchedNewPassword
@@ -217,8 +228,8 @@ export default function ProfileScreen() {
         header={(
           <DashboardHeader
             title="My Profile"
-            subtitle={user?.email || 'No email found'}
-            summary="Review your account details, update your contact information, and manage your security settings."
+            subtitle={user?.email || 'Account'}
+            summary=""
             avatarInitials={avatarInitials}
             avatarUri={profile?.avatar_url}
             variant={role === 'donor' ? 'donor' : 'patient'}
@@ -228,7 +239,7 @@ export default function ProfileScreen() {
         <AppCard variant={role === 'donor' ? 'donorTint' : 'patientTint'} radius="xl" padding="lg">
           <DashboardSectionHeader
             title="Account Overview"
-            description="Manage your saved details here without repeating the full profile card."
+            description="Saved account details."
             style={styles.sectionHeader}
           />
 
@@ -258,7 +269,7 @@ export default function ProfileScreen() {
         <AppCard variant="elevated" radius="xl" padding="lg">
           <DashboardSectionHeader
             title="Account Actions"
-            description="Choose what you want to manage next."
+            description="Manage your account."
             style={styles.sectionHeader}
           />
 
@@ -288,7 +299,7 @@ export default function ProfileScreen() {
                     <>
                       <DashboardSectionHeader
                         title="Edit Profile"
-                        description="Update the shared information stored in your account profile."
+                        description="Update your saved details."
                         style={styles.sectionHeader}
                       />
 
@@ -334,7 +345,7 @@ export default function ProfileScreen() {
                     <>
                       <DashboardSectionHeader
                         title="Change Password"
-                        description="Set a new password for your current signed-in account without leaving your profile flow."
+                        description="Set a new password."
                         style={styles.sectionHeader}
                       />
 

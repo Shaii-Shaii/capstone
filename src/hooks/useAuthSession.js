@@ -1,19 +1,30 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../api/supabase/client';
-import { getProfile } from '../features/profile/services/profile.service';
+import { getCurrentAccountBundle } from '../features/profile/services/profile.service';
 
 export const useAuthSession = () => {
   const [user, setUser] = useState(null);
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
+  const [patientProfile, setPatientProfile] = useState(null);
+  const [staffProfile, setStaffProfile] = useState(null);
+  const [databaseUserId, setDatabaseUserId] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
 
   const refreshProfile = useCallback(async (userId) => {
     const targetUserId = userId || user?.id;
     if (!targetUserId) return null;
 
-    const { profile: userProfile } = await getProfile(targetUserId);
+    const {
+      profile: userProfile,
+      patientProfile: nextPatientProfile,
+      staffProfile: nextStaffProfile,
+      databaseUserId: nextDatabaseUserId,
+    } = await getCurrentAccountBundle(targetUserId);
     setProfile(userProfile);
+    setPatientProfile(nextPatientProfile);
+    setStaffProfile(nextStaffProfile);
+    setDatabaseUserId(nextDatabaseUserId);
     return userProfile;
   }, [user?.id]);
 
@@ -26,6 +37,9 @@ export const useAuthSession = () => {
           setSession(null);
           setUser(null);
           setProfile(null);
+          setPatientProfile(null);
+          setStaffProfile(null);
+          setDatabaseUserId(null);
           setIsLoading(false);
         }
         return;
@@ -37,13 +51,27 @@ export const useAuthSession = () => {
       }
       
       try {
-        const { profile: userProfile } = await getProfile(newSession.user.id);
+        const {
+          profile: userProfile,
+          patientProfile: nextPatientProfile,
+          staffProfile: nextStaffProfile,
+          databaseUserId: nextDatabaseUserId,
+        } = await getCurrentAccountBundle(newSession.user.id);
         if (mounted) {
           setProfile(userProfile);
+          setPatientProfile(nextPatientProfile);
+          setStaffProfile(nextStaffProfile);
+          setDatabaseUserId(nextDatabaseUserId);
           setIsLoading(false);
         }
       } catch (_err) {
-        if (mounted) setIsLoading(false);
+        if (mounted) {
+          setProfile(null);
+          setPatientProfile(null);
+          setStaffProfile(null);
+          setDatabaseUserId(null);
+          setIsLoading(false);
+        }
       }
     }
 
@@ -86,5 +114,14 @@ export const useAuthSession = () => {
     };
   }, []);
 
-  return { user, session, profile, isLoading, refreshProfile };
+  return {
+    user,
+    session,
+    profile,
+    patientProfile,
+    staffProfile,
+    databaseUserId,
+    isLoading,
+    refreshProfile,
+  };
 };
