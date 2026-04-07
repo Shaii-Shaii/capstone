@@ -1,19 +1,9 @@
 import React from 'react';
-import { Pressable, Text, StyleSheet, View, useWindowDimensions } from 'react-native';
-import Animated, {
-  Extrapolation,
-  FadeInDown,
-  interpolate,
-  useAnimatedStyle,
-  useSharedValue,
-  withSpring,
-} from 'react-native-reanimated';
+import { Pressable, Text, StyleSheet, View } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { theme } from '../../design-system/theme';
 import { AppCard } from './AppCard';
 import { AppIcon } from './AppIcon';
-
-const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 const CARD_VARIANTS = {
   donor: {
@@ -59,37 +49,10 @@ export const DashboardActionCard = ({
   onPress,
   disabled = false,
   variant = 'neutral',
-  delay = 0,
   style,
   compact = false,
-  index = 0,
-  scrollX,
-  railSpacing = theme.spacing.md,
 }) => {
-  const { height } = useWindowDimensions();
-  const isShortScreen = height < theme.layout.shortScreenHeight;
   const config = disabled ? CARD_VARIANTS.disabled : (CARD_VARIANTS[variant] || CARD_VARIANTS.neutral);
-  const scale = useSharedValue(1);
-  const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
-  }));
-
-  const motionStyle = useAnimatedStyle(() => {
-    const width = style?.width;
-    if (!scrollX || typeof width !== 'number') {
-      return {};
-    }
-
-    const interval = width + railSpacing;
-    const inputRange = [(index - 1) * interval, index * interval, (index + 1) * interval];
-
-    return {
-      transform: [
-        { scale: interpolate(scrollX.value, inputRange, [0.97, 1, 0.97], Extrapolation.CLAMP) },
-      ],
-      opacity: interpolate(scrollX.value, inputRange, [0.88, 1, 0.88], Extrapolation.CLAMP),
-    };
-  });
 
   const handlePress = async () => {
     if (disabled || !onPress) return;
@@ -97,79 +60,56 @@ export const DashboardActionCard = ({
     onPress();
   };
 
-  const isShortcut = compact;
-
   return (
-    <Animated.View
-      entering={FadeInDown.delay(delay).duration(theme.motion.cardEnter).springify().damping(16)}
-      style={[styles.wrapper, style]}
-    >
-      <AnimatedPressable
-        onPress={handlePress}
-        onPressIn={() => {
-          if (!disabled) {
-            scale.value = withSpring(0.986, theme.motion.spring);
-          }
-        }}
-        onPressOut={() => {
-          scale.value = withSpring(1, theme.motion.spring);
-        }}
-        disabled={disabled}
-        style={[motionStyle, animatedStyle]}
+    <Pressable onPress={handlePress} disabled={disabled} style={[styles.wrapper, style]}>
+      <AppCard
+        variant={config.cardVariant}
+        padding={compact ? 'xs' : 'md'}
+        radius="xl"
+        style={styles.card}
       >
-        <AppCard
-          variant={config.cardVariant}
-          padding={isShortcut ? 'xs' : isShortScreen ? 'sm' : 'md'}
-          radius="xl"
-          style={styles.card}
-        >
-          {isShortcut ? (
-            <View style={styles.shortcutCard}>
-              <View style={[styles.shortcutIconWrap, { backgroundColor: config.accent }]}>
-                {icon ? (
-                  <AppIcon
-                    name={icon}
-                    state={disabled ? 'disabled' : variant === 'patient' ? 'muted' : 'active'}
-                  />
-                ) : null}
-                {badgeText ? (
-                  <View style={[styles.shortcutBadge, { backgroundColor: config.badgeBackground }]}>
-                    <Text style={[styles.shortcutBadgeText, { color: config.badgeText }]}>{badgeText}</Text>
-                  </View>
-                ) : null}
-              </View>
-              <Text numberOfLines={2} style={[styles.shortcutTitle, { color: config.titleColor }]}>
-                {title}
-              </Text>
-              {meta ? <Text numberOfLines={1} style={styles.shortcutMeta}>{meta}</Text> : null}
-            </View>
-          ) : (
-            <>
-              <View style={[styles.accent, { backgroundColor: config.accent }]} />
+        {compact ? (
+          <View style={styles.shortcutCard}>
+            <View style={[styles.shortcutIconWrap, { backgroundColor: config.accent }]}>
               {icon ? (
-                <View style={[styles.iconWrap, isShortScreen ? styles.iconWrapCompact : null]}>
-                  <AppIcon name={icon} state={disabled ? 'disabled' : variant === 'patient' ? 'muted' : 'active'} />
+                <AppIcon
+                  name={icon}
+                  state={disabled ? 'disabled' : variant === 'patient' ? 'muted' : 'active'}
+                />
+              ) : null}
+              {badgeText ? (
+                <View style={[styles.shortcutBadge, { backgroundColor: config.badgeBackground }]}>
+                  <Text style={[styles.shortcutBadgeText, { color: config.badgeText }]}>{badgeText}</Text>
                 </View>
               ) : null}
-              <View style={styles.header}>
-                <Text style={[styles.title, isShortScreen ? styles.titleCompact : null, { color: config.titleColor }]}>
-                  {title}
-                </Text>
-                {badgeText ? (
-                  <View style={[styles.badge, { backgroundColor: config.badgeBackground }]}>
-                    <Text style={[styles.badgeText, { color: config.badgeText }]}>{badgeText}</Text>
-                  </View>
-                ) : null}
+            </View>
+            <Text numberOfLines={2} style={[styles.shortcutTitle, { color: config.titleColor }]}>
+              {title}
+            </Text>
+            {meta ? <Text numberOfLines={1} style={styles.shortcutMeta}>{meta}</Text> : null}
+          </View>
+        ) : (
+          <>
+            <View style={[styles.accent, { backgroundColor: config.accent }]} />
+            {icon ? (
+              <View style={styles.iconWrap}>
+                <AppIcon name={icon} state={disabled ? 'disabled' : variant === 'patient' ? 'muted' : 'active'} />
               </View>
-              <Text style={[styles.description, isShortScreen ? styles.descriptionCompact : null, { color: config.descriptionColor }]}>
-                {description}
-              </Text>
-              {meta ? <Text style={[styles.meta, isShortScreen ? styles.metaCompact : null]}>{meta}</Text> : null}
-            </>
-          )}
-        </AppCard>
-      </AnimatedPressable>
-    </Animated.View>
+            ) : null}
+            <View style={styles.header}>
+              <Text style={[styles.title, { color: config.titleColor }]}>{title}</Text>
+              {badgeText ? (
+                <View style={[styles.badge, { backgroundColor: config.badgeBackground }]}>
+                  <Text style={[styles.badgeText, { color: config.badgeText }]}>{badgeText}</Text>
+                </View>
+              ) : null}
+            </View>
+            <Text style={[styles.description, { color: config.descriptionColor }]}>{description}</Text>
+            {meta ? <Text style={styles.meta}>{meta}</Text> : null}
+          </>
+        )}
+      </AppCard>
+    </Pressable>
   );
 };
 
@@ -196,11 +136,6 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.whiteOverlay,
     marginBottom: theme.spacing.sm,
   },
-  iconWrapCompact: {
-    width: 34,
-    height: 34,
-    marginBottom: theme.spacing.xs,
-  },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -214,16 +149,8 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.compact.bodyLg,
     lineHeight: theme.typography.compact.bodyLg * theme.typography.lineHeights.snug,
   },
-  titleCompact: {
-    fontSize: theme.typography.compact.body,
-    lineHeight: theme.typography.compact.body * theme.typography.lineHeights.snug,
-  },
   description: {
     fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.compact.caption,
-    lineHeight: theme.typography.compact.caption * theme.typography.lineHeights.relaxed,
-  },
-  descriptionCompact: {
     fontSize: theme.typography.compact.caption,
     lineHeight: theme.typography.compact.caption * theme.typography.lineHeights.relaxed,
   },
@@ -232,10 +159,6 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.caption,
     color: theme.colors.textMuted,
-  },
-  metaCompact: {
-    marginTop: 2,
-    fontSize: theme.typography.compact.caption,
   },
   badge: {
     paddingHorizontal: theme.spacing.sm,

@@ -1,18 +1,9 @@
-import React, { useState } from 'react';
-import { Pressable, StyleSheet, Text, View, ImageBackground, useWindowDimensions } from 'react-native';
-import Animated, {
-  Extrapolation,
-  interpolate,
-  useAnimatedStyle,
-  useSharedValue,
-  withSpring,
-} from 'react-native-reanimated';
+import React from 'react';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import * as Haptics from 'expo-haptics';
-import { LinearGradient } from 'expo-linear-gradient';
-import { theme } from '../../design-system/theme';
+import { AppCard } from './AppCard';
 import { AppIcon } from './AppIcon';
-
-const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+import { theme } from '../../design-system/theme';
 
 export const DashboardFeatureCard = ({
   title,
@@ -20,41 +11,13 @@ export const DashboardFeatureCard = ({
   badgeText,
   meta,
   ctaLabel,
-  imageUrl,
   icon,
   variant = 'donor',
   width,
-  index = 0,
-  scrollX,
-  railSpacing = theme.spacing.md,
-  size = 'hero',
   onPress,
 }) => {
-  const [imageFailed, setImageFailed] = useState(false);
-  const { height } = useWindowDimensions();
-  const isShortScreen = height < theme.layout.shortScreenHeight;
-  const scale = useSharedValue(1);
-
-  const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
-  }));
-
-  const motionStyle = useAnimatedStyle(() => {
-    if (!scrollX || typeof width !== 'number') {
-      return {};
-    }
-
-    const interval = width + railSpacing;
-    const inputRange = [(index - 1) * interval, index * interval, (index + 1) * interval];
-
-    return {
-      transform: [
-        { scale: interpolate(scrollX.value, inputRange, [0.96, 1, 0.96], Extrapolation.CLAMP) },
-        { translateY: interpolate(scrollX.value, inputRange, [6, 0, 6], Extrapolation.CLAMP) },
-      ],
-      opacity: interpolate(scrollX.value, inputRange, [0.88, 1, 0.88], Extrapolation.CLAMP),
-    };
-  });
+  const tintVariant = variant === 'patient' ? 'patientTint' : 'donorTint';
+  const iconState = variant === 'patient' ? 'muted' : 'active';
 
   const handlePress = async () => {
     if (!onPress) return;
@@ -62,183 +25,107 @@ export const DashboardFeatureCard = ({
     onPress();
   };
 
-  const overlayColors = variant === 'patient'
-    ? ['rgba(8,8,8,0.12)', 'rgba(8,8,8,0.78)']
-    : ['rgba(151,49,58,0.12)', 'rgba(8,8,8,0.82)'];
-
-  const content = (
-    <LinearGradient colors={overlayColors} style={[styles.overlay, isShortScreen ? styles.overlayCompact : null]}>
-      <View style={styles.topRow}>
-        {badgeText ? (
-          <View style={styles.badge}>
-            {icon ? <AppIcon name={icon} size="sm" state="inverse" /> : null}
-            <Text style={styles.badgeText}>{badgeText}</Text>
+  return (
+    <Pressable onPress={handlePress} style={[styles.wrapper, { width }]}>
+      <AppCard variant={tintVariant} radius="xl" padding="lg" style={styles.card}>
+        <View style={styles.topRow}>
+          <View style={styles.badgeWrap}>
+            {icon ? (
+              <View style={styles.iconWrap}>
+                <AppIcon name={icon} size="sm" state={iconState} />
+              </View>
+            ) : null}
+            {badgeText ? (
+              <View style={styles.badge}>
+                <Text style={styles.badgeText}>{badgeText}</Text>
+              </View>
+            ) : null}
           </View>
-        ) : null}
-      </View>
-
-      <View style={styles.bottomBlock}>
-        <Text style={[styles.title, isShortScreen ? styles.titleCompact : null]}>{title}</Text>
-        <Text style={[styles.description, isShortScreen ? styles.descriptionCompact : null]}>{description}</Text>
-        <View style={styles.footerRow}>
-          {meta ? <Text style={styles.meta}>{meta}</Text> : <View />}
           {ctaLabel ? (
             <View style={styles.ctaWrap}>
               <Text style={styles.ctaText}>{ctaLabel}</Text>
-              <AppIcon name="chevronRight" size="sm" state="inverse" />
+              <AppIcon name="chevronRight" size="sm" state="muted" />
             </View>
           ) : null}
         </View>
-      </View>
-    </LinearGradient>
-  );
 
-  return (
-    <AnimatedPressable
-      onPress={handlePress}
-      onPressIn={() => {
-        scale.value = withSpring(0.985, theme.motion.spring);
-      }}
-      onPressOut={() => {
-        scale.value = withSpring(1, theme.motion.spring);
-      }}
-      style={[
-        styles.wrapper,
-        size === 'compact' ? styles.wrapperSmall : null,
-        isShortScreen ? styles.wrapperCompact : null,
-        { width },
-        motionStyle,
-        animatedStyle,
-      ]}
-    >
-      {imageUrl && !imageFailed ? (
-        <ImageBackground
-          source={{ uri: imageUrl }}
-          style={styles.imageBackground}
-          imageStyle={[styles.image, size === 'compact' ? styles.imageCompact : null]}
-          onError={() => setImageFailed(true)}
-        >
-          {content}
-        </ImageBackground>
-      ) : (
-        <LinearGradient
-          colors={variant === 'patient'
-            ? [theme.colors.patientCardFrom, theme.colors.dashboardPatientTo]
-            : [theme.colors.donorCardFrom, theme.colors.dashboardDonorTo]}
-          style={[
-            styles.imageBackground,
-            size === 'compact' ? styles.imageBackgroundCompact : null,
-            isShortScreen ? styles.imageBackgroundCompact : null,
-          ]}
-        >
-          {content}
-        </LinearGradient>
-      )}
-    </AnimatedPressable>
+        <Text style={styles.title}>{title}</Text>
+        <Text style={styles.description}>{description}</Text>
+        {meta ? <Text style={styles.meta}>{meta}</Text> : null}
+      </AppCard>
+    </Pressable>
   );
 };
 
 const styles = StyleSheet.create({
   wrapper: {
-    height: 164,
-    borderRadius: 26,
-    overflow: 'hidden',
-    ...theme.shadows.hero,
+    width: '100%',
   },
-  wrapperSmall: {
-    height: 140,
-  },
-  wrapperCompact: {
-    height: 152,
-    borderRadius: 24,
-  },
-  imageBackground: {
-    flex: 1,
-  },
-  imageBackgroundCompact: {
-    borderRadius: theme.radius.lg,
-  },
-  image: {
-    borderRadius: 26,
-  },
-  imageCompact: {
-    borderRadius: 24,
-  },
-  overlay: {
-    flex: 1,
+  card: {
+    minHeight: 152,
     justifyContent: 'space-between',
-    padding: theme.spacing.sm,
-  },
-  overlayCompact: {
-    padding: theme.spacing.sm,
   },
   topRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+    marginBottom: theme.spacing.md,
   },
-  badge: {
+  badgeWrap: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.spacing.xs,
-    alignSelf: 'flex-start',
-    paddingHorizontal: theme.spacing.sm,
-    paddingVertical: 4,
-    borderRadius: theme.radius.pill,
+    flexWrap: 'wrap',
+    flex: 1,
+  },
+  iconWrap: {
+    width: 34,
+    height: 34,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: theme.colors.whiteOverlay,
+  },
+  badge: {
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: 5,
+    borderRadius: theme.radius.pill,
+    backgroundColor: theme.colors.surfaceSoft,
   },
   badgeText: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.caption,
-    color: theme.colors.textInverse,
+    color: theme.colors.textSecondary,
     fontWeight: theme.typography.weights.semibold,
-  },
-  bottomBlock: {
-    gap: theme.spacing.xs,
   },
   title: {
     fontFamily: theme.typography.fontFamilyDisplay,
     fontSize: theme.typography.compact.titleSm,
-    color: theme.colors.textInverse,
-  },
-  titleCompact: {
-    fontSize: theme.typography.compact.body,
+    color: theme.colors.textPrimary,
+    marginBottom: theme.spacing.xs,
   },
   description: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.caption,
-    color: theme.colors.textHeroSoft,
+    color: theme.colors.textSecondary,
     lineHeight: theme.typography.compact.caption * theme.typography.lineHeights.relaxed,
-  },
-  descriptionCompact: {
-    fontSize: theme.typography.compact.caption,
-    lineHeight: theme.typography.compact.caption * theme.typography.lineHeights.relaxed,
-  },
-  footerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: theme.spacing.sm,
   },
   meta: {
-    flex: 1,
+    marginTop: theme.spacing.sm,
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.caption,
-    color: theme.colors.textHeroMuted,
+    color: theme.colors.textMuted,
   },
   ctaWrap: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.spacing.xs,
-    paddingHorizontal: theme.spacing.sm,
-    paddingVertical: 5,
-    borderRadius: theme.radius.pill,
-    backgroundColor: 'rgba(255,255,255,0.12)',
   },
   ctaText: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.caption,
-    color: theme.colors.textInverse,
+    color: theme.colors.textSecondary,
     fontWeight: theme.typography.weights.semibold,
   },
 });

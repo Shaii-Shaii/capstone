@@ -2,7 +2,6 @@ import React from 'react';
 import { View, StyleSheet, Text } from 'react-native';
 import { usePathname, useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
-import Animated, { FadeInDown } from 'react-native-reanimated';
 import { DashboardLayout } from './DashboardLayout';
 import { DashboardHeader } from '../ui/DashboardHeader';
 import { DashboardSectionHeader } from '../ui/DashboardSectionHeader';
@@ -16,7 +15,7 @@ import { useNotifications } from '../../hooks/useNotifications';
 import { useAuth } from '../../providers/AuthProvider';
 import { theme } from '../../design-system/theme';
 
-function renderDashboardSection({ section, content, role, onItemPress, onActionPress, index }) {
+function renderDashboardSection({ section, content, role, onItemPress, onActionPress }) {
   const data = content[section.dataKey];
   if (!data) return null;
 
@@ -31,11 +30,7 @@ function renderDashboardSection({ section, content, role, onItemPress, onActionP
 
   if (section.kind === 'grid') {
     return (
-      <Animated.View
-        key={section.key}
-        entering={FadeInDown.delay(100 + index * theme.motion.stagger).duration(theme.motion.cardEnter)}
-        style={styles.section}
-      >
+      <View key={section.key} style={styles.section}>
         {header}
         <View style={styles.gridWrap}>
           {data.items.map((item) => (
@@ -53,26 +48,20 @@ function renderDashboardSection({ section, content, role, onItemPress, onActionP
             </View>
           ))}
         </View>
-      </Animated.View>
+      </View>
     );
   }
 
   if (section.kind === 'featured') {
     return (
-      <Animated.View
-        key={section.key}
-        entering={FadeInDown.delay(120 + index * theme.motion.stagger).duration(theme.motion.cardEnter)}
-        style={styles.section}
-      >
+      <View key={section.key} style={styles.section}>
         {header}
         <DashboardWidgetRail
           items={data.items}
-          renderItem={(item, index, width, scrollX) => (
+          renderItem={(item, index, width) => (
             <DashboardFeatureCard
               key={item.key}
               width={width}
-              index={index}
-              scrollX={scrollX}
               variant={role}
               title={item.title}
               description={item.description}
@@ -80,33 +69,25 @@ function renderDashboardSection({ section, content, role, onItemPress, onActionP
               meta={item.meta}
               ctaLabel={item.ctaLabel}
               icon={item.icon}
-              imageUrl={item.imageUrl}
-              size={section.size}
               onPress={() => onItemPress(item)}
             />
           )}
         />
-      </Animated.View>
+      </View>
     );
   }
 
   if (section.kind === 'info') {
     return (
-      <Animated.View
-        key={section.key}
-        entering={FadeInDown.delay(120 + index * theme.motion.stagger).duration(theme.motion.cardEnter)}
-        style={styles.section}
-      >
+      <View key={section.key} style={styles.section}>
         {header}
         <DashboardWidgetRail
           items={data.items}
           cardWidth={section.cardWidth}
-          renderItem={(item, index, width, scrollX) => (
+          renderItem={(item, index, width) => (
             <DashboardInfoCard
               key={item.key}
               width={width}
-              index={index}
-              scrollX={scrollX}
               variant={role}
               title={item.title}
               description={item.description}
@@ -117,21 +98,17 @@ function renderDashboardSection({ section, content, role, onItemPress, onActionP
             />
           )}
         />
-      </Animated.View>
+      </View>
     );
   }
 
   return (
-    <Animated.View
-      key={section.key}
-      entering={FadeInDown.delay(120 + index * theme.motion.stagger).duration(theme.motion.cardEnter)}
-      style={styles.section}
-    >
+    <View key={section.key} style={styles.section}>
       {header}
       <DashboardWidgetRail
         items={data.items}
         cardWidth={section.cardWidth}
-        renderItem={(item, index, width, scrollX) => (
+        renderItem={(item, index, width) => (
           <DashboardActionCard
             key={item.key}
             title={item.title}
@@ -141,15 +118,12 @@ function renderDashboardSection({ section, content, role, onItemPress, onActionP
             icon={item.icon}
             compact={section.compact ?? false}
             variant={role}
-            index={index}
-            scrollX={scrollX}
             style={{ width }}
-            delay={80 + index * 60}
             onPress={() => onItemPress(item)}
           />
         )}
       />
-    </Animated.View>
+    </View>
   );
 }
 
@@ -201,49 +175,44 @@ export function RoleDashboardHome({ role, profile, navItems, content }) {
           avatarInitials={avatarInitials}
           avatarUri={profile?.avatar_url}
           variant={role}
-          searchPlaceholder={content.header.searchPlaceholder}
           quickTools={quickTools}
           utilityActions={content.header.utilityActions?.map((item) => ({
             ...item,
             badge: item.key === 'notifications' && unreadCount ? String(Math.min(unreadCount, 99)) : item.badge,
             onPress: item.route ? () => handleActionRoute(item.route) : undefined,
           }))}
-          onSearchPress={() => handleActionRoute(role === 'donor' ? '/donor/donations' : '/patient/requests')}
         />
       )}
     >
       {hasSummaryCard ? (
-        <Animated.View entering={FadeInDown.delay(60).duration(theme.motion.cardEnter)}>
-          <AppCard variant={role === 'donor' ? 'donorTint' : 'patientTint'} radius="xl" padding="xs">
-            {content.summaryCard?.eyebrow ? (
-              <Text style={[styles.summaryEyebrow, role === 'donor' ? styles.summaryEyebrowDonor : null]}>
-                {content.summaryCard.eyebrow}
-              </Text>
-            ) : null}
-            {content.summaryCard?.title ? <Text style={styles.summaryTitle}>{content.summaryCard.title}</Text> : null}
-            {content.summaryCard?.body ? <Text style={styles.summaryBody}>{content.summaryCard.body}</Text> : null}
-            {content.snapshotItems?.length ? (
-              <View style={styles.snapshotRow}>
-                {content.snapshotItems.map((item) => (
-                  <View key={item.key} style={styles.snapshotPill}>
-                    <View style={[styles.snapshotIconWrap, role === 'donor' ? styles.snapshotIconWrapDonor : null]}>
-                      <AppIcon name={item.icon} size="sm" state={role === 'donor' ? 'active' : 'muted'} />
-                    </View>
-                    <View style={styles.snapshotCopy}>
-                      <Text style={styles.snapshotLabel}>{item.label}</Text>
-                      <Text style={styles.snapshotValue}>{item.value}</Text>
-                    </View>
+        <AppCard variant={role === 'donor' ? 'donorTint' : 'patientTint'} radius="xl" padding="xs">
+          {content.summaryCard?.eyebrow ? (
+            <Text style={[styles.summaryEyebrow, role === 'donor' ? styles.summaryEyebrowDonor : null]}>
+              {content.summaryCard.eyebrow}
+            </Text>
+          ) : null}
+          {content.summaryCard?.title ? <Text style={styles.summaryTitle}>{content.summaryCard.title}</Text> : null}
+          {content.summaryCard?.body ? <Text style={styles.summaryBody}>{content.summaryCard.body}</Text> : null}
+          {content.snapshotItems?.length ? (
+            <View style={styles.snapshotRow}>
+              {content.snapshotItems.map((item) => (
+                <View key={item.key} style={styles.snapshotPill}>
+                  <View style={[styles.snapshotIconWrap, role === 'donor' ? styles.snapshotIconWrapDonor : null]}>
+                    <AppIcon name={item.icon} size="sm" state={role === 'donor' ? 'active' : 'muted'} />
                   </View>
-                ))}
-              </View>
-            ) : null}
-          </AppCard>
-        </Animated.View>
+                  <View style={styles.snapshotCopy}>
+                    <Text style={styles.snapshotLabel}>{item.label}</Text>
+                    <Text style={styles.snapshotValue}>{item.value}</Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+          ) : null}
+        </AppCard>
       ) : null}
 
-      {content.sections.map((section, index) => renderDashboardSection({
+      {content.sections.map((section) => renderDashboardSection({
         section,
-        index,
         content,
         role,
         onItemPress: handleItemPress,

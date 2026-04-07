@@ -14,7 +14,6 @@ export const donorDashboardContent = {
     greeting: 'hello',
     subtitle: 'Your donation home',
     summary: '',
-    searchPlaceholder: 'Search donor tools and updates',
     utilityActions: [
       { key: 'notifications', icon: 'notifications', badge: '2', route: '/donor/notifications' },
     ],
@@ -22,36 +21,9 @@ export const donorDashboardContent = {
   },
   summaryCard: null,
   snapshotItems: [],
-  featured: {
-    title: 'Featured',
-    description: 'The most useful donor step right now.',
-    items: [
-      {
-        key: 'program',
-        title: 'Donation Program',
-        description: 'See how prepared hair moves from donor handoff to support for wig recipients.',
-        badgeText: 'Featured',
-        meta: 'Impact overview',
-        ctaLabel: 'Open',
-        icon: 'donations',
-        imageUrl: dashboardSampleImages.donorProgram,
-      },
-      {
-        key: 'guidelines',
-        title: 'Preparation Guide',
-        description: 'Review clean, dry, tied, and donation-ready prep before your next handoff.',
-        badgeText: 'Prep',
-        meta: 'Ready for review',
-        ctaLabel: 'View',
-        icon: 'support',
-        imageUrl: dashboardSampleImages.donorGuidelines,
-        route: '/donor/donations',
-      },
-    ],
-  },
   quickActions: {
-    title: 'Services',
-    description: 'Fast donor shortcuts.',
+    title: 'Main Actions',
+    description: 'Go directly to the next donor step.',
     items: [
       {
         key: 'status',
@@ -93,7 +65,7 @@ export const donorDashboardContent = {
   },
   progress: {
     title: 'Next Steps',
-    description: 'Short reminders that move you forward.',
+    description: 'Keep the donor flow focused.',
     items: [
       {
         key: 'prep',
@@ -149,12 +121,6 @@ export const donorDashboardContent = {
   },
   sections: [
     {
-      key: 'featured',
-      kind: 'featured',
-      dataKey: 'featured',
-      size: 'hero',
-    },
-    {
       key: 'quick-actions',
       kind: 'grid',
       dataKey: 'quickActions',
@@ -180,7 +146,6 @@ export const patientDashboardContent = {
     greeting: 'welcome',
     subtitle: 'Your support home',
     summary: '',
-    searchPlaceholder: 'Search requests and support',
     utilityActions: [
       { key: 'notifications', icon: 'notifications', badge: '3', route: '/patient/notifications' },
     ],
@@ -188,37 +153,9 @@ export const patientDashboardContent = {
   },
   summaryCard: null,
   snapshotItems: [],
-  featured: {
-    title: 'Featured',
-    description: 'The most useful patient actions right now.',
-    items: [
-      {
-        key: 'request',
-        title: 'Start a Wig Request',
-        description: 'Begin a new request privately and keep the required support details organized.',
-        badgeText: 'Featured',
-        meta: 'Request intake',
-        ctaLabel: 'Open',
-        icon: 'requests',
-        imageUrl: dashboardSampleImages.patientRequest,
-        route: '/patient/requests',
-      },
-      {
-        key: 'support',
-        title: 'Support Resources',
-        description: 'Browse care guidance, request notes, and practical support resources.',
-        badgeText: 'Care',
-        meta: 'Helpful resources',
-        ctaLabel: 'View',
-        icon: 'support',
-        imageUrl: dashboardSampleImages.patientSupport,
-        route: '/patient/support',
-      },
-    ],
-  },
   quickActions: {
-    title: 'Services',
-    description: 'Fast patient shortcuts.',
+    title: 'Main Actions',
+    description: 'Go directly to the next patient step.',
     items: [
       {
         key: 'submit',
@@ -260,7 +197,7 @@ export const patientDashboardContent = {
   },
   requestStatus: {
     title: 'Next Steps',
-    description: 'Short cards that keep support progress visible.',
+    description: 'Keep the support flow focused.',
     items: [
       {
         key: 'readiness',
@@ -316,12 +253,6 @@ export const patientDashboardContent = {
     ],
   },
   sections: [
-    {
-      key: 'featured',
-      kind: 'featured',
-      dataKey: 'featured',
-      size: 'hero',
-    },
     {
       key: 'quick-actions',
       kind: 'grid',

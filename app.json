@@ -40,12 +40,12 @@
       [
         "expo-splash-screen",
         {
-          "image": "./src/assets/images/donivra_logo.png",
-          "imageWidth": 200,
+          "image": "./src/assets/images/donivra_logo_no_text.png",
+          "imageWidth": 144,
           "resizeMode": "contain",
-          "backgroundColor": "#ffffff",
+          "backgroundColor": "#f4f1f1",
           "dark": {
-            "backgroundColor": "#000000"
+            "backgroundColor": "#f4f1f1"
           }
         }
       ]

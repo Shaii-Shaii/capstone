@@ -1,10 +1,6 @@
 import React from 'react';
-import { StyleSheet, useWindowDimensions } from 'react-native';
-import { ScrollView } from 'react-native-gesture-handler';
-import Animated, { useAnimatedScrollHandler, useSharedValue } from 'react-native-reanimated';
+import { StyleSheet, useWindowDimensions, ScrollView } from 'react-native';
 import { theme } from '../../design-system/theme';
-
-const AnimatedScrollView = Animated.createAnimatedComponent(ScrollView);
 
 export const DashboardWidgetRail = ({
   items = [],
@@ -20,25 +16,12 @@ export const DashboardWidgetRail = ({
     width * (isShortScreen ? 0.8 : 0.82),
     isShortScreen ? theme.layout.dashboardRailCardWidthCompact : theme.layout.dashboardRailCardWidth
   );
-  const scrollX = useSharedValue(0);
-
-  const scrollHandler = useAnimatedScrollHandler({
-    onScroll: (event) => {
-      scrollX.value = event.contentOffset.x;
-    },
-  });
 
   return (
-    <AnimatedScrollView
+    <ScrollView
       horizontal
       showsHorizontalScrollIndicator={showsHorizontalScrollIndicator}
       bounces={false}
-      decelerationRate="fast"
-      disableIntervalMomentum
-      snapToInterval={computedCardWidth + spacing}
-      snapToAlignment="start"
-      onScroll={scrollHandler}
-      scrollEventThrottle={16}
       contentContainerStyle={[
         styles.content,
         isShortScreen ? styles.contentCompact : null,
@@ -48,10 +31,10 @@ export const DashboardWidgetRail = ({
     >
       {items.map((item, index) => (
         <React.Fragment key={item?.key || `widget-${index}`}>
-          {renderItem(item, index, computedCardWidth, scrollX)}
+          {renderItem(item, index, computedCardWidth)}
         </React.Fragment>
       ))}
-    </AnimatedScrollView>
+    </ScrollView>
   );
 };
 
