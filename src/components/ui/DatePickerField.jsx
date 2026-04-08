@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { AppIcon } from './AppIcon';
@@ -44,6 +44,7 @@ export function DatePickerField({
   onPress,
 }) {
   const [isPickerVisible, setIsPickerVisible] = useState(false);
+  const webInputRef = useRef(null);
   const parsedDateValue = useMemo(() => parseDateValue(value), [value]);
   const maximumDateValue = useMemo(
     () => (maximumDate instanceof Date ? maximumDate : null),
@@ -66,6 +67,25 @@ export function DatePickerField({
     [parsedDateValue]
   );
 
+  const openWebPicker = async () => {
+    await onPress?.();
+
+    const inputElement = webInputRef.current;
+    if (!inputElement) return;
+
+    if (typeof inputElement.showPicker === 'function') {
+      try {
+        inputElement.showPicker();
+        return;
+      } catch (_error) {
+        // Fall back to click/focus below when showPicker is unavailable or blocked.
+      }
+    }
+
+    inputElement.focus?.();
+    inputElement.click?.();
+  };
+
   if (Platform.OS === 'web') {
     return (
       <View style={styles.fieldWrap}>
@@ -73,12 +93,15 @@ export function DatePickerField({
           {label}
         </Text>
 
-        <View style={[
+        <Pressable
+          onPress={openWebPicker}
+          style={[
           styles.fieldShell,
           styles.webFieldShell,
           error ? styles.fieldShellError : null,
-        ]}>
-          <View pointerEvents="none" style={styles.webDisplayLayer}>
+        ]}
+        >
+          <View style={styles.webDisplayLayer}>
             <Text style={[
               styles.fieldValue,
               !value ? styles.fieldPlaceholder : null,
@@ -89,13 +112,13 @@ export function DatePickerField({
           </View>
 
           {React.createElement('input', {
+            ref: webInputRef,
             type: 'date',
             value: value || '',
             min: minimumDateString,
             max: maximumDateString,
             autoComplete: 'bday',
             'aria-label': label,
-            onClick: () => onPress?.(),
             onChange: (event) => {
               const nextValue = String(event?.target?.value || '').trim();
               const normalizedValue = parseDateValue(nextValue);
@@ -104,21 +127,19 @@ export function DatePickerField({
             onBlur,
             style: {
               position: 'absolute',
-              top: 0,
-              right: 0,
-              bottom: 0,
-              left: 0,
+              width: 1,
+              height: 1,
               opacity: 0,
-              cursor: 'pointer',
-              zIndex: 2,
+              pointerEvents: 'none',
               border: 'none',
               background: 'transparent',
               boxSizing: 'border-box',
               appearance: 'none',
               WebkitAppearance: 'none',
+              overflow: 'hidden',
             },
           })}
-        </View>
+        </Pressable>
 
         {error ? (
           <Text style={styles.fieldError}>{error}</Text>
@@ -232,6 +253,7 @@ const styles = StyleSheet.create({
   },
   webFieldShell: {
     position: 'relative',
+    cursor: 'pointer',
   },
   webDisplayLayer: {
     flex: 1,
@@ -239,6 +261,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: theme.spacing.sm,
+    pointerEvents: 'none',
   },
   fieldShellError: {
     borderColor: theme.colors.borderError,
