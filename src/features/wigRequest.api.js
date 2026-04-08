@@ -1,5 +1,6 @@
 import { supabase } from '../api/supabase/client';
 import { wigReferenceStorageBucket } from './wigRequest.constants';
+import { logAppError, logAppEvent } from '../utils/appErrors';
 
 const firstRelation = (value) => (Array.isArray(value) ? value[0] || null : value || null);
 
@@ -227,14 +228,42 @@ export const fetchLatestWigSpecificationByRequestId = async (wigRequestId) => {
   };
 };
 
-export const uploadWigReferenceImage = async ({ path, fileBody, contentType, bucket = wigReferenceStorageBucket }) => (
-  await supabase.storage
+export const uploadWigReferenceImage = async ({ path, fileBody, contentType, bucket = wigReferenceStorageBucket }) => {
+  logAppEvent('wig_request.storage.upload_started', 'Wig preview upload started.', {
+    table: 'storage',
+    bucket,
+    filePath: path,
+    fileType: 'wig_request_preview',
+    contentType: contentType || 'image/jpeg',
+  });
+
+  const result = await supabase.storage
     .from(bucket)
     .upload(path, fileBody, {
       contentType,
       upsert: false,
-    })
-);
+    });
+
+  if (result.error) {
+    logAppError('wig_request.storage.upload_failed', result.error, {
+      table: 'storage',
+      bucket,
+      filePath: path,
+      fileType: 'wig_request_preview',
+      contentType: contentType || 'image/jpeg',
+    });
+    return result;
+  }
+
+  logAppEvent('wig_request.storage.upload_succeeded', 'Wig preview upload succeeded.', {
+    table: 'storage',
+    bucket,
+    filePath: path,
+    fileType: 'wig_request_preview',
+  });
+
+  return result;
+};
 
 export const getStoragePublicUrl = ({ path, bucket = wigReferenceStorageBucket }) => (
   supabase.storage
