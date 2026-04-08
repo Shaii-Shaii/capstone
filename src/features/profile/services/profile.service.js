@@ -28,6 +28,7 @@ const sanitizeSharedProfileUpdates = (updates = {}) => ({
 });
 
 const getTodayDate = () => new Date().toISOString().slice(0, 10);
+const dataUrlPattern = /^data:([^;]+);base64,(.+)$/i;
 const getPatientCodeLogMeta = (patientCode) => {
   const normalizedCode = String(patientCode || '').trim().toUpperCase();
   return {
@@ -151,6 +152,53 @@ const fetchRoleProfile = async (role, userId) => {
   }
 
   return { data: null, error: null };
+};
+
+const persistSchemaSafeMediaValue = async ({ authUserId, mediaValue, documentType }) => {
+  if (!mediaValue) return '';
+
+  if (typeof mediaValue === 'object' && mediaValue !== null) {
+    if (mediaValue.fileBody) {
+      const uploadResult = await ProfileAPI.uploadPatientOnboardingMedia({
+        authUserId,
+        fileBody: mediaValue.fileBody,
+        contentType: mediaValue.contentType,
+        fileName: mediaValue.fileName,
+        documentType,
+      });
+
+      if (uploadResult.error || !uploadResult.data?.publicUrl) {
+        throw new Error(uploadResult.error?.message || 'File upload failed.');
+      }
+
+      return uploadResult.data.publicUrl;
+    }
+
+    return mediaValue.publicUrl || mediaValue.path || '';
+  }
+
+  if (typeof mediaValue === 'string' && dataUrlPattern.test(mediaValue)) {
+    const [, mimeType] = mediaValue.match(dataUrlPattern) || [];
+    const fileResponse = await fetch(mediaValue);
+    if (!fileResponse.ok) {
+      throw new Error('Selected file could not be read.');
+    }
+
+    const uploadResult = await ProfileAPI.uploadPatientOnboardingMedia({
+      authUserId,
+      fileBody: await fileResponse.arrayBuffer(),
+      contentType: mimeType || 'image/jpeg',
+      documentType,
+    });
+
+    if (uploadResult.error || !uploadResult.data?.publicUrl) {
+      throw new Error(uploadResult.error?.message || 'File upload failed.');
+    }
+
+    return uploadResult.data.publicUrl;
+  }
+
+  return typeof mediaValue === 'string' ? mediaValue : '';
 };
 
 const updateRoleProfile = async (role, userId, updates) => {
@@ -318,13 +366,24 @@ export const completePostLoginOnboarding = async ({
         hasMedicalDocument: Boolean(manualPatientDetails?.medical_document),
       });
 
+      const patientPictureUrl = await persistSchemaSafeMediaValue({
+        authUserId: userId,
+        mediaValue: manualPatientDetails?.patient_picture,
+        documentType: 'patient-picture',
+      });
+      const medicalDocumentUrl = await persistSchemaSafeMediaValue({
+        authUserId: userId,
+        mediaValue: manualPatientDetails?.medical_document,
+        documentType: 'patient-document',
+      });
+
       const patientResult = await ProfileAPI.updatePatientDetails(userId, {
         medical_condition: manualPatientDetails?.medical_condition || '',
-        patient_picture: manualPatientDetails?.patient_picture || '',
+        patient_picture: patientPictureUrl || '',
         date_of_diagnosis: manualPatientDetails?.date_of_diagnosis || null,
         guardian: manualPatientDetails?.guardian || '',
         guardian_contact_number: manualPatientDetails?.guardian_contact_number || '',
-        medical_document: manualPatientDetails?.medical_document || '',
+        medical_document: medicalDocumentUrl || '',
       });
 
       if (patientResult.error) {
@@ -554,8 +613,53 @@ export const saveAvatar = async (userId, avatarUrl) => {
     if (!userId) throw new Error('User ID is required');
     if (!avatarUrl) throw new Error('Avatar image is required');
 
+    let normalizedAvatarUrl = avatarUrl;
+
+    if (typeof avatarUrl === 'object' && avatarUrl !== null) {
+      if (avatarUrl.fileBody) {
+        const uploadResult = await ProfileAPI.uploadProfileAvatar({
+          authUserId: userId,
+          fileBody: avatarUrl.fileBody,
+          contentType: avatarUrl.contentType,
+          fileName: avatarUrl.fileName,
+        });
+
+        if (uploadResult.error || !uploadResult.data?.publicUrl) {
+          throw new Error(uploadResult.error?.message || 'Profile photo could not be uploaded.');
+        }
+
+        normalizedAvatarUrl = uploadResult.data.publicUrl;
+      } else {
+        normalizedAvatarUrl = avatarUrl.publicUrl || avatarUrl.path || '';
+      }
+    }
+
+    if (typeof normalizedAvatarUrl === 'string' && dataUrlPattern.test(normalizedAvatarUrl)) {
+      const [, mimeType] = normalizedAvatarUrl.match(dataUrlPattern) || [];
+      const fileResponse = await fetch(normalizedAvatarUrl);
+      if (!fileResponse.ok) {
+        throw new Error('Profile photo could not be read.');
+      }
+
+      const uploadResult = await ProfileAPI.uploadProfileAvatar({
+        authUserId: userId,
+        fileBody: await fileResponse.arrayBuffer(),
+        contentType: mimeType || 'image/jpeg',
+      });
+
+      if (uploadResult.error || !uploadResult.data?.publicUrl) {
+        throw new Error(uploadResult.error?.message || 'Profile photo could not be uploaded.');
+      }
+
+      normalizedAvatarUrl = uploadResult.data.publicUrl;
+    }
+
+    if (!normalizedAvatarUrl || typeof normalizedAvatarUrl !== 'string') {
+      throw new Error('Profile photo could not be prepared.');
+    }
+
     const { data, error } = await ProfileAPI.updateProfile(userId, {
-      avatar_url: avatarUrl,
+      avatar_url: normalizedAvatarUrl,
     });
 
     if (error) throw new Error(error.message);

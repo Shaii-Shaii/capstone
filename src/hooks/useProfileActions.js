@@ -15,25 +15,30 @@ import { logAppError, logAppEvent } from '../utils/appErrors';
 
 const IMAGE_MEDIA_TYPES = ['images'];
 
-const readBlobAsDataUrl = (blob) => new Promise((resolve, reject) => {
-  const reader = new FileReader();
-  reader.onloadend = () => resolve(typeof reader.result === 'string' ? reader.result : '');
-  reader.onerror = () => reject(new Error('Unable to read the selected image.'));
-  reader.readAsDataURL(blob);
-});
+const getFileExtension = (mimeType = '', fileName = '') => {
+  const normalizedMimeType = String(mimeType || '').toLowerCase();
+  const normalizedFileName = String(fileName || '').trim().toLowerCase();
 
-const getAssetDataUrl = async (asset) => {
+  if (normalizedMimeType.includes('png') || normalizedFileName.endsWith('.png')) return 'png';
+  if (normalizedMimeType.includes('webp') || normalizedFileName.endsWith('.webp')) return 'webp';
+  if (normalizedMimeType.includes('gif') || normalizedFileName.endsWith('.gif')) return 'gif';
+  return 'jpg';
+};
+
+const getAssetUploadPayload = async (asset) => {
   if (!asset) {
     throw new Error('Unable to read the selected image.');
   }
 
-  if (asset.base64) {
-    const mimeType = asset.mimeType || asset.file?.type || 'image/jpeg';
-    return `data:${mimeType};base64,${asset.base64}`;
-  }
+  const contentType = asset.mimeType || asset.file?.type || 'image/jpeg';
+  const fileName = asset.fileName || asset.file?.name || `profile-photo.${getFileExtension(contentType)}`;
 
-  if (asset.file) {
-    return await readBlobAsDataUrl(asset.file);
+  if (asset.file && typeof asset.file.arrayBuffer === 'function') {
+    return {
+      fileBody: await asset.file.arrayBuffer(),
+      contentType,
+      fileName,
+    };
   }
 
   if (asset.uri) {
@@ -41,8 +46,12 @@ const getAssetDataUrl = async (asset) => {
     if (!response.ok) {
       throw new Error('Unable to read the selected image.');
     }
-    const blob = await response.blob();
-    return await readBlobAsDataUrl(blob);
+
+    return {
+      fileBody: await response.arrayBuffer(),
+      contentType,
+      fileName,
+    };
   }
 
   throw new Error('Unable to read the selected image.');
@@ -241,7 +250,7 @@ export const useProfileActions = () => {
         allowsEditing: true,
         aspect: [1, 1],
         quality: 0.55,
-        base64: true,
+        base64: false,
       });
 
       if (result.canceled) {
@@ -249,10 +258,10 @@ export const useProfileActions = () => {
       }
 
       const asset = result.assets?.[0];
-      const avatarUrl = await getAssetDataUrl(asset);
+      const avatarUploadPayload = await getAssetUploadPayload(asset);
 
       setIsUploadingAvatar(true);
-      const uploadResult = await saveAvatar(user.id, avatarUrl);
+      const uploadResult = await saveAvatar(user.id, avatarUploadPayload);
       setIsUploadingAvatar(false);
 
       if (uploadResult.error) {
@@ -269,7 +278,7 @@ export const useProfileActions = () => {
         authUserId: user.id,
         platform: Platform.OS,
       });
-      return { success: true, avatarUrl };
+      return { success: true, avatarUrl: uploadResult.profile?.avatar_url || uploadResult.profile?.photo_path || '' };
     } catch (error) {
       setIsUploadingAvatar(false);
       logAppError('profile_photo.upload', error, {

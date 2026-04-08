@@ -4,6 +4,7 @@ import { logAppError, logAppEvent } from '../../../utils/appErrors';
 const isUuid = (value) => typeof value === 'string' && value.includes('-');
 const buildMissingSystemUserError = () => new Error('The logged-in account is not linked to an app user record.');
 const getTodayDate = () => new Date().toISOString().slice(0, 10);
+const profileAvatarStorageBucket = process.env.EXPO_PUBLIC_PROFILE_AVATAR_BUCKET || process.env.EXPO_PUBLIC_WIG_REFERENCE_BUCKET || 'wig-reference-images';
 const buildQueryContext = ({ table, filter, authUserId = '', systemUserId = null, patientId = null, hospitalId = null }) => ({
   table,
   filter,
@@ -167,6 +168,78 @@ const normalizePatientLinkPreview = (row) => ({
   suffix: row?.suffix || '',
   full_name: row?.full_name || '',
 });
+
+const getFileExtension = ({ contentType = '', fileName = '' }) => {
+  const normalizedContentType = String(contentType || '').toLowerCase();
+  const normalizedFileName = String(fileName || '').trim().toLowerCase();
+
+  if (normalizedContentType.includes('png') || normalizedFileName.endsWith('.png')) return 'png';
+  if (normalizedContentType.includes('webp') || normalizedFileName.endsWith('.webp')) return 'webp';
+  if (normalizedContentType.includes('gif') || normalizedFileName.endsWith('.gif')) return 'gif';
+  return 'jpg';
+};
+
+const uploadProfileMedia = async ({
+  authUserId,
+  fileBody,
+  contentType,
+  fileName,
+  folder = 'profile-media',
+}) => {
+  if (!authUserId) {
+    return { data: null, error: new Error('Auth user ID is required.') };
+  }
+
+  if (!fileBody) {
+    return { data: null, error: new Error('Media file is required.') };
+  }
+
+  const extension = getFileExtension({ contentType, fileName });
+  const filePath = `${authUserId}/${folder}-${Date.now()}.${extension}`;
+  const uploadResult = await supabase.storage
+    .from(profileAvatarStorageBucket)
+    .upload(filePath, fileBody, {
+      contentType: contentType || 'image/jpeg',
+      upsert: false,
+    });
+
+  if (uploadResult.error) {
+    logAppError('profile.storage.upload_failed', uploadResult.error, {
+      table: 'storage',
+      bucket: profileAvatarStorageBucket,
+      authUserId,
+      filePath,
+      folder,
+      contentType: contentType || 'image/jpeg',
+    });
+
+    return {
+      data: null,
+      error: uploadResult.error,
+    };
+  }
+
+  const { data: publicUrlData } = supabase.storage
+    .from(profileAvatarStorageBucket)
+    .getPublicUrl(filePath);
+
+  logAppEvent('profile.storage.upload_succeeded', 'Profile media uploaded to storage.', {
+    table: 'storage',
+    bucket: profileAvatarStorageBucket,
+    authUserId,
+    filePath,
+    folder,
+  });
+
+  return {
+    data: {
+      bucket: profileAvatarStorageBucket,
+      filePath,
+      publicUrl: publicUrlData?.publicUrl || filePath,
+    },
+    error: null,
+  };
+};
 
 export const fetchSystemUserByAuthUserId = async (authUserId) => {
   return await runSingleRowSelect({
@@ -681,6 +754,37 @@ export const updateProfile = async (authUserId, updates) => {
     error: null,
   };
 };
+
+export const uploadProfileAvatar = async ({
+  authUserId,
+  fileBody,
+  contentType,
+  fileName,
+}) => {
+  return await uploadProfileMedia({
+    authUserId,
+    fileBody,
+    contentType,
+    fileName,
+    folder: 'profile-avatar',
+  });
+};
+
+export const uploadPatientOnboardingMedia = async ({
+  authUserId,
+  fileBody,
+  contentType,
+  fileName,
+  documentType = 'patient-media',
+}) => (
+  await uploadProfileMedia({
+    authUserId,
+    fileBody,
+    contentType,
+    fileName,
+    folder: documentType,
+  })
+);
 
 export const fetchDonorProfileByUserId = async (userId) => {
   const profileResult = await fetchProfileById(userId);

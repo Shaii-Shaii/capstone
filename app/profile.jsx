@@ -303,6 +303,7 @@ export default function ProfileScreen() {
     : 'info';
   const isPopupVisible = mode !== 'view';
   const modalMaxHeight = Math.max(360, viewportHeight - theme.spacing.xl * 2);
+  const maximumBirthdateValue = useMemo(() => formatDateValue(getMaximumBirthdate()), []);
   const liveProfileCompletionMeta = useMemo(() => (
     getProfileCompletionMeta(watchedProfileValues)
   ), [getProfileCompletionMeta, watchedProfileValues]);
@@ -641,7 +642,27 @@ export default function ProfileScreen() {
                             control={profileForm.control}
                             name={field.formKey}
                             render={({ field: controllerField, fieldState }) => {
-                              if (field.formKey === 'birthdate' && Platform.OS !== 'web') {
+                              if (field.formKey === 'birthdate') {
+                                if (Platform.OS === 'web') {
+                                  return (
+                                    <AppInput
+                                      label={field.label}
+                                      placeholder={field.placeholder}
+                                      variant="filled"
+                                      helperText={field.helperText}
+                                      value={controllerField.value}
+                                      onChangeText={controllerField.onChange}
+                                      onChange={(event) => {
+                                        controllerField.onChange(event?.target?.value || event?.nativeEvent?.text || '');
+                                      }}
+                                      onBlur={controllerField.onBlur}
+                                      error={fieldState.error?.message}
+                                      max={maximumBirthdateValue}
+                                      type="date"
+                                    />
+                                  );
+                                }
+
                                 const fallbackDate = parseDateValue(controllerField.value) || getMaximumBirthdate();
 
                                 return (
