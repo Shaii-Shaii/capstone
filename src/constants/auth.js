@@ -3,11 +3,11 @@ export const roleAuthConfig = {
     label: 'signup',
     signup: {
       title: 'Create account',
-      subtitle: 'Enter your details to continue.',
+      subtitle: '',
       eyebrow: '',
       buttonText: 'Create account',
       footerQuestion: 'Already have an account?',
-      footerLink: 'Log in here',
+      footerLink: 'Log in',
     },
     routes: {
       signup: '/auth/signup',
@@ -18,12 +18,12 @@ export const roleAuthConfig = {
   access: {
     label: 'account',
     login: {
-      title: 'Welcome back to Donivra',
-      subtitle: 'Sign in once and we will open the right donor or patient dashboard for your saved account role.',
-      eyebrow: 'Account login',
-      buttonText: 'Log in to Donivra',
+      title: 'Log in',
+      subtitle: '',
+      eyebrow: '',
+      buttonText: 'Log in',
       footerQuestion: 'Need a new account?',
-      footerLink: 'Sign up here',
+      footerLink: 'Sign up',
     },
     routes: {
       login: '/auth/access',

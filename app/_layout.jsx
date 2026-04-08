@@ -8,14 +8,12 @@ import { useRoleRedirect } from '../src/hooks/useRoleRedirect';
 import { theme } from '../src/design-system/theme';
 import donivraLogoNoText from '../src/assets/images/donivra_logo_no_text.png';
 
-const SPLASH_DURATION_MS = 1200;
+const SPLASH_DURATION_MS = 1000;
 
 function LaunchSplash() {
   return (
     <View style={styles.splashScreen}>
-      <View style={styles.splashLogoWrap}>
-        <Image source={donivraLogoNoText} style={styles.splashLogo} resizeMode="contain" />
-      </View>
+      <Image source={donivraLogoNoText} style={styles.splashLogo} resizeMode="contain" />
       <Text style={styles.splashBrand}>Donivra</Text>
     </View>
   );
@@ -59,30 +57,21 @@ export default function RootLayout() {
 const styles = StyleSheet.create({
   splashScreen: {
     flex: 1,
-    backgroundColor: theme.colors.dashboardDonorFrom,
+    backgroundColor: theme.colors.backgroundCanvas,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  splashLogoWrap: {
-    width: 104,
-    height: 104,
-    borderRadius: 32,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.14)',
-    marginBottom: theme.spacing.md,
+    paddingHorizontal: theme.spacing.lg,
   },
   splashLogo: {
-    width: 64,
-    height: 64,
+    width: 88,
+    height: 88,
+    marginBottom: theme.spacing.md,
   },
   splashBrand: {
     fontFamily: theme.typography.fontFamilyDisplay,
-    fontSize: 38,
-    lineHeight: 42,
-    color: theme.colors.textInverse,
+    fontSize: theme.typography.semantic.titleSm,
+    lineHeight: theme.typography.semantic.titleSm * theme.typography.lineHeights.tight,
+    color: theme.colors.textPrimary,
     textAlign: 'center',
   },
 });

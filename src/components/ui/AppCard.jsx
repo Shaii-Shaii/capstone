@@ -1,10 +1,7 @@
 import React from 'react';
 import { View, StyleSheet } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import Animated, { FadeInDown } from 'react-native-reanimated';
 import { theme } from '../../design-system/theme';
-
-const AnimatedView = Animated.createAnimatedComponent(View);
 
 const CARD_VARIANTS = {
   default: {
@@ -85,18 +82,18 @@ export const AppCard = ({
 
   if (config.gradient) {
     return (
-      <AnimatedView entering={FadeInDown.delay(enteringDelay).duration(theme.motion.slow)}>
+      <View>
         <LinearGradient colors={config.gradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={cardStyles}>
           <View style={contentStyle}>{children}</View>
         </LinearGradient>
-      </AnimatedView>
+      </View>
     );
   }
 
   return (
-    <AnimatedView entering={FadeInDown.delay(enteringDelay).duration(theme.motion.slow)} style={cardStyles}>
+    <View style={cardStyles}>
       <View style={contentStyle}>{children}</View>
-    </AnimatedView>
+    </View>
   );
 };
 

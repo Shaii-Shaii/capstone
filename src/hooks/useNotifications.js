@@ -5,7 +5,7 @@ import {
   markAllNotificationsRead,
   markNotificationRead,
 } from '../features/notification.service';
-import { resolveDatabaseUserId } from '../features/profile/api/profile.api';
+import { fetchPatientDetailsByUserId, resolveDatabaseUserId } from '../features/profile/api/profile.api';
 
 export const useNotifications = ({ role, userId, databaseUserId: preferredDatabaseUserId = null }) => {
   const [notifications, setNotifications] = useState([]);
@@ -14,24 +14,36 @@ export const useNotifications = ({ role, userId, databaseUserId: preferredDataba
   const [isRefreshingNotifications, setIsRefreshingNotifications] = useState(false);
   const [notificationError, setNotificationError] = useState(null);
   const [databaseUserId, setDatabaseUserId] = useState(null);
+  const [patientId, setPatientId] = useState(null);
 
   useEffect(() => {
     let isMounted = true;
 
     const syncDatabaseUserId = async () => {
       if (!userId) {
-        if (isMounted) setDatabaseUserId(null);
+        if (isMounted) {
+          setDatabaseUserId(null);
+          setPatientId(null);
+        }
         return;
       }
 
       if (preferredDatabaseUserId) {
         if (isMounted) setDatabaseUserId(preferredDatabaseUserId);
-        return;
+      } else {
+        const result = await resolveDatabaseUserId(userId, { ensure: false });
+        if (isMounted) {
+          setDatabaseUserId(result.data || null);
+        }
       }
 
-      const result = await resolveDatabaseUserId(userId, { ensure: false });
-      if (isMounted) {
-        setDatabaseUserId(result.data || null);
+      if (role === 'patient') {
+        const patientResult = await fetchPatientDetailsByUserId(userId);
+        if (isMounted) {
+          setPatientId(patientResult.data?.patient_id || null);
+        }
+      } else if (isMounted) {
+        setPatientId(null);
       }
     };
 
@@ -40,7 +52,7 @@ export const useNotifications = ({ role, userId, databaseUserId: preferredDataba
     return () => {
       isMounted = false;
     };
-  }, [preferredDatabaseUserId, userId]);
+  }, [preferredDatabaseUserId, role, userId]);
 
   const refreshNotifications = useCallback(async ({ silent = false } = {}) => {
     if (!userId || !role) return;
@@ -100,18 +112,10 @@ export const useNotifications = ({ role, userId, databaseUserId: preferredDataba
       {
         event: '*',
         schema: 'public',
-        table: role === 'donor' ? 'hair_submissions' : 'wig_requests',
-        ...(role === 'donor' ? { filter: `user_id=eq.${databaseUserId}` } : {}),
-      },
-      {
-        event: '*',
-        schema: 'public',
-        table: role === 'donor' ? 'hair_submission_logistics' : 'wig_request_specifications',
-      },
-      {
-        event: '*',
-        schema: 'public',
-        table: role === 'donor' ? 'donor_recommendations' : 'wigs',
+        table: role === 'donor' ? 'hair_submissions' : 'patients',
+        ...(role === 'donor'
+          ? { filter: `user_id=eq.${databaseUserId}` }
+          : { filter: `user_id=eq.${databaseUserId}` }),
       },
     ].forEach(subscribeTo);
 
@@ -121,6 +125,46 @@ export const useNotifications = ({ role, userId, databaseUserId: preferredDataba
         schema: 'public',
         table: 'ai_screenings',
       });
+
+      subscribeTo({
+        event: '*',
+        schema: 'public',
+        table: 'hair_submission_logistics',
+      });
+
+      subscribeTo({
+        event: '*',
+        schema: 'public',
+        table: 'donor_recommendations',
+      });
+    }
+
+    if (role === 'patient' && patientId) {
+      subscribeTo({
+        event: '*',
+        schema: 'public',
+        table: 'wig_requests',
+        filter: `patient_id=eq.${patientId}`,
+      });
+
+      subscribeTo({
+        event: '*',
+        schema: 'public',
+        table: 'wig_allocations',
+        filter: `patient_id=eq.${patientId}`,
+      });
+
+      subscribeTo({
+        event: '*',
+        schema: 'public',
+        table: 'wigs',
+      });
+
+      subscribeTo({
+        event: '*',
+        schema: 'public',
+        table: 'wig_request_specifications',
+      });
     }
 
     channel.subscribe();
@@ -128,7 +172,7 @@ export const useNotifications = ({ role, userId, databaseUserId: preferredDataba
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [databaseUserId, refreshNotifications, role, userId]);
+  }, [databaseUserId, patientId, refreshNotifications, role, userId]);
 
   return {
     notifications,

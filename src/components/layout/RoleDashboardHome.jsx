@@ -1,5 +1,5 @@
-import React from 'react';
-import { View, StyleSheet, Text } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { Modal, Pressable, View, StyleSheet, Text } from 'react-native';
 import { usePathname, useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { DashboardLayout } from './DashboardLayout';
@@ -12,10 +12,13 @@ import { DashboardInfoCard } from '../ui/DashboardInfoCard';
 import { AppCard } from '../ui/AppCard';
 import { AppButton } from '../ui/AppButton';
 import { AppIcon } from '../ui/AppIcon';
+import { AppTextLink } from '../ui/AppTextLink';
 import { useNotifications } from '../../hooks/useNotifications';
 import { useProcessTracking } from '../../hooks/useProcessTracking';
 import { useAuth } from '../../providers/AuthProvider';
 import { theme } from '../../design-system/theme';
+import { needsPersonalDetailsCompletion } from '../../features/profile/services/profile.service';
+import { logAppEvent } from '../../utils/appErrors';
 
 function renderDashboardSection({ section, content, role, onItemPress, onActionPress }) {
   const data = content[section.dataKey];
@@ -133,13 +136,15 @@ export function RoleDashboardHome({ role, profile, navItems, content }) {
   const router = useRouter();
   const pathname = usePathname();
   const { user, patientProfile, staffProfile } = useAuth();
+  const [showCompleteProfilePrompt, setShowCompleteProfilePrompt] = useState(false);
   const { unreadCount } = useNotifications({ role, userId: user?.id, databaseUserId: profile?.user_id });
   const { tracker } = useProcessTracking({ role, userId: user?.id, databaseUserId: profile?.user_id });
-  const firstName = (profile?.first_name || patientProfile?.first_name || '').trim();
-  const lastName = (profile?.last_name || patientProfile?.last_name || '').trim();
+  const firstName = (profile?.first_name || '').trim();
+  const lastName = (profile?.last_name || '').trim();
   const avatarUri = profile?.avatar_url || profile?.photo_path || patientProfile?.patient_picture || '';
   const avatarInitials = [firstName[0], lastName[0]].filter(Boolean).join('');
   const needsAccountSetup = role !== 'patient' && !staffProfile?.hospital_id;
+  const needsProfileCompletion = role === 'donor' && needsPersonalDetailsCompletion(profile);
   const welcomeTitle = content.header.greeting === 'hello'
     ? (firstName ? `Hello, ${firstName}` : 'Hello')
     : (firstName ? `Welcome back, ${firstName}` : 'Welcome back');
@@ -153,8 +158,8 @@ export function RoleDashboardHome({ role, profile, navItems, content }) {
     title: tracker?.summary?.label || (role === 'patient' ? 'No request yet' : 'No submission yet'),
     body: tracker?.summary?.helperText
       || (role === 'patient'
-        ? 'Your linked request updates show here.'
-        : 'Your latest donation updates show here.'),
+        ? 'Request updates appear here.'
+        : 'Donation updates appear here.'),
   };
   const snapshotItems = [
     {
@@ -188,7 +193,7 @@ export function RoleDashboardHome({ role, profile, navItems, content }) {
         }
       : null,
   ].filter(Boolean);
-  const hasSummaryCard = role !== 'patient' && (Boolean(summaryCard.title) || Boolean(snapshotItems.length));
+  const hasSummaryCard = Boolean(summaryCard.title) || Boolean(snapshotItems.length);
 
   const handleNavPress = (item) => {
     if (!item.route || item.route === pathname) return;
@@ -213,81 +218,136 @@ export function RoleDashboardHome({ role, profile, navItems, content }) {
     onPress: item.route ? () => handleActionRoute(item.route) : undefined,
   })) || [];
 
-  return (
-    <DashboardLayout
-      navItems={navItems}
-      activeNavKey="home"
-      navVariant={role}
-      onNavPress={handleNavPress}
-      header={(
-        <DashboardHeader
-          title={headerTitle}
-          subtitle={role === 'patient' ? '' : content.header.subtitle}
-          summary={content.header.summary}
-          avatarInitials={avatarInitials}
-          avatarUri={avatarUri}
-          variant={role}
-          quickTools={role === 'patient' ? [] : quickTools}
-          minimal={role === 'patient'}
-          showAvatar={role === 'patient' ? true : undefined}
-          utilityActions={content.header.utilityActions?.map((item) => ({
-            ...item,
-            badge: item.key === 'notifications' && unreadCount ? String(Math.min(unreadCount, 99)) : item.badge,
-            onPress: item.route ? () => handleActionRoute(item.route) : undefined,
-          }))}
-        />
-      )}
-    >
-      {needsAccountSetup ? (
-        <AppCard variant="donorTint" radius="xl" padding="md" style={styles.setupCard}>
-          <View style={styles.setupCopy}>
-            <Text style={styles.setupTitle}>Complete Account Setup</Text>
-            <Text style={styles.setupBody}>Finish your profile before organization-linked access.</Text>
-          </View>
-          <AppButton
-            title="Open Profile"
-            fullWidth={false}
-            onPress={() => handleActionRoute('/profile')}
-            leading={<AppIcon name="profile" state="inverse" />}
-          />
-        </AppCard>
-      ) : null}
+  useEffect(() => {
+    if (!needsProfileCompletion) {
+      setShowCompleteProfilePrompt(false);
+      return;
+    }
 
-      {hasSummaryCard ? (
-        <AppCard variant={role === 'donor' ? 'donorTint' : 'patientTint'} radius="xl" padding="xs">
-          {summaryCard.eyebrow ? (
-            <Text style={[styles.summaryEyebrow, role === 'donor' ? styles.summaryEyebrowDonor : null]}>
-              {summaryCard.eyebrow}
-            </Text>
-          ) : null}
-          {summaryCard.title ? <Text style={styles.summaryTitle}>{summaryCard.title}</Text> : null}
-          {summaryCard.body ? <Text style={styles.summaryBody}>{summaryCard.body}</Text> : null}
-          {snapshotItems.length ? (
-            <View style={styles.snapshotRow}>
-              {snapshotItems.map((item) => (
-                <View key={item.key} style={styles.snapshotPill}>
-                  <View style={[styles.snapshotIconWrap, role === 'donor' ? styles.snapshotIconWrapDonor : null]}>
-                    <AppIcon name={item.icon} size="sm" state={role === 'donor' ? 'active' : 'muted'} />
-                  </View>
-                  <View style={styles.snapshotCopy}>
-                    <Text style={styles.snapshotLabel}>{item.label}</Text>
-                    <Text style={styles.snapshotValue}>{item.value}</Text>
-                  </View>
-                </View>
-              ))}
-            </View>
-          ) : null}
-        </AppCard>
-      ) : null}
-
-      {content.sections.map((section) => renderDashboardSection({
-        section,
-        content,
+    const timeoutId = setTimeout(() => {
+      logAppEvent('profile_completion.modal', 'Profile completion modal displayed.', {
+        authUserId: user?.id || null,
+        databaseUserId: profile?.user_id || null,
         role,
-        onItemPress: handleItemPress,
-        onActionPress: handleActionRoute,
-      }))}
-    </DashboardLayout>
+      });
+      setShowCompleteProfilePrompt(true);
+    }, 220);
+
+    return () => clearTimeout(timeoutId);
+  }, [needsProfileCompletion, profile?.user_id, role, user?.id]);
+
+  return (
+    <>
+      <DashboardLayout
+        navItems={navItems}
+        activeNavKey="home"
+        navVariant={role}
+        onNavPress={handleNavPress}
+        header={(
+          <DashboardHeader
+            title={headerTitle}
+            subtitle={role === 'patient' ? '' : content.header.subtitle}
+            summary={content.header.summary}
+            avatarInitials={avatarInitials}
+            avatarUri={avatarUri}
+            variant={role}
+            quickTools={role === 'patient' ? [] : quickTools}
+            minimal={role === 'patient'}
+            showAvatar={role === 'patient' ? true : undefined}
+            utilityActions={content.header.utilityActions?.map((item) => ({
+              ...item,
+              badge: item.key === 'notifications' ? (unreadCount ? String(Math.min(unreadCount, 99)) : undefined) : item.badge,
+              onPress: item.route ? () => handleActionRoute(item.route) : undefined,
+            }))}
+          />
+        )}
+      >
+        {needsAccountSetup ? (
+          <AppCard variant="donorTint" radius="xl" padding="md" style={styles.setupCard}>
+            <View style={styles.setupCopy}>
+              <Text style={styles.setupTitle}>Complete Account Setup</Text>
+              <Text style={styles.setupBody}>Finish your profile.</Text>
+            </View>
+            <AppButton
+              title="Open Profile"
+              fullWidth={false}
+              onPress={() => handleActionRoute('/profile')}
+              leading={<AppIcon name="profile" state="inverse" />}
+            />
+          </AppCard>
+        ) : null}
+
+        {hasSummaryCard ? (
+          <AppCard variant={role === 'donor' ? 'donorTint' : 'patientTint'} radius="xl" padding="xs">
+            {summaryCard.eyebrow ? (
+              <Text style={[styles.summaryEyebrow, role === 'donor' ? styles.summaryEyebrowDonor : null]}>
+                {summaryCard.eyebrow}
+              </Text>
+            ) : null}
+            {summaryCard.title ? <Text style={styles.summaryTitle}>{summaryCard.title}</Text> : null}
+            {summaryCard.body ? <Text style={styles.summaryBody}>{summaryCard.body}</Text> : null}
+            {snapshotItems.length ? (
+              <View style={styles.snapshotRow}>
+                {snapshotItems.map((item) => (
+                  <View key={item.key} style={styles.snapshotPill}>
+                    <View style={[styles.snapshotIconWrap, role === 'donor' ? styles.snapshotIconWrapDonor : null]}>
+                      <AppIcon name={item.icon} size="sm" state={role === 'donor' ? 'active' : 'muted'} />
+                    </View>
+                    <View style={styles.snapshotCopy}>
+                      <Text style={styles.snapshotLabel}>{item.label}</Text>
+                      <Text style={styles.snapshotValue}>{item.value}</Text>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            ) : null}
+          </AppCard>
+        ) : null}
+
+        {content.sections.map((section) => renderDashboardSection({
+          section,
+          content,
+          role,
+          onItemPress: handleItemPress,
+          onActionPress: handleActionRoute,
+        }))}
+      </DashboardLayout>
+
+      <Modal
+        transparent
+        visible={showCompleteProfilePrompt}
+        animationType="fade"
+        onRequestClose={() => setShowCompleteProfilePrompt(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <Pressable style={styles.modalBackdrop} onPress={() => setShowCompleteProfilePrompt(false)} />
+          <AppCard variant="elevated" radius="xl" padding="lg" style={styles.modalCard}>
+            <View style={styles.modalCopy}>
+              <Text style={styles.modalTitle}>Complete Your Details</Text>
+              <Text style={styles.modalBody}>
+                Add your personal details.
+              </Text>
+            </View>
+
+            <View style={styles.modalActions}>
+              <AppButton
+                title="Open Profile"
+                size="lg"
+                onPress={() => {
+                  setShowCompleteProfilePrompt(false);
+                  handleActionRoute('/profile');
+                }}
+              />
+              <AppTextLink
+                title="Later"
+                variant="muted"
+                onPress={() => setShowCompleteProfilePrompt(false)}
+              />
+            </View>
+          </AppCard>
+        </View>
+      </Modal>
+    </>
   );
 }
 
@@ -393,5 +453,39 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.bodySm,
     color: theme.colors.textSecondary,
+  },
+  modalOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingHorizontal: theme.spacing.lg,
+    backgroundColor: theme.colors.overlay,
+  },
+  modalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: theme.layout.authCardMaxWidth,
+    alignSelf: 'center',
+  },
+  modalCopy: {
+    gap: theme.spacing.xs,
+  },
+  modalTitle: {
+    textAlign: 'center',
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.titleSm,
+    color: theme.colors.textPrimary,
+  },
+  modalBody: {
+    textAlign: 'center',
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textSecondary,
+  },
+  modalActions: {
+    marginTop: theme.spacing.md,
+    gap: theme.spacing.sm,
   },
 });

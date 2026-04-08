@@ -1,21 +1,10 @@
-export const dashboardSampleImages = {
-  donorProgram: 'https://images.unsplash.com/photo-1515377905703-c4788e51af15?auto=format&fit=crop&w=1200&q=80',
-  donorGuidelines: 'https://images.unsplash.com/photo-1521590832167-7bcbfaa6381f?auto=format&fit=crop&w=1200&q=80',
-  donorAppointment: 'https://images.unsplash.com/photo-1522337660859-02fbefca4702?auto=format&fit=crop&w=1200&q=80',
-  donorNotifications: 'https://images.unsplash.com/photo-1515169067868-5387ec356754?auto=format&fit=crop&w=1200&q=80',
-  patientSupport: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=1200&q=80',
-  patientRequest: 'https://images.unsplash.com/photo-1516574187841-cb9cc2ca948b?auto=format&fit=crop&w=1200&q=80',
-  patientResources: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=1200&q=80',
-  patientNotifications: 'https://images.unsplash.com/photo-1516302752625-fcc3c50ae61f?auto=format&fit=crop&w=1200&q=80',
-};
-
 export const donorDashboardContent = {
   header: {
     greeting: 'hello',
     subtitle: 'Donation home',
     summary: '',
     utilityActions: [
-      { key: 'notifications', icon: 'notifications', badge: '2', route: '/donor/notifications' },
+      { key: 'notifications', icon: 'notifications', route: '/donor/notifications' },
     ],
     quickTools: [],
   },
@@ -23,12 +12,12 @@ export const donorDashboardContent = {
   snapshotItems: [],
   quickActions: {
     title: 'Main Actions',
-    description: 'Open the next donor step.',
+    description: '',
     items: [
       {
         key: 'status',
         title: 'Track',
-        description: 'Review status and milestones.',
+        description: 'Review status.',
         badgeText: 'Live',
         meta: 'Status',
         icon: 'donations',
@@ -37,7 +26,7 @@ export const donorDashboardContent = {
       {
         key: 'prepare',
         title: 'Prepare',
-        description: 'Open donation prep notes.',
+        description: 'Open prep notes.',
         badgeText: 'Guide',
         meta: 'Checklist',
         icon: 'support',
@@ -46,7 +35,7 @@ export const donorDashboardContent = {
       {
         key: 'appointment',
         title: 'Visit',
-        description: 'Manage your salon step.',
+        description: 'Manage your visit.',
         badgeText: 'Book',
         meta: 'Appointment',
         icon: 'appointment',
@@ -55,7 +44,7 @@ export const donorDashboardContent = {
       {
         key: 'profile',
         title: 'Profile',
-        description: 'Manage account and password.',
+        description: 'Manage account.',
         badgeText: 'Me',
         meta: 'Account',
         icon: 'profile',
@@ -97,12 +86,12 @@ export const donorDashboardContent = {
   },
   account: {
     title: 'Account',
-    description: 'Profile tools.',
+    description: '',
     items: [
       {
         key: 'profile',
         title: 'Profile & Security',
-        description: 'Manage account details and password settings.',
+        description: 'Manage details and password.',
         badgeText: 'Profile',
         meta: 'Account center',
         icon: 'profile',
@@ -111,7 +100,7 @@ export const donorDashboardContent = {
       {
         key: 'journey',
         title: 'Journey Notes',
-        description: 'Return to donor progress and preparation details whenever you need them.',
+        description: 'Open donor details.',
         badgeText: 'Guide',
         meta: 'Donor tools',
         icon: 'donations',
@@ -124,12 +113,6 @@ export const donorDashboardContent = {
       key: 'quick-actions',
       kind: 'grid',
       dataKey: 'quickActions',
-    },
-    {
-      key: 'progress',
-      kind: 'info',
-      dataKey: 'progress',
-      cardWidth: 184,
     },
     {
       key: 'account',
@@ -147,7 +130,7 @@ export const patientDashboardContent = {
     subtitle: '',
     summary: '',
     utilityActions: [
-      { key: 'notifications', icon: 'notifications', badge: '3', route: '/patient/notifications' },
+      { key: 'notifications', icon: 'notifications', route: '/patient/notifications' },
     ],
     quickTools: [],
   },
@@ -155,7 +138,7 @@ export const patientDashboardContent = {
   snapshotItems: [],
   quickActions: {
     title: 'Main Actions',
-    description: 'Open the next patient step.',
+    description: '',
     items: [
       {
         key: 'submit',
@@ -169,7 +152,7 @@ export const patientDashboardContent = {
       {
         key: 'resources',
         title: 'Resources',
-        description: 'Browse support materials.',
+        description: 'Browse support.',
         badgeText: 'Care',
         meta: 'Hub',
         icon: 'support',
@@ -178,7 +161,7 @@ export const patientDashboardContent = {
       {
         key: 'status',
         title: 'Status',
-        description: 'Track request progress.',
+        description: 'Track progress.',
         badgeText: 'Live',
         meta: 'Timeline',
         icon: 'requests',
@@ -187,7 +170,7 @@ export const patientDashboardContent = {
       {
         key: 'profile',
         title: 'Profile',
-        description: 'Manage personal details and password.',
+        description: 'Manage account.',
         badgeText: 'Me',
         meta: 'Account',
         icon: 'profile',
@@ -221,12 +204,12 @@ export const patientDashboardContent = {
   },
   account: {
     title: 'Account',
-    description: 'Profile tools.',
+    description: '',
     items: [
       {
         key: 'profile',
         title: 'Profile & Security',
-        description: 'Manage your details, password, and account info.',
+        description: 'Manage details and password.',
         badgeText: 'Profile',
         meta: 'Account center',
         icon: 'profile',
@@ -235,7 +218,7 @@ export const patientDashboardContent = {
       {
         key: 'support-center',
         title: 'Support Center',
-        description: 'Revisit support guidance and request-related resources from your patient home.',
+        description: 'Open support.',
         badgeText: 'Care',
         meta: 'Support tools',
         icon: 'support',
@@ -244,7 +227,18 @@ export const patientDashboardContent = {
     ],
   },
   sections: [
-    
+    {
+      key: 'quick-actions',
+      kind: 'grid',
+      dataKey: 'quickActions',
+    },
+    {
+      key: 'account',
+      kind: 'actions',
+      dataKey: 'account',
+      compact: false,
+      cardWidth: 188,
+    },
   ],
 };
 
@@ -344,7 +338,6 @@ export const donorPlaceholderModules = {
           meta: 'Timeline module',
           ctaLabel: 'View roadmap',
           icon: 'donations',
-          imageUrl: dashboardSampleImages.donorProgram,
         },
         {
           key: 'readiness',
@@ -354,7 +347,6 @@ export const donorPlaceholderModules = {
           meta: 'Preparation flow',
           ctaLabel: 'See checklist',
           icon: 'support',
-          imageUrl: dashboardSampleImages.donorGuidelines,
         },
       ],
     },
@@ -376,8 +368,8 @@ export const donorPlaceholderModules = {
       title: 'Appointment Hub',
       description: 'Swipe through the future booking and scheduling surfaces prepared for donor appointments.',
       items: [
-        { key: 'calendar', title: 'Booking View', description: 'Partner salon slots and booking windows will live here.', badgeText: 'Soon', meta: 'Scheduling flow', ctaLabel: 'Preview layout', icon: 'appointment', imageUrl: dashboardSampleImages.donorAppointment },
-        { key: 'visit', title: 'Visit Notes', description: 'Preparation details, arrival reminders, and cut guidance can be added here next.', badgeText: 'Next', meta: 'Visit support', ctaLabel: 'Read notes', icon: 'support', imageUrl: dashboardSampleImages.donorGuidelines },
+        { key: 'calendar', title: 'Booking View', description: 'Partner salon slots and booking windows will live here.', badgeText: 'Soon', meta: 'Scheduling flow', ctaLabel: 'Preview layout', icon: 'appointment' },
+        { key: 'visit', title: 'Visit Notes', description: 'Preparation details, arrival reminders, and cut guidance can be added here next.', badgeText: 'Next', meta: 'Visit support', ctaLabel: 'Read notes', icon: 'support' },
       ],
     },
     highlights: {
@@ -398,8 +390,8 @@ export const donorPlaceholderModules = {
       title: 'Notification Focus',
       description: 'Swipe through the alert groupings that can grow into a full donor inbox.',
       items: [
-        { key: 'alerts', title: 'Donor Alerts', description: 'Reminder cards, milestones, and partner notes will appear here.', badgeText: 'Alerts', meta: 'Notification stream', ctaLabel: 'See preview', icon: 'notifications', imageUrl: dashboardSampleImages.donorNotifications },
-        { key: 'digest', title: 'Weekly Digest', description: 'A future digest view can summarize all donation-related progress in one glance.', badgeText: 'Digest', meta: 'Summary module', ctaLabel: 'Open digest', icon: 'updates', imageUrl: dashboardSampleImages.donorProgram },
+        { key: 'alerts', title: 'Donor Alerts', description: 'Reminder cards, milestones, and partner notes will appear here.', badgeText: 'Alerts', meta: 'Notification stream', ctaLabel: 'See preview', icon: 'notifications' },
+        { key: 'digest', title: 'Weekly Digest', description: 'A future digest view can summarize all donation-related progress in one glance.', badgeText: 'Digest', meta: 'Summary module', ctaLabel: 'Open digest', icon: 'updates' },
       ],
     },
     highlights: {
@@ -423,8 +415,8 @@ export const patientPlaceholderModules = {
       title: 'Request Focus',
       description: 'Swipe through the request-specific spaces prepared for patient use.',
       items: [
-        { key: 'intake', title: 'Request Intake', description: 'New submission forms and follow-up prompts can expand here next.', badgeText: 'Start', meta: 'Intake flow', ctaLabel: 'See intake', icon: 'requests', imageUrl: dashboardSampleImages.patientRequest },
-        { key: 'progress', title: 'Request Timeline', description: 'Milestones and support checkpoints will have a dedicated home here.', badgeText: 'Status', meta: 'Timeline module', ctaLabel: 'Track status', icon: 'updates', imageUrl: dashboardSampleImages.patientSupport },
+        { key: 'intake', title: 'Request Intake', description: 'New submission forms and follow-up prompts can expand here next.', badgeText: 'Start', meta: 'Intake flow', ctaLabel: 'See intake', icon: 'requests' },
+        { key: 'progress', title: 'Request Timeline', description: 'Milestones and support checkpoints will have a dedicated home here.', badgeText: 'Status', meta: 'Timeline module', ctaLabel: 'Track status', icon: 'updates' },
       ],
     },
     highlights: {
@@ -445,8 +437,8 @@ export const patientPlaceholderModules = {
       title: 'Support Hub',
       description: 'Swipe through the support surfaces already prepared for patient journeys.',
       items: [
-        { key: 'resources', title: 'Helpful Resources', description: 'Care references, support materials, and practical reminders can expand here.', badgeText: 'Care', meta: 'Resource hub', ctaLabel: 'Open support', icon: 'support', imageUrl: dashboardSampleImages.patientSupport },
-        { key: 'account', title: 'Profile & Support', description: 'Your account details and support readiness stay close to the rest of the care journey.', badgeText: 'Profile', meta: 'Support setup', ctaLabel: 'Open profile', icon: 'profile', imageUrl: dashboardSampleImages.patientResources, route: '/profile' },
+        { key: 'resources', title: 'Helpful Resources', description: 'Care references, support materials, and practical reminders can expand here.', badgeText: 'Care', meta: 'Resource hub', ctaLabel: 'Open support', icon: 'support' },
+        { key: 'account', title: 'Profile & Support', description: 'Your account details and support readiness stay close to the rest of the care journey.', badgeText: 'Profile', meta: 'Support setup', ctaLabel: 'Open profile', icon: 'profile', route: '/profile' },
       ],
     },
     highlights: {
@@ -467,8 +459,8 @@ export const patientPlaceholderModules = {
       title: 'Notification Center',
       description: 'Swipe through the alert and update surfaces prepared for future patient messaging.',
       items: [
-        { key: 'alerts', title: 'Patient Alerts', description: 'Support reminders, request changes, and care updates can appear here.', badgeText: 'Alerts', meta: 'Notification feed', ctaLabel: 'Preview alerts', icon: 'notifications', imageUrl: dashboardSampleImages.patientNotifications },
-        { key: 'digest', title: 'Care Summary', description: 'A digest view can summarize request changes and support notes in one place.', badgeText: 'Digest', meta: 'Summary module', ctaLabel: 'Open summary', icon: 'updates', imageUrl: dashboardSampleImages.patientSupport },
+        { key: 'alerts', title: 'Patient Alerts', description: 'Support reminders, request changes, and care updates can appear here.', badgeText: 'Alerts', meta: 'Notification feed', ctaLabel: 'Preview alerts', icon: 'notifications' },
+        { key: 'digest', title: 'Care Summary', description: 'A digest view can summarize request changes and support notes in one place.', badgeText: 'Digest', meta: 'Summary module', ctaLabel: 'Open summary', icon: 'updates' },
       ],
     },
     highlights: {

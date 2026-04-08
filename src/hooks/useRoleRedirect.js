@@ -3,7 +3,7 @@ import { useRouter, useSegments } from 'expo-router';
 import { useAuth } from '../providers/AuthProvider';
 
 export const useRoleRedirect = () => {
-  const { user, profile, isLoading } = useAuth();
+  const { user, profile, needsOnboarding, isLoading } = useAuth();
   const segments = useSegments();
   const router = useRouter();
 
@@ -33,6 +33,14 @@ export const useRoleRedirect = () => {
     // 3. Guard authenticated users
     if (user && profile) {
       const role = profile.role;
+      const isRootRoute = currentPath === '';
+
+      if (needsOnboarding) {
+        if (!isRootRoute) {
+          router.replace('/');
+        }
+        return;
+      }
 
       // Rule A: If logged in, block access to public auth routes and auto-redirect to correct home
       if (isPublicAuthRoute) {
@@ -54,5 +62,5 @@ export const useRoleRedirect = () => {
         router.replace('/donor/home');
       }
     }
-  }, [user, profile, isLoading, segments, router]);
+  }, [user, profile, needsOnboarding, isLoading, segments, router]);
 };

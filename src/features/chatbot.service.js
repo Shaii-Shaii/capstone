@@ -12,7 +12,7 @@ import {
   fetchLatestWigRequestByPatientDetailsId,
 } from './wigRequest.api';
 import { getProfileBundle } from './profile/services/profile.service';
-import { logAppError } from '../utils/appErrors';
+import { logAppError, writeAuditLog } from '../utils/appErrors';
 
 const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses';
 const OPENAI_IMAGES_URL = 'https://api.openai.com/v1/images/generations';
@@ -85,37 +85,27 @@ const buildBootstrapConversation = (settings) => (
 );
 
 const normalizeSettings = (row) => {
-  const quickSuggestions = Array.isArray(row?.quick_suggestions)
-    ? row.quick_suggestions
-    : Array.isArray(row?.suggestions)
-      ? row.suggestions
-      : [];
-
   return {
-    welcomeMessage: row?.welcome_message || row?.greeting_message || '',
-    fallbackMessage: row?.fallback_message || row?.no_answer_message || '',
-    quickSuggestions,
+    welcomeMessage: row?.welcome_message || '',
+    fallbackMessage: row?.fallback_message || '',
+    quickSuggestions: [],
   };
 };
 
 const normalizeFaq = (row) => ({
-  id: row?.id || row?.question || Math.random().toString(36).slice(2),
-  question: row?.question || row?.title || '',
-  answer: row?.answer || row?.response || row?.content || '',
-  keywords: Array.isArray(row?.keywords)
-    ? row.keywords
-    : typeof row?.keywords === 'string'
-      ? row.keywords.split(',').map((item) => item.trim()).filter(Boolean)
-      : [],
+  id: row?.faq_id || row?.question || Math.random().toString(36).slice(2),
+  question: row?.question || '',
+  answer: row?.answer || '',
+  keywords: [],
   priorityOrder: Number(row?.priority_order) || 0,
 });
 
 const normalizeMessage = (row) => ({
-  id: row?.id || `${row?.created_at || Date.now()}-${row?.sender_role || row?.sender_type || 'assistant'}`,
-  sender: row?.sender_role || row?.sender_type || row?.author || 'assistant',
-  text: row?.message_text || row?.content || row?.body || '',
+  id: row?.message_id || `${row?.created_at || Date.now()}-${row?.sender_type || 'assistant'}`,
+  sender: row?.sender_type || 'assistant',
+  text: row?.message_text || '',
   createdAt: row?.created_at || new Date().toISOString(),
-  source: row?.message_kind || row?.message_type || 'chat',
+  source: 'chat',
 });
 
 const matchesTopic = (text, topics) => {
@@ -639,7 +629,6 @@ const persistConversationToBackend = async ({
     if (!resolvedConversationId) {
       const conversationPayload = {
         user_id: userId,
-        role,
         title: role === 'donor' ? 'Donor quick inquiries' : 'Patient quick inquiries',
         updated_at: new Date().toISOString(),
       };
@@ -649,7 +638,7 @@ const persistConversationToBackend = async ({
         throw new Error(conversationResult.error.message);
       }
 
-      resolvedConversationId = conversationResult.data?.id || null;
+      resolvedConversationId = conversationResult.data?.conversation_id || conversationResult.data?.id || null;
     } else {
       await ChatbotAPI.updateChatbotConversation(resolvedConversationId, {
         updated_at: new Date().toISOString(),
@@ -665,9 +654,8 @@ const persistConversationToBackend = async ({
 
     const rows = messages.map((message) => ({
       conversation_id: resolvedConversationId,
-      sender_role: message.sender,
+      sender_type: message.sender,
       message_text: message.text,
-      message_kind: message.source || 'chat',
     }));
 
     const insertResult = await ChatbotAPI.createChatbotMessages(rows);
@@ -675,25 +663,37 @@ const persistConversationToBackend = async ({
       throw new Error(insertResult.error.message);
     }
 
+    await writeAuditLog({
+      authUserId: userId,
+      action: resolvedConversationId === conversationId ? 'chatbot.message.append' : 'chatbot.conversation.create',
+      description: `Persisted ${messages.length} chat message(s) for ${role} support.`,
+      resource: 'chatbot_conversations,chatbot_messages',
+      status: 'success',
+    });
+
     return {
       conversationId: resolvedConversationId,
       error: null,
     };
   } catch (error) {
-    if (!isMissingChatTableError(error)) {
-      logAppError('chatbot.persistConversationToBackend', error, {
-        role,
-        userId,
-        conversationId,
-        messageCount: messages?.length || 0,
-      });
-    }
+    logAppError('chatbot.persistConversationToBackend', error, {
+      role,
+      userId,
+      conversationId,
+      messageCount: messages?.length || 0,
+    });
+
+    await writeAuditLog({
+      authUserId: userId,
+      action: 'chatbot.message.append',
+      description: error.message || 'Unable to persist chatbot conversation.',
+      resource: 'chatbot_conversations,chatbot_messages',
+      status: 'failed',
+    });
 
     return {
       conversationId,
-      error: isMissingChatTableError(error)
-        ? null
-        : 'Your messages may not be saved right now.',
+      error: 'Your messages may not be saved right now.',
     };
   }
 };
@@ -702,23 +702,34 @@ export const loadChatbotBootstrap = async ({ userId, role }) => {
   const defaultSettings = normalizeSettings(null);
 
   try {
-    const [
-      settingsResult,
-      faqResult,
-      conversationResult,
-    ] = await Promise.all([
-      ChatbotAPI.fetchChatbotSettings().catch(() => ({ data: null, error: null })),
-      ChatbotAPI.fetchChatbotFaqs().catch(() => ({ data: [], error: null })),
-      ChatbotAPI.fetchLatestChatbotConversation({ userId, role }).catch(() => ({ data: null, error: null })),
+    const [settingsResult, faqResult, conversationResult] = await Promise.all([
+      ChatbotAPI.fetchChatbotSettings(),
+      ChatbotAPI.fetchChatbotFaqs(),
+      ChatbotAPI.fetchLatestChatbotConversation({ userId }),
     ]);
+
+    if (settingsResult.error && !isMissingChatTableError(settingsResult.error)) {
+      throw settingsResult.error;
+    }
+
+    if (faqResult.error && !isMissingChatTableError(faqResult.error)) {
+      throw faqResult.error;
+    }
+
+    if (conversationResult.error && !isMissingChatTableError(conversationResult.error)) {
+      throw conversationResult.error;
+    }
 
     const settings = normalizeSettings(settingsResult.data);
     const faqs = (faqResult.data || []).map(normalizeFaq).filter((faq) => faq.question && faq.answer);
     let messages = [];
-    let conversationId = conversationResult.data?.id || null;
+    let conversationId = conversationResult.data?.conversation_id || conversationResult.data?.id || null;
 
     if (conversationId) {
-      const messageResult = await ChatbotAPI.fetchChatbotMessages(conversationId).catch(() => ({ data: [], error: null }));
+      const messageResult = await ChatbotAPI.fetchChatbotMessages(conversationId);
+      if (messageResult.error && !isMissingChatTableError(messageResult.error)) {
+        throw messageResult.error;
+      }
       const serverMessages = (messageResult.data || []).map(normalizeMessage).filter((message) => message.text);
 
       if (serverMessages.length) {
@@ -744,14 +755,12 @@ export const loadChatbotBootstrap = async ({ userId, role }) => {
       userId,
     });
 
-    const messages = buildBootstrapConversation(defaultSettings);
-
     return {
       settings: defaultSettings,
       faqs: [],
       quickSuggestions: [],
       conversationId: null,
-      messages,
+      messages: [],
       error: 'We could not open the chat right now. Please try again.',
     };
   }

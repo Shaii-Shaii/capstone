@@ -26,8 +26,8 @@ export const LoginForm = ({ onSubmit, isLoading, onForgotPassword, buttonText = 
         name="email"
         render={({ field: { onChange, onBlur, value } }) => (
           <AppInput
-            label="Email Address"
-            placeholder="juan@example.com"
+            label="Email"
+            placeholder="Enter your email"
             keyboardType="email-address"
             autoCapitalize="none"
             autoCorrect={false}
@@ -46,7 +46,7 @@ export const LoginForm = ({ onSubmit, isLoading, onForgotPassword, buttonText = 
         render={({ field: { onChange, onBlur, value } }) => (
           <PasswordInput
             label="Password"
-            placeholder="Enter your password"
+            placeholder="Password"
             variant="filled"
             onBlur={onBlur}
             onChangeText={onChange}

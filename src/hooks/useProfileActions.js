@@ -3,6 +3,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { useAuth } from '../providers/AuthProvider';
 import { useAuthActions } from '../features/auth/hooks/useAuthActions';
 import { getProfileBundle, getVisibleRoleFields, saveAvatar, saveProfile } from '../features/profile/services/profile.service';
+import { logAppError, logAppEvent } from '../utils/appErrors';
 
 const IMAGE_MEDIA_TYPES = ['images'];
 
@@ -35,10 +36,36 @@ export const useProfileActions = () => {
   const loadProfileBundle = useCallback(async () => {
     if (!user?.id || !profile?.role) return;
     setIsLoadingRoleProfile(true);
-    const { roleProfile: fetchedRoleProfile } = await getProfileBundle(user.id, profile.role);
-    setRoleProfile(fetchedRoleProfile);
-    setVisibleRoleFields(getVisibleRoleFields(fetchedRoleProfile));
-    setIsLoadingRoleProfile(false);
+    logAppEvent('profile_completion.modal_fetch', 'Profile completion context fetch started.', {
+      authUserId: user.id,
+      role: profile.role,
+    });
+
+    try {
+      const { roleProfile: fetchedRoleProfile, error } = await getProfileBundle(user.id, profile.role);
+
+      if (error) {
+        throw new Error(error);
+      }
+
+      setRoleProfile(fetchedRoleProfile);
+      setVisibleRoleFields(getVisibleRoleFields(fetchedRoleProfile));
+
+      logAppEvent('profile_completion.modal_fetch', 'Profile completion context fetch succeeded.', {
+        authUserId: user.id,
+        role: profile.role,
+        hasRoleProfile: Boolean(fetchedRoleProfile),
+      });
+    } catch (error) {
+      logAppError('profile_completion.modal_fetch', error, {
+        authUserId: user?.id || null,
+        role: profile?.role || null,
+      });
+      setRoleProfile(null);
+      setVisibleRoleFields([]);
+    } finally {
+      setIsLoadingRoleProfile(false);
+    }
   }, [profile?.role, user?.id]);
 
   useEffect(() => {
@@ -51,7 +78,18 @@ export const useProfileActions = () => {
     }
 
     setIsSavingProfile(true);
+    logAppEvent('profile_completion.save', 'Profile completion save started.', {
+      authUserId: user.id,
+      role: profile?.role || null,
+    });
+
     const payload = {
+      first_name: values.firstName,
+      middle_name: values.middleName,
+      last_name: values.lastName,
+      suffix: values.suffix,
+      birthdate: values.birthdate,
+      gender: values.gender,
       phone: values.phone,
       street: values.street,
       barangay: values.barangay,
@@ -65,11 +103,21 @@ export const useProfileActions = () => {
     setIsSavingProfile(false);
 
     if (result.error) {
+      logAppError('profile_completion.save', new Error(result.error), {
+        authUserId: user.id,
+        role: profile?.role || null,
+      });
       return { success: false, error: result.error };
     }
 
     await refreshProfile(user.id);
     await loadProfileBundle();
+
+    logAppEvent('profile_completion.save', 'Profile completion save succeeded.', {
+      authUserId: user.id,
+      role: profile?.role || null,
+    });
+
     return { success: true };
   };
 

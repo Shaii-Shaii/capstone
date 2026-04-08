@@ -10,6 +10,7 @@ import {
   updatePatientPictureByPatientId,
 } from './profile/api/profile.api';
 import { wigRequestStatuses } from './wigRequest.constants';
+import { writeAuditLog } from '../utils/appErrors';
 
 const getFileExtension = (mimeType = 'image/jpeg') => {
   if (mimeType.includes('png')) return 'png';
@@ -85,8 +86,8 @@ export const getPatientWigRequestContext = async (userId) => {
 
     const [{ data: latestWigRequest, error: wigRequestError }, { data: latestAllocation, error: allocationError }] =
       await Promise.all([
-        WigRequestAPI.fetchLatestWigRequestByPatientDetailsId(patientDetails.id),
-        WigRequestAPI.fetchLatestWigAllocationByPatientDetailsId(patientDetails.id),
+        WigRequestAPI.fetchLatestWigRequestByPatientDetailsId(patientDetails.patient_id),
+        WigRequestAPI.fetchLatestWigAllocationByPatientDetailsId(patientDetails.patient_id),
       ]);
 
     if (wigRequestError) {
@@ -97,8 +98,8 @@ export const getPatientWigRequestContext = async (userId) => {
       throw new Error(allocationError.message || 'Unable to load the latest wig allocation.');
     }
 
-    const { data: latestWigSpecification, error: wigSpecificationError } = latestWigRequest?.id
-      ? await WigRequestAPI.fetchLatestWigSpecificationByRequestId(latestWigRequest.id)
+    const { data: latestWigSpecification, error: wigSpecificationError } = latestWigRequest?.req_id
+      ? await WigRequestAPI.fetchLatestWigSpecificationByRequestId(latestWigRequest.req_id)
       : { data: null, error: null };
 
     if (wigSpecificationError) {
@@ -140,16 +141,15 @@ export const savePatientWigRequestFlow = async ({
       throw new Error(systemUserError.message || 'Unable to resolve the patient account.');
     }
 
-    if (referenceImageUrl && patientDetails.id) {
-      const patientPictureResult = await updatePatientPictureByPatientId(patientDetails.id, referenceImageUrl);
+    if (referenceImageUrl && patientDetails.patient_id) {
+      const patientPictureResult = await updatePatientPictureByPatientId(patientDetails.patient_id, referenceImageUrl);
       if (patientPictureResult.error) {
         throw new Error(patientPictureResult.error.message || 'Unable to save the patient reference photo.');
       }
     }
 
     const { data: wigRequest, error: wigRequestError } = await WigRequestAPI.createWigRequest({
-      patient_id: patientDetails.id,
-      hospital_id: patientDetails.hospital_id || null,
+      patient_id: patientDetails.patient_id,
       requested_by: systemUser?.user_id || null,
       request_date: new Date().toISOString(),
       status: wigRequestStatuses.pending,
@@ -160,13 +160,14 @@ export const savePatientWigRequestFlow = async ({
     }
 
     const { data: wigSpecification, error: wigSpecificationError } = await WigRequestAPI.createWigSpecification({
-      wig_request_id: wigRequest.id,
+      wig_request_id: wigRequest.req_id,
       preferred_color: preferences.preferredColor,
       preferred_length: preferences.preferredLength,
       hair_texture: null,
       cap_size: null,
       style_preference: preview?.recommended_style_name || null,
       notes: [preferences.notes, preview?.style_notes, preview?.summary].filter(Boolean).join('\n\n') || null,
+      ai_wig_preview_url: preview?.generated_image_data_url || null,
     });
 
     if (wigSpecificationError) {
@@ -188,12 +189,29 @@ export const savePatientWigRequestFlow = async ({
       });
     }
 
+    await writeAuditLog({
+      authUserId: userId,
+      databaseUserId: systemUser?.user_id || null,
+      action: 'wig_request.create',
+      description: `Created wig request ${wigRequest.req_id || wigRequest.id}.`,
+      resource: 'wig_requests',
+      status: 'success',
+    });
+
     return {
       wigRequest,
       wigSpecification,
       error: null,
     };
   } catch (error) {
+    await writeAuditLog({
+      authUserId: userId,
+      action: 'wig_request.create',
+      description: error.message || 'Unable to save wig request.',
+      resource: 'wig_requests',
+      status: 'failed',
+    });
+
     return {
       wigRequest: null,
       wigSpecification: null,

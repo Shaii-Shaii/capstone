@@ -13,8 +13,8 @@ export function PatientSupportChatScreen() {
   const { user, profile, patientProfile } = useAuth();
   const { unreadCount } = useNotifications({ role: 'patient', userId: user?.id, databaseUserId: profile?.user_id });
 
-  const firstName = (profile?.first_name || patientProfile?.first_name || '').trim();
-  const lastName = (profile?.last_name || patientProfile?.last_name || '').trim();
+  const firstName = (profile?.first_name || '').trim();
+  const lastName = (profile?.last_name || '').trim();
   const avatarUri = profile?.avatar_url || profile?.photo_path || patientProfile?.patient_picture || '';
   const avatarInitials = `${firstName?.[0] || ''}${lastName?.[0] || ''}`.trim();
 

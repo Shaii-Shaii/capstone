@@ -8,6 +8,7 @@ import {
   hairSubmissionStatuses,
   hairSubmissionStorageBucket,
 } from './hairSubmission.constants';
+import { writeAuditLog } from '../utils/appErrors';
 
 const buildSubmissionCode = () => `HS-${Date.now().toString(36).toUpperCase()}`;
 
@@ -83,7 +84,7 @@ export const saveHairSubmissionFlow = async ({
     }
 
     const { data: detail, error: detailError } = await HairSubmissionAPI.createHairSubmissionDetail({
-      submission_id: submission.id,
+      submission_id: submission.submission_id,
       bundle_number: 1,
       declared_length: Number(confirmedValues.declaredLength),
       declared_texture: confirmedValues.declaredTexture,
@@ -99,8 +100,8 @@ export const saveHairSubmissionFlow = async ({
 
     const imageRows = await uploadSelectedImages({
       userId,
-      submissionId: submission.id,
-      detailId: detail.id,
+      submissionId: submission.submission_id,
+      detailId: detail.submission_detail_id,
       photos,
     });
 
@@ -110,7 +111,7 @@ export const saveHairSubmissionFlow = async ({
     }
 
     const { data: screening, error: screeningError } = await HairSubmissionAPI.createAiScreening({
-      submission_id: submission.id,
+      submission_id: submission.submission_id,
       estimated_length: aiAnalysis.estimated_length ? Number(aiAnalysis.estimated_length) : null,
       detected_texture: aiAnalysis.detected_texture || null,
       detected_density: aiAnalysis.detected_density || null,
@@ -126,7 +127,7 @@ export const saveHairSubmissionFlow = async ({
     }
 
     const recommendationRows = buildRecommendationRows({
-      submissionId: submission.id,
+      submissionId: submission.submission_id,
       recommendations: aiAnalysis.recommendations,
     });
 
@@ -155,6 +156,14 @@ export const saveHairSubmissionFlow = async ({
       });
     }
 
+    await writeAuditLog({
+      authUserId: userId,
+      action: 'hair_submission.create',
+      description: `Created hair submission ${submission.submission_code || submission.submission_id}.`,
+      resource: 'hair_submissions',
+      status: 'success',
+    });
+
     return {
       submission,
       detail,
@@ -163,6 +172,14 @@ export const saveHairSubmissionFlow = async ({
       error: null,
     };
   } catch (error) {
+    await writeAuditLog({
+      authUserId: userId,
+      action: 'hair_submission.create',
+      description: error.message || 'Unable to save hair submission.',
+      resource: 'hair_submissions',
+      status: 'failed',
+    });
+
     return {
       submission: null,
       detail: null,

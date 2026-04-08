@@ -1,5 +1,5 @@
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { usePathname, useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { useAuth } from '../../providers/AuthProvider';
@@ -11,16 +11,15 @@ import { DashboardSectionHeader } from '../ui/DashboardSectionHeader';
 import { DashboardWidgetRail } from '../ui/DashboardWidgetRail';
 import { DashboardFeatureCard } from '../ui/DashboardFeatureCard';
 import { DashboardInfoCard } from '../ui/DashboardInfoCard';
-import { AppCard } from '../ui/AppCard';
 
 export function DashboardModuleScreen({ role, navItems, module }) {
   const router = useRouter();
   const pathname = usePathname();
-  const { user, profile, patientProfile } = useAuth();
+  const { user, profile } = useAuth();
   const { unreadCount } = useNotifications({ role, userId: user?.id, databaseUserId: profile?.user_id });
 
-  const firstName = profile?.first_name || patientProfile?.first_name || '';
-  const lastName = profile?.last_name || patientProfile?.last_name || '';
+  const firstName = profile?.first_name || '';
+  const lastName = profile?.last_name || '';
   const avatarInitials = `${firstName?.[0] || ''}${lastName?.[0] || ''}`.trim();
 
   const handleNavPress = (item) => {
@@ -70,12 +69,6 @@ export function DashboardModuleScreen({ role, navItems, module }) {
         />
       )}
     >
-      <AppCard variant={role === 'donor' ? 'donorTint' : 'patientTint'} radius="xl" padding="xs">
-        <Text style={styles.moduleEyebrow}>{role === 'donor' ? 'Signed-in module' : 'Support module'}</Text>
-        <Text style={styles.moduleTitle}>{module.title}</Text>
-        <Text style={styles.moduleBody}>{module.summary}</Text>
-      </AppCard>
-
       <View style={styles.section}>
         <DashboardSectionHeader
           title={module.featured.title}
@@ -96,7 +89,6 @@ export function DashboardModuleScreen({ role, navItems, module }) {
               meta={item.meta}
               ctaLabel={item.ctaLabel}
               icon={item.icon}
-              imageUrl={item.imageUrl}
               onPress={() => handleCardPress(item)}
             />
           )}
@@ -135,26 +127,5 @@ export function DashboardModuleScreen({ role, navItems, module }) {
 const styles = StyleSheet.create({
   section: {
     gap: theme.spacing.xs,
-  },
-  moduleEyebrow: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.compact.caption,
-    fontWeight: theme.typography.weights.semibold,
-    color: theme.colors.brandPrimary,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-    marginBottom: theme.spacing.xs,
-  },
-  moduleTitle: {
-    fontFamily: theme.typography.fontFamilyDisplay,
-    fontSize: theme.typography.semantic.body,
-    color: theme.colors.textPrimary,
-    marginBottom: 2,
-  },
-  moduleBody: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.compact.bodySm,
-    color: theme.colors.textSecondary,
-    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
   },
 });

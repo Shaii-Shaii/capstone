@@ -11,6 +11,7 @@ import {
   fetchLatestWigRequestByPatientDetailsId,
 } from './wigRequest.api';
 import { fetchPatientDetailsByUserId, resolveDatabaseUserId } from './profile/api/profile.api';
+import { writeAuditLog } from '../utils/appErrors';
 
 const buildStorageKey = ({ userId, role }) => `${notificationStoragePrefix}.${role}.${userId}`;
 
@@ -53,6 +54,7 @@ const buildNotification = ({
   id: backendId || dedupeKey,
   backendId,
   dedupeKey,
+  stableKey: [type || '', title || '', message || ''].join('::'),
   type,
   title,
   message,
@@ -82,36 +84,31 @@ const saveLocalNotifications = async ({ userId, role, notifications }) => {
 };
 
 const normalizeBackendNotification = (row) => {
-  const createdAt = row?.created_at || row?.updated_at || new Date().toISOString();
-  const type = row?.notification_type || row?.type || 'system_update';
-  const dedupeKey = row?.dedupe_key
-    || row?.external_key
-    || `${type}:${row?.reference_type || row?.source_type || 'notification'}:${row?.reference_id || row?.source_id || row?.id}`;
+  const createdAt = row?.updated_at || new Date().toISOString();
+  const type = row?.type || 'system_update';
+  const backendId = row?.notification_id || null;
+  const dedupeKey = `${type}:${backendId || `${row?.title || ''}:${row?.message || ''}:${createdAt}`}`;
 
   return buildNotification({
     dedupeKey,
     type,
-    title: row?.title || row?.heading || 'System update',
-    message: row?.message || row?.body || row?.content || '',
+    title: row?.title || 'System update',
+    message: row?.message || '',
     createdAt,
-    referenceType: row?.reference_type || row?.source_type,
-    referenceId: row?.reference_id || row?.source_id || row?.id,
-    backendId: row?.id || null,
-    isRead: Boolean(row?.is_read),
+    referenceType: 'notification',
+    referenceId: backendId,
+    backendId,
+    isRead: String(row?.status || '').toLowerCase() === 'read',
   });
 };
 
 const toBackendPayload = ({ databaseUserId, role, notification }) => ({
   user_id: databaseUserId,
-  role,
-  notification_type: notification.type,
   title: notification.title,
   message: notification.message,
-  is_read: notification.isRead,
-  reference_type: notification.referenceType,
-  reference_id: notification.referenceId,
-  created_at: notification.createdAt,
-  dedupe_key: notification.dedupeKey,
+  type: notification.type || role || 'system_update',
+  status: notification.isRead ? 'Read' : 'Unread',
+  updated_at: notification.createdAt || new Date().toISOString(),
 });
 
 const resolveNotificationBackendUserId = async (userId) => {
@@ -123,18 +120,21 @@ const mergeNotifications = ({ localNotifications, backendNotifications, derivedN
   const merged = new Map();
 
   [...backendNotifications, ...localNotifications, ...derivedNotifications].forEach((notification) => {
-    const existing = merged.get(notification.dedupeKey);
+    const mergeKey = notification.stableKey || notification.dedupeKey;
+    const existing = merged.get(mergeKey);
 
     if (!existing) {
-      merged.set(notification.dedupeKey, notification);
+      merged.set(mergeKey, notification);
       return;
     }
 
-    merged.set(notification.dedupeKey, {
+    merged.set(mergeKey, {
       ...existing,
       ...notification,
       id: notification.backendId || existing.backendId || notification.id || existing.id,
       backendId: notification.backendId || existing.backendId || null,
+      dedupeKey: existing.dedupeKey || notification.dedupeKey,
+      stableKey: notification.stableKey || existing.stableKey,
       isRead: existing.isRead || notification.isRead,
       createdAt: existing.createdAt > notification.createdAt ? existing.createdAt : notification.createdAt,
     });
@@ -157,63 +157,65 @@ const buildDonorDerivedNotifications = async (userId) => {
   const screening = Array.isArray(submission?.ai_screenings)
     ? submission.ai_screenings[0]
     : submission?.ai_screenings;
+  const submissionId = submission?.submission_id;
+  const screeningId = screening?.ai_screening_id;
 
-  if (!submission?.id) {
+  if (!submissionId) {
     return notifications;
   }
 
   notifications.push(buildNotification({
-    dedupeKey: `${notificationTypes.submissionReceived}:${submission.id}`,
+    dedupeKey: `${notificationTypes.submissionReceived}:${submissionId}`,
     type: notificationTypes.submissionReceived,
     title: 'Submission received',
     message: `Your hair submission ${submission.submission_code || ''} was saved and is now in the review flow.`.trim(),
     createdAt: submission.created_at,
     referenceType: 'hair_submission',
-    referenceId: submission.id,
+    referenceId: submissionId,
   }));
 
-  if (screening?.id) {
+  if (screeningId) {
     notifications.push(buildNotification({
-      dedupeKey: `${notificationTypes.screeningCompleted}:${screening.id}`,
+      dedupeKey: `${notificationTypes.screeningCompleted}:${screeningId}`,
       type: notificationTypes.screeningCompleted,
       title: 'AI screening completed',
       message: screening.summary || `Your latest screening result is ${screening.decision || 'ready for review'}.`,
       createdAt: screening.created_at,
       referenceType: 'ai_screening',
-      referenceId: screening.id,
+      referenceId: screeningId,
     }));
 
     if (String(screening.decision || '').toLowerCase().includes('eligible')) {
       notifications.push(buildNotification({
-        dedupeKey: `${notificationTypes.certificateAvailable}:${submission.id}`,
+        dedupeKey: `${notificationTypes.certificateAvailable}:${submissionId}`,
         type: notificationTypes.certificateAvailable,
         title: 'Certificate available',
         message: 'Your donation reached a qualified result and the donor certificate is now available in the donations screen.',
         createdAt: screening.created_at,
         referenceType: 'hair_submission',
-        referenceId: submission.id,
+        referenceId: submissionId,
       }));
     }
   }
 
-  const { data: recommendations } = await fetchDonorRecommendationsBySubmissionId(submission.id);
+  const { data: recommendations } = await fetchDonorRecommendationsBySubmissionId(submissionId);
   if (recommendations?.length) {
     const topRecommendation = recommendations[0];
     notifications.push(buildNotification({
-      dedupeKey: `${notificationTypes.recommendationAvailable}:${submission.id}`,
+      dedupeKey: `${notificationTypes.recommendationAvailable}:${submissionId}`,
       type: notificationTypes.recommendationAvailable,
       title: 'Recommendation available',
       message: topRecommendation.recommendation_text || 'New donor guidance is now available after screening.',
       createdAt: topRecommendation.created_at,
       referenceType: 'hair_submission',
-      referenceId: submission.id,
+      referenceId: submissionId,
     }));
   }
 
-  const { data: logistics } = await fetchHairSubmissionLogisticsBySubmissionId(submission.id);
-  if (logistics?.id) {
+  const { data: logistics } = await fetchHairSubmissionLogisticsBySubmissionId(submissionId);
+  if (logistics?.submission_logistics_id) {
     notifications.push(buildNotification({
-      dedupeKey: `${notificationTypes.logisticsUpdated}:${logistics.id}`,
+      dedupeKey: `${notificationTypes.logisticsUpdated}:${logistics.submission_logistics_id}`,
       type: notificationTypes.logisticsUpdated,
       title: 'Logistics update',
       message: logistics.notes
@@ -221,7 +223,7 @@ const buildDonorDerivedNotifications = async (userId) => {
         || `Shipment status: ${logistics.shipment_status || logistics.logistics_type || 'updated'}.`,
       createdAt: logistics.updated_at || logistics.created_at,
       referenceType: 'hair_submission_logistics',
-      referenceId: logistics.id,
+      referenceId: logistics.submission_logistics_id,
     }));
   }
 
@@ -236,31 +238,31 @@ const buildPatientDerivedNotifications = async (userId) => {
     throw new Error(patientDetailsError.message || 'Unable to load patient notifications.');
   }
 
-  if (!patientDetails?.id) {
+  if (!patientDetails?.patient_id) {
     return notifications;
   }
 
   const [{ data: wigRequest }, { data: latestAllocation }] = await Promise.all([
-    fetchLatestWigRequestByPatientDetailsId(patientDetails.id),
-    fetchLatestWigAllocationByPatientDetailsId(patientDetails.id),
+    fetchLatestWigRequestByPatientDetailsId(patientDetails.patient_id),
+    fetchLatestWigAllocationByPatientDetailsId(patientDetails.patient_id),
   ]);
 
-  if (wigRequest?.id) {
+  if (wigRequest?.req_id) {
     notifications.push(buildNotification({
-      dedupeKey: `${notificationTypes.wigRequestUpdated}:${wigRequest.id}`,
+      dedupeKey: `${notificationTypes.wigRequestUpdated}:${wigRequest.req_id}`,
       type: notificationTypes.wigRequestUpdated,
       title: 'Wig request updated',
       message: wigRequest.notes || `Your wig request status is now ${wigRequest.status || 'pending'}.`,
       createdAt: wigRequest.updated_at || wigRequest.request_date,
       referenceType: 'wig_request',
-      referenceId: wigRequest.id,
+      referenceId: wigRequest.req_id,
     }));
   }
 
-  if (latestAllocation?.id) {
+  if (latestAllocation?.allocation_id) {
     const wig = latestAllocation.wigs;
     notifications.push(buildNotification({
-      dedupeKey: `${notificationTypes.wigAllocationUpdated}:${latestAllocation.id}`,
+      dedupeKey: `${notificationTypes.wigAllocationUpdated}:${latestAllocation.allocation_id}`,
       type: notificationTypes.wigAllocationUpdated,
       title: 'Wig allocation updated',
       message: latestAllocation.notes
@@ -268,7 +270,7 @@ const buildPatientDerivedNotifications = async (userId) => {
         || 'Your wig allocation has a new status update.',
       createdAt: latestAllocation.released_at || latestAllocation.allocated_at,
       referenceType: 'wig_allocation',
-      referenceId: latestAllocation.id,
+      referenceId: latestAllocation.allocation_id,
     }));
   }
 
@@ -285,8 +287,8 @@ const persistMissingBackendNotifications = async ({
     return null;
   }
 
-  const backendKeys = new Set(backendNotifications.map((item) => item.dedupeKey));
-  const missingNotifications = notifications.filter((item) => !backendKeys.has(item.dedupeKey));
+  const backendKeys = new Set(backendNotifications.map((item) => item.stableKey || item.dedupeKey));
+  const missingNotifications = notifications.filter((item) => !backendKeys.has(item.stableKey || item.dedupeKey));
 
   if (!missingNotifications.length) {
     return null;
@@ -315,19 +317,49 @@ export const loadNotifications = async ({ userId, role }) => {
       .map(normalizeBackendNotification)
       .filter((notification) => notification.title || notification.message);
 
-    const mergedNotifications = mergeNotifications({
-      localNotifications,
-      backendNotifications,
-      derivedNotifications,
-    });
+    const mergedNotifications = databaseUserId
+      ? mergeNotifications({
+          localNotifications: [],
+          backendNotifications,
+          derivedNotifications: [],
+        })
+      : mergeNotifications({
+          localNotifications,
+          backendNotifications,
+          derivedNotifications,
+        });
 
     await saveLocalNotifications({ userId, role, notifications: mergedNotifications });
-    await persistMissingBackendNotifications({
-      databaseUserId,
-      role,
-      notifications: mergedNotifications,
-      backendNotifications,
-    });
+
+    if (databaseUserId) {
+      const persistError = await persistMissingBackendNotifications({
+        databaseUserId,
+        role,
+        notifications: derivedNotifications,
+        backendNotifications,
+      });
+
+      if (!persistError && derivedNotifications.length) {
+        const refreshedBackendResult = await NotificationAPI.fetchNotificationsByUserId(databaseUserId).catch(() => ({ data: [], error: null }));
+        const refreshedBackendNotifications = (refreshedBackendResult.data || [])
+          .map(normalizeBackendNotification)
+          .filter((notification) => notification.title || notification.message);
+
+        const databaseNotifications = mergeNotifications({
+          localNotifications: [],
+          backendNotifications: refreshedBackendNotifications,
+          derivedNotifications: [],
+        });
+
+        await saveLocalNotifications({ userId, role, notifications: databaseNotifications });
+
+        return {
+          notifications: databaseNotifications,
+          unreadCount: databaseNotifications.filter((item) => !item.isRead).length,
+          error: null,
+        };
+      }
+    }
 
     return {
       notifications: mergedNotifications,
@@ -348,17 +380,49 @@ export const loadNotifications = async ({ userId, role }) => {
 export const recordNotifications = async ({ userId, role, notifications }) => {
   const localNotifications = await loadLocalNotifications({ userId, role });
   const databaseUserId = await resolveNotificationBackendUserId(userId);
-  const mergedNotifications = mergeNotifications({
+  let mergedNotifications = mergeNotifications({
     localNotifications,
     backendNotifications: [],
     derivedNotifications: notifications,
   });
 
   await saveLocalNotifications({ userId, role, notifications: mergedNotifications });
+
   if (databaseUserId) {
-    await NotificationAPI.createNotifications(
+    const createResult = await NotificationAPI.createNotifications(
       notifications.map((notification) => toBackendPayload({ databaseUserId, role, notification }))
-    ).catch(() => null);
+    ).catch((error) => ({ data: [], error }));
+
+    if (!createResult?.error) {
+      const backendNotifications = (createResult.data || [])
+        .map(normalizeBackendNotification)
+        .filter((notification) => notification.title || notification.message);
+
+      mergedNotifications = mergeNotifications({
+        localNotifications,
+        backendNotifications,
+        derivedNotifications: [],
+      });
+
+      await saveLocalNotifications({ userId, role, notifications: mergedNotifications });
+      await writeAuditLog({
+        authUserId: userId,
+        databaseUserId,
+        action: 'notification.create',
+        description: `Created ${backendNotifications.length || notifications.length} notification record(s).`,
+        resource: 'notification',
+        status: 'success',
+      });
+    } else {
+      await writeAuditLog({
+        authUserId: userId,
+        databaseUserId,
+        action: 'notification.create',
+        description: createResult.error?.message || 'Unable to persist notifications.',
+        resource: 'notification',
+        status: 'failed',
+      });
+    }
   }
 
   return {
@@ -373,49 +437,49 @@ export const buildImmediateNotificationEvents = ({ role, payload }) => {
 
     if (payload?.submission) {
       notifications.push(buildNotification({
-        dedupeKey: `${notificationTypes.submissionReceived}:${payload.submission.id}`,
+        dedupeKey: `${notificationTypes.submissionReceived}:${payload.submission.submission_id}`,
         type: notificationTypes.submissionReceived,
         title: 'Submission received',
         message: `Your hair submission ${payload.submission.submission_code || ''} was saved successfully.`.trim(),
         createdAt: payload.submission.created_at || new Date().toISOString(),
         referenceType: 'hair_submission',
-        referenceId: payload.submission.id,
+        referenceId: payload.submission.submission_id,
       }));
     }
 
     if (payload?.screening) {
       notifications.push(buildNotification({
-        dedupeKey: `${notificationTypes.screeningCompleted}:${payload.screening.id || payload.submission?.id}`,
+        dedupeKey: `${notificationTypes.screeningCompleted}:${payload.screening.ai_screening_id || payload.submission?.submission_id}`,
         type: notificationTypes.screeningCompleted,
         title: 'AI screening completed',
         message: payload.screening.summary || `Your screening result is ${payload.screening.decision || 'ready for review'}.`,
         createdAt: payload.screening.created_at || new Date().toISOString(),
         referenceType: 'ai_screening',
-        referenceId: payload.screening.id || payload.submission?.id,
+        referenceId: payload.screening.ai_screening_id || payload.submission?.submission_id,
       }));
     }
 
     if (payload?.recommendations?.length) {
       notifications.push(buildNotification({
-        dedupeKey: `${notificationTypes.recommendationAvailable}:${payload.submission?.id}`,
+        dedupeKey: `${notificationTypes.recommendationAvailable}:${payload.submission?.submission_id}`,
         type: notificationTypes.recommendationAvailable,
         title: 'Recommendation available',
         message: payload.recommendations[0].recommendation_text || 'New donor guidance is now available.',
         createdAt: payload.recommendations[0].created_at || new Date().toISOString(),
         referenceType: 'hair_submission',
-        referenceId: payload.submission?.id,
+        referenceId: payload.submission?.submission_id,
       }));
     }
 
     if (String(payload?.screening?.decision || '').toLowerCase().includes('eligible')) {
       notifications.push(buildNotification({
-        dedupeKey: `${notificationTypes.certificateAvailable}:${payload.submission?.id}`,
+        dedupeKey: `${notificationTypes.certificateAvailable}:${payload.submission?.submission_id}`,
         type: notificationTypes.certificateAvailable,
         title: 'Certificate available',
         message: 'Your donation reached a qualified result and the donor certificate is now available.',
         createdAt: payload.screening?.created_at || new Date().toISOString(),
         referenceType: 'hair_submission',
-        referenceId: payload.submission?.id,
+        referenceId: payload.submission?.submission_id,
       }));
     }
 
@@ -425,13 +489,13 @@ export const buildImmediateNotificationEvents = ({ role, payload }) => {
   if (role === 'patient' && payload?.wigRequest) {
     return [
       buildNotification({
-        dedupeKey: `${notificationTypes.wigRequestUpdated}:${payload.wigRequest.id}`,
+        dedupeKey: `${notificationTypes.wigRequestUpdated}:${payload.wigRequest.req_id}`,
         type: notificationTypes.wigRequestUpdated,
         title: 'Wig request updated',
         message: payload.wigRequest.notes || `Your wig request status is ${payload.wigRequest.status || 'pending'}.`,
         createdAt: payload.wigRequest.updated_at || payload.wigRequest.request_date || new Date().toISOString(),
         referenceType: 'wig_request',
-        referenceId: payload.wigRequest.id,
+        referenceId: payload.wigRequest.req_id,
       }),
     ];
   }
@@ -441,6 +505,7 @@ export const buildImmediateNotificationEvents = ({ role, payload }) => {
 
 export const markNotificationRead = async ({ userId, role, notificationId }) => {
   const localNotifications = await loadLocalNotifications({ userId, role });
+  const databaseUserId = await resolveNotificationBackendUserId(userId);
   const targetNotification = localNotifications.find((item) => (
     item.id === notificationId
       || item.backendId === notificationId
@@ -457,7 +522,17 @@ export const markNotificationRead = async ({ userId, role, notificationId }) => 
   await saveLocalNotifications({ userId, role, notifications: nextNotifications });
 
   if (targetNotification?.backendId) {
-    await NotificationAPI.markNotificationsRead([targetNotification.backendId]).catch(() => null);
+    const result = await NotificationAPI.markNotificationsRead([targetNotification.backendId]).catch((error) => ({ error }));
+    await writeAuditLog({
+      authUserId: userId,
+      databaseUserId,
+      action: 'notification.read',
+      description: result?.error
+        ? (result.error.message || 'Unable to mark notification as read.')
+        : `Marked notification ${targetNotification.backendId} as read.`,
+      resource: 'notification',
+      status: result?.error ? 'failed' : 'success',
+    });
   }
 
   return {
@@ -476,7 +551,17 @@ export const markAllNotificationsRead = async ({ userId, role }) => {
 
   await saveLocalNotifications({ userId, role, notifications: nextNotifications });
   if (databaseUserId) {
-    await NotificationAPI.markAllNotificationsRead(databaseUserId).catch(() => null);
+    const result = await NotificationAPI.markAllNotificationsRead(databaseUserId).catch((error) => ({ error }));
+    await writeAuditLog({
+      authUserId: userId,
+      databaseUserId,
+      action: 'notification.read_all',
+      description: result?.error
+        ? (result.error.message || 'Unable to mark all notifications as read.')
+        : 'Marked all notifications as read.',
+      resource: 'notification',
+      status: result?.error ? 'failed' : 'success',
+    });
   }
 
   return {

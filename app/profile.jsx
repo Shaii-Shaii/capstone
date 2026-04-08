@@ -115,10 +115,10 @@ export default function ProfileScreen() {
   const hasOrganization = !isPatient && Boolean(staffProfile?.hospital_id);
   const navItems = role === 'donor' ? donorDashboardNavItems : patientDashboardNavItems;
   const roleLabel = roleLabelMap[role] || 'Member';
-  const firstName = (profile?.first_name || patientProfile?.first_name || '').trim();
-  const middleName = (profile?.middle_name || patientProfile?.middle_name || '').trim();
-  const lastName = (profile?.last_name || patientProfile?.last_name || '').trim();
-  const suffix = profile?.suffix || patientProfile?.suffix || '';
+  const firstName = (profile?.first_name || '').trim();
+  const middleName = (profile?.middle_name || '').trim();
+  const lastName = (profile?.last_name || '').trim();
+  const suffix = profile?.suffix || '';
   const avatarUri = profile?.avatar_url || profile?.photo_path || patientProfile?.patient_picture || '';
   const avatarInitials = `${firstName?.[0] || ''}${lastName?.[0] || ''}`.trim();
   const fullName = [firstName, middleName, lastName, suffix].filter(Boolean).join(' ');
@@ -134,19 +134,9 @@ export default function ProfileScreen() {
   ), [profile]);
   const overviewRows = useMemo(() => (
     [
-      profile?.user_id ? { key: 'user_id', label: 'User ID', value: String(profile.user_id) } : null,
-      profile?.auth_user_id ? { key: 'auth_user_id', label: 'Auth user ID', value: profile.auth_user_id } : null,
-      profile?.user_details_id ? { key: 'user_details_id', label: 'User details ID', value: String(profile.user_details_id) } : null,
       fullName ? { key: 'full_name', label: 'Full name', value: fullName } : null,
       { key: 'email', label: 'Email', value: user?.email || 'Not available' },
       { key: 'role', label: 'Account type', value: roleLabel },
-      { key: 'account_status', label: 'Account status', value: profile?.is_active ? 'Active' : 'Inactive' },
-      profile?.created_at ? { key: 'created_at', label: 'Created at', value: profile.created_at } : null,
-      profile?.updated_at ? { key: 'updated_at', label: 'Updated at', value: profile.updated_at } : null,
-      profile?.access_start ? { key: 'access_start', label: 'Access start', value: profile.access_start } : null,
-      profile?.access_end ? { key: 'access_end', label: 'Access end', value: profile.access_end } : null,
-      profile?.user_details_created_at ? { key: 'details_created_at', label: 'Details created at', value: profile.user_details_created_at } : null,
-      profile?.user_details_updated_at ? { key: 'details_updated_at', label: 'Details updated at', value: profile.user_details_updated_at } : null,
       ...displayRows,
       hospitalProfile?.hospital_name
         ? { key: 'hospital_name', label: 'Hospital name', value: hospitalProfile.hospital_name }
@@ -174,26 +164,20 @@ export default function ProfileScreen() {
       patientProfile?.hospital_id
         ? { key: 'patient_hospital', label: 'Hospital ID', value: String(patientProfile.hospital_id) }
         : null,
-      patientProfile?.age
-        ? { key: 'patient_age', label: 'Patient age', value: String(patientProfile.age) }
-        : null,
-      patientProfile?.gender
-        ? { key: 'patient_gender', label: 'Patient gender', value: patientProfile.gender }
-        : null,
       patientProfile?.medical_condition
         ? { key: 'medical_condition', label: 'Medical condition', value: patientProfile.medical_condition }
         : null,
+      patientProfile?.date_of_diagnosis
+        ? { key: 'date_of_diagnosis', label: 'Date of diagnosis', value: patientProfile.date_of_diagnosis }
+        : null,
+      patientProfile?.guardian
+        ? { key: 'guardian', label: 'Guardian', value: patientProfile.guardian }
+        : null,
+      patientProfile?.guardian_contact_number
+        ? { key: 'guardian_contact_number', label: 'Guardian contact', value: patientProfile.guardian_contact_number }
+        : null,
       patientProfile?.medical_document
         ? { key: 'medical_document', label: 'Medical document', value: patientProfile.medical_document }
-        : null,
-      patientProfile?.created_at
-        ? { key: 'patient_created_at', label: 'Patient created at', value: patientProfile.created_at }
-        : null,
-      patientProfile?.updated_at
-        ? { key: 'patient_updated_at', label: 'Patient updated at', value: patientProfile.updated_at }
-        : null,
-      staffProfile?.link_id
-        ? { key: 'staff_link_id', label: 'Hospital staff link ID', value: String(staffProfile.link_id) }
         : null,
       staffProfile?.hospital_id
         ? { key: 'staff_hospital', label: 'Assigned hospital', value: String(staffProfile.hospital_id) }
@@ -212,29 +196,17 @@ export default function ProfileScreen() {
     hospitalProfile?.hospital_name,
     hospitalProfile?.region,
     hospitalProfile?.street,
-    patientProfile?.patient_id,
     patientProfile?.hospital_id,
-    patientProfile?.age,
-    patientProfile?.created_at,
-    patientProfile?.gender,
+    patientProfile?.date_of_diagnosis,
+    patientProfile?.guardian,
+    patientProfile?.guardian_contact_number,
     patientProfile?.medical_document,
     patientProfile?.medical_condition,
+    patientProfile?.patient_id,
     patientProfile?.patient_code,
-    patientProfile?.updated_at,
-    profile?.access_end,
-    profile?.access_start,
-    profile?.created_at,
-    profile?.updated_at,
-    profile?.is_active,
-    profile?.auth_user_id,
-    profile?.user_details_created_at,
-    profile?.user_details_id,
-    profile?.user_details_updated_at,
-    profile?.user_id,
     roleLabel,
     staffProfile?.assigned_date,
     staffProfile?.hospital_id,
-    staffProfile?.link_id,
     user?.email,
   ]);
   const watchedNewPassword = passwordForm.watch('newPassword');
@@ -480,17 +452,12 @@ export default function ProfileScreen() {
                     <>
                       <DashboardSectionHeader
                         title="Edit Profile"
-                        description="Only address and contact number can be changed here."
+                        description=""
                         style={styles.sectionHeader}
                       />
 
-                      <View style={styles.editHintWrap}>
-                        <Text style={styles.editHintText}>Locked: name, birthday</Text>
-                        <Text style={styles.editHintText}>Editable: contact number, address</Text>
-                      </View>
-
                       <View style={styles.editPreviewCard}>
-                        <Text style={styles.editPreviewTitle}>Current details</Text>
+                        <Text style={styles.editPreviewTitle}>Current</Text>
                         <View style={styles.editPreviewList}>
                           {editablePreviewRows.map((row) => (
                             <View key={row.key} style={styles.editPreviewRow}>
@@ -544,7 +511,7 @@ export default function ProfileScreen() {
                     <>
                       <DashboardSectionHeader
                         title="Change Password"
-                        description="Set a new password."
+                        description=""
                         style={styles.sectionHeader}
                       />
 
@@ -659,15 +626,6 @@ const styles = StyleSheet.create({
   },
   actionList: {
     gap: theme.spacing.sm,
-  },
-  editHintWrap: {
-    gap: 2,
-    marginBottom: theme.spacing.md,
-  },
-  editHintText: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    color: theme.colors.textSecondary,
   },
   actionRow: {
     flexDirection: 'row',

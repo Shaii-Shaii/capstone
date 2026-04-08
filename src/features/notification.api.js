@@ -7,7 +7,7 @@ export const fetchNotificationsByUserId = async (userId) => (
     .from(NOTIFICATION_TABLE)
     .select('*')
     .eq('user_id', userId)
-    .order('created_at', { ascending: false })
+    .order('updated_at', { ascending: false })
     .limit(60)
 );
 
@@ -21,15 +21,21 @@ export const createNotifications = async (rows) => (
 export const markNotificationsRead = async (ids) => (
   await supabase
     .from(NOTIFICATION_TABLE)
-    .update({ is_read: true })
-    .in('id', ids)
+    .update({
+      status: 'Read',
+      updated_at: new Date().toISOString(),
+    })
+    .in('notification_id', ids)
     .select()
 );
 
 export const markAllNotificationsRead = async (userId) => (
   await supabase
     .from(NOTIFICATION_TABLE)
-    .update({ is_read: true })
+    .update({
+      status: 'Read',
+      updated_at: new Date().toISOString(),
+    })
     .eq('user_id', userId)
     .select()
 );

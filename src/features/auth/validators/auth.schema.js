@@ -1,6 +1,40 @@
 import { z } from 'zod';
 import { isCommonPassword, normalizePasswordComparable, passwordRules } from '../../../utils/passwordRules';
 
+const normalizeEmailValue = (value) => value.trim().toLowerCase();
+
+const hasObviousEmailIssues = (value) => {
+  const normalizedValue = normalizeEmailValue(value);
+  const [localPart = '', domainPart = ''] = normalizedValue.split('@');
+
+  if (!localPart || !domainPart) return true;
+  if (normalizedValue.includes('..')) return true;
+  if (localPart.startsWith('.') || localPart.endsWith('.')) return true;
+  if (domainPart.startsWith('-') || domainPart.endsWith('-')) return true;
+  if (!domainPart.includes('.')) return true;
+
+  const domainLabels = domainPart.split('.');
+  if (domainLabels.some((label) => !label || label.startsWith('-') || label.endsWith('-'))) {
+    return true;
+  }
+
+  const topLevelDomain = domainLabels[domainLabels.length - 1] || '';
+  if (topLevelDomain.length < 2) return true;
+
+  return false;
+};
+
+const passesGmailProductRule = (value) => {
+  const normalizedValue = normalizeEmailValue(value);
+  const [localPart = '', domainPart = ''] = normalizedValue.split('@');
+
+  if (!['gmail.com', 'googlemail.com'].includes(domainPart)) {
+    return true;
+  }
+
+  return localPart.length >= 6;
+};
+
 export const calculateAgeFromBirthdate = (birthdate) => {
   if (!birthdate) return null;
 
@@ -19,7 +53,18 @@ export const calculateAgeFromBirthdate = (birthdate) => {
 };
 
 // Shared Field Rules
-export const emailField = z.string().min(1, 'Email is required').email('Invalid email address');
+export const emailField = z.string()
+  .trim()
+  .min(1, 'Email is required')
+  .max(254, 'Email is too long')
+  .email('Enter a valid email')
+  .refine((value) => !hasObviousEmailIssues(value), {
+    message: 'Enter a valid email',
+  })
+  .refine((value) => passesGmailProductRule(value), {
+    message: 'Gmail username must be at least 6 characters',
+  })
+  .transform(normalizeEmailValue);
 
 export const passwordField = z.string()
   .min(passwordRules.minLength, `Password must be at least ${passwordRules.minLength} characters`)
@@ -54,16 +99,6 @@ export const coordinateField = z.string()
   .refine((value) => !value || !Number.isNaN(Number(value)), {
     message: 'Must be a valid coordinate',
   });
-const optionalTextField = z.string().trim().max(120, 'Max 120 characters allowed').optional().or(z.literal(''));
-const optionalLongTextField = z.string().trim().max(300, 'Max 300 characters allowed').optional().or(z.literal(''));
-const optionalNameField = z.union([nameField, z.literal('')]).optional();
-const patientAgeField = z.string()
-  .trim()
-  .optional()
-  .or(z.literal(''))
-  .refine((value) => !value || (/^\d+$/.test(value) && Number(value) > 0), {
-    message: 'Enter a valid age',
-  });
 
 const passwordMatchesUserContext = (password, values = []) => {
   const normalizedPassword = normalizePasswordComparable(password);
@@ -76,36 +111,7 @@ const passwordMatchesUserContext = (password, values = []) => {
 };
 
 export const signupDefaultValues = {
-  firstName: '',
-  lastName: '',
   email: '',
-  phone: '',
-  birthdate: '',
-  isPatient: '',
-  patientFlowMode: '',
-  linkedPatientCode: '',
-  linkedPatientId: '',
-  linkedPatientHospitalId: '',
-  linkedPatientName: '',
-  linkedPatientCondition: '',
-  patientFirstName: '',
-  patientMiddleName: '',
-  patientLastName: '',
-  patientSuffix: '',
-  patientAge: '',
-  patientGender: '',
-  patientMedicalCondition: '',
-  patientPicture: '',
-  patientMedicalDocument: '',
-  street: '',
-  barangay: '',
-  city: '',
-  province: '',
-  region: '',
-  country: 'Philippines',
-  latitude: '',
-  longitude: '',
-  profilePhoto: '',
   password: '',
   confirmPassword: '',
 };
@@ -130,120 +136,19 @@ export const resetPasswordSchema = z.object({
 
 // Shared Base Signup Schema
 export const baseSignupSchema = z.object({
-  firstName: nameField,
-  lastName: nameField,
   email: emailField,
-  phone: phoneField,
-  birthdate: birthdateField,
-  isPatient: z.string().trim().min(1, 'Please answer whether you are a patient').refine((value) => ['yes', 'no'].includes(value), {
-    message: 'Please answer whether you are a patient',
-  }),
-  patientFlowMode: z.string().trim().optional().or(z.literal('')),
-  linkedPatientCode: optionalTextField,
-  linkedPatientId: optionalTextField,
-  linkedPatientHospitalId: optionalTextField,
-  linkedPatientName: optionalLongTextField,
-  linkedPatientCondition: optionalLongTextField,
-  patientFirstName: optionalNameField,
-  patientMiddleName: optionalTextField,
-  patientLastName: optionalNameField,
-  patientSuffix: optionalTextField,
-  patientAge: patientAgeField,
-  patientGender: optionalTextField,
-  patientMedicalCondition: optionalLongTextField,
-  patientPicture: z.string().optional().or(z.literal('')),
-  patientMedicalDocument: z.string().optional().or(z.literal('')),
-  street: addressField,
-  barangay: addressField,
-  city: addressField,
-  province: addressField,
-  region: addressField,
-  country: addressField,
-  latitude: coordinateField,
-  longitude: coordinateField,
-  profilePhoto: z.string().optional().or(z.literal('')),
   password: passwordField,
-  confirmPassword: z.string()
+  confirmPassword: z.string(),
 }).refine((data) => data.password === data.confirmPassword, {
   message: "Passwords don't match",
-  path: ["confirmPassword"],
-}).refine((data) => (
-  (Boolean(data.latitude) && Boolean(data.longitude)) ||
-  (!data.latitude && !data.longitude)
-), {
-  message: 'Latitude and longitude should both be provided when coordinates are entered manually',
-  path: ['longitude'],
+  path: ['confirmPassword'],
 }).superRefine((data, ctx) => {
-  const passwordContextValues = [
-    data.firstName,
-    data.lastName,
-    data.email,
-    data.phone,
-    data.birthdate,
-    data.patientFirstName,
-    data.patientLastName,
-  ];
-
-  if (passwordMatchesUserContext(data.password, passwordContextValues)) {
+  if (passwordMatchesUserContext(data.password, [data.email])) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: 'Password cannot contain your personal details such as name, email, phone, or birthdate.',
+      message: 'Password cannot contain your email address.',
       path: ['password'],
     });
-  }
-
-  if (data.isPatient !== 'yes') {
-    return;
-  }
-
-  if (!['linked', 'manual'].includes(data.patientFlowMode)) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: 'Complete the patient code popup or continue with manual patient details.',
-      path: ['patientFlowMode'],
-    });
-  }
-
-  if (data.patientFlowMode === 'linked' && !data.linkedPatientCode) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: 'Please confirm a valid hospital code first.',
-      path: ['linkedPatientCode'],
-    });
-  }
-
-  if (data.patientFlowMode === 'manual') {
-    if (!data.patientFirstName) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'First name is required',
-        path: ['patientFirstName'],
-      });
-    }
-
-    if (!data.patientLastName) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'Last name is required',
-        path: ['patientLastName'],
-      });
-    }
-
-    if (!data.patientGender) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'Gender is required',
-        path: ['patientGender'],
-      });
-    }
-
-    if (!data.patientMedicalCondition) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'Medical condition is required',
-        path: ['patientMedicalCondition'],
-      });
-    }
   }
 });
 

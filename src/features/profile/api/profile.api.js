@@ -2,6 +2,7 @@ import { supabase } from '../../../api/supabase/client';
 
 const isUuid = (value) => typeof value === 'string' && value.includes('-');
 const buildMissingSystemUserError = () => new Error('The logged-in account is not linked to an app user record.');
+const getTodayDate = () => new Date().toISOString().slice(0, 10);
 
 const normalizeSystemUser = (row, details = null) => ({
   id: row?.auth_user_id || '',
@@ -42,14 +43,11 @@ const normalizePatient = (row) => ({
   user_id: row?.user_id || null,
   hospital_id: row?.hospital_id || null,
   patient_code: row?.patient_code || '',
-  first_name: row?.first_name || '',
-  middle_name: row?.middle_name || '',
-  last_name: row?.last_name || '',
-  suffix: row?.suffix || '',
-  age: row?.age ?? null,
-  gender: row?.gender || '',
   medical_condition: row?.medical_condition || '',
   patient_picture: row?.patient_picture || '',
+  date_of_diagnosis: row?.date_of_diagnosis || null,
+  guardian: row?.guardian || '',
+  guardian_contact_number: row?.guardian_contact_number || '',
   medical_document: row?.medical_document || '',
   created_at: row?.created_at || null,
   updated_at: row?.updated_at || null,
@@ -83,15 +81,20 @@ const normalizePatientLinkPreview = (row) => ({
   patient_id: row?.patient_id || null,
   patient_code: row?.patient_code || '',
   hospital_id: row?.hospital_id || null,
+  hospital_name: row?.hospital_name || '',
+  medical_condition: row?.medical_condition || '',
+  patient_picture: row?.patient_picture || '',
+  date_of_diagnosis: row?.date_of_diagnosis || null,
+  guardian: row?.guardian || '',
+  guardian_contact_number: row?.guardian_contact_number || '',
+  medical_document: row?.medical_document || '',
+  user_id: row?.user_id || null,
+  linked_auth_user_id: row?.linked_auth_user_id || '',
   first_name: row?.first_name || '',
   middle_name: row?.middle_name || '',
   last_name: row?.last_name || '',
   suffix: row?.suffix || '',
-  age: row?.age ?? null,
-  gender: row?.gender || '',
-  medical_condition: row?.medical_condition || '',
-  patient_picture: row?.patient_picture || '',
-  user_id: row?.user_id || null,
+  full_name: row?.full_name || '',
 });
 
 export const fetchSystemUserByAuthUserId = async (authUserId) => {
@@ -151,6 +154,45 @@ export const linkSystemUserToAuthUserId = async ({ userId, authUserId, email, ro
     .eq('user_id', userId)
     .select()
     .single();
+};
+
+export const updateSystemUserRoleByAuthUserId = async ({ authUserId, role, email }) => {
+  if (!authUserId) {
+    return { data: null, error: new Error('Auth user ID is required.') };
+  }
+
+  const systemUserResult = await ensureSystemUserByAuthUserId(authUserId);
+  if (systemUserResult.error || !systemUserResult.data?.user_id) {
+    return {
+      data: null,
+      error: systemUserResult.error || buildMissingSystemUserError(),
+    };
+  }
+
+  const payload = {
+    role: role || null,
+    updated_at: new Date().toISOString(),
+  };
+
+  if (email) {
+    payload.email = email;
+  }
+
+  const result = await supabase
+    .from('users')
+    .update(payload)
+    .eq('user_id', systemUserResult.data.user_id)
+    .select()
+    .single();
+
+  if (result.error) {
+    return result;
+  }
+
+  return {
+    data: result.data,
+    error: null,
+  };
 };
 
 export const ensureSystemUserRecord = async ({ authUserId, email, role }) => {
@@ -269,6 +311,8 @@ export const createUserDetails = async ({ systemUserId, details = {} }) => {
       contact_number: details.contact_number || '',
       joined_date: details.joined_date || null,
       photo_path: details.photo_path || null,
+      latitude: details.latitude ? Number(details.latitude) : null,
+      longitude: details.longitude ? Number(details.longitude) : null,
     }])
     .select()
     .single();
@@ -295,6 +339,52 @@ export const ensureUserDetailsRecord = async ({ systemUserId, details = {} }) =>
   }
 
   return createResult;
+};
+
+export const ensureProfileInfrastructure = async ({
+  authUserId,
+  email,
+  role,
+  details = {},
+}) => {
+  if (!authUserId) {
+    return { data: null, error: new Error('Auth user ID is required.') };
+  }
+
+  const systemUserResult = await ensureSystemUserRecord({
+    authUserId,
+    email,
+    role,
+  });
+
+  if (systemUserResult.error || !systemUserResult.data?.user_id) {
+    return {
+      data: null,
+      error: systemUserResult.error || buildMissingSystemUserError(),
+    };
+  }
+
+  const normalizedDetails = {
+    joined_date: details.joined_date || getTodayDate(),
+    ...details,
+  };
+
+  const userDetailsResult = await ensureUserDetailsRecord({
+    systemUserId: systemUserResult.data.user_id,
+    details: normalizedDetails,
+  });
+
+  if (userDetailsResult.error) {
+    return {
+      data: null,
+      error: userDetailsResult.error,
+    };
+  }
+
+  return {
+    data: normalizeSystemUser(systemUserResult.data, userDetailsResult.data || null),
+    error: null,
+  };
 };
 
 export const resolveSystemUser = async (userIdentifier, options = {}) => {
@@ -351,8 +441,13 @@ export const fetchProfileById = async (authUserId) => {
     return { data: null, error: systemUserResult.error || new Error('System user could not be loaded.') };
   }
 
-  const userDetailsResult = await fetchUserDetailsBySystemUserId(systemUserResult.data.user_id);
-  if (userDetailsResult.error && userDetailsResult.error.code !== 'PGRST116') {
+  const userDetailsResult = await ensureUserDetailsRecord({
+    systemUserId: systemUserResult.data.user_id,
+    details: {
+      joined_date: getTodayDate(),
+    },
+  });
+  if (userDetailsResult.error) {
     return { data: null, error: userDetailsResult.error };
   }
 
@@ -368,7 +463,16 @@ export const updateProfile = async (authUserId, updates) => {
     return { data: null, error: systemUserResult.error || new Error('System user could not be loaded.') };
   }
 
-  await ensureUserDetailsBySystemUserId(systemUserResult.data);
+  const ensuredDetailsResult = await ensureUserDetailsRecord({
+    systemUserId: systemUserResult.data.user_id,
+    details: {
+      joined_date: getTodayDate(),
+    },
+  });
+
+  if (ensuredDetailsResult.error) {
+    return { data: null, error: ensuredDetailsResult.error };
+  }
 
   const payload = {
     first_name: updates.first_name ?? undefined,
@@ -384,6 +488,8 @@ export const updateProfile = async (authUserId, updates) => {
     barangay: updates.barangay ?? undefined,
     region: updates.region ?? undefined,
     country: updates.country ?? undefined,
+    latitude: updates.latitude !== undefined && updates.latitude !== '' ? Number(updates.latitude) : undefined,
+    longitude: updates.longitude !== undefined && updates.longitude !== '' ? Number(updates.longitude) : undefined,
     joined_date: updates.joined_date ?? undefined,
     photo_path: updates.avatar_url ?? updates.photo_path ?? undefined,
     updated_at: new Date().toISOString(),
@@ -487,9 +593,54 @@ export const fetchPatientDetailsByCode = async (patientCode) => {
     .ilike('patient_code', normalizedCode)
     .maybeSingle();
 
+  if (result.error || !result.data) {
+    return {
+      data: null,
+      error: result.error,
+    };
+  }
+
+  let systemUser = null;
+  let userDetails = null;
+  let hospital = null;
+
+  if (result.data.user_id) {
+    const [systemUserResult, userDetailsResult] = await Promise.all([
+      resolveSystemUser(result.data.user_id, { ensure: false }),
+      fetchUserDetailsBySystemUserId(result.data.user_id),
+    ]);
+
+    systemUser = systemUserResult.data || null;
+    userDetails = userDetailsResult.data || null;
+  }
+
+  if (result.data.hospital_id) {
+    const hospitalResult = await fetchHospitalRepresentativeById(result.data.hospital_id);
+    hospital = hospitalResult.data || null;
+  }
+
+  const fullName = [
+    userDetails?.first_name,
+    userDetails?.middle_name,
+    userDetails?.last_name,
+    userDetails?.suffix,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .trim();
+
   return {
-    data: result.data ? normalizePatientLinkPreview(result.data) : null,
-    error: result.error,
+    data: normalizePatientLinkPreview({
+      ...result.data,
+      linked_auth_user_id: systemUser?.auth_user_id || '',
+      hospital_name: hospital?.hospital_name || '',
+      first_name: userDetails?.first_name || '',
+      middle_name: userDetails?.middle_name || '',
+      last_name: userDetails?.last_name || '',
+      suffix: userDetails?.suffix || '',
+      full_name: fullName,
+    }),
+    error: null,
   };
 };
 
@@ -507,14 +658,11 @@ export const createPatientDetails = async (payload) => {
     .insert([{
       user_id: systemUserResult.data.user_id,
       hospital_id: payload?.hospital_id || null,
-      first_name: payload?.first_name || profile?.first_name || '',
-      middle_name: payload?.middle_name || profile?.middle_name || '',
-      last_name: payload?.last_name || profile?.last_name || '',
-      suffix: payload?.suffix || profile?.suffix || '',
-      age: payload?.age ?? null,
-      gender: payload?.gender || profile?.gender || '',
       patient_picture: payload?.patient_picture || profile?.photo_path || null,
       medical_condition: payload?.medical_condition || null,
+      date_of_diagnosis: payload?.date_of_diagnosis || null,
+      guardian: payload?.guardian || null,
+      guardian_contact_number: payload?.guardian_contact_number || null,
       medical_document: payload?.medical_document || null,
     }])
     .select()
@@ -568,14 +716,11 @@ export const updatePatientDetails = async (userIdentifier, updates) => {
     .from('patients')
     .update({
       hospital_id: updates.hospital_id ?? undefined,
-      first_name: updates.first_name ?? undefined,
-      middle_name: updates.middle_name ?? undefined,
-      last_name: updates.last_name ?? undefined,
-      suffix: updates.suffix ?? undefined,
-      age: updates.age ?? undefined,
-      gender: updates.gender ?? undefined,
       medical_condition: updates.medical_condition ?? undefined,
       patient_picture: updates.patient_picture ?? updates.avatar_url ?? undefined,
+      date_of_diagnosis: updates.date_of_diagnosis ?? undefined,
+      guardian: updates.guardian ?? undefined,
+      guardian_contact_number: updates.guardian_contact_number ?? undefined,
       medical_document: updates.medical_document ?? undefined,
       updated_at: new Date().toISOString(),
     })
@@ -604,8 +749,37 @@ export const linkPatientDetailsToUserByCode = async ({
     return { data: null, error: patientResult.error || new Error('Patient record was not found.') };
   }
 
-  if (patientResult.data.user_id && patientResult.data.user_id !== systemUserResult.data.user_id) {
+  if (
+    patientResult.data.linked_auth_user_id
+    && patientResult.data.linked_auth_user_id !== systemUserResult.data.auth_user_id
+  ) {
     return { data: null, error: new Error('This patient code is already linked to another account.') };
+  }
+
+  if (patientResult.data.user_id && patientResult.data.user_id !== systemUserResult.data.user_id) {
+    const sourceDetailsResult = await fetchUserDetailsBySystemUserId(patientResult.data.user_id);
+
+    if (sourceDetailsResult.data && systemUserResult.data.auth_user_id) {
+      await updateProfile(systemUserResult.data.auth_user_id, {
+        first_name: sourceDetailsResult.data.first_name || undefined,
+        middle_name: sourceDetailsResult.data.middle_name || undefined,
+        last_name: sourceDetailsResult.data.last_name || undefined,
+        suffix: sourceDetailsResult.data.suffix || undefined,
+        birthdate: sourceDetailsResult.data.birthdate || undefined,
+        gender: sourceDetailsResult.data.gender || undefined,
+        contact_number: sourceDetailsResult.data.contact_number || undefined,
+        street: sourceDetailsResult.data.street || undefined,
+        barangay: sourceDetailsResult.data.barangay || undefined,
+        region: sourceDetailsResult.data.region || undefined,
+        city: sourceDetailsResult.data.city || undefined,
+        province: sourceDetailsResult.data.province || undefined,
+        country: sourceDetailsResult.data.country || undefined,
+        joined_date: sourceDetailsResult.data.joined_date || undefined,
+        photo_path: sourceDetailsResult.data.photo_path || undefined,
+        latitude: sourceDetailsResult.data.latitude ?? undefined,
+        longitude: sourceDetailsResult.data.longitude ?? undefined,
+      });
+    }
   }
 
   const updates = {

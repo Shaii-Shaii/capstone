@@ -16,7 +16,7 @@ import { theme } from '../../design-system/theme';
 
 export function NotificationCenterScreen({ role }) {
   const router = useRouter();
-  const { user, profile, patientProfile } = useAuth();
+  const { user, profile } = useAuth();
   const {
     notifications,
     unreadCount,
@@ -29,8 +29,8 @@ export function NotificationCenterScreen({ role }) {
   } = useNotifications({ role, userId: user?.id, databaseUserId: profile?.user_id });
 
   const navItems = role === 'donor' ? donorDashboardNavItems : patientDashboardNavItems;
-  const firstName = profile?.first_name || patientProfile?.first_name || '';
-  const lastName = profile?.last_name || patientProfile?.last_name || '';
+  const firstName = profile?.first_name || '';
+  const lastName = profile?.last_name || '';
   const avatarInitials = `${firstName?.[0] || ''}${lastName?.[0] || ''}`.trim();
 
   const handleNavPress = (item) => {

@@ -100,6 +100,19 @@ const buildStoredFrontPhoto = (uri, requestId) => (
     : null
 );
 
+const buildStoredPreview = (specification, wigRequest) => (
+  specification?.ai_wig_preview_url
+    ? {
+        summary: wigRequest?.notes || specification?.notes || '',
+        style_notes: specification?.notes || '',
+        recommended_style_name: specification?.style_preference || 'Saved wig preview',
+        recommended_style_family: specification?.preferred_length || 'Saved recommendation',
+        generated_image_data_url: specification.ai_wig_preview_url,
+        options: [],
+      }
+    : null
+);
+
 export const usePatientWigRequest = ({ userId }) => {
   const [referenceImage, setReferenceImage] = useState(null);
   const [preview, setPreview] = useState(null);
@@ -117,7 +130,7 @@ export const usePatientWigRequest = ({ userId }) => {
   const [isSavingRequest, setIsSavingRequest] = useState(false);
   const [requestedSavedPreviewId, setRequestedSavedPreviewId] = useState(null);
 
-  const hasSubmittedRequest = Boolean(context.latestWigRequest?.id);
+  const hasSubmittedRequest = Boolean(context.latestWigRequest?.req_id);
 
   const progressLabel = useMemo(() => {
     if (isSavingRequest) return 'Submitting wig request';
@@ -140,12 +153,12 @@ export const usePatientWigRequest = ({ userId }) => {
 
   const buildSavedReferenceImage = useCallback(() => (
     buildStoredFrontPhoto(
-      context.latestWigSpecification?.ai_picture_sample_url,
-      context.latestWigRequest?.id
+      context.latestWigSpecification?.patient_picture,
+      context.latestWigRequest?.req_id
     )
   ), [
-    context.latestWigRequest?.id,
-    context.latestWigSpecification?.ai_picture_sample_url,
+    context.latestWigRequest?.req_id,
+    context.latestWigSpecification?.patient_picture,
   ]);
 
   const refreshContext = useCallback(async () => {
@@ -162,10 +175,10 @@ export const usePatientWigRequest = ({ userId }) => {
       latestWigSpecification: result.latestWigSpecification,
     });
 
-    if (result.latestWigRequest?.id && result.latestWigSpecification?.ai_picture_sample_url) {
+    if (result.latestWigRequest?.req_id && result.latestWigSpecification?.patient_picture) {
       const storedFrontPhoto = buildStoredFrontPhoto(
-        result.latestWigSpecification.ai_picture_sample_url,
-        result.latestWigRequest.id
+        result.latestWigSpecification.patient_picture,
+        result.latestWigRequest.req_id
       );
 
       setReferenceImage((current) => {
@@ -173,6 +186,10 @@ export const usePatientWigRequest = ({ userId }) => {
         if (current?.uri === storedFrontPhoto?.uri) return current;
         return storedFrontPhoto;
       });
+    }
+
+    if (result.latestWigSpecification?.ai_wig_preview_url) {
+      setPreview((current) => current || buildStoredPreview(result.latestWigSpecification, result.latestWigRequest));
     }
 
     if (result.error) {
@@ -192,7 +209,7 @@ export const usePatientWigRequest = ({ userId }) => {
 
   useEffect(() => {
     setRequestedSavedPreviewId(null);
-  }, [context.latestWigRequest?.id]);
+  }, [context.latestWigRequest?.req_id]);
 
   const requestPreview = useCallback(async ({
     preferences,
@@ -227,13 +244,13 @@ export const usePatientWigRequest = ({ userId }) => {
 
   useEffect(() => {
     if (!hasSubmittedRequest) return;
-    if (!context.latestWigRequest?.id || requestedSavedPreviewId === context.latestWigRequest.id) return;
+    if (!context.latestWigRequest?.req_id || requestedSavedPreviewId === context.latestWigRequest.req_id) return;
     if (preview || isGeneratingPreview) return;
 
     const storedFrontPhoto = referenceImage?.uri ? referenceImage : buildSavedReferenceImage();
     if (!storedFrontPhoto?.uri) return;
 
-    setRequestedSavedPreviewId(context.latestWigRequest.id);
+    setRequestedSavedPreviewId(context.latestWigRequest.req_id);
     requestPreview({
       preferences: buildSavedPreferences(),
       imageSource: storedFrontPhoto,
@@ -242,7 +259,7 @@ export const usePatientWigRequest = ({ userId }) => {
   }, [
     buildSavedPreferences,
     buildSavedReferenceImage,
-    context.latestWigRequest?.id,
+    context.latestWigRequest?.req_id,
     hasSubmittedRequest,
     isGeneratingPreview,
     preview,

@@ -1,3 +1,5 @@
+import { supabase } from '../api/supabase/client';
+
 export const createAppError = (title, message) => ({
   title,
   message,
@@ -9,11 +11,112 @@ export const getErrorMessage = (error, fallback = '') => {
   return fallback;
 };
 
+const writeConsoleLog = (level, scope, message, extras = {}, error = undefined) => {
+  const logger = typeof console?.[level] === 'function' ? console[level] : console.log;
+  logger(`[${scope}] ${message}`, {
+    timestamp: new Date().toISOString(),
+    scope,
+    message,
+    extras,
+    error,
+  });
+};
+
+export const logAppEvent = (scope, message, extras = {}, level = 'info') => {
+  writeConsoleLog(level, scope, message, extras);
+};
+
 export const logAppError = (scope, error, extras) => {
   const technicalMessage = getErrorMessage(error, 'Unknown error');
 
-  console.log(`[${scope}] ${technicalMessage}`, {
-    error,
-    extras,
-  });
+  writeConsoleLog('error', scope, technicalMessage, extras, error);
+};
+
+const resolveAuditUserId = async ({ databaseUserId = null, authUserId = '', userEmail = '' } = {}) => {
+  if (databaseUserId) {
+    return databaseUserId;
+  }
+
+  if (authUserId) {
+    const result = await supabase
+      .from('users')
+      .select('user_id')
+      .eq('auth_user_id', authUserId)
+      .maybeSingle();
+
+    if (result.data?.user_id) {
+      return result.data.user_id;
+    }
+  }
+
+  if (userEmail) {
+    const result = await supabase
+      .from('users')
+      .select('user_id')
+      .ilike('email', userEmail.trim())
+      .maybeSingle();
+
+    if (result.data?.user_id) {
+      return result.data.user_id;
+    }
+  }
+
+  return null;
+};
+
+export const writeAuditLog = async ({
+  databaseUserId = null,
+  authUserId = '',
+  userEmail = '',
+  action,
+  description = '',
+  resource = '',
+  status = 'success',
+}) => {
+  try {
+    if (!action) {
+      return { success: false, error: 'Audit action is required.' };
+    }
+
+    const userId = await resolveAuditUserId({ databaseUserId, authUserId, userEmail });
+
+    const result = await supabase
+      .from('audit_logs')
+      .insert([{
+        user_id: userId,
+        action,
+        description: description || null,
+        time: new Date().toISOString(),
+        user_email: userEmail || null,
+        resource: resource || null,
+        status: status || 'success',
+      }])
+      .select('log_id')
+      .maybeSingle();
+
+    if (result.error) {
+      throw result.error;
+    }
+
+    return {
+      success: true,
+      logId: result.data?.log_id || null,
+      error: null,
+    };
+  } catch (error) {
+    logAppError('audit.writeAuditLog', error, {
+      action,
+      resource,
+      status,
+      userEmail,
+      authUserId,
+      databaseUserId,
+    });
+
+    return {
+      success: false,
+      logId: null,
+      error: getErrorMessage(error, 'Unable to write audit log.'),
+    };
+  }
 };

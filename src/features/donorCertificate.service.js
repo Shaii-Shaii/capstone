@@ -35,7 +35,7 @@ const normalizeCertificateRecord = ({ profile, submission, screening }) => {
 
   return {
     donorName,
-    submissionId: submission.id,
+    submissionId: submission.submission_id,
     submissionCode: submission.submission_code || 'Pending submission code',
     donationDate: submission.created_at,
     donationDateLabel: formatCertificateDate(submission.created_at),

@@ -57,7 +57,7 @@ const getStepState = ({ index, currentIndex, highlightedIndex = null, hasData = 
 };
 
 const buildDonorTracker = ({ submission, detail, logistics, qaAssessment, history }) => {
-  if (!submission?.id) {
+  if (!submission?.submission_id) {
     return {
       tracker: null,
       error: null,
@@ -129,7 +129,7 @@ const buildDonorTracker = ({ submission, detail, logistics, qaAssessment, histor
 
   const events = [
     {
-      key: `submission-${submission.id}`,
+      key: `submission-${submission.submission_id}`,
       title: 'Hair submission created',
       description: `Submission code ${submission.submission_code || 'not available'}`,
       timestamp: formatDateTime(submission.created_at),
@@ -137,7 +137,7 @@ const buildDonorTracker = ({ submission, detail, logistics, qaAssessment, histor
     },
     logistics
       ? {
-          key: `logistics-${logistics.id}`,
+          key: `logistics-${logistics.submission_logistics_id}`,
           title: logistics.logistics_type
             ? `${normalizeStatusLabel(logistics.logistics_type)} arranged`
             : 'Logistics updated',
@@ -155,7 +155,7 @@ const buildDonorTracker = ({ submission, detail, logistics, qaAssessment, histor
       : null,
     qaAssessment
       ? {
-          key: `qa-${qaAssessment.id}`,
+          key: `qa-${qaAssessment.qa_assessment_id}`,
           title: 'Quality assessment updated',
           description: qaAssessment.remarks || 'The QA result is now available for this bundle.',
           timestamp: formatDateTime(qaAssessment.assessed_at),
@@ -193,8 +193,8 @@ const buildDonorTracker = ({ submission, detail, logistics, qaAssessment, histor
       steps,
       events,
       watch: {
-        submissionId: submission.id,
-        submissionDetailId: detail?.id || null,
+        submissionId: submission.submission_id,
+        submissionDetailId: detail?.submission_detail_id || null,
       },
     },
     error: null,
@@ -202,7 +202,7 @@ const buildDonorTracker = ({ submission, detail, logistics, qaAssessment, histor
 };
 
 const buildPatientTracker = ({ patientDetails, wigRequest, latestAllocation }) => {
-  if (!patientDetails?.id) {
+  if (!patientDetails?.patient_id) {
     return {
       tracker: null,
       error: null,
@@ -215,9 +215,9 @@ const buildPatientTracker = ({ patientDetails, wigRequest, latestAllocation }) =
 
   const currentIndex = latestAllocation?.released_at || releaseStatus
     ? 3
-    : wig?.id || latestAllocation?.id
+    : wig?.id || latestAllocation?.allocation_id
       ? 2
-      : wigRequest?.id
+      : wigRequest?.req_id
         ? 1
         : 0;
 
@@ -246,7 +246,7 @@ const buildPatientTracker = ({ patientDetails, wigRequest, latestAllocation }) =
       description: wig?.wig_name
         ? `${wig.wig_name}${wig.wig_code ? ` • ${wig.wig_code}` : ''}`
         : 'A production update appears here once a wig record is linked to your request.',
-      state: getStepState({ index: 2, currentIndex, hasData: Boolean(wig?.id || latestAllocation?.id) }),
+      state: getStepState({ index: 2, currentIndex, hasData: Boolean(wig?.id || latestAllocation?.allocation_id) }),
     },
     {
       key: 'allocation',
@@ -256,14 +256,14 @@ const buildPatientTracker = ({ patientDetails, wigRequest, latestAllocation }) =
         || (latestAllocation?.allocated_at
           ? `Allocated on ${formatDateTime(latestAllocation.allocated_at)}`
           : 'Allocation and release updates will appear here.'),
-      state: getStepState({ index: 3, currentIndex, hasData: Boolean(latestAllocation?.id) }),
+      state: getStepState({ index: 3, currentIndex, hasData: Boolean(latestAllocation?.allocation_id) }),
     },
   ];
 
   const events = [
     wigRequest
       ? {
-          key: `wig-request-${wigRequest.id}`,
+          key: `wig-request-${wigRequest.req_id}`,
           title: 'Wig request submitted',
           description: wigRequest.notes || 'Your wig preferences were saved to the request.',
           timestamp: formatDateTime(wigRequest.updated_at || wigRequest.request_date),
@@ -281,7 +281,7 @@ const buildPatientTracker = ({ patientDetails, wigRequest, latestAllocation }) =
       : null,
     latestAllocation
       ? {
-          key: `allocation-${latestAllocation.id}`,
+          key: `allocation-${latestAllocation.allocation_id}`,
           title: latestAllocation.released_at ? 'Wig released' : 'Wig allocated',
           description: latestAllocation.notes || 'Allocation details were updated for your request.',
           timestamp: formatDateTime(latestAllocation.released_at || latestAllocation.allocated_at),
@@ -310,8 +310,8 @@ const buildPatientTracker = ({ patientDetails, wigRequest, latestAllocation }) =
       steps,
       events,
       watch: {
-        patientId: patientDetails.id,
-        reqId: wigRequest?.id || null,
+        patientId: patientDetails.patient_id,
+        reqId: wigRequest?.req_id || null,
         wigId: wig?.id || null,
       },
     },
@@ -335,16 +335,16 @@ export const getProcessTracking = async ({ role, userId }) => {
         return { tracker: null, error: null };
       }
 
-      const { data: detail, error: detailError } = await fetchLatestHairSubmissionDetailBySubmissionId(submission.id);
+      const { data: detail, error: detailError } = await fetchLatestHairSubmissionDetailBySubmissionId(submission.submission_id);
       if (detailError) {
         throw new Error(detailError.message || 'Unable to load donor tracking details.');
       }
 
       const [{ data: logistics, error: logisticsError }, { data: qaAssessment, error: qaError }, { data: history, error: historyError }] =
         await Promise.all([
-          fetchHairSubmissionLogisticsBySubmissionId(submission.id),
-          detail?.id ? fetchLatestQaAssessmentBySubmissionDetailId(detail.id) : Promise.resolve({ data: null, error: null }),
-          fetchHairBundleTrackingHistory({ submissionId: submission.id, submissionDetailId: detail?.id }),
+          fetchHairSubmissionLogisticsBySubmissionId(submission.submission_id),
+          detail?.submission_detail_id ? fetchLatestQaAssessmentBySubmissionDetailId(detail.submission_detail_id) : Promise.resolve({ data: null, error: null }),
+          fetchHairBundleTrackingHistory({ submissionId: submission.submission_id, submissionDetailId: detail?.submission_detail_id }),
         ]);
 
       if (logisticsError) throw new Error(logisticsError.message || 'Unable to load logistics updates.');
@@ -366,14 +366,14 @@ export const getProcessTracking = async ({ role, userId }) => {
         throw new Error(patientDetailsError.message || 'Unable to load patient details.');
       }
 
-      if (!patientDetails?.id) {
+      if (!patientDetails?.patient_id) {
         return { tracker: null, error: null };
       }
 
       const [{ data: wigRequest, error: wigRequestError }, { data: latestAllocation, error: allocationError }] =
         await Promise.all([
-          fetchLatestWigRequestByPatientDetailsId(patientDetails.id),
-          fetchLatestWigAllocationByPatientDetailsId(patientDetails.id),
+          fetchLatestWigRequestByPatientDetailsId(patientDetails.patient_id),
+          fetchLatestWigAllocationByPatientDetailsId(patientDetails.patient_id),
         ]);
 
       if (wigRequestError) throw new Error(wigRequestError.message || 'Unable to load wig request tracking.');

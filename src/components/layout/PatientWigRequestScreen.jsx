@@ -648,13 +648,13 @@ export function PatientWigRequestScreen() {
   });
 
   const draftValues = useWatch({ control });
-  const firstName = (profile?.first_name || patientProfile?.first_name || '').trim();
-  const lastName = (profile?.last_name || patientProfile?.last_name || '').trim();
+  const firstName = (profile?.first_name || '').trim();
+  const lastName = (profile?.last_name || '').trim();
   const avatarUri = profile?.avatar_url || profile?.photo_path || patientProfile?.patient_picture || '';
   const avatarInitials = `${firstName?.[0] || ''}${lastName?.[0] || ''}`.trim();
   const hasCameraPermission = Boolean(cameraPermission?.granted);
   const shouldShowTracker = hasSubmittedRequest && Boolean(tracker || isLoadingTracking || trackingError);
-  const shouldShowRecommendation = Boolean(preview || referenceImage?.uri || latestWigSpecification?.ai_picture_sample_url);
+  const shouldShowRecommendation = Boolean(preview || referenceImage?.uri || latestWigSpecification?.patient_picture || latestWigSpecification?.ai_wig_preview_url);
   const recommendationOptions = useMemo(() => buildRecommendationOptions({
     preview,
     specification: latestWigSpecification,
@@ -680,11 +680,11 @@ export function PatientWigRequestScreen() {
     || 'Your suggested wig recommendation will appear here after the front photo is processed.';
   const preferredColor = latestWigSpecification?.preferred_color || draftValues?.preferredColor || '';
   const preferredLength = latestWigSpecification?.preferred_length || draftValues?.preferredLength || '';
-  const generatedImageUri = selectedOption?.generatedImageUri || preview?.generated_image_data_url || '';
+  const generatedImageUri = selectedOption?.generatedImageUri || preview?.generated_image_data_url || latestWigSpecification?.ai_wig_preview_url || '';
 
   useEffect(() => {
     setSelectedOptionId(recommendationOptions[0]?.id || '');
-  }, [preview?.generated_image_data_url, recommendationOptions]);
+  }, [latestWigSpecification?.ai_wig_preview_url, preview?.generated_image_data_url, recommendationOptions]);
 
   const handleNavPress = (item) => {
     if (!item.route || item.route === '/patient/requests') return;

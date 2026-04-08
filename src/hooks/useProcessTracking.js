@@ -144,6 +144,7 @@ export const useProcessTracking = ({ role, userId, databaseUserId: preferredData
         event: '*',
         schema: 'public',
         table: 'patients',
+        ...(databaseUserId ? { filter: `user_id=eq.${databaseUserId}` } : {}),
       }, () => {
         refreshTracking();
       });
@@ -176,6 +177,17 @@ export const useProcessTracking = ({ role, userId, databaseUserId: preferredData
           schema: 'public',
           table: 'wigs',
           filter: `wig_id=eq.${watch.wigId}`,
+        }, () => {
+          refreshTracking();
+        });
+      }
+
+      if (watch.patientId) {
+        channel = channel.on('postgres_changes', {
+          event: '*',
+          schema: 'public',
+          table: 'wig_allocations',
+          filter: `patient_id=eq.${watch.patientId}`,
         }, () => {
           refreshTracking();
         });

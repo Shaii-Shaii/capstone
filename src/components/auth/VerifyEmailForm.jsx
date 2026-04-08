@@ -19,7 +19,7 @@ export const VerifyEmailForm = ({ schema, emailContext, onSubmit, onResend, isLo
   return (
     <View style={styles.container}>
       <Text style={styles.subtitle}>
-        Enter the 6-digit code sent to <Text style={styles.emailText}>{emailContext}</Text>.
+        Code sent to <Text style={styles.emailText}>{emailContext}</Text>
       </Text>
       {successMessage ? <Text style={styles.successText}>{successMessage}</Text> : null}
 

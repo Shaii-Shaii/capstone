@@ -1,7 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { linkPatientRecordByCode, saveAvatar, saveProfile } from '../../profile/services/profile.service';
 import { ensureSystemUserRecord, ensureUserDetailsRecord } from '../../profile/api/profile.api';
-import { calculateAgeFromBirthdate } from '../validators/auth.schema';
 
 const SIGNUP_DRAFT_STORAGE_KEY = 'donivra.signupDrafts';
 
@@ -23,14 +22,6 @@ const sanitizeDraft = (draft = {}) => ({
   linkedPatientCode: draft.linkedPatientCode?.trim?.() || '',
   linkedPatientId: draft.linkedPatientId || '',
   linkedPatientHospitalId: draft.linkedPatientHospitalId || '',
-  linkedPatientName: draft.linkedPatientName?.trim?.() || '',
-  linkedPatientCondition: draft.linkedPatientCondition?.trim?.() || '',
-  patientFirstName: draft.patientFirstName?.trim?.() || '',
-  patientMiddleName: draft.patientMiddleName?.trim?.() || '',
-  patientLastName: draft.patientLastName?.trim?.() || '',
-  patientSuffix: draft.patientSuffix?.trim?.() || '',
-  patientAge: draft.patientAge?.toString?.().trim?.() || '',
-  patientGender: draft.patientGender?.trim?.() || '',
   patientMedicalCondition: draft.patientMedicalCondition?.trim?.() || '',
   patientPicture: draft.patientPicture?.trim?.() || '',
   patientMedicalDocument: draft.patientMedicalDocument?.trim?.() || '',
@@ -100,12 +91,6 @@ export const syncPendingSignupDraft = async ({ userId, email, role }) => {
 
     const manualPatientRoleSpecific = draft.isPatient === 'yes' && draft.patientFlowMode === 'manual'
       ? {
-          first_name: draft.patientFirstName || draft.firstName,
-          middle_name: draft.patientMiddleName,
-          last_name: draft.patientLastName || draft.lastName,
-          suffix: draft.patientSuffix,
-          age: calculateAgeFromBirthdate(draft.birthdate),
-          gender: draft.patientGender,
           medical_condition: draft.patientMedicalCondition,
           patient_picture: draft.patientPicture || draft.profilePhoto || '',
           medical_document: draft.patientMedicalDocument || '',
@@ -144,6 +129,8 @@ export const syncPendingSignupDraft = async ({ userId, email, role }) => {
         contact_number: draft.phone,
         joined_date: draft.joinedDate,
         photo_path: draft.profilePhoto || null,
+        latitude: draft.latitude,
+        longitude: draft.longitude,
       },
     });
 
@@ -167,6 +154,8 @@ export const syncPendingSignupDraft = async ({ userId, email, role }) => {
       barangay: draft.barangay,
       region: draft.region,
       country: draft.country,
+      latitude: draft.latitude,
+      longitude: draft.longitude,
       city: draft.city,
       province: draft.province,
       joined_date: draft.joinedDate,

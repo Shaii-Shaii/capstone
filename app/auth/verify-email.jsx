@@ -1,26 +1,17 @@
 import React, { useEffect, useState } from 'react';
-import { View, StyleSheet, Alert, Text } from 'react-native';
+import { View, StyleSheet, Alert } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { VerifyEmailForm } from '../../src/components/auth/VerifyEmailForm';
 import { AuthHeader } from '../../src/components/auth/AuthHeader';
 import { AuthScreenLayout } from '../../src/components/auth/AuthScreenLayout';
 import { AppTextLink } from '../../src/components/ui/AppTextLink';
-import { FormProgressStepper } from '../../src/components/ui/FormProgressStepper';
 import { verifyEmailSchema } from '../../src/features/auth/validators/auth.schema';
 import { logout, verifyEmail, resendVerifyEmail } from '../../src/features/auth/services/auth.service';
 import { syncPendingSignupDraft } from '../../src/features/auth/services/signupDraft.service';
 import { theme } from '../../src/design-system/theme';
 
 const RESEND_DELAY = 30;
-const SIGNUP_STEPS = [
-  { key: 'personal', label: 'Personal Details', shortLabel: 'Personal' },
-  { key: 'address', label: 'Address Details', shortLabel: 'Address' },
-  { key: 'patient', label: 'Patient', shortLabel: 'Patient' },
-  { key: 'photo', label: 'Profile Photo', shortLabel: 'Photo' },
-  { key: 'confirm', label: 'Confirm', shortLabel: 'Confirm' },
-  { key: 'verify', label: 'OTP Verification', shortLabel: 'Verify' },
-];
 
 export default function VerifyEmailScreen() {
   const router = useRouter();
@@ -30,7 +21,6 @@ export default function VerifyEmailScreen() {
   const [isVerifying, setIsVerifying] = useState(false);
   const [isResending, setIsResending] = useState(false);
   const [resendCountdown, setResendCountdown] = useState(RESEND_DELAY);
-  const [verified, setVerified] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
 
   useEffect(() => {
@@ -69,7 +59,6 @@ export default function VerifyEmailScreen() {
     }
 
     await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    setVerified(true);
     setStatusMessage('Email verified. Redirecting to login...');
 
     if (session?.user?.id && email) {
@@ -113,14 +102,8 @@ export default function VerifyEmailScreen() {
       <AppTextLink title="Back" variant="muted" onPress={() => router.back()} />
       <AuthHeader
         title="Verify your email"
-        subtitle="Enter the 6-digit code to continue."
+        subtitle="Enter the code to continue."
         eyebrow="Email confirmation"
-      />
-
-      <FormProgressStepper
-        steps={SIGNUP_STEPS}
-        currentStep={5}
-        style={styles.stepper}
       />
 
       <View style={styles.formContainer}>
@@ -135,8 +118,6 @@ export default function VerifyEmailScreen() {
           successMessage={statusMessage}
         />
       </View>
-
-      {verified ? <Text style={styles.readyText}>Your account is ready.</Text> : null}
     </AuthScreenLayout>
   );
 }
@@ -145,15 +126,5 @@ const styles = StyleSheet.create({
   formContainer: {
     marginTop: theme.spacing.md,
     width: '100%',
-  },
-  stepper: {
-    marginTop: theme.spacing.sm,
-  },
-  readyText: {
-    marginTop: theme.spacing.md,
-    textAlign: 'center',
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.compact.bodySm,
-    color: theme.colors.textSecondary,
   },
 });

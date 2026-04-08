@@ -12,7 +12,6 @@ import {
   Image,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Animated, { FadeIn, FadeInUp, FadeOut } from 'react-native-reanimated';
 import { ScreenContainer } from '../ui/ScreenContainer';
 import { DashboardTabBar } from '../ui/DashboardTabBar';
 import { AppCard } from '../ui/AppCard';
@@ -73,12 +72,9 @@ export const DashboardLayout = ({
       ]}
     >
       <View style={[styles.shell, isShortScreen ? styles.shellCompact : null]}>
-        <Animated.View
-          entering={FadeInUp.duration(theme.motion.screenEnter)}
-          style={[styles.headerContainer, isShortScreen ? styles.headerContainerCompact : null]}
-        >
+        <View style={[styles.headerContainer, isShortScreen ? styles.headerContainerCompact : null]}>
           {header}
-        </Animated.View>
+        </View>
 
         <ScrollView
           style={styles.scrollView}
@@ -87,9 +83,7 @@ export const DashboardLayout = ({
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
-          <Animated.View
-            entering={FadeIn.delay(30).duration(theme.motion.contentSwap)}
-            exiting={FadeOut.duration(theme.motion.fast)}
+          <View
             style={[
               styles.contentStage,
               isShortScreen ? styles.contentStageCompact : null,
@@ -103,7 +97,7 @@ export const DashboardLayout = ({
                 {footer}
               </View>
             ) : null}
-          </Animated.View>
+          </View>
         </ScrollView>
       </View>
 

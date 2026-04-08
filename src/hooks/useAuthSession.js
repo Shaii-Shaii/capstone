@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../api/supabase/client';
-import { getCurrentAccountBundle } from '../features/profile/services/profile.service';
+import { getCurrentAccountBundle, needsPostLoginOnboarding } from '../features/profile/services/profile.service';
+import { ensureProfileInfrastructure } from '../features/profile/api/profile.api';
 
 export const useAuthSession = () => {
   const [user, setUser] = useState(null);
@@ -10,11 +11,20 @@ export const useAuthSession = () => {
   const [staffProfile, setStaffProfile] = useState(null);
   const [hospitalProfile, setHospitalProfile] = useState(null);
   const [databaseUserId, setDatabaseUserId] = useState(null);
+  const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
   const refreshProfile = useCallback(async (userId) => {
     const targetUserId = userId || user?.id;
     if (!targetUserId) return null;
+
+    const currentEmail = targetUserId === user?.id ? user?.email || '' : '';
+    const currentRole = targetUserId === user?.id ? user?.user_metadata?.role || null : null;
+    await ensureProfileInfrastructure({
+      authUserId: targetUserId,
+      email: currentEmail,
+      role: currentRole,
+    });
 
     const {
       profile: userProfile,
@@ -28,8 +38,13 @@ export const useAuthSession = () => {
     setStaffProfile(nextStaffProfile);
     setHospitalProfile(nextHospitalProfile);
     setDatabaseUserId(nextDatabaseUserId);
+    setNeedsOnboarding(needsPostLoginOnboarding({
+      profile: userProfile,
+      patientProfile: nextPatientProfile,
+      staffProfile: nextStaffProfile,
+    }));
     return userProfile;
-  }, [user?.id]);
+  }, [user?.email, user?.id, user?.user_metadata?.role]);
 
   useEffect(() => {
     let mounted = true;
@@ -44,6 +59,7 @@ export const useAuthSession = () => {
           setStaffProfile(null);
           setHospitalProfile(null);
           setDatabaseUserId(null);
+          setNeedsOnboarding(false);
           setIsLoading(false);
         }
         return;
@@ -55,6 +71,12 @@ export const useAuthSession = () => {
       }
       
       try {
+        await ensureProfileInfrastructure({
+          authUserId: newSession.user.id,
+          email: newSession.user.email || '',
+          role: newSession.user.user_metadata?.role || null,
+        });
+
         const {
           profile: userProfile,
           patientProfile: nextPatientProfile,
@@ -68,6 +90,11 @@ export const useAuthSession = () => {
           setStaffProfile(nextStaffProfile);
           setHospitalProfile(nextHospitalProfile);
           setDatabaseUserId(nextDatabaseUserId);
+          setNeedsOnboarding(needsPostLoginOnboarding({
+            profile: userProfile,
+            patientProfile: nextPatientProfile,
+            staffProfile: nextStaffProfile,
+          }));
           setIsLoading(false);
         }
       } catch (_err) {
@@ -77,6 +104,7 @@ export const useAuthSession = () => {
           setStaffProfile(null);
           setHospitalProfile(null);
           setDatabaseUserId(null);
+          setNeedsOnboarding(false);
           setIsLoading(false);
         }
       }
@@ -129,6 +157,7 @@ export const useAuthSession = () => {
     staffProfile,
     hospitalProfile,
     databaseUserId,
+    needsOnboarding,
     isLoading,
     refreshProfile,
   };

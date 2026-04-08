@@ -13,7 +13,6 @@ import {
   View,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import { LinearGradient } from 'expo-linear-gradient';
 import { AppIcon } from '../ui/AppIcon';
 import { StatusBanner } from '../ui/StatusBanner';
 import { ChatMessageBubble } from './ChatMessageBubble';
@@ -185,12 +184,7 @@ export function ChatbotSupportPanel({ role, userId, variant = 'screen' }) {
       {...containerProps}
     >
       {!isModal ? (
-        <LinearGradient
-          colors={['#f6eff4', '#f5f3ff', '#fff8fb']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.heroCard}
-        >
+        <View style={styles.heroCard}>
           <View style={styles.heroTopRow}>
             <View style={styles.heroBotPill}>
               <View style={styles.heroBotAvatarWrap}>
@@ -206,23 +200,8 @@ export function ChatbotSupportPanel({ role, userId, variant = 'screen' }) {
               <AppIcon name="refresh" state="muted" size="sm" />
             </Pressable>
           </View>
-
-          <View style={styles.heroOrbWrap}>
-            <View style={styles.heroOrbOuter}>
-              <LinearGradient
-                colors={['#ffffff', '#f3e7f5', '#e4f0ff']}
-                start={{ x: 0.1, y: 0.1 }}
-                end={{ x: 0.9, y: 1 }}
-                style={styles.heroOrbInner}
-              >
-                <Image source={chatbotIcon} style={styles.heroOrbIcon} resizeMode="contain" />
-              </LinearGradient>
-            </View>
-          </View>
-
-          <Text style={styles.heroTitle}>How can I help you today?</Text>
           <Text style={styles.heroBody}>{roleCopy}</Text>
-        </LinearGradient>
+        </View>
       ) : null}
 
       {shouldRenderSuggestions ? (
@@ -394,7 +373,8 @@ const styles = StyleSheet.create({
     padding: theme.spacing.md,
     borderWidth: 1,
     borderColor: theme.colors.borderSubtle,
-    overflow: 'hidden',
+    backgroundColor: theme.colors.backgroundPrimary,
+    gap: theme.spacing.sm,
   },
   heroTopRow: {
     flexDirection: 'row',
@@ -426,6 +406,7 @@ const styles = StyleSheet.create({
   },
   heroBotCopy: {
     gap: 1,
+    flex: 1,
   },
   heroBotName: {
     fontFamily: theme.typography.fontFamily,
@@ -444,46 +425,9 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.full,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.72)',
-  },
-  heroOrbWrap: {
-    alignItems: 'center',
-    marginTop: theme.spacing.md,
-    marginBottom: theme.spacing.sm,
-  },
-  heroOrbOuter: {
-    width: 122,
-    height: 122,
-    borderRadius: theme.radius.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.45)',
-    shadowColor: '#cab6de',
-    shadowOpacity: 0.32,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 8,
-  },
-  heroOrbInner: {
-    width: 94,
-    height: 94,
-    borderRadius: theme.radius.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  heroOrbIcon: {
-    width: 62,
-    height: 62,
-  },
-  heroTitle: {
-    textAlign: 'center',
-    fontFamily: theme.typography.fontFamilyDisplay,
-    fontSize: theme.typography.semantic.bodyLg,
-    color: theme.colors.textPrimary,
-    marginBottom: 4,
+    backgroundColor: theme.colors.surfaceSoft,
   },
   heroBody: {
-    textAlign: 'center',
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.bodySm,
     lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,

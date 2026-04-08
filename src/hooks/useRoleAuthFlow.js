@@ -4,7 +4,6 @@ import * as Haptics from 'expo-haptics';
 import { useAuthActions } from '../features/auth/hooks/useAuthActions';
 import {
   authMessages,
-  getHomeRouteForRole,
   roleAuthConfig,
 } from '../constants/auth';
 import { savePendingSignupDraft, syncPendingSignupDraft } from '../features/auth/services/signupDraft.service';
@@ -16,30 +15,17 @@ export const useRoleAuthFlow = (role) => {
   const expectedRole = role === 'donor' || role === 'patient' ? role : undefined;
 
   const handleSignup = async (data) => {
-    const selectedRole = expectedRole || (data.isPatient === 'yes' ? 'patient' : 'donor');
+    const selectedRole = expectedRole || 'donor';
 
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
     const result = await register(data.email, data.password, {
-      firstName: data.firstName,
-      lastName: data.lastName,
-      phone: data.phone,
-      birthdate: data.birthdate,
-      street: data.street,
-      barangay: data.barangay,
-      city: data.city,
-      province: data.province,
-      region: data.region,
-      country: data.country,
-      latitude: data.latitude,
-      longitude: data.longitude,
-      profilePhoto: data.profilePhoto,
       role: selectedRole,
     });
 
     if (result.success) {
       await savePendingSignupDraft({
-        ...data,
+        email: data.email,
         role: selectedRole,
       });
 
@@ -75,7 +61,7 @@ export const useRoleAuthFlow = (role) => {
         return;
       }
 
-      router.replace(getHomeRouteForRole(resolvedRole));
+      router.replace('/');
       return;
     }
 

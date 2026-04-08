@@ -1,10 +1,16 @@
 import { z } from 'zod';
-import { passwordField, phoneField } from '../auth/validators/auth.schema';
+import { birthdateField, nameField, passwordField, phoneField } from '../auth/validators/auth.schema';
 import { isPasswordReuse, reusedPasswordMessage } from '../../utils/passwordRules';
 
 export const optionalTextField = z.string().max(80, 'Too long').optional().or(z.literal(''));
 
 export const profileUpdateSchema = z.object({
+  firstName: nameField,
+  middleName: optionalTextField,
+  lastName: nameField,
+  suffix: optionalTextField,
+  birthdate: birthdateField,
+  gender: z.string().trim().min(1, 'Gender is required').max(50, 'Too long'),
   phone: phoneField,
   street: optionalTextField,
   barangay: optionalTextField,
@@ -24,4 +30,19 @@ export const changePasswordSchema = z.object({
 }).refine((data) => !isPasswordReuse(data.currentPassword, data.newPassword), {
   message: reusedPasswordMessage,
   path: ['newPassword'],
+});
+
+export const patientOnboardingSchema = z.object({
+  medical_condition: z.string().trim().min(1, 'Medical condition is required').max(300, 'Too long'),
+  date_of_diagnosis: z.string()
+    .trim()
+    .optional()
+    .or(z.literal(''))
+    .refine((value) => !value || /^\d{4}-\d{2}-\d{2}$/.test(value), {
+      message: 'Use YYYY-MM-DD format',
+    }),
+  guardian: optionalTextField,
+  guardian_contact_number: phoneField.optional().or(z.literal('')),
+  patient_picture: z.string().optional().or(z.literal('')),
+  medical_document: z.string().optional().or(z.literal('')),
 });

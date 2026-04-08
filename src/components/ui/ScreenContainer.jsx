@@ -2,7 +2,6 @@ import React from 'react';
 import { View, StyleSheet, Platform, ScrollView, KeyboardAvoidingView, useWindowDimensions } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import Animated, { FadeIn, FadeInUp } from 'react-native-reanimated';
 import { theme } from '../../design-system/theme';
 
 export const ScreenContainer = ({
@@ -38,8 +37,7 @@ export const ScreenContainer = ({
     : theme.layout.dashboardHeroMinHeight;
 
   const content = (
-    <Animated.View
-      entering={FadeInUp.duration(theme.motion.slow)}
+    <View
       style={[
         styles.content,
         isAuth ? styles.authContent : null,
@@ -53,7 +51,7 @@ export const ScreenContainer = ({
       ]}
     >
       {children}
-    </Animated.View>
+    </View>
   );
 
   const viewPort = scrollable ? (
@@ -90,14 +88,12 @@ export const ScreenContainer = ({
     <View style={[styles.container, isDashboard ? styles.dashboardContainer : null]}>
       {isAuth ? (
         <>
-          <Animated.View entering={FadeIn.duration(theme.motion.slow)}>
-            <LinearGradient
-              colors={heroColors}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={[styles.authHero, { height: authHeroHeight }]}
-            />
-          </Animated.View>
+          <LinearGradient
+            colors={heroColors}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={[styles.authHero, { height: authHeroHeight }]}
+          />
           <View style={[styles.authBase, { top: authHeroHeight - theme.spacing.giant }]} />
           {keyboardWrapper}
         </>
@@ -105,25 +101,11 @@ export const ScreenContainer = ({
         <>
           {isDashboard ? (
             <>
-              <Animated.View entering={FadeIn.duration(theme.motion.slow)}>
-                <LinearGradient
-                  colors={[theme.colors.dashboardShellFrom, theme.colors.dashboardShellTo]}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 1 }}
-                  style={[styles.dashboardHero, { height: dashboardHeroHeight }]}
-                />
-              </Animated.View>
-              <View
-                style={[
-                  styles.dashboardGlowOne,
-                  isShortScreen ? styles.dashboardGlowOneCompact : null,
-                ]}
-              />
-              <View
-                style={[
-                  styles.dashboardGlowTwo,
-                  isShortScreen ? styles.dashboardGlowTwoCompact : null,
-                ]}
+              <LinearGradient
+                colors={[theme.colors.dashboardShellFrom, theme.colors.dashboardShellTo]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={[styles.dashboardHero, { height: dashboardHeroHeight }]}
               />
               <View style={[styles.dashboardBase, { top: dashboardHeroHeight - theme.spacing.lg }]} />
             </>
@@ -179,34 +161,6 @@ const styles = StyleSheet.create({
     top: 0,
     left: 0,
     right: 0,
-  },
-  dashboardGlowOne: {
-    position: 'absolute',
-    top: 42,
-    right: -20,
-    width: 132,
-    height: 132,
-    borderRadius: theme.radius.full,
-    backgroundColor: theme.colors.accentSoft,
-  },
-  dashboardGlowOneCompact: {
-    top: 32,
-    width: 112,
-    height: 112,
-  },
-  dashboardGlowTwo: {
-    position: 'absolute',
-    top: 104,
-    left: -34,
-    width: 96,
-    height: 96,
-    borderRadius: theme.radius.full,
-    backgroundColor: theme.colors.whiteOverlay,
-  },
-  dashboardGlowTwoCompact: {
-    top: 88,
-    width: 84,
-    height: 84,
   },
   scrollContainer: {
     flexGrow: 1,

@@ -3,7 +3,6 @@ import { StyleSheet, View, useWindowDimensions } from 'react-native';
 import { ScreenContainer } from '../ui/ScreenContainer';
 import { AppCard } from '../ui/AppCard';
 import { theme } from '../../design-system/theme';
-import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
 
 export const AuthScreenLayout = ({ children, cardStyle, role = 'donor' }) => {
   const { height } = useWindowDimensions();
@@ -23,29 +22,24 @@ export const AuthScreenLayout = ({ children, cardStyle, role = 'donor' }) => {
       heroColors={heroColors}
       contentStyle={isCompactScreen ? styles.screenContentCompact : styles.screenContent}
     >
-      <Animated.View
-        entering={FadeInUp.duration(420).springify().damping(16)}
+      <View
         style={[
           styles.container,
           isShortScreen ? styles.containerCompact : null,
           isCompactScreen ? styles.containerDense : null,
         ]}
       >
-        <View style={[styles.glowOne, isShortScreen ? styles.glowOneCompact : null]} />
-        <View style={[styles.glowTwo, isShortScreen ? styles.glowTwoCompact : null]} />
-        <Animated.View entering={FadeInDown.delay(80).duration(420)}>
-          <AppCard
-            variant="elevated"
-            radius="xl"
-            padding={isCompactScreen ? 'sm' : isShortScreen ? 'md' : 'lg'}
-            contentStyle={styles.cardContent}
-            style={[styles.card, cardStyle]}
-          >
-            <View style={[styles.topAccent, role === 'patient' ? styles.topAccentPatient : null]} />
-            {children}
-          </AppCard>
-        </Animated.View>
-      </Animated.View>
+        <AppCard
+          variant="elevated"
+          radius="xl"
+          padding={isCompactScreen ? 'sm' : isShortScreen ? 'md' : 'lg'}
+          contentStyle={styles.cardContent}
+          style={[styles.card, cardStyle]}
+        >
+          <View style={[styles.topAccent, role === 'patient' ? styles.topAccentPatient : null]} />
+          {children}
+        </AppCard>
+      </View>
     </ScreenContainer>
   );
 };
@@ -101,35 +95,5 @@ const styles = StyleSheet.create({
   },
   topAccentPatient: {
     backgroundColor: theme.colors.brandSecondary,
-  },
-  glowOne: {
-    position: 'absolute',
-    top: -16,
-    right: -18,
-    width: 128,
-    height: 128,
-    borderRadius: theme.radius.full,
-    backgroundColor: theme.colors.accentStrong,
-  },
-  glowOneCompact: {
-    top: -10,
-    right: -10,
-    width: 108,
-    height: 108,
-  },
-  glowTwo: {
-    position: 'absolute',
-    top: 78,
-    left: -28,
-    width: 92,
-    height: 92,
-    borderRadius: theme.radius.full,
-    backgroundColor: theme.colors.whiteOverlay,
-  },
-  glowTwoCompact: {
-    top: 68,
-    left: -20,
-    width: 76,
-    height: 76,
   },
 });
