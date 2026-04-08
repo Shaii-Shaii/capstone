@@ -768,6 +768,7 @@ function FirstTimeOnboarding() {
                 render={({ field: { onChange, onBlur, value }, fieldState }) => (
                   <DatePickerField
                     label="Date of Diagnosis"
+                    required={true}
                     value={value ?? ''}
                     placeholder="Select diagnosis date"
                     helperText=""
@@ -788,6 +789,7 @@ function FirstTimeOnboarding() {
                 render={({ field: { onChange, onBlur, value }, fieldState }) => (
                   <AppInput
                     label="Guardian"
+                    required={true}
                     value={value ?? ''}
                     onChangeText={onChange}
                     onBlur={onBlur}
@@ -805,6 +807,7 @@ function FirstTimeOnboarding() {
                 render={({ field: { onChange, onBlur, value }, fieldState }) => (
                   <AppInput
                     label="Guardian Contact Number"
+                    required={true}
                     value={value ?? ''}
                     onChangeText={onChange}
                     onBlur={onBlur}

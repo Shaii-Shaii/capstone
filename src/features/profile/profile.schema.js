@@ -7,19 +7,20 @@ const normalizeStringInput = (value) => {
   if (value === undefined || value === null) return '';
   return typeof value === 'string' ? value : String(value);
 };
+const normalizePhoneComparable = (value) => String(value || '').replace(/\D/g, '');
 
 const requiredStringField = (schema) => z.preprocess(normalizeStringInput, schema);
 const optionalStringField = (schema) => z.preprocess(normalizeStringInput, schema.optional().or(z.literal('')));
 
 export const optionalTextField = optionalStringField(z.string().max(80, 'Too long'));
 const profileGenderValues = profileGenderOptions.map((option) => option.value);
-const optionalDateField = optionalStringField(z.string()
+const requiredDateField = (requiredMessage) => requiredStringField(z.string()
   .trim()
-  .refine((value) => !value || /^\d{4}-\d{2}-\d{2}$/.test(value), {
+  .min(1, requiredMessage)
+  .refine((value) => /^\d{4}-\d{2}-\d{2}$/.test(value), {
     message: 'Use YYYY-MM-DD format',
   })
   .refine((value) => {
-    if (!value) return true;
     const selectedDate = new Date(`${value}T00:00:00`);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -77,12 +78,12 @@ export const patientOnboardingSchema = z.object({
   latitude: optionalStringField(coordinateField),
   longitude: optionalStringField(coordinateField),
   medical_condition: requiredStringField(z.string().trim().min(1, 'Medical condition is required').max(300, 'Too long')),
-  date_of_diagnosis: optionalDateField,
-  guardian: optionalTextField,
+  date_of_diagnosis: requiredDateField('Date of diagnosis is required'),
+  guardian: requiredStringField(z.string().trim().min(1, 'Guardian is required').max(80, 'Too long')),
   guardian_relationship: requiredStringField(
     z.string().trim().min(1, 'Guardian relationship is required').max(80, 'Too long')
   ),
-  guardian_contact_number: optionalStringField(phoneField),
+  guardian_contact_number: requiredStringField(phoneField),
   patient_picture: z.union([z.string(), z.object({
     fileBody: z.any().optional(),
     contentType: z.string().optional(),
@@ -95,4 +96,15 @@ export const patientOnboardingSchema = z.object({
     fileName: z.string().optional(),
     previewUri: z.string().optional(),
   })]).optional().or(z.literal('')),
+}).superRefine((data, ctx) => {
+  const contactNumber = normalizePhoneComparable(data.contact_number);
+  const guardianContactNumber = normalizePhoneComparable(data.guardian_contact_number);
+
+  if (contactNumber && guardianContactNumber && contactNumber === guardianContactNumber) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Guardian contact number must be different from your contact number',
+      path: ['guardian_contact_number'],
+    });
+  }
 });
