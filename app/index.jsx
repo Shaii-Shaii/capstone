@@ -257,7 +257,7 @@ function FirstTimeOnboarding() {
       suffix: profile?.suffix || '',
       birthdate: profile?.birthdate || '',
       gender: profile?.gender || '',
-      contact_number: profile?.contact_number || profile?.phone || '',
+      contact_number: profile?.contact_number || '',
       street: profile?.street || '',
       barangay: profile?.barangay || '',
       region: profile?.region || '',
