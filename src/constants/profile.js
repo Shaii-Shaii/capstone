@@ -122,6 +122,16 @@ export const profileGenderOptions = [
   { label: 'Prefer not to say', value: 'Prefer not to say' },
 ];
 
+export const guardianRelationshipOptions = [
+  { label: 'Mother', value: 'Mother' },
+  { label: 'Father', value: 'Father' },
+  { label: 'Aunt', value: 'Aunt' },
+  { label: 'Sister', value: 'Sister' },
+  { label: 'Brother', value: 'Brother' },
+  { label: 'Guardian', value: 'Guardian' },
+  { label: 'Other', value: 'Other' },
+];
+
 export const profileCompletionFieldLabels = {
   photo_path: 'Photo',
   first_name: 'First name',

@@ -20,7 +20,7 @@ import {
   getPatientLinkPreview,
 } from '../src/features/profile/services/profile.service';
 import { patientOnboardingSchema } from '../src/features/profile/profile.schema';
-import { profileGenderOptions } from '../src/constants/profile';
+import { guardianRelationshipOptions, profileGenderOptions } from '../src/constants/profile';
 import { theme } from '../src/design-system/theme';
 import donivraLogoNoText from '../src/assets/images/donivra_logo_no_text.png';
 
@@ -28,10 +28,17 @@ const normalizePatientCode = (value) => value.toUpperCase().replace(/[^A-Z0-9]/g
 const IMAGE_MEDIA_TYPES = ['images'];
 const PROFILE_MINIMUM_AGE = 18;
 const MINIMUM_BIRTHDATE = new Date(1900, 0, 1);
+const MINIMUM_DIAGNOSIS_DATE = new Date(1900, 0, 1);
 
 const getMaximumBirthdate = () => {
   const maxDate = new Date();
   maxDate.setFullYear(maxDate.getFullYear() - PROFILE_MINIMUM_AGE);
+  return maxDate;
+};
+
+const getMaximumDiagnosisDate = () => {
+  const maxDate = new Date();
+  maxDate.setHours(0, 0, 0, 0);
   return maxDate;
 };
 
@@ -228,6 +235,7 @@ function FirstTimeOnboarding() {
       date_of_diagnosis: '',
       guardian: '',
       guardian_relationship: '',
+      guardian_relationship_other: '',
       guardian_contact_number: '',
       patient_picture: '',
       medical_document: '',
@@ -360,6 +368,7 @@ function FirstTimeOnboarding() {
             'date_of_diagnosis',
             'guardian',
             'guardian_relationship',
+            'guardian_relationship_other',
             'guardian_contact_number',
           ]
     );
@@ -514,6 +523,7 @@ function FirstTimeOnboarding() {
       const patientPictureValue = manualPatientForm.watch('patient_picture');
       const medicalDocumentValue = manualPatientForm.watch('medical_document');
       const manualGenderValue = manualPatientForm.watch('gender');
+      const manualGuardianRelationshipValue = manualPatientForm.watch('guardian_relationship');
       const patientPicturePreview = typeof patientPictureValue === 'string' ? patientPictureValue : patientPictureValue?.previewUri || '';
       const medicalDocumentPreview = typeof medicalDocumentValue === 'string' ? medicalDocumentValue : medicalDocumentValue?.previewUri || '';
 
@@ -704,14 +714,17 @@ function FirstTimeOnboarding() {
                 control={manualPatientForm.control}
                 name="date_of_diagnosis"
                 render={({ field: { onChange, onBlur, value }, fieldState }) => (
-                  <AppInput
+                  <DatePickerField
                     label="Date of Diagnosis"
                     value={value}
-                    onChangeText={onChange}
-                    onBlur={onBlur}
+                    placeholder="Select diagnosis date"
+                    helperText=""
                     error={fieldState.error?.message}
-                    placeholder="YYYY-MM-DD"
-                    variant="filled"
+                    onChange={onChange}
+                    onBlur={onBlur}
+                    minimumDate={MINIMUM_DIAGNOSIS_DATE}
+                    maximumDate={getMaximumDiagnosisDate()}
+                    onPress={() => Haptics.selectionAsync()}
                   />
                 )}
               />
@@ -752,18 +765,66 @@ function FirstTimeOnboarding() {
               <Controller
                 control={manualPatientForm.control}
                 name="guardian_relationship"
-                render={({ field: { onChange, onBlur, value }, fieldState }) => (
-                  <AppInput
-                    label="Guardian Relationship"
-                    value={value}
-                    onChangeText={onChange}
-                    onBlur={onBlur}
-                    error={fieldState.error?.message}
-                    placeholder="Parent, sibling, guardian"
-                    variant="filled"
-                  />
+                render={({ fieldState }) => (
+                  <>
+                    <AddressSelectField
+                      label="Guardian Relationship"
+                      required={true}
+                      value={manualGuardianRelationshipValue}
+                      placeholder="Select relationship"
+                      helperText=""
+                      error={fieldState.error?.message}
+                      onPress={async () => {
+                        await Haptics.selectionAsync();
+                        setActiveManualPicker('guardianRelationship');
+                      }}
+                    />
+
+                    <AddressOptionSheet
+                      visible={activeManualPicker === 'guardianRelationship'}
+                      title="Select Relationship"
+                      placeholder="Search relationship"
+                      options={guardianRelationshipOptions}
+                      selectedValue={manualGuardianRelationshipValue}
+                      onClose={() => setActiveManualPicker('')}
+                      onSelect={(option) => {
+                        manualPatientForm.setValue('guardian_relationship', option.value, {
+                          shouldDirty: true,
+                          shouldTouch: true,
+                          shouldValidate: true,
+                        });
+
+                        if (option.value !== 'Other') {
+                          manualPatientForm.setValue('guardian_relationship_other', '', {
+                            shouldDirty: true,
+                            shouldTouch: true,
+                            shouldValidate: true,
+                          });
+                        }
+                      }}
+                    />
+                  </>
                 )}
               />
+
+              {manualGuardianRelationshipValue === 'Other' ? (
+                <Controller
+                  control={manualPatientForm.control}
+                  name="guardian_relationship_other"
+                  render={({ field: { onChange, onBlur, value }, fieldState }) => (
+                    <AppInput
+                      label="Other Relationship"
+                      required={true}
+                      value={value}
+                      onChangeText={onChange}
+                      onBlur={onBlur}
+                      error={fieldState.error?.message}
+                      placeholder="Enter relationship"
+                      variant="filled"
+                    />
+                  )}
+                />
+              ) : null}
             </>
           ) : (
             <View style={styles.uploadSection}>

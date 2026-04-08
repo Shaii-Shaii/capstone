@@ -356,6 +356,10 @@ export const completePostLoginOnboarding = async ({
     }
 
     if (mode === 'patient-manual') {
+      const normalizedGuardianRelationship = manualPatientDetails?.guardian_relationship === 'Other'
+        ? String(manualPatientDetails?.guardian_relationship_other || '').trim()
+        : String(manualPatientDetails?.guardian_relationship || '').trim();
+
       logAppEvent('patient.manual_submission', 'Manual patient detail submission started.', {
         authUserId: userId,
         hasFirstName: Boolean(manualPatientDetails?.first_name),
@@ -372,7 +376,7 @@ export const completePostLoginOnboarding = async ({
         hasMedicalCondition: Boolean(manualPatientDetails?.medical_condition),
         hasDiagnosisDate: Boolean(manualPatientDetails?.date_of_diagnosis),
         hasGuardian: Boolean(manualPatientDetails?.guardian),
-        hasGuardianRelationship: Boolean(manualPatientDetails?.guardian_relationship),
+        hasGuardianRelationship: Boolean(normalizedGuardianRelationship),
         hasGuardianContactNumber: Boolean(manualPatientDetails?.guardian_contact_number),
         hasPatientPicture: Boolean(manualPatientDetails?.patient_picture),
         hasMedicalDocument: Boolean(manualPatientDetails?.medical_document),
@@ -414,7 +418,7 @@ export const completePostLoginOnboarding = async ({
         patient_picture: patientPictureUrl || '',
         date_of_diagnosis: manualPatientDetails?.date_of_diagnosis || null,
         guardian: manualPatientDetails?.guardian || '',
-        guardian_relationship: manualPatientDetails?.guardian_relationship || '',
+        guardian_relationship: normalizedGuardianRelationship,
         guardian_contact_number: manualPatientDetails?.guardian_contact_number || '',
         medical_document: medicalDocumentUrl || '',
       });
