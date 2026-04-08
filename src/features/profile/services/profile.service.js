@@ -40,7 +40,23 @@ export const needsPostLoginOnboarding = ({
   profile,
   patientProfile,
   staffProfile,
-}) => !profile?.user_details_id && !patientProfile?.patient_id && !staffProfile?.link_id;
+}) => {
+  const normalizedRole = String(profile?.role || '').trim().toLowerCase();
+
+  if (!normalizedRole || normalizedRole === 'tentative') {
+    return true;
+  }
+
+  if (normalizedRole === 'patient') {
+    return !patientProfile?.patient_id;
+  }
+
+  if (normalizedRole === 'donor') {
+    return false;
+  }
+
+  return !profile?.user_details_id && !patientProfile?.patient_id && !staffProfile?.link_id;
+};
 
 const normalizeComparableFormValues = (values = {}) => ({
   firstName: String(values.firstName || '').trim(),

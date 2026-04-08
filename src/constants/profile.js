@@ -202,6 +202,7 @@ export const profileActionConfig = [
 export const roleLabelMap = {
   donor: 'Donor',
   patient: 'Patient',
+  tentative: 'Pending setup',
 };
 
 export const profileDisplayFields = [

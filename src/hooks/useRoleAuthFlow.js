@@ -15,7 +15,7 @@ export const useRoleAuthFlow = (role) => {
   const expectedRole = role === 'donor' || role === 'patient' ? role : undefined;
 
   const handleSignup = async (data) => {
-    const selectedRole = expectedRole || 'donor';
+    const selectedRole = 'tentative';
 
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
