@@ -489,6 +489,22 @@ export const fetchUserDetailsBySystemUserId = async (systemUserId) => {
   });
 };
 
+export const fetchUserDetailsById = async (userDetailsId) => {
+  if (!userDetailsId) {
+    return { data: null, error: new Error('User details ID is required.') };
+  }
+
+  return await runSingleRowSelect({
+    table: 'user_details',
+    filter: { user_details_id: userDetailsId },
+    queryBuilder: supabase
+      .from('user_details')
+      .select('*')
+      .eq('user_details_id', userDetailsId)
+      .order('updated_at', { ascending: false }),
+  });
+};
+
 export const ensureUserDetailsBySystemUserId = async (systemUser) => {
   if (!systemUser?.user_id) {
     return { data: null, error: new Error('System user is required.') };
@@ -715,6 +731,17 @@ export const updateProfile = async (authUserId, updates) => {
     return { data: null, error: ensuredDetailsResult.error };
   }
 
+  if (!ensuredDetailsResult.data?.user_details_id) {
+    const missingDetailsError = new Error('User details row could not be resolved.');
+    logAppError('profile.query.update_failed', missingDetailsError, buildQueryContext({
+      table: 'user_details',
+      filter: { user_id: systemUserResult.data.user_id },
+      authUserId,
+      systemUserId: systemUserResult.data.user_id,
+    }));
+    return { data: null, error: missingDetailsError };
+  }
+
   const payload = {
     first_name: updates.first_name ?? undefined,
     middle_name: updates.middle_name ?? undefined,
@@ -740,15 +767,56 @@ export const updateProfile = async (authUserId, updates) => {
     Object.entries(payload).filter(([, value]) => value !== undefined)
   );
 
+  logAppEvent('profile.query.update_target', 'Updating user_details via primary key.', {
+    table: 'user_details',
+    filter: {
+      user_details_id: ensuredDetailsResult.data.user_details_id,
+      user_id: systemUserResult.data.user_id,
+    },
+    authUserId,
+    systemUserId: systemUserResult.data.user_id,
+  });
+
   const result = await supabase
     .from('user_details')
     .update(filteredPayload)
-    .eq('user_id', systemUserResult.data.user_id)
+    .eq('user_details_id', ensuredDetailsResult.data.user_details_id)
     .select()
     .maybeSingle();
 
   if (result.error) {
+    logAppError('profile.query.update_failed', result.error, buildQueryContext({
+      table: 'user_details',
+      filter: {
+        user_details_id: ensuredDetailsResult.data.user_details_id,
+        user_id: systemUserResult.data.user_id,
+      },
+      authUserId,
+      systemUserId: systemUserResult.data.user_id,
+    }));
     return result;
+  }
+
+  if (!result.data?.user_details_id) {
+    logAppEvent('profile.query.update_no_row', 'Update returned no user_details row. Refetching by primary key.', {
+      table: 'user_details',
+      filter: {
+        user_details_id: ensuredDetailsResult.data.user_details_id,
+        user_id: systemUserResult.data.user_id,
+      },
+      authUserId,
+      systemUserId: systemUserResult.data.user_id,
+    }, 'warn');
+
+    const refetchedDetailsResult = await fetchUserDetailsById(ensuredDetailsResult.data.user_details_id);
+    if (refetchedDetailsResult.error) {
+      return { data: null, error: refetchedDetailsResult.error };
+    }
+
+    return {
+      data: normalizeSystemUser(systemUserResult.data, refetchedDetailsResult.data),
+      error: null,
+    };
   }
 
   return {

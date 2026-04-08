@@ -719,7 +719,7 @@ function FirstTimeOnboarding() {
                 defaultValue={getManualPatientFieldValue('contact_number')}
                 render={({ field: { onChange, onBlur, value }, fieldState }) => (
                   <AppInput
-                    label="Mobile Number"
+                    label="Contact Number"
                     required={true}
                     value={value ?? ''}
                     onChangeText={onChange}
