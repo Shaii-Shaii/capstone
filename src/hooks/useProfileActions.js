@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import * as ImagePicker from 'expo-image-picker';
+import { Platform } from 'react-native';
 import { useAuth } from '../providers/AuthProvider';
 import { useAuthActions } from '../features/auth/hooks/useAuthActions';
 import {
@@ -13,6 +14,39 @@ import {
 import { logAppError, logAppEvent } from '../utils/appErrors';
 
 const IMAGE_MEDIA_TYPES = ['images'];
+
+const readBlobAsDataUrl = (blob) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onloadend = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+  reader.onerror = () => reject(new Error('Unable to read the selected image.'));
+  reader.readAsDataURL(blob);
+});
+
+const getAssetDataUrl = async (asset) => {
+  if (!asset) {
+    throw new Error('Unable to read the selected image.');
+  }
+
+  if (asset.base64) {
+    const mimeType = asset.mimeType || asset.file?.type || 'image/jpeg';
+    return `data:${mimeType};base64,${asset.base64}`;
+  }
+
+  if (asset.file) {
+    return await readBlobAsDataUrl(asset.file);
+  }
+
+  if (asset.uri) {
+    const response = await fetch(asset.uri);
+    if (!response.ok) {
+      throw new Error('Unable to read the selected image.');
+    }
+    const blob = await response.blob();
+    return await readBlobAsDataUrl(blob);
+  }
+
+  throw new Error('Unable to read the selected image.');
+};
 
 const formFromProfile = (profile) => ({
   firstName: profile?.first_name || '',
@@ -190,9 +224,16 @@ export const useProfileActions = () => {
         return { success: false, error: 'Session not found.' };
       }
 
-      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!permission.granted) {
-        return { success: false, error: 'Please allow photo library access to choose a profile image.' };
+      logAppEvent('profile_photo.upload', 'Profile photo upload started.', {
+        authUserId: user.id,
+        platform: Platform.OS,
+      });
+
+      if (Platform.OS !== 'web') {
+        const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (!permission.granted) {
+          return { success: false, error: 'Please allow photo library access to choose a profile image.' };
+        }
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
@@ -208,26 +249,33 @@ export const useProfileActions = () => {
       }
 
       const asset = result.assets?.[0];
-      if (!asset?.base64) {
-        return { success: false, error: 'Unable to read the selected image.' };
-      }
-
-      const mimeType = asset.mimeType || 'image/jpeg';
-      const avatarUrl = `data:${mimeType};base64,${asset.base64}`;
+      const avatarUrl = await getAssetDataUrl(asset);
 
       setIsUploadingAvatar(true);
       const uploadResult = await saveAvatar(user.id, avatarUrl);
       setIsUploadingAvatar(false);
 
       if (uploadResult.error) {
+        logAppError('profile_photo.upload', new Error(uploadResult.error), {
+          authUserId: user.id,
+          platform: Platform.OS,
+        });
         return { success: false, error: uploadResult.error };
       }
 
       await refreshProfile(user.id);
       await loadProfileBundle();
+      logAppEvent('profile_photo.upload', 'Profile photo upload succeeded.', {
+        authUserId: user.id,
+        platform: Platform.OS,
+      });
       return { success: true, avatarUrl };
     } catch (error) {
       setIsUploadingAvatar(false);
+      logAppError('profile_photo.upload', error, {
+        authUserId: user?.id || null,
+        platform: Platform.OS,
+      });
       return { success: false, error: error.message || 'Unable to update your photo.' };
     }
   };
