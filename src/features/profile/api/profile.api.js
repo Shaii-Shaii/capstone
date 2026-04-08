@@ -1,8 +1,79 @@
 import { supabase } from '../../../api/supabase/client';
+import { logAppError, logAppEvent } from '../../../utils/appErrors';
 
 const isUuid = (value) => typeof value === 'string' && value.includes('-');
 const buildMissingSystemUserError = () => new Error('The logged-in account is not linked to an app user record.');
 const getTodayDate = () => new Date().toISOString().slice(0, 10);
+const buildQueryContext = ({ table, filter, authUserId = '', systemUserId = null, patientId = null, hospitalId = null }) => ({
+  table,
+  filter,
+  authUserId: authUserId || null,
+  systemUserId: systemUserId || null,
+  patientId: patientId || null,
+  hospitalId: hospitalId || null,
+});
+
+const resolveQueryRows = ({ table, filter, rows, authUserId = '', systemUserId = null, patientId = null, hospitalId = null }) => {
+  const context = buildQueryContext({ table, filter, authUserId, systemUserId, patientId, hospitalId });
+  const safeRows = Array.isArray(rows) ? rows : [];
+
+  if (safeRows.length === 0) {
+    logAppEvent('profile.query.zero_rows', 'No rows returned for single-row lookup.', {
+      ...context,
+      rowCount: 0,
+    }, 'warn');
+    return { data: null, error: null };
+  }
+
+  if (safeRows.length > 1) {
+    logAppError('profile.query.multiple_rows', new Error('Multiple rows returned for single-row lookup.'), {
+      ...context,
+      rowCount: safeRows.length,
+    });
+  }
+
+  return {
+    data: safeRows[0] || null,
+    error: null,
+  };
+};
+
+const runSingleRowSelect = async ({
+  table,
+  filter,
+  authUserId = '',
+  systemUserId = null,
+  patientId = null,
+  hospitalId = null,
+  queryBuilder,
+}) => {
+  const result = await queryBuilder.limit(2);
+  if (result.error) {
+    logAppError('profile.query.select_failed', result.error, buildQueryContext({
+      table,
+      filter,
+      authUserId,
+      systemUserId,
+      patientId,
+      hospitalId,
+    }));
+
+    return {
+      data: null,
+      error: result.error,
+    };
+  }
+
+  return resolveQueryRows({
+    table,
+    filter,
+    rows: result.data,
+    authUserId,
+    systemUserId,
+    patientId,
+    hospitalId,
+  });
+};
 
 const normalizeSystemUser = (row, details = null) => ({
   id: row?.auth_user_id || '',
@@ -98,11 +169,16 @@ const normalizePatientLinkPreview = (row) => ({
 });
 
 export const fetchSystemUserByAuthUserId = async (authUserId) => {
-  return await supabase
-    .from('users')
-    .select('*')
-    .eq('auth_user_id', authUserId)
-    .maybeSingle();
+  return await runSingleRowSelect({
+    table: 'users',
+    filter: { auth_user_id: authUserId },
+    authUserId,
+    queryBuilder: supabase
+      .from('users')
+      .select('*')
+      .eq('auth_user_id', authUserId)
+      .order('updated_at', { ascending: false }),
+  });
 };
 
 export const fetchSystemUserByEmail = async (email) => {
@@ -110,15 +186,19 @@ export const fetchSystemUserByEmail = async (email) => {
     return { data: null, error: new Error('Email is required.') };
   }
 
-  return await supabase
-    .from('users')
-    .select('*')
-    .ilike('email', email.trim())
-    .maybeSingle();
+  return await runSingleRowSelect({
+    table: 'users',
+    filter: { email: email.trim().toLowerCase() },
+    queryBuilder: supabase
+      .from('users')
+      .select('*')
+      .ilike('email', email.trim())
+      .order('updated_at', { ascending: false }),
+  });
 };
 
 export const createSystemUser = async ({ authUserId, email, role }) => {
-  return await supabase
+  const result = await supabase
     .from('users')
     .insert([{
       auth_user_id: authUserId,
@@ -127,7 +207,28 @@ export const createSystemUser = async ({ authUserId, email, role }) => {
       is_active: true,
     }])
     .select()
-    .single();
+    .maybeSingle();
+
+  if (result.error) {
+    logAppError('profile.query.insert_failed', result.error, buildQueryContext({
+      table: 'users',
+      filter: { auth_user_id: authUserId, email: email || null },
+      authUserId,
+    }));
+    return result;
+  }
+
+  if (result.data?.user_id) {
+    return result;
+  }
+
+  logAppEvent('profile.query.insert_no_row', 'Insert succeeded without a returned users row. Refetching.', {
+    table: 'users',
+    filter: { auth_user_id: authUserId, email: email || null },
+    authUserId,
+  }, 'warn');
+
+  return await fetchSystemUserByAuthUserId(authUserId);
 };
 
 export const linkSystemUserToAuthUserId = async ({ userId, authUserId, email, role }) => {
@@ -148,12 +249,35 @@ export const linkSystemUserToAuthUserId = async ({ userId, authUserId, email, ro
     payload.role = role;
   }
 
-  return await supabase
+  const result = await supabase
     .from('users')
     .update(payload)
     .eq('user_id', userId)
     .select()
-    .single();
+    .maybeSingle();
+
+  if (result.error) {
+    logAppError('profile.query.update_failed', result.error, buildQueryContext({
+      table: 'users',
+      filter: { user_id: userId },
+      authUserId,
+      systemUserId: userId,
+    }));
+    return result;
+  }
+
+  if (result.data?.user_id) {
+    return result;
+  }
+
+  logAppEvent('profile.query.update_no_row', 'Update succeeded without a returned users row. Refetching.', {
+    table: 'users',
+    filter: { user_id: userId },
+    authUserId,
+    systemUserId: userId,
+  }, 'warn');
+
+  return await fetchSystemUserByAuthUserId(authUserId);
 };
 
 export const updateSystemUserRoleByAuthUserId = async ({ authUserId, role, email }) => {
@@ -183,10 +307,21 @@ export const updateSystemUserRoleByAuthUserId = async ({ authUserId, role, email
     .update(payload)
     .eq('user_id', systemUserResult.data.user_id)
     .select()
-    .single();
+    .maybeSingle();
 
   if (result.error) {
     return result;
+  }
+
+  if (!result.data?.user_id) {
+    logAppEvent('profile.query.update_no_row', 'Role update returned no users row. Refetching.', {
+      table: 'users',
+      filter: { user_id: systemUserResult.data.user_id },
+      authUserId,
+      systemUserId: systemUserResult.data.user_id,
+    }, 'warn');
+
+    return await fetchSystemUserByAuthUserId(authUserId);
   }
 
   return {
@@ -267,11 +402,16 @@ export const ensureSystemUserByAuthUserId = async (authUserId) => {
 };
 
 export const fetchUserDetailsBySystemUserId = async (systemUserId) => {
-  return await supabase
-    .from('user_details')
-    .select('*')
-    .eq('user_id', systemUserId)
-    .maybeSingle();
+  return await runSingleRowSelect({
+    table: 'user_details',
+    filter: { user_id: systemUserId },
+    systemUserId,
+    queryBuilder: supabase
+      .from('user_details')
+      .select('*')
+      .eq('user_id', systemUserId)
+      .order('updated_at', { ascending: false }),
+  });
 };
 
 export const ensureUserDetailsBySystemUserId = async (systemUser) => {
@@ -292,7 +432,7 @@ export const createUserDetails = async ({ systemUserId, details = {} }) => {
     return { data: null, error: new Error('System user ID is required.') };
   }
 
-  return await supabase
+  const result = await supabase
     .from('user_details')
     .insert([{
       user_id: systemUserId,
@@ -315,7 +455,28 @@ export const createUserDetails = async ({ systemUserId, details = {} }) => {
       longitude: details.longitude ? Number(details.longitude) : null,
     }])
     .select()
-    .single();
+    .maybeSingle();
+
+  if (result.error) {
+    logAppError('profile.query.insert_failed', result.error, buildQueryContext({
+      table: 'user_details',
+      filter: { user_id: systemUserId },
+      systemUserId,
+    }));
+    return result;
+  }
+
+  if (result.data?.user_details_id) {
+    return result;
+  }
+
+  logAppEvent('profile.query.insert_no_row', 'Insert succeeded without a returned user_details row. Refetching.', {
+    table: 'user_details',
+    filter: { user_id: systemUserId },
+    systemUserId,
+  }, 'warn');
+
+  return await fetchUserDetailsBySystemUserId(systemUserId);
 };
 
 export const ensureUserDetailsRecord = async ({ systemUserId, details = {} }) => {
@@ -395,11 +556,16 @@ export const resolveSystemUser = async (userIdentifier, options = {}) => {
   }
 
   if (!isUuid(userIdentifier)) {
-    const result = await supabase
-      .from('users')
-      .select('*')
-      .eq('user_id', userIdentifier)
-      .maybeSingle();
+    const result = await runSingleRowSelect({
+      table: 'users',
+      filter: { user_id: userIdentifier },
+      systemUserId: userIdentifier,
+      queryBuilder: supabase
+        .from('users')
+        .select('*')
+        .eq('user_id', userIdentifier)
+        .order('updated_at', { ascending: false }),
+    });
 
     if (!result.data && !result.error) {
       return { data: null, error: buildMissingSystemUserError() };
@@ -534,11 +700,17 @@ export const fetchPatientDetailsByUserId = async (userIdentifier) => {
     return { data: null, error: systemUserResult.error || new Error('System user could not be loaded.') };
   }
 
-  const result = await supabase
-    .from('patients')
-    .select('*')
-    .eq('user_id', systemUserResult.data.user_id)
-    .maybeSingle();
+  const result = await runSingleRowSelect({
+    table: 'patients',
+    filter: { user_id: systemUserResult.data.user_id },
+    authUserId: isUuid(userIdentifier) ? userIdentifier : '',
+    systemUserId: systemUserResult.data.user_id,
+    queryBuilder: supabase
+      .from('patients')
+      .select('*')
+      .eq('user_id', systemUserResult.data.user_id)
+      .order('updated_at', { ascending: false }),
+  });
 
   return {
     data: result.data ? normalizePatient(result.data) : null,
@@ -552,11 +724,17 @@ export const fetchHospitalStaffByUserId = async (userIdentifier) => {
     return { data: null, error: systemUserResult.error || new Error('System user could not be loaded.') };
   }
 
-  const result = await supabase
-    .from('hospital_staff')
-    .select('*')
-    .eq('user_id', systemUserResult.data.user_id)
-    .maybeSingle();
+  const result = await runSingleRowSelect({
+    table: 'hospital_staff',
+    filter: { user_id: systemUserResult.data.user_id },
+    authUserId: isUuid(userIdentifier) ? userIdentifier : '',
+    systemUserId: systemUserResult.data.user_id,
+    queryBuilder: supabase
+      .from('hospital_staff')
+      .select('*')
+      .eq('user_id', systemUserResult.data.user_id)
+      .order('assigned_date', { ascending: false }),
+  });
 
   return {
     data: result.data ? normalizeHospitalStaff(result.data) : null,
@@ -569,11 +747,16 @@ export const fetchHospitalRepresentativeById = async (hospitalId) => {
     return { data: null, error: null };
   }
 
-  const result = await supabase
-    .from('H-Representatives')
-    .select('*')
-    .eq('hospital_id', hospitalId)
-    .maybeSingle();
+  const result = await runSingleRowSelect({
+    table: 'H-Representatives',
+    filter: { hospital_id: hospitalId },
+    hospitalId,
+    queryBuilder: supabase
+      .from('H-Representatives')
+      .select('*')
+      .eq('hospital_id', hospitalId)
+      .order('updated_at', { ascending: false }),
+  });
 
   return {
     data: result.data ? normalizeHospitalRepresentative(result.data) : null,
@@ -587,11 +770,15 @@ export const fetchPatientDetailsByCode = async (patientCode) => {
     return { data: null, error: new Error('Patient code is required.') };
   }
 
-  const result = await supabase
-    .from('patients')
-    .select('*')
-    .ilike('patient_code', normalizedCode)
-    .maybeSingle();
+  const result = await runSingleRowSelect({
+    table: 'patients',
+    filter: { patient_code: normalizedCode },
+    queryBuilder: supabase
+      .from('patients')
+      .select('*')
+      .ilike('patient_code', normalizedCode)
+      .order('updated_at', { ascending: false }),
+  });
 
   if (result.error || !result.data) {
     return {
@@ -666,7 +853,31 @@ export const createPatientDetails = async (payload) => {
       medical_document: payload?.medical_document || null,
     }])
     .select()
-    .single();
+    .maybeSingle();
+
+  if (result.error) {
+    logAppError('profile.query.insert_failed', result.error, buildQueryContext({
+      table: 'patients',
+      filter: { user_id: systemUserResult.data.user_id },
+      authUserId: systemUserResult.data.auth_user_id || '',
+      systemUserId: systemUserResult.data.user_id,
+    }));
+    return {
+      data: null,
+      error: result.error,
+    };
+  }
+
+  if (!result.data?.patient_id) {
+    logAppEvent('profile.query.insert_no_row', 'Insert succeeded without a returned patients row. Refetching.', {
+      table: 'patients',
+      filter: { user_id: systemUserResult.data.user_id },
+      authUserId: systemUserResult.data.auth_user_id || '',
+      systemUserId: systemUserResult.data.user_id,
+    }, 'warn');
+
+    return await fetchPatientDetailsByUserId(systemUserResult.data.auth_user_id || systemUserResult.data.user_id);
+  }
 
   return {
     data: result.data ? normalizePatient(result.data) : null,
@@ -683,7 +894,19 @@ export const updatePatientPictureByPatientId = async (patientId, patientPicture)
     })
     .eq('patient_id', patientId)
     .select()
-    .single();
+    .maybeSingle();
+
+  if (result.error) {
+    logAppError('profile.query.update_failed', result.error, buildQueryContext({
+      table: 'patients',
+      filter: { patient_id: patientId },
+      patientId,
+    }));
+    return {
+      data: null,
+      error: result.error,
+    };
+  }
 
   return {
     data: result.data ? normalizePatient(result.data) : null,
@@ -726,7 +949,21 @@ export const updatePatientDetails = async (userIdentifier, updates) => {
     })
     .eq('patient_id', refreshedPatient.data.patient_id)
     .select()
-    .single();
+    .maybeSingle();
+
+  if (result.error) {
+    logAppError('profile.query.update_failed', result.error, buildQueryContext({
+      table: 'patients',
+      filter: { patient_id: refreshedPatient.data.patient_id },
+      patientId: refreshedPatient.data.patient_id,
+      authUserId: isUuid(userIdentifier) ? userIdentifier : '',
+      systemUserId: refreshedPatient.data.user_id || null,
+    }));
+    return {
+      data: null,
+      error: result.error,
+    };
+  }
 
   return {
     data: result.data ? normalizePatient(result.data) : null,
@@ -796,7 +1033,21 @@ export const linkPatientDetailsToUserByCode = async ({
     .update(updates)
     .eq('patient_id', patientResult.data.patient_id)
     .select()
-    .single();
+    .maybeSingle();
+
+  if (result.error) {
+    logAppError('profile.query.update_failed', result.error, buildQueryContext({
+      table: 'patients',
+      filter: { patient_id: patientResult.data.patient_id },
+      patientId: patientResult.data.patient_id,
+      authUserId: systemUserResult.data.auth_user_id || '',
+      systemUserId: systemUserResult.data.user_id,
+    }));
+    return {
+      data: null,
+      error: result.error,
+    };
+  }
 
   return {
     data: result.data ? normalizePatient(result.data) : null,
