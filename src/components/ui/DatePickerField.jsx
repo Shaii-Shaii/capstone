@@ -78,13 +78,15 @@ export function DatePickerField({
           styles.webFieldShell,
           error ? styles.fieldShellError : null,
         ]}>
-          <Text style={[
-            styles.fieldValue,
-            !value ? styles.fieldPlaceholder : null,
-          ]}>
-            {readableValue || placeholder}
-          </Text>
-          <AppIcon name="appointment" state={error ? 'danger' : 'muted'} />
+          <View pointerEvents="none" style={styles.webDisplayLayer}>
+            <Text style={[
+              styles.fieldValue,
+              !value ? styles.fieldPlaceholder : null,
+            ]}>
+              {readableValue || placeholder}
+            </Text>
+            <AppIcon name="appointment" state={error ? 'danger' : 'muted'} />
+          </View>
 
           {React.createElement('input', {
             type: 'date',
@@ -102,11 +104,18 @@ export function DatePickerField({
             onBlur,
             style: {
               position: 'absolute',
-              inset: 0,
-              width: '100%',
-              height: '100%',
+              top: 0,
+              right: 0,
+              bottom: 0,
+              left: 0,
               opacity: 0,
               cursor: 'pointer',
+              zIndex: 2,
+              border: 'none',
+              background: 'transparent',
+              boxSizing: 'border-box',
+              appearance: 'none',
+              WebkitAppearance: 'none',
             },
           })}
         </View>
@@ -223,6 +232,13 @@ const styles = StyleSheet.create({
   },
   webFieldShell: {
     position: 'relative',
+  },
+  webDisplayLayer: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
   },
   fieldShellError: {
     borderColor: theme.colors.borderError,
