@@ -522,6 +522,7 @@ export default function ProfileScreen() {
                   contentContainerStyle={styles.modalScrollContent}
                   showsVerticalScrollIndicator={true}
                   keyboardShouldPersistTaps="handled"
+                  nestedScrollEnabled={true}
                 >
                   {mode === 'edit' ? (
                     <>
@@ -845,12 +846,14 @@ const styles = StyleSheet.create({
     width: '100%',
     alignSelf: 'center',
     maxWidth: theme.layout.authCardMaxWidth,
+    minHeight: 0,
+    overflow: 'hidden',
   },
   modalScroll: {
-    maxHeight: '100%',
+    flex: 1,
+    minHeight: 0,
   },
   modalScrollContent: {
-    flexGrow: 1,
     paddingBottom: theme.spacing.lg,
   },
   modalKeyboardWrap: {
