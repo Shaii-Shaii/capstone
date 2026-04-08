@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { AppIcon } from './AppIcon';
@@ -10,6 +10,23 @@ const readableDateFormatter = new Intl.DateTimeFormat(undefined, {
   month: 'long',
   day: 'numeric',
 });
+const MONTH_LABELS = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+const WEEKDAY_LABELS = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
+const webNativeSelectStyle = {
+  flex: 1,
+  minHeight: 38,
+  borderRadius: 14,
+  border: `1px solid ${theme.colors.borderSubtle}`,
+  backgroundColor: theme.colors.surfaceSoft,
+  color: theme.colors.textPrimary,
+  padding: '0 12px',
+  fontFamily: theme.typography.fontFamily,
+  fontSize: `${theme.typography.compact.body}px`,
+  outline: 'none',
+};
 
 const formatDateValue = (date) => {
   const year = date.getFullYear();
@@ -31,6 +48,40 @@ const formatReadableDate = (value) => {
   return readableDateFormatter.format(parsedDate);
 };
 
+const toDateOnly = (date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
+
+const isSameDate = (left, right) => (
+  left?.getFullYear() === right?.getFullYear()
+  && left?.getMonth() === right?.getMonth()
+  && left?.getDate() === right?.getDate()
+);
+
+const isDateWithinBounds = (date, minimumDate, maximumDate) => {
+  const normalizedDate = toDateOnly(date).getTime();
+  const minTime = minimumDate ? toDateOnly(minimumDate).getTime() : null;
+  const maxTime = maximumDate ? toDateOnly(maximumDate).getTime() : null;
+
+  if (minTime !== null && normalizedDate < minTime) return false;
+  if (maxTime !== null && normalizedDate > maxTime) return false;
+  return true;
+};
+
+const buildCalendarDays = (visibleMonth) => {
+  const firstDayOfMonth = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth(), 1);
+  const firstWeekday = firstDayOfMonth.getDay();
+  const firstCalendarDay = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth(), 1 - firstWeekday);
+
+  return Array.from({ length: 42 }, (_, index) => {
+    const date = new Date(firstCalendarDay);
+    date.setDate(firstCalendarDay.getDate() + index);
+    return {
+      key: `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`,
+      date,
+      isCurrentMonth: date.getMonth() === visibleMonth.getMonth(),
+    };
+  });
+};
+
 export function DatePickerField({
   label,
   value,
@@ -44,7 +95,7 @@ export function DatePickerField({
   onPress,
 }) {
   const [isPickerVisible, setIsPickerVisible] = useState(false);
-  const webInputRef = useRef(null);
+  const webFieldRef = useRef(null);
   const parsedDateValue = useMemo(() => parseDateValue(value), [value]);
   const maximumDateValue = useMemo(
     () => (maximumDate instanceof Date ? maximumDate : null),
@@ -54,41 +105,56 @@ export function DatePickerField({
     () => (minimumDate instanceof Date ? minimumDate : null),
     [minimumDate]
   );
-  const maximumDateString = useMemo(
-    () => (maximumDateValue ? formatDateValue(maximumDateValue) : undefined),
-    [maximumDateValue]
-  );
-  const minimumDateString = useMemo(
-    () => (minimumDateValue ? formatDateValue(minimumDateValue) : undefined),
-    [minimumDateValue]
-  );
   const readableValue = useMemo(
     () => formatReadableDate(parsedDateValue),
     [parsedDateValue]
   );
+  const initialCalendarMonth = useMemo(() => {
+    const baseDate = parsedDateValue || maximumDateValue || new Date();
+    return new Date(baseDate.getFullYear(), baseDate.getMonth(), 1);
+  }, [maximumDateValue, parsedDateValue]);
+  const [visibleMonth, setVisibleMonth] = useState(initialCalendarMonth);
+
+  useEffect(() => {
+    if (!isPickerVisible) {
+      setVisibleMonth(initialCalendarMonth);
+    }
+  }, [initialCalendarMonth, isPickerVisible]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'web' || !isPickerVisible) return undefined;
+
+    const handlePointerDown = (event) => {
+      if (!webFieldRef.current?.contains?.(event.target)) {
+        setIsPickerVisible(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+    };
+  }, [isPickerVisible]);
+
+  const visibleMonthDays = useMemo(
+    () => buildCalendarDays(visibleMonth),
+    [visibleMonth]
+  );
+  const minimumYear = minimumDateValue?.getFullYear() || 1900;
+  const maximumYear = maximumDateValue?.getFullYear() || new Date().getFullYear();
+  const yearOptions = useMemo(
+    () => Array.from({ length: maximumYear - minimumYear + 1 }, (_, index) => minimumYear + index),
+    [maximumYear, minimumYear]
+  );
 
   const openWebPicker = async () => {
     await onPress?.();
-
-    const inputElement = webInputRef.current;
-    if (!inputElement) return;
-
-    if (typeof inputElement.showPicker === 'function') {
-      try {
-        inputElement.showPicker();
-        return;
-      } catch (_error) {
-        // Fall back to click/focus below when showPicker is unavailable or blocked.
-      }
-    }
-
-    inputElement.focus?.();
-    inputElement.click?.();
+    setIsPickerVisible((currentValue) => !currentValue);
   };
 
   if (Platform.OS === 'web') {
     return (
-      <View style={styles.fieldWrap}>
+      <View ref={webFieldRef} style={styles.fieldWrap}>
         <Text style={[styles.label, error ? styles.labelError : null]}>
           {label}
         </Text>
@@ -110,36 +176,124 @@ export function DatePickerField({
             </Text>
             <AppIcon name="appointment" state={error ? 'danger' : 'muted'} />
           </View>
-
-          {React.createElement('input', {
-            ref: webInputRef,
-            type: 'date',
-            value: value || '',
-            min: minimumDateString,
-            max: maximumDateString,
-            autoComplete: 'bday',
-            'aria-label': label,
-            onChange: (event) => {
-              const nextValue = String(event?.target?.value || '').trim();
-              const normalizedValue = parseDateValue(nextValue);
-              onChange(normalizedValue ? formatDateValue(normalizedValue) : nextValue);
-            },
-            onBlur,
-            style: {
-              position: 'absolute',
-              width: 1,
-              height: 1,
-              opacity: 0,
-              pointerEvents: 'none',
-              border: 'none',
-              background: 'transparent',
-              boxSizing: 'border-box',
-              appearance: 'none',
-              WebkitAppearance: 'none',
-              overflow: 'hidden',
-            },
-          })}
         </Pressable>
+
+        {isPickerVisible ? (
+          <View style={styles.webPickerCard}>
+            <View style={styles.webPickerHeader}>
+              <Text style={styles.webPickerTitle}>Select birthdate</Text>
+              <AppTextLink
+                title="Close"
+                variant="muted"
+                onPress={() => setIsPickerVisible(false)}
+              />
+            </View>
+
+            <View style={styles.webPickerToolbar}>
+              <Pressable
+                onPress={() => setVisibleMonth(new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() - 1, 1))}
+                style={styles.webArrowButton}
+              >
+                <Text style={styles.webArrowText}>‹</Text>
+              </Pressable>
+
+              <View style={styles.webSelectRow}>
+                {React.createElement(
+                  'select',
+                  {
+                    value: String(visibleMonth.getMonth()),
+                    onChange: (event) => {
+                      const nextMonth = Number(event.target.value);
+                      setVisibleMonth(new Date(visibleMonth.getFullYear(), nextMonth, 1));
+                    },
+                    style: webNativeSelectStyle,
+                  },
+                  MONTH_LABELS.map((monthLabel, monthIndex) => (
+                    React.createElement('option', { key: monthLabel, value: String(monthIndex) }, monthLabel)
+                  ))
+                )}
+
+                {React.createElement(
+                  'select',
+                  {
+                    value: String(visibleMonth.getFullYear()),
+                    onChange: (event) => {
+                      const nextYear = Number(event.target.value);
+                      setVisibleMonth(new Date(nextYear, visibleMonth.getMonth(), 1));
+                    },
+                    style: webNativeSelectStyle,
+                  },
+                  yearOptions.map((yearValue) => (
+                    React.createElement('option', { key: yearValue, value: String(yearValue) }, String(yearValue))
+                  ))
+                )}
+              </View>
+
+              <Pressable
+                onPress={() => setVisibleMonth(new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() + 1, 1))}
+                style={styles.webArrowButton}
+              >
+                <Text style={styles.webArrowText}>›</Text>
+              </Pressable>
+            </View>
+
+            <View style={styles.webWeekdayRow}>
+              {WEEKDAY_LABELS.map((weekdayLabel) => (
+                <Text key={weekdayLabel} style={styles.webWeekdayCell}>
+                  {weekdayLabel}
+                </Text>
+              ))}
+            </View>
+
+            <View style={styles.webCalendarGrid}>
+              {visibleMonthDays.map((day) => {
+                const isDisabled = !isDateWithinBounds(day.date, minimumDateValue, maximumDateValue);
+                const isSelected = parsedDateValue ? isSameDate(day.date, parsedDateValue) : false;
+
+                return (
+                  <Pressable
+                    key={day.key}
+                    disabled={isDisabled}
+                    onPress={() => {
+                      onChange(formatDateValue(day.date));
+                      onBlur?.();
+                      setIsPickerVisible(false);
+                    }}
+                    style={[
+                      styles.webDayCell,
+                      !day.isCurrentMonth ? styles.webDayCellMuted : null,
+                      isSelected ? styles.webDayCellSelected : null,
+                      isDisabled ? styles.webDayCellDisabled : null,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.webDayText,
+                        !day.isCurrentMonth ? styles.webDayTextMuted : null,
+                        isSelected ? styles.webDayTextSelected : null,
+                        isDisabled ? styles.webDayTextDisabled : null,
+                      ]}
+                    >
+                      {day.date.getDate()}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            <View style={styles.webPickerFooter}>
+              <AppTextLink
+                title="Clear"
+                variant="muted"
+                onPress={() => {
+                  onChange('');
+                  onBlur?.();
+                  setIsPickerVisible(false);
+                }}
+              />
+            </View>
+          </View>
+        ) : null}
 
         {error ? (
           <Text style={styles.fieldError}>{error}</Text>
@@ -262,6 +416,106 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: theme.spacing.sm,
     pointerEvents: 'none',
+  },
+  webPickerCard: {
+    marginTop: theme.spacing.sm,
+    borderRadius: theme.radius.xl,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+    backgroundColor: theme.colors.backgroundPrimary,
+    padding: theme.spacing.md,
+    gap: theme.spacing.sm,
+    ...theme.shadows.soft,
+  },
+  webPickerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+  },
+  webPickerTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textPrimary,
+  },
+  webPickerToolbar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  webArrowButton: {
+    width: 36,
+    height: 36,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.surfaceSoft,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+  },
+  webArrowText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodyLg,
+    color: theme.colors.textPrimary,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  webSelectRow: {
+    flex: 1,
+    flexDirection: 'row',
+    gap: theme.spacing.sm,
+  },
+  webWeekdayRow: {
+    flexDirection: 'row',
+  },
+  webWeekdayCell: {
+    flex: 1,
+    textAlign: 'center',
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textSecondary,
+  },
+  webCalendarGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 4,
+  },
+  webDayCell: {
+    width: '13.2%',
+    aspectRatio: 1,
+    borderRadius: theme.radius.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.backgroundPrimary,
+  },
+  webDayCellMuted: {
+    backgroundColor: theme.colors.surfaceSoft,
+  },
+  webDayCellSelected: {
+    backgroundColor: theme.colors.brandPrimary,
+  },
+  webDayCellDisabled: {
+    opacity: 0.35,
+  },
+  webDayText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    color: theme.colors.textPrimary,
+  },
+  webDayTextMuted: {
+    color: theme.colors.textSecondary,
+  },
+  webDayTextSelected: {
+    color: theme.colors.textOnBrand,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  webDayTextDisabled: {
+    color: theme.colors.textDisabled,
+  },
+  webPickerFooter: {
+    flexDirection: 'row',
+    justifyContent: 'flex-start',
   },
   fieldShellError: {
     borderColor: theme.colors.borderError,
