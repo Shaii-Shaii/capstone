@@ -8,8 +8,9 @@ const profileAvatarStorageBucket =
   process.env.EXPO_PUBLIC_PROFILE_PICTURES_BUCKET
   || 'profile_pictures';
 const patientOnboardingStorageBucket =
-  process.env.EXPO_PUBLIC_PATIENT_ASSETS_BUCKET
-  || 'patient_assets';
+  process.env.EXPO_PUBLIC_PATIENT_SELF_UPLOADS_BUCKET
+  || process.env.EXPO_PUBLIC_PROFILE_PICTURES_BUCKET
+  || 'profile_pictures';
 const buildQueryContext = ({ table, filter, authUserId = '', systemUserId = null, patientId = null, hospitalId = null }) => ({
   table,
   filter,
