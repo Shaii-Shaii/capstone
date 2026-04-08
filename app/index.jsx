@@ -247,6 +247,7 @@ function FirstTimeOnboarding() {
   const manualPatientForm = useForm({
     resolver: zodResolver(patientOnboardingSchema),
     mode: 'onBlur',
+    shouldUnregister: false,
     defaultValues: {
       first_name: profile?.first_name || '',
       middle_name: profile?.middle_name || '',
@@ -271,6 +272,8 @@ function FirstTimeOnboarding() {
       medical_document: '',
     },
   });
+
+  const getManualPatientFieldValue = (fieldName) => manualPatientForm.getValues(fieldName) ?? '';
 
   useEffect(() => {
     const animation = Animated.sequence([
@@ -570,11 +573,12 @@ function FirstTimeOnboarding() {
               <Controller
                 control={manualPatientForm.control}
                 name="first_name"
+                defaultValue={getManualPatientFieldValue('first_name')}
                 render={({ field: { onChange, onBlur, value }, fieldState }) => (
                   <AppInput
                     label="First Name"
                     required={true}
-                    value={value}
+                    value={value ?? ''}
                     onChangeText={onChange}
                     onBlur={onBlur}
                     error={fieldState.error?.message}
@@ -587,10 +591,11 @@ function FirstTimeOnboarding() {
               <Controller
                 control={manualPatientForm.control}
                 name="middle_name"
+                defaultValue={getManualPatientFieldValue('middle_name')}
                 render={({ field: { onChange, onBlur, value }, fieldState }) => (
                   <AppInput
                     label="Middle Name"
-                    value={value}
+                    value={value ?? ''}
                     onChangeText={onChange}
                     onBlur={onBlur}
                     error={fieldState.error?.message}
@@ -603,11 +608,12 @@ function FirstTimeOnboarding() {
               <Controller
                 control={manualPatientForm.control}
                 name="last_name"
+                defaultValue={getManualPatientFieldValue('last_name')}
                 render={({ field: { onChange, onBlur, value }, fieldState }) => (
                   <AppInput
                     label="Last Name"
                     required={true}
-                    value={value}
+                    value={value ?? ''}
                     onChangeText={onChange}
                     onBlur={onBlur}
                     error={fieldState.error?.message}
@@ -620,10 +626,11 @@ function FirstTimeOnboarding() {
               <Controller
                 control={manualPatientForm.control}
                 name="suffix"
+                defaultValue={getManualPatientFieldValue('suffix')}
                 render={({ field: { onChange, onBlur, value }, fieldState }) => (
                   <AppInput
                     label="Suffix"
-                    value={value}
+                    value={value ?? ''}
                     onChangeText={onChange}
                     onBlur={onBlur}
                     error={fieldState.error?.message}
@@ -636,11 +643,12 @@ function FirstTimeOnboarding() {
               <Controller
                 control={manualPatientForm.control}
                 name="birthdate"
+                defaultValue={getManualPatientFieldValue('birthdate')}
                 render={({ field: { onChange, onBlur, value }, fieldState }) => (
                   <DatePickerField
                     label="Birthdate"
                     required={true}
-                    value={value}
+                    value={value ?? ''}
                     placeholder="Select your birthdate"
                     helperText=""
                     error={fieldState.error?.message}
@@ -656,6 +664,7 @@ function FirstTimeOnboarding() {
               <Controller
                 control={manualPatientForm.control}
                 name="gender"
+                defaultValue={getManualPatientFieldValue('gender')}
                 render={({ fieldState }) => (
                   <>
                     <AddressSelectField
@@ -693,11 +702,12 @@ function FirstTimeOnboarding() {
               <Controller
                 control={manualPatientForm.control}
                 name="phone"
+                defaultValue={getManualPatientFieldValue('phone')}
                 render={({ field: { onChange, onBlur, value }, fieldState }) => (
                   <AppInput
                     label="Mobile Number"
                     required={true}
-                    value={value}
+                    value={value ?? ''}
                     onChangeText={onChange}
                     onBlur={onBlur}
                     error={fieldState.error?.message}
@@ -722,11 +732,12 @@ function FirstTimeOnboarding() {
               <Controller
                 control={manualPatientForm.control}
                 name="medical_condition"
+                defaultValue={getManualPatientFieldValue('medical_condition')}
                 render={({ field: { onChange, onBlur, value }, fieldState }) => (
                   <AppInput
                     label="Medical Condition"
                     required={true}
-                    value={value}
+                    value={value ?? ''}
                     onChangeText={onChange}
                     onBlur={onBlur}
                     error={fieldState.error?.message}
@@ -739,10 +750,11 @@ function FirstTimeOnboarding() {
               <Controller
                 control={manualPatientForm.control}
                 name="date_of_diagnosis"
+                defaultValue={getManualPatientFieldValue('date_of_diagnosis')}
                 render={({ field: { onChange, onBlur, value }, fieldState }) => (
                   <DatePickerField
                     label="Date of Diagnosis"
-                    value={value}
+                    value={value ?? ''}
                     placeholder="Select diagnosis date"
                     helperText=""
                     error={fieldState.error?.message}
@@ -758,10 +770,11 @@ function FirstTimeOnboarding() {
               <Controller
                 control={manualPatientForm.control}
                 name="guardian"
+                defaultValue={getManualPatientFieldValue('guardian')}
                 render={({ field: { onChange, onBlur, value }, fieldState }) => (
                   <AppInput
                     label="Guardian"
-                    value={value}
+                    value={value ?? ''}
                     onChangeText={onChange}
                     onBlur={onBlur}
                     error={fieldState.error?.message}
@@ -774,10 +787,11 @@ function FirstTimeOnboarding() {
               <Controller
                 control={manualPatientForm.control}
                 name="guardian_contact_number"
+                defaultValue={getManualPatientFieldValue('guardian_contact_number')}
                 render={({ field: { onChange, onBlur, value }, fieldState }) => (
                   <AppInput
                     label="Guardian Contact Number"
-                    value={value}
+                    value={value ?? ''}
                     onChangeText={onChange}
                     onBlur={onBlur}
                     error={fieldState.error?.message}
@@ -791,6 +805,7 @@ function FirstTimeOnboarding() {
               <Controller
                 control={manualPatientForm.control}
                 name="guardian_relationship"
+                defaultValue={getManualPatientFieldValue('guardian_relationship')}
                 render={({ fieldState }) => (
                   <>
                     <AddressSelectField
@@ -837,11 +852,12 @@ function FirstTimeOnboarding() {
                 <Controller
                   control={manualPatientForm.control}
                   name="guardian_relationship_other"
+                  defaultValue={getManualPatientFieldValue('guardian_relationship_other')}
                   render={({ field: { onChange, onBlur, value }, fieldState }) => (
                     <AppInput
                       label="Other Relationship"
                       required={true}
-                      value={value}
+                      value={value ?? ''}
                       onChangeText={onChange}
                       onBlur={onBlur}
                       error={fieldState.error?.message}
