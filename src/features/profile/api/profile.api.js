@@ -11,6 +11,9 @@ const patientOnboardingStorageBucket =
   process.env.EXPO_PUBLIC_PATIENT_SELF_UPLOADS_BUCKET
   || process.env.EXPO_PUBLIC_PROFILE_PICTURES_BUCKET
   || 'profile_pictures';
+const patientsTable = 'Patients';
+const hospitalRepresentativeTable = 'Hospital_Representative';
+const hospitalsTable = 'Hospitals';
 const buildQueryContext = ({ table, filter, authUserId = '', systemUserId = null, patientId = null, hospitalId = null }) => ({
   table,
   filter,
@@ -1028,12 +1031,12 @@ export const fetchPatientDetailsByUserId = async (userIdentifier) => {
   }
 
   const result = await runSingleRowSelect({
-    table: 'patients',
+    table: patientsTable,
     filter: { user_id: systemUserResult.data.user_id },
     authUserId: isUuid(userIdentifier) ? userIdentifier : '',
     systemUserId: systemUserResult.data.user_id,
     queryBuilder: supabase
-      .from('patients')
+      .from(patientsTable)
       .select('*')
       .eq('user_id', systemUserResult.data.user_id)
       .order('updated_at', { ascending: false }),
@@ -1052,12 +1055,12 @@ export const fetchHospitalStaffByUserId = async (userIdentifier) => {
   }
 
   const result = await runSingleRowSelect({
-    table: 'hospital_staff',
+    table: hospitalRepresentativeTable,
     filter: { user_id: systemUserResult.data.user_id },
     authUserId: isUuid(userIdentifier) ? userIdentifier : '',
     systemUserId: systemUserResult.data.user_id,
     queryBuilder: supabase
-      .from('hospital_staff')
+      .from(hospitalRepresentativeTable)
       .select('*')
       .eq('user_id', systemUserResult.data.user_id)
       .order('assigned_date', { ascending: false }),
@@ -1075,11 +1078,11 @@ export const fetchHospitalRepresentativeById = async (hospitalId) => {
   }
 
   const result = await runSingleRowSelect({
-    table: 'H-Representatives',
+    table: hospitalsTable,
     filter: { hospital_id: hospitalId },
     hospitalId,
     queryBuilder: supabase
-      .from('H-Representatives')
+      .from(hospitalsTable)
       .select('*')
       .eq('hospital_id', hospitalId)
       .order('updated_at', { ascending: false }),
@@ -1133,10 +1136,10 @@ export const fetchPatientDetailsByCode = async (patientCode) => {
   }
 
   const result = await runSingleRowSelect({
-    table: 'patients',
+    table: patientsTable,
     filter: { patient_code: normalizedCode },
     queryBuilder: supabase
-      .from('patients')
+      .from(patientsTable)
       .select('*')
       .ilike('patient_code', normalizedCode)
       .order('updated_at', { ascending: false }),
@@ -1211,7 +1214,7 @@ export const createPatientDetails = async (payload) => {
   };
 
   const authContext = await ensureMutationAuthContext({
-    table: 'patients',
+    table: patientsTable,
     operation: 'insert',
     expectedAuthUserId: systemUserResult.data.auth_user_id || '',
     systemUserId: systemUserResult.data.user_id,
@@ -1226,7 +1229,7 @@ export const createPatientDetails = async (payload) => {
   const profile = profileResult.data;
 
   const result = await supabase
-    .from('patients')
+    .from(patientsTable)
     .insert([{
       user_id: systemUserResult.data.user_id,
       hospital_id: patientPayload.hospital_id,
@@ -1243,7 +1246,7 @@ export const createPatientDetails = async (payload) => {
 
   if (result.error) {
     logAppError('profile.query.insert_failed', result.error, buildQueryContext({
-      table: 'patients',
+      table: patientsTable,
       filter: { user_id: systemUserResult.data.user_id },
       authUserId: systemUserResult.data.auth_user_id || '',
       systemUserId: systemUserResult.data.user_id,
@@ -1260,7 +1263,7 @@ export const createPatientDetails = async (payload) => {
 
   if (!result.data?.patient_id) {
     logAppEvent('profile.query.insert_no_row', 'Insert succeeded without a returned patients row. Refetching.', {
-      table: 'patients',
+      table: patientsTable,
       filter: { user_id: systemUserResult.data.user_id },
       authUserId: systemUserResult.data.auth_user_id || '',
       systemUserId: systemUserResult.data.user_id,
@@ -1277,7 +1280,7 @@ export const createPatientDetails = async (payload) => {
 
 export const updatePatientPictureByPatientId = async (patientId, patientPicture) => {
   const result = await supabase
-    .from('patients')
+    .from(patientsTable)
     .update({
       patient_picture: patientPicture,
       updated_at: new Date().toISOString(),
@@ -1288,7 +1291,7 @@ export const updatePatientPictureByPatientId = async (patientId, patientPicture)
 
   if (result.error) {
     logAppError('profile.query.update_failed', result.error, buildQueryContext({
-      table: 'patients',
+      table: patientsTable,
       filter: { patient_id: patientId },
       patientId,
     }));
@@ -1343,7 +1346,7 @@ export const updatePatientDetails = async (userIdentifier, updates) => {
   };
 
   const authContext = await ensureMutationAuthContext({
-    table: 'patients',
+    table: patientsTable,
     operation: 'update',
     expectedAuthUserId: systemUserResult.data.auth_user_id || '',
     systemUserId: systemUserResult.data.user_id,
@@ -1356,7 +1359,7 @@ export const updatePatientDetails = async (userIdentifier, updates) => {
   }
 
   const result = await supabase
-    .from('patients')
+    .from(patientsTable)
     .update(patientPayload)
     .eq('patient_id', refreshedPatient.data.patient_id)
     .select()
@@ -1364,7 +1367,7 @@ export const updatePatientDetails = async (userIdentifier, updates) => {
 
   if (result.error) {
     logAppError('profile.query.update_failed', result.error, buildQueryContext({
-      table: 'patients',
+      table: patientsTable,
       filter: { patient_id: refreshedPatient.data.patient_id },
       patientId: refreshedPatient.data.patient_id,
       authUserId: isUuid(userIdentifier) ? userIdentifier : '',
@@ -1444,7 +1447,7 @@ export const linkPatientDetailsToUserByCode = async ({
   }
 
   const authContext = await ensureMutationAuthContext({
-    table: 'patients',
+    table: patientsTable,
     operation: 'update',
     expectedAuthUserId: systemUserResult.data.auth_user_id || '',
     systemUserId: systemUserResult.data.user_id,
@@ -1457,7 +1460,7 @@ export const linkPatientDetailsToUserByCode = async ({
   }
 
   const result = await supabase
-    .from('patients')
+    .from(patientsTable)
     .update(updates)
     .eq('patient_id', patientResult.data.patient_id)
     .select()
@@ -1465,7 +1468,7 @@ export const linkPatientDetailsToUserByCode = async ({
 
   if (result.error) {
     logAppError('profile.query.update_failed', result.error, buildQueryContext({
-      table: 'patients',
+      table: patientsTable,
       filter: { patient_id: patientResult.data.patient_id },
       patientId: patientResult.data.patient_id,
       authUserId: systemUserResult.data.auth_user_id || '',
