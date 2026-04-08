@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, StyleSheet, Text, Pressable, Alert, ScrollView, Modal, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, StyleSheet, Text, Pressable, Alert, ScrollView, Modal, KeyboardAvoidingView, Platform, useWindowDimensions } from 'react-native';
 import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { Controller, useForm, useWatch } from 'react-hook-form';
@@ -64,6 +64,7 @@ function ActionRow({ item, onPress }) {
 
 export default function ProfileScreen() {
   const router = useRouter();
+  const { height: viewportHeight } = useWindowDimensions();
   const {
     user,
     profile,
@@ -273,6 +274,7 @@ export default function ProfileScreen() {
       : 'info'
     : 'info';
   const isPopupVisible = mode !== 'view';
+  const modalMaxHeight = Math.max(360, viewportHeight - theme.spacing.xl * 2);
   const liveProfileCompletionMeta = useMemo(() => (
     getProfileCompletionMeta(watchedProfileValues)
   ), [getProfileCompletionMeta, watchedProfileValues]);
@@ -516,20 +518,20 @@ export default function ProfileScreen() {
             <View style={styles.modalOverlay}>
               <Pressable style={styles.modalBackdrop} onPress={handleModalClose} />
 
-              <AppCard variant="elevated" radius="xl" padding="lg" style={styles.modalCard}>
-                <ScrollView
-                  style={styles.modalScroll}
-                  contentContainerStyle={styles.modalScrollContent}
-                  showsVerticalScrollIndicator={true}
-                  keyboardShouldPersistTaps="handled"
-                  nestedScrollEnabled={true}
-                >
-                  {mode === 'edit' ? (
-                    <>
+              <AppCard
+                variant="elevated"
+                radius="xl"
+                padding="lg"
+                style={[styles.modalCard, { maxHeight: modalMaxHeight }]}
+                contentStyle={styles.modalCardContent}
+              >
+                {mode === 'edit' ? (
+                  <>
+                    <View style={styles.modalHeaderBlock}>
                       <DashboardSectionHeader
                         title={editModalTitle}
                         description=""
-                        style={styles.sectionHeader}
+                        style={styles.sectionHeaderCompact}
                       />
 
                       <View style={styles.completionCard}>
@@ -554,7 +556,16 @@ export default function ProfileScreen() {
                         />
                         <Text style={styles.completionHint}>{completionHint}</Text>
                       </View>
+                    </View>
 
+                    <ScrollView
+                      style={styles.modalBodyScroll}
+                      contentContainerStyle={styles.modalBodyContent}
+                      showsVerticalScrollIndicator={true}
+                      keyboardShouldPersistTaps="handled"
+                      keyboardDismissMode="interactive"
+                      nestedScrollEnabled={true}
+                    >
                       <View style={styles.editPreviewCard}>
                         <Text style={styles.editPreviewTitle}>Current</Text>
                         <View style={styles.editPreviewList}>
@@ -603,17 +614,28 @@ export default function ProfileScreen() {
                         />
                         <AppTextLink title="Close" variant="muted" onPress={requestEditModalClose} />
                       </View>
-                    </>
-                  ) : null}
+                    </ScrollView>
+                  </>
+                ) : null}
 
-                  {mode === 'password' ? (
-                    <>
+                {mode === 'password' ? (
+                  <>
+                    <View style={styles.modalHeaderBlock}>
                       <DashboardSectionHeader
                         title="Change Password"
                         description=""
-                        style={styles.sectionHeader}
+                        style={styles.sectionHeaderCompact}
                       />
+                    </View>
 
+                    <ScrollView
+                      style={styles.modalBodyScroll}
+                      contentContainerStyle={styles.modalBodyContent}
+                      showsVerticalScrollIndicator={true}
+                      keyboardShouldPersistTaps="handled"
+                      keyboardDismissMode="interactive"
+                      nestedScrollEnabled={true}
+                    >
                       <View style={styles.passwordMeterCard}>
                         <View style={styles.passwordMeterHeader}>
                           <AppIcon
@@ -664,9 +686,9 @@ export default function ProfileScreen() {
                         />
                         <AppTextLink title="Close" variant="muted" onPress={handleModalClose} />
                       </View>
-                    </>
-                  ) : null}
-                </ScrollView>
+                    </ScrollView>
+                  </>
+                ) : null}
               </AppCard>
             </View>
           </KeyboardAvoidingView>
@@ -722,6 +744,9 @@ const styles = StyleSheet.create({
   },
   sectionHeader: {
     marginBottom: theme.spacing.lg,
+  },
+  sectionHeaderCompact: {
+    marginBottom: theme.spacing.md,
   },
   actionList: {
     gap: theme.spacing.sm,
@@ -842,19 +867,26 @@ const styles = StyleSheet.create({
     lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
   },
   modalCard: {
-    maxHeight: '90%',
     width: '100%',
     alignSelf: 'center',
     maxWidth: theme.layout.authCardMaxWidth,
     minHeight: 0,
     overflow: 'hidden',
+    flexShrink: 1,
   },
-  modalScroll: {
+  modalCardContent: {
     flex: 1,
     minHeight: 0,
   },
-  modalScrollContent: {
-    paddingBottom: theme.spacing.lg,
+  modalHeaderBlock: {
+    flexShrink: 0,
+  },
+  modalBodyScroll: {
+    flex: 1,
+    minHeight: 0,
+  },
+  modalBodyContent: {
+    paddingBottom: theme.spacing.xl,
   },
   modalKeyboardWrap: {
     flex: 1,
@@ -862,7 +894,9 @@ const styles = StyleSheet.create({
   modalOverlay: {
     flex: 1,
     justifyContent: 'center',
+    alignItems: 'center',
     paddingHorizontal: theme.spacing.lg,
+    paddingVertical: theme.spacing.lg,
     backgroundColor: theme.colors.overlay,
   },
   modalBackdrop: {
@@ -870,6 +904,7 @@ const styles = StyleSheet.create({
   },
   editPreviewCard: {
     marginBottom: theme.spacing.md,
+    marginTop: theme.spacing.xs,
     borderRadius: theme.radius.lg,
     backgroundColor: theme.colors.surfaceSoft,
     borderWidth: 1,
