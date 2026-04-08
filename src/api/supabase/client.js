@@ -273,7 +273,7 @@ const shouldRefreshSession = (session) => {
   return expiresAtMs - now <= refreshThresholdMs;
 };
 
-const ensureActiveSession = async () => {
+export const ensureActiveSession = async () => {
   const { data } = await supabase.auth.getSession();
   const session = data?.session || null;
 

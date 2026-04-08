@@ -1,4 +1,4 @@
-import { supabase } from '../../../api/supabase/client';
+import { ensureActiveSession, supabase } from '../../../api/supabase/client';
 import { logAppError, logAppEvent } from '../../../utils/appErrors';
 
 const isUuid = (value) => typeof value === 'string' && value.includes('-');
@@ -18,6 +18,81 @@ const buildQueryContext = ({ table, filter, authUserId = '', systemUserId = null
   patientId: patientId || null,
   hospitalId: hospitalId || null,
 });
+
+const getPayloadKeys = (payload = {}) => Object.keys(payload || {}).sort();
+const buildSupabaseErrorMeta = (error) => ({
+  message: error?.message || '',
+  code: error?.code || '',
+  details: error?.details || '',
+  hint: error?.hint || '',
+});
+
+const buildMutationContext = ({
+  table,
+  operation,
+  expectedAuthUserId = '',
+  currentAuthUserId = '',
+  systemUserId = null,
+  patientId = null,
+  payload = {},
+}) => ({
+  table,
+  operation,
+  expectedAuthUserId: expectedAuthUserId || null,
+  currentAuthUserId: currentAuthUserId || null,
+  systemUserId: systemUserId || null,
+  patientId: patientId || null,
+  payloadKeys: getPayloadKeys(payload),
+});
+
+const ensureMutationAuthContext = async ({
+  table,
+  operation,
+  expectedAuthUserId = '',
+  systemUserId = null,
+  patientId = null,
+  payload = {},
+}) => {
+  const sessionResult = await ensureActiveSession();
+  const currentAuthUserId = sessionResult.session?.user?.id || '';
+  const context = buildMutationContext({
+    table,
+    operation,
+    expectedAuthUserId,
+    currentAuthUserId,
+    systemUserId,
+    patientId,
+    payload,
+  });
+
+  logAppEvent('profile.mutation.started', 'Authenticated mutation started.', context);
+
+  if (sessionResult.error || !currentAuthUserId) {
+    const authError = sessionResult.error || new Error('No active authenticated session found.');
+    logAppError('profile.mutation.auth_missing', authError, context);
+    return {
+      error: authError,
+      context,
+      currentAuthUserId,
+    };
+  }
+
+  if (expectedAuthUserId && currentAuthUserId !== expectedAuthUserId) {
+    const mismatchError = new Error('Authenticated session does not match the expected user.');
+    logAppError('profile.mutation.auth_mismatch', mismatchError, context);
+    return {
+      error: mismatchError,
+      context,
+      currentAuthUserId,
+    };
+  }
+
+  return {
+    error: null,
+    context,
+    currentAuthUserId,
+  };
+};
 
 const resolveQueryRows = ({ table, filter, rows, authUserId = '', systemUserId = null, patientId = null, hospitalId = null }) => {
   const context = buildQueryContext({ table, filter, authUserId, systemUserId, patientId, hospitalId });
@@ -203,6 +278,25 @@ const uploadProfileMedia = async ({
     return { data: null, error: new Error('Media file is required.') };
   }
 
+  const authContext = await ensureMutationAuthContext({
+    table: 'storage.objects',
+    operation: 'insert',
+    expectedAuthUserId: authUserId,
+    payload: {
+      bucket,
+      folder,
+      fileName: fileName || '',
+      contentType: contentType || 'image/jpeg',
+    },
+  });
+
+  if (authContext.error) {
+    return {
+      data: null,
+      error: authContext.error,
+    };
+  }
+
   const extension = getFileExtension({ contentType, fileName });
   const filePath = `${authUserId}/${folder}-${Date.now()}.${extension}`;
   logAppEvent('profile.storage.upload_started', 'Storage upload started.', {
@@ -231,6 +325,8 @@ const uploadProfileMedia = async ({
       folder,
       fileType,
       contentType: contentType || 'image/jpeg',
+      currentAuthUserId: authContext.currentAuthUserId,
+      supabaseError: buildSupabaseErrorMeta(uploadResult.error),
     });
 
     return {
@@ -542,6 +638,18 @@ export const createUserDetails = async ({ systemUserId, details = {} }) => {
     return { data: null, error: new Error('System user ID is required.') };
   }
 
+  const authContext = await ensureMutationAuthContext({
+    table: 'user_details',
+    operation: 'insert',
+    expectedAuthUserId: details.auth_user_id || '',
+    systemUserId,
+    payload: details,
+  });
+
+  if (authContext.error) {
+    return { data: null, error: authContext.error };
+  }
+
   const result = await supabase
     .from('user_details')
     .insert([{
@@ -572,7 +680,12 @@ export const createUserDetails = async ({ systemUserId, details = {} }) => {
       table: 'user_details',
       filter: { user_id: systemUserId },
       systemUserId,
+      authUserId: authContext.currentAuthUserId,
     }));
+    logAppError('profile.mutation.failed', result.error, {
+      ...authContext.context,
+      supabaseError: buildSupabaseErrorMeta(result.error),
+    });
     return result;
   }
 
@@ -786,6 +899,18 @@ export const updateProfile = async (authUserId, updates) => {
     Object.entries(payload).filter(([, value]) => value !== undefined)
   );
 
+  const authContext = await ensureMutationAuthContext({
+    table: 'user_details',
+    operation: 'update',
+    expectedAuthUserId: authUserId,
+    systemUserId: systemUserResult.data.user_id,
+    payload: filteredPayload,
+  });
+
+  if (authContext.error) {
+    return { data: null, error: authContext.error };
+  }
+
   logAppEvent('profile.query.update_target', 'Updating user_details via primary key.', {
     table: 'user_details',
     filter: {
@@ -812,6 +937,10 @@ export const updateProfile = async (authUserId, updates) => {
       },
       authUserId,
       systemUserId: systemUserResult.data.user_id,
+      currentAuthUserId: authContext.currentAuthUserId,
+      payloadKeys: authContext.context.payloadKeys,
+      operation: 'update',
+      supabaseError: buildSupabaseErrorMeta(result.error),
     }));
     return result;
   }
@@ -1069,6 +1198,29 @@ export const createPatientDetails = async (payload) => {
     return { data: null, error: systemUserResult.error || new Error('System user could not be loaded.') };
   }
 
+  const patientPayload = {
+    hospital_id: payload?.hospital_id || null,
+    patient_picture: payload?.patient_picture || null,
+    medical_condition: payload?.medical_condition || null,
+    date_of_diagnosis: payload?.date_of_diagnosis || null,
+    guardian: payload?.guardian || null,
+    guardian_relationship: payload?.guardian_relationship || null,
+    guardian_contact_number: payload?.guardian_contact_number || null,
+    medical_document: payload?.medical_document || null,
+  };
+
+  const authContext = await ensureMutationAuthContext({
+    table: 'patients',
+    operation: 'insert',
+    expectedAuthUserId: systemUserResult.data.auth_user_id || '',
+    systemUserId: systemUserResult.data.user_id,
+    payload: patientPayload,
+  });
+
+  if (authContext.error) {
+    return { data: null, error: authContext.error };
+  }
+
   const profileResult = await fetchProfileById(systemUserResult.data.auth_user_id);
   const profile = profileResult.data;
 
@@ -1076,14 +1228,14 @@ export const createPatientDetails = async (payload) => {
     .from('patients')
     .insert([{
       user_id: systemUserResult.data.user_id,
-      hospital_id: payload?.hospital_id || null,
-      patient_picture: payload?.patient_picture || profile?.photo_path || null,
-      medical_condition: payload?.medical_condition || null,
-      date_of_diagnosis: payload?.date_of_diagnosis || null,
-      guardian: payload?.guardian || null,
-      guardian_relationship: payload?.guardian_relationship || null,
-      guardian_contact_number: payload?.guardian_contact_number || null,
-      medical_document: payload?.medical_document || null,
+      hospital_id: patientPayload.hospital_id,
+      patient_picture: patientPayload.patient_picture || profile?.photo_path || null,
+      medical_condition: patientPayload.medical_condition,
+      date_of_diagnosis: patientPayload.date_of_diagnosis,
+      guardian: patientPayload.guardian,
+      guardian_relationship: patientPayload.guardian_relationship,
+      guardian_contact_number: patientPayload.guardian_contact_number,
+      medical_document: patientPayload.medical_document,
     }])
     .select()
     .maybeSingle();
@@ -1095,6 +1247,10 @@ export const createPatientDetails = async (payload) => {
       authUserId: systemUserResult.data.auth_user_id || '',
       systemUserId: systemUserResult.data.user_id,
     }));
+    logAppError('profile.mutation.failed', result.error, {
+      ...authContext.context,
+      supabaseError: buildSupabaseErrorMeta(result.error),
+    });
     return {
       data: null,
       error: result.error,
@@ -1148,6 +1304,11 @@ export const updatePatientPictureByPatientId = async (patientId, patientPicture)
 };
 
 export const updatePatientDetails = async (userIdentifier, updates) => {
+  const systemUserResult = await resolveSystemUser(userIdentifier);
+  if (systemUserResult.error || !systemUserResult.data?.user_id) {
+    return { data: null, error: systemUserResult.error || new Error('System user could not be loaded.') };
+  }
+
   const patientResult = await fetchPatientDetailsByUserId(userIdentifier);
   if (patientResult.error) {
     return { data: null, error: patientResult.error };
@@ -1168,19 +1329,34 @@ export const updatePatientDetails = async (userIdentifier, updates) => {
     return { data: null, error: refreshedPatient.error || new Error('Patient record is not available.') };
   }
 
+  const patientPayload = {
+    hospital_id: updates.hospital_id ?? undefined,
+    medical_condition: updates.medical_condition ?? undefined,
+    patient_picture: updates.patient_picture ?? updates.avatar_url ?? undefined,
+    date_of_diagnosis: updates.date_of_diagnosis ?? undefined,
+    guardian: updates.guardian ?? undefined,
+    guardian_relationship: updates.guardian_relationship ?? undefined,
+    guardian_contact_number: updates.guardian_contact_number ?? undefined,
+    medical_document: updates.medical_document ?? undefined,
+    updated_at: new Date().toISOString(),
+  };
+
+  const authContext = await ensureMutationAuthContext({
+    table: 'patients',
+    operation: 'update',
+    expectedAuthUserId: systemUserResult.data.auth_user_id || '',
+    systemUserId: systemUserResult.data.user_id,
+    patientId: refreshedPatient.data.patient_id,
+    payload: patientPayload,
+  });
+
+  if (authContext.error) {
+    return { data: null, error: authContext.error };
+  }
+
   const result = await supabase
     .from('patients')
-    .update({
-      hospital_id: updates.hospital_id ?? undefined,
-      medical_condition: updates.medical_condition ?? undefined,
-      patient_picture: updates.patient_picture ?? updates.avatar_url ?? undefined,
-      date_of_diagnosis: updates.date_of_diagnosis ?? undefined,
-      guardian: updates.guardian ?? undefined,
-      guardian_relationship: updates.guardian_relationship ?? undefined,
-      guardian_contact_number: updates.guardian_contact_number ?? undefined,
-      medical_document: updates.medical_document ?? undefined,
-      updated_at: new Date().toISOString(),
-    })
+    .update(patientPayload)
     .eq('patient_id', refreshedPatient.data.patient_id)
     .select()
     .maybeSingle();
@@ -1192,6 +1368,10 @@ export const updatePatientDetails = async (userIdentifier, updates) => {
       patientId: refreshedPatient.data.patient_id,
       authUserId: isUuid(userIdentifier) ? userIdentifier : '',
       systemUserId: refreshedPatient.data.user_id || null,
+      currentAuthUserId: authContext.currentAuthUserId,
+      payloadKeys: authContext.context.payloadKeys,
+      operation: 'update',
+      supabaseError: buildSupabaseErrorMeta(result.error),
     }));
     return {
       data: null,
@@ -1262,6 +1442,19 @@ export const linkPatientDetailsToUserByCode = async ({
     updates.patient_picture = patientPicture;
   }
 
+  const authContext = await ensureMutationAuthContext({
+    table: 'patients',
+    operation: 'update',
+    expectedAuthUserId: systemUserResult.data.auth_user_id || '',
+    systemUserId: systemUserResult.data.user_id,
+    patientId: patientResult.data.patient_id,
+    payload: updates,
+  });
+
+  if (authContext.error) {
+    return { data: null, error: authContext.error };
+  }
+
   const result = await supabase
     .from('patients')
     .update(updates)
@@ -1276,6 +1469,10 @@ export const linkPatientDetailsToUserByCode = async ({
       patientId: patientResult.data.patient_id,
       authUserId: systemUserResult.data.auth_user_id || '',
       systemUserId: systemUserResult.data.user_id,
+      currentAuthUserId: authContext.currentAuthUserId,
+      payloadKeys: authContext.context.payloadKeys,
+      operation: 'update',
+      supabaseError: buildSupabaseErrorMeta(result.error),
     }));
     return {
       data: null,
