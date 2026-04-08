@@ -155,7 +155,10 @@ export const register = async (email, password, additionalData = {}) => {
       throw new Error("This email is already registered. Please log in instead.");
     }
 
-    if (data?.user?.id) {
+    // When email confirmation is required, Supabase can create the auth user without
+    // returning an active session yet. In that case, defer public table setup until
+    // OTP verification/login so signup does not fail before the account is confirmed.
+    if (data?.user?.id && data?.session) {
       const ensureSystemUserResult = await ensureProfileInfrastructure({
         authUserId: data.user.id,
         email: data.user.email || email,
@@ -167,11 +170,20 @@ export const register = async (email, password, additionalData = {}) => {
       }
     }
 
+    if (data?.user?.id && !data?.session) {
+      logAppEvent('auth.signup', 'Signup created auth user and is waiting for email verification before DB sync.', {
+        authUserId: data.user.id,
+        role: additionalData.role || null,
+      });
+    }
+
     await writeAuditLog({
       authUserId: data.user?.id,
       userEmail: data.user?.email || email,
       action: 'auth.signup',
-      description: `Signup created for ${additionalData.role || 'account'} account.`,
+      description: data?.session
+        ? `Signup created for ${additionalData.role || 'account'} account.`
+        : `Signup created and is waiting for email verification for ${additionalData.role || 'account'} account.`,
       resource: 'auth',
       status: 'success',
     });
