@@ -1,7 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { AppInput } from './AppInput';
 import { AppIcon } from './AppIcon';
 import { AppTextLink } from './AppTextLink';
 import { theme } from '../../design-system/theme';
@@ -69,24 +68,55 @@ export function DatePickerField({
 
   if (Platform.OS === 'web') {
     return (
-      <AppInput
-        label={label}
-        placeholder={placeholder}
-        variant="filled"
-        helperText={helperText}
-        value={value}
-        onChange={(event) => {
-          const nextValue = String(event?.target?.value || event?.nativeEvent?.text || '').trim();
-          const normalizedValue = parseDateValue(nextValue);
-          onChange(normalizedValue ? formatDateValue(normalizedValue) : nextValue);
-        }}
-        onBlur={onBlur}
-        error={error}
-        min={minimumDateString}
-        max={maximumDateString}
-        type="date"
-        autoComplete="bday"
-      />
+      <View style={styles.fieldWrap}>
+        <Text style={[styles.label, error ? styles.labelError : null]}>
+          {label}
+        </Text>
+
+        <View style={[
+          styles.fieldShell,
+          styles.webFieldShell,
+          error ? styles.fieldShellError : null,
+        ]}>
+          <Text style={[
+            styles.fieldValue,
+            !value ? styles.fieldPlaceholder : null,
+          ]}>
+            {readableValue || placeholder}
+          </Text>
+          <AppIcon name="appointment" state={error ? 'danger' : 'muted'} />
+
+          {React.createElement('input', {
+            type: 'date',
+            value: value || '',
+            min: minimumDateString,
+            max: maximumDateString,
+            autoComplete: 'bday',
+            'aria-label': label,
+            onClick: () => onPress?.(),
+            onChange: (event) => {
+              const nextValue = String(event?.target?.value || '').trim();
+              const normalizedValue = parseDateValue(nextValue);
+              onChange(normalizedValue ? formatDateValue(normalizedValue) : nextValue);
+            },
+            onBlur,
+            style: {
+              position: 'absolute',
+              inset: 0,
+              width: '100%',
+              height: '100%',
+              opacity: 0,
+              cursor: 'pointer',
+            },
+          })}
+        </View>
+
+        {error ? (
+          <Text style={styles.fieldError}>{error}</Text>
+        ) : helperText ? (
+          <Text style={styles.fieldHelper}>{helperText}</Text>
+        ) : null}
+      </View>
     );
   }
 
@@ -190,6 +220,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: theme.spacing.sm,
+  },
+  webFieldShell: {
+    position: 'relative',
   },
   fieldShellError: {
     borderColor: theme.colors.borderError,
