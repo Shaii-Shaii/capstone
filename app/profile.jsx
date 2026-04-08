@@ -36,6 +36,7 @@ import { donorDashboardNavItems, patientDashboardNavItems } from '../src/constan
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 const PROFILE_MINIMUM_AGE = 18;
 const MINIMUM_BIRTHDATE = new Date(1900, 0, 1);
+const REQUIRED_PROFILE_FIELDS = new Set(['firstName', 'lastName', 'birthdate', 'gender', 'phone']);
 
 const getMaximumBirthdate = () => {
   const maxDate = new Date();
@@ -627,6 +628,7 @@ export default function ProfileScreen() {
                                 return (
                                   <DatePickerField
                                     label={field.label}
+                                    required={REQUIRED_PROFILE_FIELDS.has(field.formKey)}
                                     value={controllerField.value}
                                     placeholder={field.placeholder}
                                     helperText={field.helperText}
@@ -645,6 +647,7 @@ export default function ProfileScreen() {
                                   <>
                                     <AddressSelectField
                                       label={field.label}
+                                      required={REQUIRED_PROFILE_FIELDS.has(field.formKey)}
                                       value={watchedGender}
                                       placeholder={field.placeholder}
                                       helperText={field.helperText}
@@ -677,6 +680,7 @@ export default function ProfileScreen() {
                               return (
                                 <AppInput
                                   label={field.label}
+                                  required={REQUIRED_PROFILE_FIELDS.has(field.formKey)}
                                   placeholder={field.placeholder}
                                   keyboardType={field.keyboardType}
                                   variant="filled"

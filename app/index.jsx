@@ -537,6 +537,7 @@ function FirstTimeOnboarding() {
                 render={({ field: { onChange, onBlur, value }, fieldState }) => (
                   <AppInput
                     label="First Name"
+                    required={true}
                     value={value}
                     onChangeText={onChange}
                     onBlur={onBlur}
@@ -569,6 +570,7 @@ function FirstTimeOnboarding() {
                 render={({ field: { onChange, onBlur, value }, fieldState }) => (
                   <AppInput
                     label="Last Name"
+                    required={true}
                     value={value}
                     onChangeText={onChange}
                     onBlur={onBlur}
@@ -601,6 +603,7 @@ function FirstTimeOnboarding() {
                 render={({ field: { onChange, onBlur, value }, fieldState }) => (
                   <DatePickerField
                     label="Birthdate"
+                    required={true}
                     value={value}
                     placeholder="Select your birthdate"
                     helperText=""
@@ -621,6 +624,7 @@ function FirstTimeOnboarding() {
                   <>
                     <AddressSelectField
                       label="Gender"
+                      required={true}
                       value={manualGenderValue}
                       placeholder="Select gender"
                       helperText=""
@@ -656,6 +660,7 @@ function FirstTimeOnboarding() {
                 render={({ field: { onChange, onBlur, value }, fieldState }) => (
                   <AppInput
                     label="Mobile Number"
+                    required={true}
                     value={value}
                     onChangeText={onChange}
                     onBlur={onBlur}
@@ -684,6 +689,7 @@ function FirstTimeOnboarding() {
                 render={({ field: { onChange, onBlur, value }, fieldState }) => (
                   <AppInput
                     label="Medical Condition"
+                    required={true}
                     value={value}
                     onChangeText={onChange}
                     onBlur={onBlur}

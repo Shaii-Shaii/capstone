@@ -61,6 +61,7 @@ const toSelectOptions = (items = [], codeKey) => (
 
 export function AddressSelectField({
   label,
+  required = false,
   value,
   placeholder,
   helperText,
@@ -70,7 +71,10 @@ export function AddressSelectField({
 }) {
   return (
     <View style={styles.selectFieldWrap}>
-      <Text style={styles.selectFieldLabel}>{label}</Text>
+      <Text style={styles.selectFieldLabel}>
+        {label}
+        {required ? <Text style={styles.requiredMark}> *</Text> : null}
+      </Text>
       <Pressable
         disabled={disabled}
         onPress={onPress}
@@ -465,6 +469,10 @@ const styles = StyleSheet.create({
     fontWeight: theme.typography.weights.semibold,
     color: theme.colors.textPrimary,
     marginBottom: theme.spacing.xs,
+  },
+  requiredMark: {
+    color: theme.colors.textError,
+    fontWeight: theme.typography.weights.bold,
   },
   selectField: {
     minHeight: theme.inputs.minHeightCompact,

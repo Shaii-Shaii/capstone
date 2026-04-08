@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, TextInput, StyleSheet } from 'react-native';
+import { View, Text, TextInput, StyleSheet } from 'react-native';
 import Animated, {
   interpolateColor,
   useAnimatedStyle,
@@ -24,6 +24,7 @@ const INPUT_VARIANTS = {
 
 export const AppInput = ({
   label,
+  required = false,
   error,
   helperText,
   variant = 'default',
@@ -74,6 +75,7 @@ export const AppInput = ({
       {label ? (
         <Animated.Text style={[styles.label, labelStyle]}>
           {label}
+          {required ? <Text style={styles.requiredMark}> *</Text> : null}
         </Animated.Text>
       ) : null}
       <AnimatedView
@@ -133,6 +135,10 @@ const styles = StyleSheet.create({
     fontWeight: theme.typography.weights.semibold,
     color: theme.colors.textPrimary,
     marginBottom: theme.spacing.xs,
+  },
+  requiredMark: {
+    color: theme.colors.textError,
+    fontWeight: theme.typography.weights.bold,
   },
   inputShell: {
     minHeight: theme.inputs.minHeightCompact,

@@ -84,6 +84,7 @@ const buildCalendarDays = (visibleMonth) => {
 
 export function DatePickerField({
   label,
+  required = false,
   value,
   placeholder,
   helperText,
@@ -157,6 +158,7 @@ export function DatePickerField({
       <View ref={webFieldRef} style={styles.fieldWrap}>
         <Text style={[styles.label, error ? styles.labelError : null]}>
           {label}
+          {required ? <Text style={styles.requiredMark}> *</Text> : null}
         </Text>
 
         <Pressable
@@ -310,6 +312,7 @@ export function DatePickerField({
     <View style={styles.fieldWrap}>
       <Text style={[styles.label, error ? styles.labelError : null]}>
         {label}
+        {required ? <Text style={styles.requiredMark}> *</Text> : null}
       </Text>
       <Pressable
         onPress={async () => {
@@ -391,6 +394,10 @@ const styles = StyleSheet.create({
   },
   labelError: {
     color: theme.colors.textError,
+  },
+  requiredMark: {
+    color: theme.colors.textError,
+    fontWeight: theme.typography.weights.bold,
   },
   fieldShell: {
     minHeight: theme.inputs.minHeightCompact,
