@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, StyleSheet, Text, Pressable, Alert, ScrollView, Modal, KeyboardAvoidingView, Platform, useWindowDimensions } from 'react-native';
 import { useRouter } from 'expo-router';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import * as Haptics from 'expo-haptics';
 import { Controller, useForm, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -32,6 +33,27 @@ import { changePasswordSchema, profileUpdateSchema } from '../src/features/profi
 import { donorDashboardNavItems, patientDashboardNavItems } from '../src/constants/dashboard';
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+const PROFILE_MINIMUM_AGE = 18;
+
+const formatDateValue = (date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const parseDateValue = (value) => {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const parsedDate = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(parsedDate.getTime())) return null;
+  return parsedDate;
+};
+
+const getMaximumBirthdate = () => {
+  const maxDate = new Date();
+  maxDate.setFullYear(maxDate.getFullYear() - PROFILE_MINIMUM_AGE);
+  return maxDate;
+};
 
 function ActionRow({ item, onPress }) {
   const scale = useSharedValue(1);
@@ -88,6 +110,7 @@ export default function ProfileScreen() {
   const [feedback, setFeedback] = useState(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [passwordSuccess, setPasswordSuccess] = useState(false);
+  const [isBirthdatePickerVisible, setIsBirthdatePickerVisible] = useState(false);
   const successTimerRef = useRef(null);
 
   const profileForm = useForm({
@@ -330,6 +353,7 @@ export default function ProfileScreen() {
   }, [closeEditModal, handleDiscardProfileChanges, hasDirtyProfileDraft]);
 
   const handleModalClose = useCallback(() => {
+    setIsBirthdatePickerVisible(false);
     if (mode === 'edit') {
       requestEditModalClose();
       return;
@@ -430,11 +454,16 @@ export default function ProfileScreen() {
     }
 
     if (mode === 'password') {
+      setIsBirthdatePickerVisible(false);
       passwordForm.reset({
         currentPassword: '',
         newPassword: '',
         confirmPassword: '',
       });
+    }
+
+    if (mode === 'view') {
+      setIsBirthdatePickerVisible(false);
     }
   }, [defaultValues, mode, passwordForm, profileForm]);
 
@@ -583,20 +612,97 @@ export default function ProfileScreen() {
                           key={field.formKey}
                           control={profileForm.control}
                           name={field.formKey}
-                          render={({ field: controllerField, fieldState }) => (
-                            <AppInput
-                              label={field.label}
-                              placeholder={field.placeholder}
-                              keyboardType={field.keyboardType}
-                              variant="filled"
-                              helperText={field.helperText}
-                              disabled={field.editable === false}
-                              value={controllerField.value}
-                              onChangeText={controllerField.onChange}
-                              onBlur={controllerField.onBlur}
-                              error={fieldState.error?.message}
-                            />
-                          )}
+                          render={({ field: controllerField, fieldState }) => {
+                            if (field.formKey === 'birthdate' && Platform.OS !== 'web') {
+                              const fallbackDate = parseDateValue(controllerField.value) || getMaximumBirthdate();
+
+                              return (
+                                <View style={styles.birthdateFieldWrap}>
+                                  <Text style={[
+                                    styles.birthdateFieldLabel,
+                                    fieldState.error ? styles.birthdateFieldLabelError : null,
+                                  ]}>
+                                    {field.label}
+                                  </Text>
+                                  <Pressable
+                                    onPress={async () => {
+                                      await Haptics.selectionAsync();
+                                      setIsBirthdatePickerVisible(true);
+                                    }}
+                                    style={[
+                                      styles.birthdateFieldShell,
+                                      fieldState.error ? styles.birthdateFieldShellError : null,
+                                    ]}
+                                  >
+                                    <Text style={[
+                                      styles.birthdateFieldValue,
+                                      !controllerField.value ? styles.birthdateFieldPlaceholder : null,
+                                    ]}>
+                                      {controllerField.value || field.placeholder}
+                                    </Text>
+                                    <AppIcon name="appointment" state={fieldState.error ? 'danger' : 'muted'} />
+                                  </Pressable>
+
+                                  {isBirthdatePickerVisible ? (
+                                    <View style={styles.birthdatePickerCard}>
+                                      <DateTimePicker
+                                        value={fallbackDate}
+                                        mode="date"
+                                        display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                                        maximumDate={getMaximumBirthdate()}
+                                        onChange={(event, selectedDate) => {
+                                          if (Platform.OS === 'android') {
+                                            setIsBirthdatePickerVisible(false);
+                                          }
+
+                                          if (event.type === 'dismissed' || !selectedDate) {
+                                            return;
+                                          }
+
+                                          controllerField.onChange(formatDateValue(selectedDate));
+                                        }}
+                                      />
+
+                                      {Platform.OS === 'ios' ? (
+                                        <View style={styles.birthdatePickerActions}>
+                                          <AppTextLink
+                                            title="Cancel"
+                                            variant="muted"
+                                            onPress={() => setIsBirthdatePickerVisible(false)}
+                                          />
+                                          <AppTextLink
+                                            title="Done"
+                                            onPress={() => setIsBirthdatePickerVisible(false)}
+                                          />
+                                        </View>
+                                      ) : null}
+                                    </View>
+                                  ) : null}
+
+                                  {fieldState.error ? (
+                                    <Text style={styles.birthdateFieldError}>{fieldState.error.message}</Text>
+                                  ) : field.helperText ? (
+                                    <Text style={styles.birthdateFieldHelper}>{field.helperText}</Text>
+                                  ) : null}
+                                </View>
+                              );
+                            }
+
+                            return (
+                              <AppInput
+                                label={field.label}
+                                placeholder={field.placeholder}
+                                keyboardType={field.keyboardType}
+                                variant="filled"
+                                helperText={field.helperText}
+                                disabled={field.editable === false}
+                                value={controllerField.value}
+                                onChangeText={controllerField.onChange}
+                                onBlur={controllerField.onBlur}
+                                error={fieldState.error?.message}
+                              />
+                            );
+                          }}
                         />
                       ))}
 
@@ -865,6 +971,74 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.semantic.bodySm,
     color: theme.colors.textSecondary,
     lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+  },
+  birthdateFieldWrap: {
+    width: '100%',
+    marginBottom: theme.spacing.sm,
+    minHeight: 82,
+  },
+  birthdateFieldLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.label,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textPrimary,
+    marginBottom: theme.spacing.xs,
+  },
+  birthdateFieldLabelError: {
+    color: theme.colors.textError,
+  },
+  birthdateFieldShell: {
+    minHeight: theme.inputs.minHeightCompact,
+    borderWidth: 1,
+    borderRadius: theme.radius.xl,
+    borderColor: theme.colors.transparent,
+    backgroundColor: theme.colors.surfaceSoft,
+    paddingHorizontal: theme.spacing.inputPaddingXCompact,
+    paddingVertical: theme.spacing.inputPaddingYCompact,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+  },
+  birthdateFieldShellError: {
+    borderColor: theme.colors.borderError,
+  },
+  birthdateFieldValue: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.body,
+    color: theme.colors.textPrimary,
+  },
+  birthdateFieldPlaceholder: {
+    color: theme.colors.textMuted,
+  },
+  birthdatePickerCard: {
+    marginTop: theme.spacing.sm,
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.surfaceSoft,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+    overflow: 'hidden',
+  },
+  birthdatePickerActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: theme.spacing.md,
+    paddingBottom: theme.spacing.sm,
+  },
+  birthdateFieldHelper: {
+    marginTop: theme.spacing.xs,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    color: theme.colors.textSecondary,
+  },
+  birthdateFieldError: {
+    marginTop: 3,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    color: theme.colors.textError,
+    fontWeight: theme.typography.weights.medium,
   },
   modalCard: {
     width: '100%',
