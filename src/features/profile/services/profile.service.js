@@ -356,27 +356,25 @@ export const completePostLoginOnboarding = async ({
     }
 
     if (mode === 'patient-manual') {
-      const normalizedGuardianRelationship = manualPatientDetails?.guardian_relationship === 'Other'
-        ? String(manualPatientDetails?.guardian_relationship_other || '').trim()
-        : String(manualPatientDetails?.guardian_relationship || '').trim();
-
       logAppEvent('patient.manual_submission', 'Manual patient detail submission started.', {
         authUserId: userId,
         hasFirstName: Boolean(manualPatientDetails?.first_name),
         hasLastName: Boolean(manualPatientDetails?.last_name),
         hasBirthdate: Boolean(manualPatientDetails?.birthdate),
         hasGender: Boolean(manualPatientDetails?.gender),
-        hasPhone: Boolean(manualPatientDetails?.phone),
+        hasContactNumber: Boolean(manualPatientDetails?.contact_number),
         hasStreet: Boolean(manualPatientDetails?.street),
         hasBarangay: Boolean(manualPatientDetails?.barangay),
         hasCity: Boolean(manualPatientDetails?.city),
         hasProvince: Boolean(manualPatientDetails?.province),
         hasRegion: Boolean(manualPatientDetails?.region),
         hasCountry: Boolean(manualPatientDetails?.country),
+        hasLatitude: Boolean(manualPatientDetails?.latitude),
+        hasLongitude: Boolean(manualPatientDetails?.longitude),
         hasMedicalCondition: Boolean(manualPatientDetails?.medical_condition),
         hasDiagnosisDate: Boolean(manualPatientDetails?.date_of_diagnosis),
         hasGuardian: Boolean(manualPatientDetails?.guardian),
-        hasGuardianRelationship: Boolean(normalizedGuardianRelationship),
+        hasGuardianRelationship: Boolean(manualPatientDetails?.guardian_relationship),
         hasGuardianContactNumber: Boolean(manualPatientDetails?.guardian_contact_number),
         hasPatientPicture: Boolean(manualPatientDetails?.patient_picture),
         hasMedicalDocument: Boolean(manualPatientDetails?.medical_document),
@@ -389,13 +387,15 @@ export const completePostLoginOnboarding = async ({
         suffix: manualPatientDetails?.suffix || '',
         birthdate: manualPatientDetails?.birthdate || null,
         gender: manualPatientDetails?.gender || '',
-        phone: manualPatientDetails?.phone || '',
+        contact_number: manualPatientDetails?.contact_number || '',
         street: manualPatientDetails?.street || '',
         barangay: manualPatientDetails?.barangay || '',
         region: manualPatientDetails?.region || '',
         city: manualPatientDetails?.city || '',
         province: manualPatientDetails?.province || '',
         country: manualPatientDetails?.country || '',
+        latitude: manualPatientDetails?.latitude || '',
+        longitude: manualPatientDetails?.longitude || '',
       });
 
       if (userDetailsSaveResult.error) {
@@ -418,7 +418,7 @@ export const completePostLoginOnboarding = async ({
         patient_picture: patientPictureUrl || '',
         date_of_diagnosis: manualPatientDetails?.date_of_diagnosis || null,
         guardian: manualPatientDetails?.guardian || '',
-        guardian_relationship: normalizedGuardianRelationship,
+        guardian_relationship: manualPatientDetails?.guardian_relationship || '',
         guardian_contact_number: manualPatientDetails?.guardian_contact_number || '',
         medical_document: medicalDocumentUrl || '',
       });

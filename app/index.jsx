@@ -50,20 +50,21 @@ const manualPatientStepFieldGroups = [
     'suffix',
     'birthdate',
     'gender',
-    'phone',
+    'contact_number',
     'street',
     'barangay',
     'region',
     'city',
     'province',
     'country',
+    'latitude',
+    'longitude',
   ],
   [
     'medical_condition',
     'date_of_diagnosis',
     'guardian',
     'guardian_relationship',
-    'guardian_relationship_other',
     'guardian_contact_number',
   ],
   [
@@ -239,6 +240,7 @@ function FirstTimeOnboarding() {
   const [isValidatingCode, setIsValidatingCode] = useState(false);
   const [manualPatientStep, setManualPatientStep] = useState(0);
   const [activeManualPicker, setActiveManualPicker] = useState('');
+  const [manualGuardianRelationshipOption, setManualGuardianRelationshipOption] = useState('');
   const [isUploadingPatientPicture, setIsUploadingPatientPicture] = useState(false);
   const [isUploadingMedicalDocument, setIsUploadingMedicalDocument] = useState(false);
   const welcomeOpacity = useRef(new Animated.Value(0)).current;
@@ -255,18 +257,19 @@ function FirstTimeOnboarding() {
       suffix: profile?.suffix || '',
       birthdate: profile?.birthdate || '',
       gender: profile?.gender || '',
-      phone: profile?.contact_number || profile?.phone || '',
+      contact_number: profile?.contact_number || profile?.phone || '',
       street: profile?.street || '',
       barangay: profile?.barangay || '',
       region: profile?.region || '',
       city: profile?.city || '',
       province: profile?.province || '',
       country: profile?.country || 'Philippines',
+      latitude: profile?.latitude !== undefined && profile?.latitude !== null ? String(profile.latitude) : '',
+      longitude: profile?.longitude !== undefined && profile?.longitude !== null ? String(profile.longitude) : '',
       medical_condition: '',
       date_of_diagnosis: '',
       guardian: '',
       guardian_relationship: '',
-      guardian_relationship_other: '',
       guardian_contact_number: '',
       patient_picture: '',
       medical_document: '',
@@ -303,6 +306,16 @@ function FirstTimeOnboarding() {
       animation.stop();
     };
   }, [startOpacity, welcomeOpacity]);
+
+  useEffect(() => {
+    const currentGuardianRelationship = String(manualPatientForm.getValues('guardian_relationship') || '').trim();
+    if (!currentGuardianRelationship) {
+      return;
+    }
+
+    const isPresetOption = guardianRelationshipOptions.some((option) => option.value === currentGuardianRelationship);
+    setManualGuardianRelationshipOption(isPresetOption ? currentGuardianRelationship : 'Other');
+  }, [manualPatientForm]);
 
   const continueToRoleHome = async (targetRole) => {
     await refreshProfile(user?.id);
@@ -529,6 +542,7 @@ function FirstTimeOnboarding() {
               onPress={() => {
                 setBranchMode('patient-manual');
                 setManualPatientStep(0);
+                setManualGuardianRelationshipOption('');
                 setScreenError('');
               }}
             />
@@ -553,6 +567,7 @@ function FirstTimeOnboarding() {
       const medicalDocumentValue = manualPatientForm.watch('medical_document');
       const manualGenderValue = manualPatientForm.watch('gender');
       const manualGuardianRelationshipValue = manualPatientForm.watch('guardian_relationship');
+      const isManualGuardianRelationshipOther = manualGuardianRelationshipOption === 'Other';
       const patientPicturePreview = typeof patientPictureValue === 'string' ? patientPictureValue : patientPictureValue?.previewUri || '';
       const medicalDocumentPreview = typeof medicalDocumentValue === 'string' ? medicalDocumentValue : medicalDocumentValue?.previewUri || '';
 
@@ -568,8 +583,7 @@ function FirstTimeOnboarding() {
             <Text style={[styles.stepIndicator, manualPatientStep === 2 ? styles.stepIndicatorActive : null]}>Step 3</Text>
           </View>
 
-          {manualPatientStep === 0 ? (
-            <>
+          <View style={manualPatientStep === 0 ? styles.manualStepPanel : styles.manualStepPanelHidden}>
               <Controller
                 control={manualPatientForm.control}
                 name="first_name"
@@ -701,8 +715,8 @@ function FirstTimeOnboarding() {
 
               <Controller
                 control={manualPatientForm.control}
-                name="phone"
-                defaultValue={getManualPatientFieldValue('phone')}
+                name="contact_number"
+                defaultValue={getManualPatientFieldValue('contact_number')}
                 render={({ field: { onChange, onBlur, value }, fieldState }) => (
                   <AppInput
                     label="Mobile Number"
@@ -726,9 +740,9 @@ function FirstTimeOnboarding() {
                 showHelperText={false}
                 showTopBorder={false}
               />
-            </>
-          ) : manualPatientStep === 1 ? (
-            <>
+          </View>
+
+          <View style={manualPatientStep === 1 ? styles.manualStepPanel : styles.manualStepPanelHidden}>
               <Controller
                 control={manualPatientForm.control}
                 name="medical_condition"
@@ -811,7 +825,7 @@ function FirstTimeOnboarding() {
                     <AddressSelectField
                       label="Guardian Relationship"
                       required={true}
-                      value={manualGuardianRelationshipValue}
+                      value={manualGuardianRelationshipOption}
                       placeholder="Select relationship"
                       helperText=""
                       error={fieldState.error?.message}
@@ -829,30 +843,28 @@ function FirstTimeOnboarding() {
                       selectedValue={manualGuardianRelationshipValue}
                       onClose={() => setActiveManualPicker('')}
                       onSelect={(option) => {
-                        manualPatientForm.setValue('guardian_relationship', option.value, {
-                          shouldDirty: true,
-                          shouldTouch: true,
-                          shouldValidate: true,
-                        });
+                        setManualGuardianRelationshipOption(option.value);
 
-                        if (option.value !== 'Other') {
-                          manualPatientForm.setValue('guardian_relationship_other', '', {
+                        manualPatientForm.setValue(
+                          'guardian_relationship',
+                          option.value === 'Other' ? '' : option.value,
+                          {
                             shouldDirty: true,
                             shouldTouch: true,
                             shouldValidate: true,
-                          });
-                        }
+                          }
+                        );
                       }}
                     />
                   </>
                 )}
               />
 
-              {manualGuardianRelationshipValue === 'Other' ? (
+              {isManualGuardianRelationshipOther ? (
                 <Controller
                   control={manualPatientForm.control}
-                  name="guardian_relationship_other"
-                  defaultValue={getManualPatientFieldValue('guardian_relationship_other')}
+                  name="guardian_relationship"
+                  defaultValue={getManualPatientFieldValue('guardian_relationship')}
                   render={({ field: { onChange, onBlur, value }, fieldState }) => (
                     <AppInput
                       label="Other Relationship"
@@ -867,8 +879,9 @@ function FirstTimeOnboarding() {
                   )}
                 />
               ) : null}
-            </>
-          ) : (
+          </View>
+
+          <View style={manualPatientStep === 2 ? styles.manualStepPanel : styles.manualStepPanelHidden}>
             <View style={styles.uploadSection}>
               <AppCard variant="soft" radius="xl" padding="md" style={styles.uploadCard}>
                 <View style={styles.uploadCardCopy}>
@@ -904,7 +917,7 @@ function FirstTimeOnboarding() {
                 <Image source={{ uri: medicalDocumentPreview }} style={styles.uploadPreviewImage} />
               ) : null}
             </View>
-          )}
+          </View>
 
           <View style={styles.actionStack}>
             {manualPatientStep < 2 ? (
@@ -938,6 +951,7 @@ function FirstTimeOnboarding() {
               onPress={() => {
                 setBranchMode('patient-code');
                 setManualPatientStep(0);
+                setManualGuardianRelationshipOption('');
                 setScreenError('');
               }}
             />
@@ -1194,6 +1208,13 @@ const styles = StyleSheet.create({
   uploadSection: {
     width: '100%',
     gap: theme.spacing.sm,
+  },
+  manualStepPanel: {
+    width: '100%',
+  },
+  manualStepPanelHidden: {
+    width: '100%',
+    display: 'none',
   },
   uploadCard: {
     width: '100%',

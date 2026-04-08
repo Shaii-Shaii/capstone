@@ -1,15 +1,20 @@
 import { z } from 'zod';
-import { birthdateField, nameField, passwordField, phoneField } from '../auth/validators/auth.schema';
+import { birthdateField, coordinateField, nameField, passwordField, phoneField } from '../auth/validators/auth.schema';
 import { isPasswordReuse, reusedPasswordMessage } from '../../utils/passwordRules';
-import { guardianRelationshipOptions, profileGenderOptions } from '../../constants/profile';
+import { profileGenderOptions } from '../../constants/profile';
 
-export const optionalTextField = z.string().max(80, 'Too long').optional().or(z.literal(''));
+const normalizeStringInput = (value) => {
+  if (value === undefined || value === null) return '';
+  return typeof value === 'string' ? value : String(value);
+};
+
+const requiredStringField = (schema) => z.preprocess(normalizeStringInput, schema);
+const optionalStringField = (schema) => z.preprocess(normalizeStringInput, schema.optional().or(z.literal('')));
+
+export const optionalTextField = optionalStringField(z.string().max(80, 'Too long'));
 const profileGenderValues = profileGenderOptions.map((option) => option.value);
-const guardianRelationshipValues = guardianRelationshipOptions.map((option) => option.value);
-const optionalDateField = z.string()
+const optionalDateField = optionalStringField(z.string()
   .trim()
-  .optional()
-  .or(z.literal(''))
   .refine((value) => !value || /^\d{4}-\d{2}-\d{2}$/.test(value), {
     message: 'Use YYYY-MM-DD format',
   })
@@ -21,7 +26,7 @@ const optionalDateField = z.string()
     return !Number.isNaN(selectedDate.getTime()) && selectedDate <= today;
   }, {
     message: 'Date cannot be in the future',
-  });
+  }));
 
 export const profileUpdateSchema = z.object({
   firstName: nameField,
@@ -54,29 +59,30 @@ export const changePasswordSchema = z.object({
 });
 
 export const patientOnboardingSchema = z.object({
-  first_name: nameField,
+  first_name: requiredStringField(nameField),
   middle_name: optionalTextField,
-  last_name: nameField,
+  last_name: requiredStringField(nameField),
   suffix: optionalTextField,
-  birthdate: birthdateField,
+  birthdate: requiredStringField(birthdateField),
   gender: z.enum(profileGenderValues, {
     errorMap: () => ({ message: 'Gender is required' }),
   }),
-  phone: phoneField,
+  contact_number: requiredStringField(phoneField),
   street: optionalTextField,
   barangay: optionalTextField,
   region: optionalTextField,
   city: optionalTextField,
   province: optionalTextField,
   country: optionalTextField,
-  medical_condition: z.string().trim().min(1, 'Medical condition is required').max(300, 'Too long'),
+  latitude: optionalStringField(coordinateField),
+  longitude: optionalStringField(coordinateField),
+  medical_condition: requiredStringField(z.string().trim().min(1, 'Medical condition is required').max(300, 'Too long')),
   date_of_diagnosis: optionalDateField,
   guardian: optionalTextField,
-  guardian_relationship: z.enum(guardianRelationshipValues, {
-    errorMap: () => ({ message: 'Guardian relationship is required' }),
-  }),
-  guardian_relationship_other: optionalTextField,
-  guardian_contact_number: phoneField.optional().or(z.literal('')),
+  guardian_relationship: requiredStringField(
+    z.string().trim().min(1, 'Guardian relationship is required').max(80, 'Too long')
+  ),
+  guardian_contact_number: optionalStringField(phoneField),
   patient_picture: z.union([z.string(), z.object({
     fileBody: z.any().optional(),
     contentType: z.string().optional(),
@@ -89,12 +95,4 @@ export const patientOnboardingSchema = z.object({
     fileName: z.string().optional(),
     previewUri: z.string().optional(),
   })]).optional().or(z.literal('')),
-}).superRefine((data, ctx) => {
-  if (data.guardian_relationship === 'Other' && !String(data.guardian_relationship_other || '').trim()) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: 'Please specify the relationship',
-      path: ['guardian_relationship_other'],
-    });
-  }
 });
