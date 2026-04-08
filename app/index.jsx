@@ -42,6 +42,36 @@ const getMaximumDiagnosisDate = () => {
   return maxDate;
 };
 
+const manualPatientStepFieldGroups = [
+  [
+    'first_name',
+    'middle_name',
+    'last_name',
+    'suffix',
+    'birthdate',
+    'gender',
+    'phone',
+    'street',
+    'barangay',
+    'region',
+    'city',
+    'province',
+    'country',
+  ],
+  [
+    'medical_condition',
+    'date_of_diagnosis',
+    'guardian',
+    'guardian_relationship',
+    'guardian_relationship_other',
+    'guardian_contact_number',
+  ],
+  [
+    'patient_picture',
+    'medical_document',
+  ],
+];
+
 const getFileExtension = (mimeType = '', fileName = '') => {
   const normalizedMimeType = String(mimeType || '').toLowerCase();
   const normalizedFileName = String(fileName || '').toLowerCase();
@@ -345,39 +375,32 @@ function FirstTimeOnboarding() {
     });
   };
 
+  const handleManualPatientInvalid = async (errors) => {
+    const invalidFieldNames = Object.keys(errors || {});
+    const blockingStep = manualPatientStepFieldGroups.findIndex((fieldNames) => (
+      fieldNames.some((fieldName) => invalidFieldNames.includes(fieldName))
+    ));
+
+    setScreenError('Please complete the required patient details before creating the account.');
+
+    if (blockingStep >= 0) {
+      setManualPatientStep(blockingStep);
+    }
+
+    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+  };
+
   const handleManualPatientNext = async () => {
-    const isValid = await manualPatientForm.trigger(
-      manualPatientStep === 0
-        ? [
-            'first_name',
-            'middle_name',
-            'last_name',
-            'suffix',
-            'birthdate',
-            'gender',
-            'phone',
-            'street',
-            'barangay',
-            'region',
-            'city',
-            'province',
-            'country',
-          ]
-        : [
-            'medical_condition',
-            'date_of_diagnosis',
-            'guardian',
-            'guardian_relationship',
-            'guardian_relationship_other',
-            'guardian_contact_number',
-          ]
-    );
+    const isValid = await manualPatientForm.trigger(manualPatientStepFieldGroups[manualPatientStep]);
 
     if (!isValid) {
+      setScreenError('Please complete the required fields before continuing.');
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       return;
     }
 
     await Haptics.selectionAsync();
+    setScreenError('');
     setManualPatientStep((currentStep) => Math.min(currentStep + 1, 2));
   };
 
@@ -414,6 +437,9 @@ function FirstTimeOnboarding() {
         shouldValidate: true,
       });
       setScreenError('');
+    } catch (error) {
+      setScreenError(error?.message || 'Unable to use the selected file.');
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     } finally {
       setUploading(false);
     }
@@ -874,11 +900,11 @@ function FirstTimeOnboarding() {
               />
             ) : (
               <AppButton
-                title="Complete Patient Account"
+                title="Create Patient Account"
                 size="lg"
                 loading={isSubmitting}
                 disabled={isSubmitting || isUploadingPatientPicture || isUploadingMedicalDocument}
-                onPress={manualPatientForm.handleSubmit(handleManualPatientSubmit)}
+                onPress={manualPatientForm.handleSubmit(handleManualPatientSubmit, handleManualPatientInvalid)}
               />
             )}
 
