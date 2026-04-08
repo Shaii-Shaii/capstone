@@ -12,12 +12,15 @@ import { AppInput } from '../src/components/ui/AppInput';
 import { AppCard } from '../src/components/ui/AppCard';
 import { AppTextLink } from '../src/components/ui/AppTextLink';
 import { OtpInput } from '../src/components/ui/OtpInput';
+import { DatePickerField } from '../src/components/ui/DatePickerField';
+import { AddressOptionSheet, AddressSelectField, SignupAddressSection } from '../src/components/auth/SignupAddressSection';
 import { useAuth } from '../src/providers/AuthProvider';
 import {
   completePostLoginOnboarding,
   getPatientLinkPreview,
 } from '../src/features/profile/services/profile.service';
 import { patientOnboardingSchema } from '../src/features/profile/profile.schema';
+import { profileGenderOptions } from '../src/constants/profile';
 import { theme } from '../src/design-system/theme';
 import donivraLogoNoText from '../src/assets/images/donivra_logo_no_text.png';
 
@@ -190,6 +193,7 @@ function FirstTimeOnboarding() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isValidatingCode, setIsValidatingCode] = useState(false);
   const [manualPatientStep, setManualPatientStep] = useState(0);
+  const [activeManualPicker, setActiveManualPicker] = useState('');
   const [isUploadingPatientPicture, setIsUploadingPatientPicture] = useState(false);
   const [isUploadingMedicalDocument, setIsUploadingMedicalDocument] = useState(false);
   const welcomeOpacity = useRef(new Animated.Value(0)).current;
@@ -199,9 +203,23 @@ function FirstTimeOnboarding() {
     resolver: zodResolver(patientOnboardingSchema),
     mode: 'onBlur',
     defaultValues: {
+      first_name: profile?.first_name || '',
+      middle_name: profile?.middle_name || '',
+      last_name: profile?.last_name || '',
+      suffix: profile?.suffix || '',
+      birthdate: profile?.birthdate || '',
+      gender: profile?.gender || '',
+      phone: profile?.contact_number || profile?.phone || '',
+      street: profile?.street || '',
+      barangay: profile?.barangay || '',
+      region: profile?.region || '',
+      city: profile?.city || '',
+      province: profile?.province || '',
+      country: profile?.country || 'Philippines',
       medical_condition: '',
       date_of_diagnosis: '',
       guardian: '',
+      guardian_relationship: '',
       guardian_contact_number: '',
       patient_picture: '',
       medical_document: '',
@@ -312,19 +330,38 @@ function FirstTimeOnboarding() {
   };
 
   const handleManualPatientNext = async () => {
-    const isValid = await manualPatientForm.trigger([
-      'medical_condition',
-      'date_of_diagnosis',
-      'guardian',
-      'guardian_contact_number',
-    ]);
+    const isValid = await manualPatientForm.trigger(
+      manualPatientStep === 0
+        ? [
+            'first_name',
+            'middle_name',
+            'last_name',
+            'suffix',
+            'birthdate',
+            'gender',
+            'phone',
+            'street',
+            'barangay',
+            'region',
+            'city',
+            'province',
+            'country',
+          ]
+        : [
+            'medical_condition',
+            'date_of_diagnosis',
+            'guardian',
+            'guardian_relationship',
+            'guardian_contact_number',
+          ]
+    );
 
     if (!isValid) {
       return;
     }
 
     await Haptics.selectionAsync();
-    setManualPatientStep(1);
+    setManualPatientStep((currentStep) => Math.min(currentStep + 1, 2));
   };
 
   const pickManualPatientAsset = async (fieldName, setUploading) => {
@@ -468,6 +505,7 @@ function FirstTimeOnboarding() {
     if (branchMode === 'patient-manual') {
       const patientPictureValue = manualPatientForm.watch('patient_picture');
       const medicalDocumentValue = manualPatientForm.watch('medical_document');
+      const manualGenderValue = manualPatientForm.watch('gender');
       const patientPicturePreview = typeof patientPictureValue === 'string' ? patientPictureValue : patientPictureValue?.previewUri || '';
       const medicalDocumentPreview = typeof medicalDocumentValue === 'string' ? medicalDocumentValue : medicalDocumentValue?.previewUri || '';
 
@@ -480,9 +518,155 @@ function FirstTimeOnboarding() {
           <View style={styles.stepIndicatorRow}>
             <Text style={[styles.stepIndicator, manualPatientStep === 0 ? styles.stepIndicatorActive : null]}>Step 1</Text>
             <Text style={[styles.stepIndicator, manualPatientStep === 1 ? styles.stepIndicatorActive : null]}>Step 2</Text>
+            <Text style={[styles.stepIndicator, manualPatientStep === 2 ? styles.stepIndicatorActive : null]}>Step 3</Text>
           </View>
 
           {manualPatientStep === 0 ? (
+            <>
+              <Controller
+                control={manualPatientForm.control}
+                name="first_name"
+                render={({ field: { onChange, onBlur, value }, fieldState }) => (
+                  <AppInput
+                    label="First Name"
+                    value={value}
+                    onChangeText={onChange}
+                    onBlur={onBlur}
+                    error={fieldState.error?.message}
+                    placeholder="Enter your first name"
+                    variant="filled"
+                  />
+                )}
+              />
+
+              <Controller
+                control={manualPatientForm.control}
+                name="middle_name"
+                render={({ field: { onChange, onBlur, value }, fieldState }) => (
+                  <AppInput
+                    label="Middle Name"
+                    value={value}
+                    onChangeText={onChange}
+                    onBlur={onBlur}
+                    error={fieldState.error?.message}
+                    placeholder="Enter your middle name"
+                    variant="filled"
+                  />
+                )}
+              />
+
+              <Controller
+                control={manualPatientForm.control}
+                name="last_name"
+                render={({ field: { onChange, onBlur, value }, fieldState }) => (
+                  <AppInput
+                    label="Last Name"
+                    value={value}
+                    onChangeText={onChange}
+                    onBlur={onBlur}
+                    error={fieldState.error?.message}
+                    placeholder="Enter your last name"
+                    variant="filled"
+                  />
+                )}
+              />
+
+              <Controller
+                control={manualPatientForm.control}
+                name="suffix"
+                render={({ field: { onChange, onBlur, value }, fieldState }) => (
+                  <AppInput
+                    label="Suffix"
+                    value={value}
+                    onChangeText={onChange}
+                    onBlur={onBlur}
+                    error={fieldState.error?.message}
+                    placeholder="Suffix"
+                    variant="filled"
+                  />
+                )}
+              />
+
+              <Controller
+                control={manualPatientForm.control}
+                name="birthdate"
+                render={({ field: { onChange, onBlur, value }, fieldState }) => (
+                  <DatePickerField
+                    label="Birthdate"
+                    value={value}
+                    placeholder="Select your birthdate"
+                    helperText=""
+                    error={fieldState.error?.message}
+                    onChange={onChange}
+                    onBlur={onBlur}
+                    onPress={() => Haptics.selectionAsync()}
+                  />
+                )}
+              />
+
+              <Controller
+                control={manualPatientForm.control}
+                name="gender"
+                render={({ fieldState }) => (
+                  <>
+                    <AddressSelectField
+                      label="Gender"
+                      value={manualGenderValue}
+                      placeholder="Select gender"
+                      helperText=""
+                      error={fieldState.error?.message}
+                      onPress={async () => {
+                        await Haptics.selectionAsync();
+                        setActiveManualPicker('gender');
+                      }}
+                    />
+
+                    <AddressOptionSheet
+                      visible={activeManualPicker === 'gender'}
+                      title="Select Gender"
+                      placeholder="Search gender"
+                      options={profileGenderOptions}
+                      selectedValue={manualGenderValue}
+                      onClose={() => setActiveManualPicker('')}
+                      onSelect={(option) => {
+                        manualPatientForm.setValue('gender', option.value, {
+                          shouldDirty: true,
+                          shouldTouch: true,
+                          shouldValidate: true,
+                        });
+                      }}
+                    />
+                  </>
+                )}
+              />
+
+              <Controller
+                control={manualPatientForm.control}
+                name="phone"
+                render={({ field: { onChange, onBlur, value }, fieldState }) => (
+                  <AppInput
+                    label="Mobile Number"
+                    value={value}
+                    onChangeText={onChange}
+                    onBlur={onBlur}
+                    error={fieldState.error?.message}
+                    placeholder="09123456789"
+                    keyboardType="phone-pad"
+                    variant="filled"
+                  />
+                )}
+              />
+
+              <SignupAddressSection
+                control={manualPatientForm.control}
+                errors={manualPatientForm.formState.errors}
+                setValue={manualPatientForm.setValue}
+                showHeader={false}
+                showHelperText={false}
+                showTopBorder={false}
+              />
+            </>
+          ) : manualPatientStep === 1 ? (
             <>
               <Controller
                 control={manualPatientForm.control}
@@ -548,6 +732,22 @@ function FirstTimeOnboarding() {
                   />
                 )}
               />
+
+              <Controller
+                control={manualPatientForm.control}
+                name="guardian_relationship"
+                render={({ field: { onChange, onBlur, value }, fieldState }) => (
+                  <AppInput
+                    label="Guardian Relationship"
+                    value={value}
+                    onChangeText={onChange}
+                    onBlur={onBlur}
+                    error={fieldState.error?.message}
+                    placeholder="Parent, sibling, guardian"
+                    variant="filled"
+                  />
+                )}
+              />
             </>
           ) : (
             <View style={styles.uploadSection}>
@@ -588,7 +788,7 @@ function FirstTimeOnboarding() {
           )}
 
           <View style={styles.actionStack}>
-            {manualPatientStep === 0 ? (
+            {manualPatientStep < 2 ? (
               <AppButton
                 title="Next"
                 size="lg"
@@ -605,11 +805,11 @@ function FirstTimeOnboarding() {
               />
             )}
 
-            {manualPatientStep === 1 ? (
+            {manualPatientStep > 0 ? (
               <AppTextLink
-                title="Back to Step 1"
+                title={manualPatientStep === 2 ? 'Back to Step 2' : 'Back to Step 1'}
                 variant="muted"
-                onPress={() => setManualPatientStep(0)}
+                onPress={() => setManualPatientStep((currentStep) => Math.max(currentStep - 1, 0))}
               />
             ) : null}
 

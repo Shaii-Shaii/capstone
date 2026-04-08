@@ -37,6 +37,21 @@ export const changePasswordSchema = z.object({
 });
 
 export const patientOnboardingSchema = z.object({
+  first_name: nameField,
+  middle_name: optionalTextField,
+  last_name: nameField,
+  suffix: optionalTextField,
+  birthdate: birthdateField,
+  gender: z.enum(profileGenderValues, {
+    errorMap: () => ({ message: 'Gender is required' }),
+  }),
+  phone: phoneField,
+  street: optionalTextField,
+  barangay: optionalTextField,
+  region: optionalTextField,
+  city: optionalTextField,
+  province: optionalTextField,
+  country: optionalTextField,
   medical_condition: z.string().trim().min(1, 'Medical condition is required').max(300, 'Too long'),
   date_of_diagnosis: z.string()
     .trim()
@@ -46,6 +61,7 @@ export const patientOnboardingSchema = z.object({
       message: 'Use YYYY-MM-DD format',
     }),
   guardian: optionalTextField,
+  guardian_relationship: optionalTextField,
   guardian_contact_number: phoneField.optional().or(z.literal('')),
   patient_picture: z.union([z.string(), z.object({
     fileBody: z.any().optional(),

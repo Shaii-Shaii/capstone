@@ -45,12 +45,12 @@ export const needsPostLoginOnboarding = ({
 }) => {
   const normalizedRole = String(profile?.role || '').trim().toLowerCase();
 
-  if (!normalizedRole || normalizedRole === 'tentative') {
+  if (!normalizedRole) {
     return true;
   }
 
-  if (onboardingCompleted === false && normalizedRole !== 'donor' && normalizedRole !== 'patient') {
-    return true;
+  if (normalizedRole === 'tentative') {
+    return onboardingCompleted !== true;
   }
 
   if (normalizedRole === 'patient') {
@@ -59,6 +59,10 @@ export const needsPostLoginOnboarding = ({
 
   if (normalizedRole === 'donor') {
     return false;
+  }
+
+  if (onboardingCompleted === false) {
+    return true;
   }
 
   return !profile?.user_details_id && !patientProfile?.patient_id && !staffProfile?.link_id;
@@ -314,6 +318,7 @@ export const completePostLoginOnboarding = async ({
     });
 
     const targetRole = mode === 'patient-linked' || mode === 'patient-manual' ? 'patient' : 'donor';
+    const shouldUpdateRoleImmediately = targetRole === 'patient';
     const systemUserResult = await ProfileAPI.ensureSystemUserRecord({
       authUserId: userId,
       email,
@@ -353,13 +358,45 @@ export const completePostLoginOnboarding = async ({
     if (mode === 'patient-manual') {
       logAppEvent('patient.manual_submission', 'Manual patient detail submission started.', {
         authUserId: userId,
+        hasFirstName: Boolean(manualPatientDetails?.first_name),
+        hasLastName: Boolean(manualPatientDetails?.last_name),
+        hasBirthdate: Boolean(manualPatientDetails?.birthdate),
+        hasGender: Boolean(manualPatientDetails?.gender),
+        hasPhone: Boolean(manualPatientDetails?.phone),
+        hasStreet: Boolean(manualPatientDetails?.street),
+        hasBarangay: Boolean(manualPatientDetails?.barangay),
+        hasCity: Boolean(manualPatientDetails?.city),
+        hasProvince: Boolean(manualPatientDetails?.province),
+        hasRegion: Boolean(manualPatientDetails?.region),
+        hasCountry: Boolean(manualPatientDetails?.country),
         hasMedicalCondition: Boolean(manualPatientDetails?.medical_condition),
         hasDiagnosisDate: Boolean(manualPatientDetails?.date_of_diagnosis),
         hasGuardian: Boolean(manualPatientDetails?.guardian),
+        hasGuardianRelationship: Boolean(manualPatientDetails?.guardian_relationship),
         hasGuardianContactNumber: Boolean(manualPatientDetails?.guardian_contact_number),
         hasPatientPicture: Boolean(manualPatientDetails?.patient_picture),
         hasMedicalDocument: Boolean(manualPatientDetails?.medical_document),
       });
+
+      const userDetailsSaveResult = await ProfileAPI.updateProfile(userId, {
+        first_name: manualPatientDetails?.first_name || '',
+        middle_name: manualPatientDetails?.middle_name || '',
+        last_name: manualPatientDetails?.last_name || '',
+        suffix: manualPatientDetails?.suffix || '',
+        birthdate: manualPatientDetails?.birthdate || null,
+        gender: manualPatientDetails?.gender || '',
+        phone: manualPatientDetails?.phone || '',
+        street: manualPatientDetails?.street || '',
+        barangay: manualPatientDetails?.barangay || '',
+        region: manualPatientDetails?.region || '',
+        city: manualPatientDetails?.city || '',
+        province: manualPatientDetails?.province || '',
+        country: manualPatientDetails?.country || '',
+      });
+
+      if (userDetailsSaveResult.error) {
+        throw new Error(userDetailsSaveResult.error.message || 'Personal details could not be saved.');
+      }
 
       const patientPictureUrl = await persistSchemaSafeMediaValue({
         authUserId: userId,
@@ -377,6 +414,7 @@ export const completePostLoginOnboarding = async ({
         patient_picture: patientPictureUrl || '',
         date_of_diagnosis: manualPatientDetails?.date_of_diagnosis || null,
         guardian: manualPatientDetails?.guardian || '',
+        guardian_relationship: manualPatientDetails?.guardian_relationship || '',
         guardian_contact_number: manualPatientDetails?.guardian_contact_number || '',
         medical_document: medicalDocumentUrl || '',
       });
@@ -402,14 +440,16 @@ export const completePostLoginOnboarding = async ({
       });
     }
 
-    const roleUpdateResult = await ProfileAPI.updateSystemUserRoleByAuthUserId({
-      authUserId: userId,
-      role: targetRole,
-      email,
-    });
+    if (shouldUpdateRoleImmediately) {
+      const roleUpdateResult = await ProfileAPI.updateSystemUserRoleByAuthUserId({
+        authUserId: userId,
+        role: targetRole,
+        email,
+      });
 
-    if (roleUpdateResult.error) {
-      throw new Error(roleUpdateResult.error.message || 'The account role could not be updated.');
+      if (roleUpdateResult.error) {
+        throw new Error(roleUpdateResult.error.message || 'The account role could not be updated.');
+      }
     }
 
     await writeAuditLog({
@@ -425,6 +465,7 @@ export const completePostLoginOnboarding = async ({
     return {
       success: true,
       role: targetRole,
+      roleUpdated: shouldUpdateRoleImmediately,
       error: null,
     };
   } catch (error) {
@@ -531,6 +572,7 @@ export const getCurrentAccountBundle = async (userId) => {
       ? await ProfileAPI.fetchLatestAuditLogByAction({
           databaseUserId: profile.user_id,
           action: 'onboarding.complete',
+          status: 'success',
         })
       : { data: null };
 
@@ -570,6 +612,8 @@ export const saveProfile = async (userId, updates, role) => {
     const { data, error } = await ProfileAPI.updateProfile(userId, sharedUpdates);
     if (error) throw new Error(error.message);
 
+    let nextProfile = data;
+
     let roleProfile = null;
     if (role === 'patient' && updates?.roleSpecific && Object.keys(updates.roleSpecific).length) {
       const roleResult = await updateRoleProfile(role, userId, updates.roleSpecific);
@@ -577,9 +621,39 @@ export const saveProfile = async (userId, updates, role) => {
       roleProfile = roleResult.data || null;
     }
 
+    if (String(role || '').trim().toLowerCase() === 'tentative') {
+      const completionMeta = buildProfileCompletionMeta(nextProfile);
+
+      if (completionMeta.isComplete) {
+        const roleUpdateResult = await ProfileAPI.updateSystemUserRoleByAuthUserId({
+          authUserId: userId,
+          role: 'donor',
+          email: nextProfile?.email || undefined,
+        });
+
+        if (roleUpdateResult.error) {
+          throw new Error(roleUpdateResult.error.message || 'The donor role could not be updated.');
+        }
+
+        nextProfile = {
+          ...nextProfile,
+          role: 'donor',
+        };
+
+        await writeAuditLog({
+          authUserId: userId,
+          databaseUserId: nextProfile?.user_id || null,
+          action: 'role.transition',
+          description: 'Completed donor account setup and updated role to donor.',
+          resource: 'users,user_details',
+          status: 'success',
+        });
+      }
+    }
+
     await writeAuditLog({
       authUserId: userId,
-      databaseUserId: data?.user_id || null,
+      databaseUserId: nextProfile?.user_id || null,
       action: 'profile.update',
       description: role === 'patient'
         ? 'Updated profile and patient details.'
@@ -590,12 +664,12 @@ export const saveProfile = async (userId, updates, role) => {
 
     logAppEvent('profile.update', 'Profile save succeeded.', {
       authUserId: userId,
-      databaseUserId: data?.user_id || null,
+      databaseUserId: nextProfile?.user_id || null,
       role: role || null,
     });
 
     return {
-      profile: data,
+      profile: nextProfile,
       roleProfile,
       error: null,
     };

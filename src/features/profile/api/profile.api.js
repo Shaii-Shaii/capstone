@@ -119,6 +119,7 @@ const normalizePatient = (row) => ({
   patient_picture: row?.patient_picture || '',
   date_of_diagnosis: row?.date_of_diagnosis || null,
   guardian: row?.guardian || '',
+  guardian_relationship: row?.guardian_relationship || '',
   guardian_contact_number: row?.guardian_contact_number || '',
   medical_document: row?.medical_document || '',
   created_at: row?.created_at || null,
@@ -158,6 +159,7 @@ const normalizePatientLinkPreview = (row) => ({
   patient_picture: row?.patient_picture || '',
   date_of_diagnosis: row?.date_of_diagnosis || null,
   guardian: row?.guardian || '',
+  guardian_relationship: row?.guardian_relationship || '',
   guardian_contact_number: row?.guardian_contact_number || '',
   medical_document: row?.medical_document || '',
   user_id: row?.user_id || null,
@@ -868,7 +870,7 @@ export const fetchHospitalRepresentativeById = async (hospitalId) => {
   };
 };
 
-export const fetchLatestAuditLogByAction = async ({ databaseUserId, authUserId, action }) => {
+export const fetchLatestAuditLogByAction = async ({ databaseUserId, authUserId, action, status }) => {
   if (!action) {
     return { data: null, error: new Error('Audit action is required.') };
   }
@@ -878,6 +880,10 @@ export const fetchLatestAuditLogByAction = async ({ databaseUserId, authUserId, 
     .select('log_id, user_id, action, description, time, user_email, resource, status')
     .eq('action', action)
     .order('time', { ascending: false });
+
+  if (status) {
+    query = query.eq('status', status);
+  }
 
   if (databaseUserId) {
     query = query.eq('user_id', databaseUserId);
@@ -984,6 +990,7 @@ export const createPatientDetails = async (payload) => {
       medical_condition: payload?.medical_condition || null,
       date_of_diagnosis: payload?.date_of_diagnosis || null,
       guardian: payload?.guardian || null,
+      guardian_relationship: payload?.guardian_relationship || null,
       guardian_contact_number: payload?.guardian_contact_number || null,
       medical_document: payload?.medical_document || null,
     }])
@@ -1078,6 +1085,7 @@ export const updatePatientDetails = async (userIdentifier, updates) => {
       patient_picture: updates.patient_picture ?? updates.avatar_url ?? undefined,
       date_of_diagnosis: updates.date_of_diagnosis ?? undefined,
       guardian: updates.guardian ?? undefined,
+      guardian_relationship: updates.guardian_relationship ?? undefined,
       guardian_contact_number: updates.guardian_contact_number ?? undefined,
       medical_document: updates.medical_document ?? undefined,
       updated_at: new Date().toISOString(),

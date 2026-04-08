@@ -20,6 +20,12 @@ import { theme } from '../../design-system/theme';
 import { needsPersonalDetailsCompletion } from '../../features/profile/services/profile.service';
 import { logAppEvent } from '../../utils/appErrors';
 
+const DONOR_COMPLETION_GUARD_ROUTES = new Set([
+  '/donor/status',
+  '/donor/donations',
+  '/donor/appointment',
+]);
+
 function renderDashboardSection({ section, content, role, onItemPress, onActionPress }) {
   const data = content[section.dataKey];
   if (!data) return null;
@@ -145,6 +151,7 @@ export function RoleDashboardHome({ role, profile, navItems, content }) {
   const avatarInitials = [firstName[0], lastName[0]].filter(Boolean).join('');
   const needsAccountSetup = role !== 'patient' && !staffProfile?.hospital_id;
   const needsProfileCompletion = role === 'donor' && needsPersonalDetailsCompletion(profile);
+  const isTentativeRole = String(profile?.role || '').trim().toLowerCase() === 'tentative';
   const welcomeTitle = content.header.greeting === 'hello'
     ? (firstName ? `Hello, ${firstName}` : 'Hello')
     : (firstName ? `Welcome back, ${firstName}` : 'Welcome back');
@@ -197,6 +204,16 @@ export function RoleDashboardHome({ role, profile, navItems, content }) {
 
   const handleNavPress = (item) => {
     if (!item.route || item.route === pathname) return;
+    if (role === 'donor' && needsProfileCompletion && DONOR_COMPLETION_GUARD_ROUTES.has(item.route)) {
+      logAppEvent('profile_completion.modal', 'Profile completion modal displayed from donor feature gate.', {
+        authUserId: user?.id || null,
+        databaseUserId: profile?.user_id || null,
+        role: profile?.role || role,
+        route: item.route,
+      });
+      setShowCompleteProfilePrompt(true);
+      return;
+    }
     router.navigate(item.route);
   };
 
@@ -204,12 +221,32 @@ export function RoleDashboardHome({ role, profile, navItems, content }) {
     if (!item.route) return;
     await Haptics.selectionAsync();
     if (item.route === pathname) return;
+    if (role === 'donor' && needsProfileCompletion && DONOR_COMPLETION_GUARD_ROUTES.has(item.route)) {
+      logAppEvent('profile_completion.modal', 'Profile completion modal displayed from donor feature gate.', {
+        authUserId: user?.id || null,
+        databaseUserId: profile?.user_id || null,
+        role: profile?.role || role,
+        route: item.route,
+      });
+      setShowCompleteProfilePrompt(true);
+      return;
+    }
     router.navigate(item.route);
   };
 
   const handleActionRoute = async (route) => {
     if (!route || route === pathname) return;
     await Haptics.selectionAsync();
+    if (role === 'donor' && needsProfileCompletion && DONOR_COMPLETION_GUARD_ROUTES.has(route)) {
+      logAppEvent('profile_completion.modal', 'Profile completion modal displayed from donor feature gate.', {
+        authUserId: user?.id || null,
+        databaseUserId: profile?.user_id || null,
+        role: profile?.role || role,
+        route,
+      });
+      setShowCompleteProfilePrompt(true);
+      return;
+    }
     router.navigate(route);
   };
 
@@ -219,22 +256,10 @@ export function RoleDashboardHome({ role, profile, navItems, content }) {
   })) || [];
 
   useEffect(() => {
-    if (!needsProfileCompletion) {
+    if (!needsProfileCompletion || !isTentativeRole) {
       setShowCompleteProfilePrompt(false);
-      return;
     }
-
-    const timeoutId = setTimeout(() => {
-      logAppEvent('profile_completion.modal', 'Profile completion modal displayed.', {
-        authUserId: user?.id || null,
-        databaseUserId: profile?.user_id || null,
-        role,
-      });
-      setShowCompleteProfilePrompt(true);
-    }, 220);
-
-    return () => clearTimeout(timeoutId);
-  }, [needsProfileCompletion, profile?.user_id, role, user?.id]);
+  }, [isTentativeRole, needsProfileCompletion]);
 
   return (
     <>

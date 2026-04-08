@@ -91,7 +91,11 @@ export default function ProfileScreen() {
     uploadAvatar,
     changePassword,
   } = useProfileActions();
-  const { unreadCount } = useNotifications({ role: profile?.role, userId: user?.id, databaseUserId: profile?.user_id });
+  const normalizedRole = String(profile?.role || '').trim().toLowerCase();
+  const resolvedRole = normalizedRole === 'patient'
+    ? 'patient'
+    : (patientProfile?.patient_id ? 'patient' : 'donor');
+  const { unreadCount } = useNotifications({ role: resolvedRole, userId: user?.id, databaseUserId: profile?.user_id });
 
   const [mode, setMode] = useState('view');
   const [feedback, setFeedback] = useState(null);
@@ -130,11 +134,11 @@ export default function ProfileScreen() {
     }
   }, []);
 
-  const role = profile?.role || 'patient';
+  const role = resolvedRole;
   const isPatient = role === 'patient';
   const hasOrganization = !isPatient && Boolean(staffProfile?.hospital_id);
   const navItems = role === 'donor' ? donorDashboardNavItems : patientDashboardNavItems;
-  const roleLabel = roleLabelMap[role] || 'Member';
+  const roleLabel = roleLabelMap[normalizedRole] || roleLabelMap[role] || 'Member';
   const firstName = (profile?.first_name || '').trim();
   const middleName = (profile?.middle_name || '').trim();
   const lastName = (profile?.last_name || '').trim();

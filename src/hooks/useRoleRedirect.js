@@ -34,10 +34,24 @@ export const useRoleRedirect = () => {
     if (user && profile) {
       const role = String(profile.role || '').trim().toLowerCase();
       const isRootRoute = currentPath === '';
+      const isTryingToAccessPatientArea = currentPath.startsWith('patient/');
+      const isTryingToAccessDonorArea = currentPath.startsWith('donor/');
 
       if (role === 'tentative') {
-        if (!isRootRoute) {
-          router.replace('/');
+        if (needsOnboarding) {
+          if (!isRootRoute) {
+            router.replace('/');
+          }
+          return;
+        }
+
+        if (isPublicAuthRoute || isRootRoute || isTryingToAccessPatientArea) {
+          router.replace('/donor/home');
+          return;
+        }
+
+        if (!isTryingToAccessDonorArea && currentPath !== 'profile') {
+          router.replace('/donor/home');
         }
         return;
       }
@@ -60,9 +74,6 @@ export const useRoleRedirect = () => {
       }
 
       // Rule B: Prevent cross-role access to protected spaces
-      const isTryingToAccessPatientArea = currentPath.startsWith('patient/');
-      const isTryingToAccessDonorArea = currentPath.startsWith('donor/');
-
       if (role === 'patient' && isTryingToAccessDonorArea) {
         router.replace('/patient/home');
       } else if (role === 'donor' && isTryingToAccessPatientArea) {
