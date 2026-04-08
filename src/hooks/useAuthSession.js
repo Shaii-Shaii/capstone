@@ -32,6 +32,7 @@ export const useAuthSession = () => {
       staffProfile: nextStaffProfile,
       hospitalProfile: nextHospitalProfile,
       databaseUserId: nextDatabaseUserId,
+      onboardingCompleted,
     } = await getCurrentAccountBundle(targetUserId);
     setProfile(userProfile);
     setPatientProfile(nextPatientProfile);
@@ -42,6 +43,7 @@ export const useAuthSession = () => {
       profile: userProfile,
       patientProfile: nextPatientProfile,
       staffProfile: nextStaffProfile,
+      onboardingCompleted,
     }));
     return userProfile;
   }, [user?.email, user?.id, user?.user_metadata?.role]);
@@ -83,6 +85,7 @@ export const useAuthSession = () => {
           staffProfile: nextStaffProfile,
           hospitalProfile: nextHospitalProfile,
           databaseUserId: nextDatabaseUserId,
+          onboardingCompleted,
         } = await getCurrentAccountBundle(newSession.user.id);
         if (mounted) {
           setProfile(userProfile);
@@ -94,6 +97,7 @@ export const useAuthSession = () => {
             profile: userProfile,
             patientProfile: nextPatientProfile,
             staffProfile: nextStaffProfile,
+            onboardingCompleted,
           }));
           setIsLoading(false);
         }

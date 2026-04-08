@@ -868,6 +868,37 @@ export const fetchHospitalRepresentativeById = async (hospitalId) => {
   };
 };
 
+export const fetchLatestAuditLogByAction = async ({ databaseUserId, authUserId, action }) => {
+  if (!action) {
+    return { data: null, error: new Error('Audit action is required.') };
+  }
+
+  let query = supabase
+    .from('audit_logs')
+    .select('log_id, user_id, action, description, time, user_email, resource, status')
+    .eq('action', action)
+    .order('time', { ascending: false });
+
+  if (databaseUserId) {
+    query = query.eq('user_id', databaseUserId);
+  } else if (authUserId) {
+    const systemUserResult = await resolveSystemUser(authUserId, { ensure: false });
+    if (systemUserResult.error || !systemUserResult.data?.user_id) {
+      return { data: null, error: null };
+    }
+
+    query = query.eq('user_id', systemUserResult.data.user_id);
+  } else {
+    return { data: null, error: null };
+  }
+
+  const result = await query.limit(1).maybeSingle();
+  return {
+    data: result.data || null,
+    error: result.error || null,
+  };
+};
+
 export const fetchPatientDetailsByCode = async (patientCode) => {
   const normalizedCode = patientCode?.trim()?.toUpperCase();
   if (!normalizedCode) {

@@ -41,10 +41,15 @@ export const needsPostLoginOnboarding = ({
   profile,
   patientProfile,
   staffProfile,
+  onboardingCompleted = null,
 }) => {
   const normalizedRole = String(profile?.role || '').trim().toLowerCase();
 
   if (!normalizedRole || normalizedRole === 'tentative') {
+    return true;
+  }
+
+  if (onboardingCompleted === false && normalizedRole !== 'donor' && normalizedRole !== 'patient') {
     return true;
   }
 
@@ -312,21 +317,11 @@ export const completePostLoginOnboarding = async ({
     const systemUserResult = await ProfileAPI.ensureSystemUserRecord({
       authUserId: userId,
       email,
-      role: targetRole,
+      role: 'tentative',
     });
 
     if (systemUserResult.error || !systemUserResult.data?.user_id) {
       throw new Error(systemUserResult.error?.message || 'The app user record could not be loaded.');
-    }
-
-    const roleUpdateResult = await ProfileAPI.updateSystemUserRoleByAuthUserId({
-      authUserId: userId,
-      role: targetRole,
-      email,
-    });
-
-    if (roleUpdateResult.error) {
-      throw new Error(roleUpdateResult.error.message || 'The account role could not be updated.');
     }
 
     const userDetailsResult = await ProfileAPI.ensureUserDetailsRecord({
@@ -405,6 +400,16 @@ export const completePostLoginOnboarding = async ({
         databaseUserId: systemUserResult.data.user_id,
         patientId: patientResult.data?.patient_id || null,
       });
+    }
+
+    const roleUpdateResult = await ProfileAPI.updateSystemUserRoleByAuthUserId({
+      authUserId: userId,
+      role: targetRole,
+      email,
+    });
+
+    if (roleUpdateResult.error) {
+      throw new Error(roleUpdateResult.error.message || 'The account role could not be updated.');
     }
 
     await writeAuditLog({
@@ -522,6 +527,12 @@ export const getCurrentAccountBundle = async (userId) => {
     const { data: hospitalProfile, error: hospitalError } = linkedHospitalId
       ? await ProfileAPI.fetchHospitalRepresentativeById(linkedHospitalId)
       : { data: null, error: null };
+    const { data: onboardingAuditLog } = profile?.user_id
+      ? await ProfileAPI.fetchLatestAuditLogByAction({
+          databaseUserId: profile.user_id,
+          action: 'onboarding.complete',
+        })
+      : { data: null };
 
     return {
       profile,
@@ -529,6 +540,7 @@ export const getCurrentAccountBundle = async (userId) => {
       staffProfile: staffError ? null : staffProfile,
       hospitalProfile: hospitalError ? null : hospitalProfile,
       databaseUserId: profile?.user_id || null,
+      onboardingCompleted: Boolean(onboardingAuditLog?.log_id),
       error: null,
     };
   } catch (error) {
@@ -538,6 +550,7 @@ export const getCurrentAccountBundle = async (userId) => {
       staffProfile: null,
       hospitalProfile: null,
       databaseUserId: null,
+      onboardingCompleted: null,
       error: error.message,
     };
   }

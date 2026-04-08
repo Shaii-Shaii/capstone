@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Animated, Image, StyleSheet, Text, View } from 'react-native';
+import { Animated, Image, Platform, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
@@ -23,6 +23,65 @@ import donivraLogoNoText from '../src/assets/images/donivra_logo_no_text.png';
 
 const normalizePatientCode = (value) => value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
 const IMAGE_MEDIA_TYPES = ['images'];
+
+const getFileExtension = (mimeType = '', fileName = '') => {
+  const normalizedMimeType = String(mimeType || '').toLowerCase();
+  const normalizedFileName = String(fileName || '').toLowerCase();
+
+  if (normalizedMimeType.includes('png') || normalizedFileName.endsWith('.png')) return 'png';
+  if (normalizedMimeType.includes('webp') || normalizedFileName.endsWith('.webp')) return 'webp';
+  if (normalizedMimeType.includes('gif') || normalizedFileName.endsWith('.gif')) return 'gif';
+  return 'jpg';
+};
+
+const getPickedMediaPayload = async (asset, fallbackPrefix) => {
+  if (!asset) {
+    throw new Error('Unable to read the selected image.');
+  }
+
+  const contentType = asset.mimeType || asset.file?.type || 'image/jpeg';
+  const fileName = asset.fileName || asset.file?.name || `${fallbackPrefix}.${getFileExtension(contentType)}`;
+  const previewUri = asset.uri || '';
+
+  if (asset.base64) {
+    const fileResponse = await fetch(`data:${contentType};base64,${asset.base64}`);
+    if (!fileResponse.ok) {
+      throw new Error('Unable to read the selected image.');
+    }
+
+    return {
+      fileBody: await fileResponse.arrayBuffer(),
+      contentType,
+      fileName,
+      previewUri: previewUri || `data:${contentType};base64,${asset.base64}`,
+    };
+  }
+
+  if (asset.file && typeof asset.file.arrayBuffer === 'function') {
+    return {
+      fileBody: await asset.file.arrayBuffer(),
+      contentType,
+      fileName,
+      previewUri,
+    };
+  }
+
+  if (asset.uri) {
+    const fileResponse = await fetch(asset.uri);
+    if (!fileResponse.ok) {
+      throw new Error('Unable to read the selected image.');
+    }
+
+    return {
+      fileBody: await fileResponse.arrayBuffer(),
+      contentType,
+      fileName,
+      previewUri: asset.uri,
+    };
+  }
+
+  throw new Error('Unable to read the selected image.');
+};
 
 function LoadingState() {
   return (
@@ -271,10 +330,12 @@ function FirstTimeOnboarding() {
   const pickManualPatientAsset = async (fieldName, setUploading) => {
     try {
       setUploading(true);
-      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!permission.granted) {
-        setScreenError('Please allow photo library access to continue.');
-        return;
+      if (Platform.OS !== 'web') {
+        const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (!permission.granted) {
+          setScreenError('Please allow photo library access to continue.');
+          return;
+        }
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
@@ -290,13 +351,11 @@ function FirstTimeOnboarding() {
       }
 
       const asset = result.assets?.[0];
-      if (!asset?.base64) {
-        setScreenError('Unable to read the selected image.');
-        return;
-      }
-
-      const mimeType = asset.mimeType || 'image/jpeg';
-      manualPatientForm.setValue(fieldName, `data:${mimeType};base64,${asset.base64}`, {
+      const mediaPayload = await getPickedMediaPayload(
+        asset,
+        fieldName === 'patient_picture' ? 'patient-picture' : 'patient-document'
+      );
+      manualPatientForm.setValue(fieldName, mediaPayload, {
         shouldDirty: true,
         shouldValidate: true,
       });
@@ -409,6 +468,8 @@ function FirstTimeOnboarding() {
     if (branchMode === 'patient-manual') {
       const patientPictureValue = manualPatientForm.watch('patient_picture');
       const medicalDocumentValue = manualPatientForm.watch('medical_document');
+      const patientPicturePreview = typeof patientPictureValue === 'string' ? patientPictureValue : patientPictureValue?.previewUri || '';
+      const medicalDocumentPreview = typeof medicalDocumentValue === 'string' ? medicalDocumentValue : medicalDocumentValue?.previewUri || '';
 
       return (
         <AppCard variant="elevated" radius="xl" padding="lg" style={styles.onboardingCard}>
@@ -504,7 +565,7 @@ function FirstTimeOnboarding() {
               </AppCard>
 
               {patientPictureValue ? (
-                <Image source={{ uri: patientPictureValue }} style={styles.uploadPreviewImage} />
+                <Image source={{ uri: patientPicturePreview }} style={styles.uploadPreviewImage} />
               ) : null}
 
               <AppCard variant="soft" radius="xl" padding="md" style={styles.uploadCard}>
@@ -521,7 +582,7 @@ function FirstTimeOnboarding() {
               </AppCard>
 
               {medicalDocumentValue ? (
-                <Image source={{ uri: medicalDocumentValue }} style={styles.uploadPreviewImage} />
+                <Image source={{ uri: medicalDocumentPreview }} style={styles.uploadPreviewImage} />
               ) : null}
             </View>
           )}

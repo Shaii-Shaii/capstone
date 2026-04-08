@@ -47,6 +47,16 @@ export const patientOnboardingSchema = z.object({
     }),
   guardian: optionalTextField,
   guardian_contact_number: phoneField.optional().or(z.literal('')),
-  patient_picture: z.string().optional().or(z.literal('')),
-  medical_document: z.string().optional().or(z.literal('')),
+  patient_picture: z.union([z.string(), z.object({
+    fileBody: z.any().optional(),
+    contentType: z.string().optional(),
+    fileName: z.string().optional(),
+    previewUri: z.string().optional(),
+  })]).optional().or(z.literal('')),
+  medical_document: z.union([z.string(), z.object({
+    fileBody: z.any().optional(),
+    contentType: z.string().optional(),
+    fileName: z.string().optional(),
+    previewUri: z.string().optional(),
+  })]).optional().or(z.literal('')),
 });

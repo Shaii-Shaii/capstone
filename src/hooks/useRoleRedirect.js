@@ -32,8 +32,15 @@ export const useRoleRedirect = () => {
 
     // 3. Guard authenticated users
     if (user && profile) {
-      const role = profile.role;
+      const role = String(profile.role || '').trim().toLowerCase();
       const isRootRoute = currentPath === '';
+
+      if (role === 'tentative') {
+        if (!isRootRoute) {
+          router.replace('/');
+        }
+        return;
+      }
 
       if (needsOnboarding) {
         if (!isRootRoute) {

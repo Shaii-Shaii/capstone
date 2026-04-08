@@ -33,6 +33,19 @@ const getAssetUploadPayload = async (asset) => {
   const contentType = asset.mimeType || asset.file?.type || 'image/jpeg';
   const fileName = asset.fileName || asset.file?.name || `profile-photo.${getFileExtension(contentType)}`;
 
+  if (asset.base64) {
+    const fileResponse = await fetch(`data:${contentType};base64,${asset.base64}`);
+    if (!fileResponse.ok) {
+      throw new Error('Unable to read the selected image.');
+    }
+
+    return {
+      fileBody: await fileResponse.arrayBuffer(),
+      contentType,
+      fileName,
+    };
+  }
+
   if (asset.file && typeof asset.file.arrayBuffer === 'function') {
     return {
       fileBody: await asset.file.arrayBuffer(),
@@ -250,7 +263,7 @@ export const useProfileActions = () => {
         allowsEditing: true,
         aspect: [1, 1],
         quality: 0.55,
-        base64: false,
+        base64: true,
       });
 
       if (result.canceled) {
