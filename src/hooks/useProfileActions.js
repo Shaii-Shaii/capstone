@@ -2,7 +2,14 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import * as ImagePicker from 'expo-image-picker';
 import { useAuth } from '../providers/AuthProvider';
 import { useAuthActions } from '../features/auth/hooks/useAuthActions';
-import { getProfileBundle, getVisibleRoleFields, saveAvatar, saveProfile } from '../features/profile/services/profile.service';
+import {
+  buildProfileCompletionMeta,
+  getProfileBundle,
+  getVisibleRoleFields,
+  hasProfileFormChanges,
+  saveAvatar,
+  saveProfile,
+} from '../features/profile/services/profile.service';
 import { logAppError, logAppEvent } from '../utils/appErrors';
 
 const IMAGE_MEDIA_TYPES = ['images'];
@@ -32,6 +39,62 @@ export const useProfileActions = () => {
   const [isLoadingRoleProfile, setIsLoadingRoleProfile] = useState(false);
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
   const defaultValues = useMemo(() => formFromProfile(profile), [profile]);
+  const profileCompletionMeta = useMemo(() => (
+    buildProfileCompletionMeta({
+      photo_path: profile?.photo_path || profile?.avatar_url || '',
+      first_name: profile?.first_name || '',
+      last_name: profile?.last_name || '',
+      birthdate: profile?.birthdate || '',
+      gender: profile?.gender || '',
+      contact_number: profile?.contact_number || profile?.phone || '',
+      street: profile?.street || '',
+      barangay: profile?.barangay || '',
+      city: profile?.city || '',
+      province: profile?.province || '',
+      region: profile?.region || '',
+      country: profile?.country || '',
+    })
+  ), [
+    profile?.avatar_url,
+    profile?.barangay,
+    profile?.birthdate,
+    profile?.city,
+    profile?.contact_number,
+    profile?.country,
+    profile?.first_name,
+    profile?.gender,
+    profile?.last_name,
+    profile?.phone,
+    profile?.photo_path,
+    profile?.province,
+    profile?.region,
+    profile?.street,
+  ]);
+
+  const getProfileCompletionMeta = useCallback((values = defaultValues) => (
+    buildProfileCompletionMeta({
+      photo_path: profile?.photo_path || profile?.avatar_url || '',
+      first_name: values?.firstName,
+      last_name: values?.lastName,
+      birthdate: values?.birthdate,
+      gender: values?.gender,
+      contact_number: values?.phone,
+      street: values?.street,
+      barangay: values?.barangay,
+      city: values?.city,
+      province: values?.province,
+      region: values?.region,
+      country: values?.country,
+    })
+  ), [
+    defaultValues,
+    profile?.avatar_url,
+    profile?.photo_path,
+  ]);
+
+  const hasUnsavedProfileChanges = useCallback((values = defaultValues) => (
+    hasProfileFormChanges(defaultValues, values)
+  ), [defaultValues]);
 
   const loadProfileBundle = useCallback(async () => {
     if (!user?.id || !profile?.role) return;
@@ -178,11 +241,14 @@ export const useProfileActions = () => {
     roleProfile,
     visibleRoleFields,
     defaultValues,
+    profileCompletionMeta,
     isSavingProfile,
     isLoadingRoleProfile,
     isUploadingAvatar,
     isChangingPassword: isAuthLoading,
     loadProfileBundle,
+    getProfileCompletionMeta,
+    hasUnsavedProfileChanges,
     saveSharedProfile,
     uploadAvatar,
     changePassword: (values) => updatePassword(values),

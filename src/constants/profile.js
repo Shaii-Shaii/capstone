@@ -116,6 +116,48 @@ export const profileFieldConfig = [
   },
 ];
 
+export const profileCompletionFieldLabels = {
+  photo_path: 'Photo',
+  first_name: 'First name',
+  last_name: 'Last name',
+  birthdate: 'Birthdate',
+  gender: 'Gender',
+  contact_number: 'Mobile number',
+  street: 'Street',
+  barangay: 'Barangay',
+  city: 'City',
+  province: 'Province',
+  region: 'Region',
+  country: 'Country',
+};
+
+export const profileCompletionSections = [
+  {
+    key: 'photo',
+    label: 'Add a profile photo',
+    shortLabel: 'Photo',
+    fields: ['photo_path'],
+  },
+  {
+    key: 'name',
+    label: 'Add your name',
+    shortLabel: 'Name',
+    fields: ['first_name', 'last_name'],
+  },
+  {
+    key: 'details',
+    label: 'Add your personal details',
+    shortLabel: 'Details',
+    fields: ['birthdate', 'gender', 'contact_number'],
+  },
+  {
+    key: 'address',
+    label: 'Add your address',
+    shortLabel: 'Address',
+    fields: ['street', 'barangay', 'city', 'province', 'region', 'country'],
+  },
+];
+
 export const passwordFieldConfig = [
   {
     key: 'currentPassword',

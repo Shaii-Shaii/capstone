@@ -1,8 +1,8 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, StyleSheet, Text, Pressable, Alert, ScrollView, Modal, KeyboardAvoidingView, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
-import { Controller, useForm } from 'react-hook-form';
+import { Controller, useForm, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { DashboardLayout } from '../src/components/layout/DashboardLayout';
@@ -13,12 +13,14 @@ import { PasswordInput } from '../src/components/ui/PasswordInput';
 import { AppButton } from '../src/components/ui/AppButton';
 import { AppTextLink } from '../src/components/ui/AppTextLink';
 import { AppIcon } from '../src/components/ui/AppIcon';
+import { FormProgressStepper } from '../src/components/ui/FormProgressStepper';
 import { StatusBanner } from '../src/components/ui/StatusBanner';
 import { DashboardSectionHeader } from '../src/components/ui/DashboardSectionHeader';
 import { useProfileActions } from '../src/hooks/useProfileActions';
 import { useNotifications } from '../src/hooks/useNotifications';
 import { theme } from '../src/design-system/theme';
 import { getPasswordStrengthMessage } from '../src/utils/passwordRules';
+import { logAppEvent } from '../src/utils/appErrors';
 import {
   passwordFieldConfig,
   profileActionConfig,
@@ -69,9 +71,12 @@ export default function ProfileScreen() {
     staffProfile,
     hospitalProfile,
     defaultValues,
+    profileCompletionMeta,
     isSavingProfile,
     isChangingPassword,
     isUploadingAvatar,
+    getProfileCompletionMeta,
+    hasUnsavedProfileChanges,
     saveSharedProfile,
     uploadAvatar,
     changePassword,
@@ -98,6 +103,9 @@ export default function ProfileScreen() {
       newPassword: '',
       confirmPassword: '',
     },
+  });
+  const watchedProfileValues = useWatch({
+    control: profileForm.control,
   });
 
   useEffect(() => {
@@ -265,9 +273,76 @@ export default function ProfileScreen() {
       : 'info'
     : 'info';
   const isPopupVisible = mode !== 'view';
+  const liveProfileCompletionMeta = useMemo(() => (
+    getProfileCompletionMeta(watchedProfileValues)
+  ), [getProfileCompletionMeta, watchedProfileValues]);
+  const activeProfileCompletionMeta = watchedProfileValues
+    ? liveProfileCompletionMeta
+    : profileCompletionMeta;
+  const hasDirtyProfileDraft = mode === 'edit' && hasUnsavedProfileChanges(watchedProfileValues);
+  const editModalTitle = role === 'donor' && !activeProfileCompletionMeta.isComplete
+    ? 'Complete Account Setup'
+    : 'Edit Profile';
+  const completionHint = activeProfileCompletionMeta.isComplete
+    ? 'All core details are complete.'
+    : `Missing: ${activeProfileCompletionMeta.missingFieldLabels.slice(0, 3).join(', ')}.`;
   const setFloatingFeedback = (type, title, message) => {
     setFeedback({ type, title, message });
   };
+
+  const closeEditModal = useCallback(() => {
+    profileForm.reset(defaultValues);
+    setMode('view');
+  }, [defaultValues, profileForm]);
+
+  const handleDiscardProfileChanges = useCallback(() => {
+    logAppEvent('profile_completion.discard', 'Unsaved profile changes were discarded.', {
+      authUserId: user?.id || null,
+      databaseUserId: profile?.user_id || null,
+      role,
+    });
+    closeEditModal();
+  }, [closeEditModal, profile?.user_id, role, user?.id]);
+
+  const requestEditModalClose = useCallback(() => {
+    if (!hasDirtyProfileDraft) {
+      closeEditModal();
+      return;
+    }
+
+    Alert.alert(
+      'Discard changes?',
+      'Unsaved changes will not be saved.',
+      [
+        {
+          text: 'Continue Editing',
+          style: 'cancel',
+        },
+        {
+          text: 'Discard Changes',
+          style: 'destructive',
+          onPress: handleDiscardProfileChanges,
+        },
+      ]
+    );
+  }, [closeEditModal, handleDiscardProfileChanges, hasDirtyProfileDraft]);
+
+  const handleModalClose = useCallback(() => {
+    if (mode === 'edit') {
+      requestEditModalClose();
+      return;
+    }
+
+    if (mode === 'password') {
+      passwordForm.reset({
+        currentPassword: '',
+        newPassword: '',
+        confirmPassword: '',
+      });
+    }
+
+    setMode('view');
+  }, [mode, passwordForm, requestEditModalClose]);
 
   const handleNavPress = async (item) => {
     if (item.route === '/profile') return;
@@ -433,13 +508,13 @@ export default function ProfileScreen() {
           </View>
         </AppCard>
 
-        <Modal transparent visible={isPopupVisible} animationType="fade" onRequestClose={() => setMode('view')}>
+        <Modal transparent visible={isPopupVisible} animationType="fade" onRequestClose={handleModalClose}>
           <KeyboardAvoidingView
             style={styles.modalKeyboardWrap}
             behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           >
             <View style={styles.modalOverlay}>
-              <Pressable style={styles.modalBackdrop} onPress={() => setMode('view')} />
+              <Pressable style={styles.modalBackdrop} onPress={handleModalClose} />
 
               <AppCard variant="elevated" radius="xl" padding="lg" style={styles.modalCard}>
                 <ScrollView
@@ -451,10 +526,33 @@ export default function ProfileScreen() {
                   {mode === 'edit' ? (
                     <>
                       <DashboardSectionHeader
-                        title="Edit Profile"
+                        title={editModalTitle}
                         description=""
                         style={styles.sectionHeader}
                       />
+
+                      <View style={styles.completionCard}>
+                        <View style={styles.completionHeader}>
+                          <Text style={styles.completionTitle}>Profile Completion</Text>
+                          <Text style={styles.completionPercent}>{activeProfileCompletionMeta.percentage}%</Text>
+                        </View>
+                        <View style={styles.completionBarTrack}>
+                          <View
+                            style={[
+                              styles.completionBarFill,
+                              { width: `${activeProfileCompletionMeta.percentage}%` },
+                            ]}
+                          />
+                        </View>
+                        <Text style={styles.completionCaption}>
+                          {activeProfileCompletionMeta.completedFieldCount}/{activeProfileCompletionMeta.totalFieldCount} fields complete
+                        </Text>
+                        <FormProgressStepper
+                          steps={activeProfileCompletionMeta.steps}
+                          currentStep={activeProfileCompletionMeta.currentStep}
+                        />
+                        <Text style={styles.completionHint}>{completionHint}</Text>
+                      </View>
 
                       <View style={styles.editPreviewCard}>
                         <Text style={styles.editPreviewTitle}>Current</Text>
@@ -502,7 +600,7 @@ export default function ProfileScreen() {
                           )}
                           leading={<AppIcon name="save" state="inverse" />}
                         />
-                        <AppTextLink title="Close" variant="muted" onPress={() => setMode('view')} />
+                        <AppTextLink title="Close" variant="muted" onPress={requestEditModalClose} />
                       </View>
                     </>
                   ) : null}
@@ -563,7 +661,7 @@ export default function ProfileScreen() {
                           )}
                           leading={<AppIcon name="changePassword" state="inverse" />}
                         />
-                        <AppTextLink title="Close" variant="muted" onPress={() => setMode('view')} />
+                        <AppTextLink title="Close" variant="muted" onPress={handleModalClose} />
                       </View>
                     </>
                   ) : null}
@@ -691,6 +789,56 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.semantic.bodySm,
     lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
     color: theme.colors.textSecondary,
+  },
+  completionCard: {
+    marginBottom: theme.spacing.md,
+    gap: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.md,
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.surfaceSoft,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+  },
+  completionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+  },
+  completionTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textPrimary,
+  },
+  completionPercent: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.bold,
+    color: theme.colors.brandPrimary,
+  },
+  completionBarTrack: {
+    height: 8,
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.borderSubtle,
+    overflow: 'hidden',
+  },
+  completionBarFill: {
+    height: '100%',
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.brandPrimary,
+  },
+  completionCaption: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    color: theme.colors.textSecondary,
+  },
+  completionHint: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    color: theme.colors.textSecondary,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
   },
   modalCard: {
     maxHeight: '90%',

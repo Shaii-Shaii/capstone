@@ -1,5 +1,6 @@
 import * as ProfileAPI from '../api/profile.api';
 import { logAppError, logAppEvent, writeAuditLog } from '../../../utils/appErrors';
+import { profileCompletionFieldLabels, profileCompletionSections } from '../../../constants/profile';
 
 const SYSTEM_ROLE_KEYS = new Set(['id', 'created_at', 'updated_at', 'user_id', 'profile_id']);
 
@@ -41,12 +42,91 @@ export const needsPostLoginOnboarding = ({
   staffProfile,
 }) => !profile?.user_details_id && !patientProfile?.patient_id && !staffProfile?.link_id;
 
-export const needsPersonalDetailsCompletion = (profile) => (
-  !profile?.first_name
-  || !profile?.last_name
-  || !profile?.birthdate
-  || !profile?.gender
-  || !profile?.phone
+const normalizeComparableFormValues = (values = {}) => ({
+  firstName: String(values.firstName || '').trim(),
+  middleName: String(values.middleName || '').trim(),
+  lastName: String(values.lastName || '').trim(),
+  suffix: String(values.suffix || '').trim(),
+  birthdate: String(values.birthdate || '').trim(),
+  gender: String(values.gender || '').trim(),
+  phone: String(values.phone || '').trim(),
+  street: String(values.street || '').trim(),
+  barangay: String(values.barangay || '').trim(),
+  region: String(values.region || '').trim(),
+  city: String(values.city || '').trim(),
+  province: String(values.province || '').trim(),
+  country: String(values.country || '').trim(),
+});
+
+const normalizeProfileCompletionSource = (source = {}) => ({
+  photo_path: source.photo_path || source.avatar_url || '',
+  first_name: source.first_name || '',
+  last_name: source.last_name || '',
+  birthdate: source.birthdate || '',
+  gender: source.gender || '',
+  contact_number: source.contact_number || source.phone || '',
+  street: source.street || '',
+  barangay: source.barangay || '',
+  city: source.city || '',
+  province: source.province || '',
+  region: source.region || '',
+  country: source.country || '',
+});
+
+const isFilledField = (value) => {
+  if (value === null || value === undefined) return false;
+  if (typeof value === 'string') return value.trim().length > 0;
+  return Boolean(value);
+};
+
+export const buildProfileCompletionMeta = (source = {}) => {
+  const normalizedSource = normalizeProfileCompletionSource(source);
+  const sections = profileCompletionSections.map((section) => {
+    const completedFieldCount = section.fields.filter((fieldKey) => isFilledField(normalizedSource[fieldKey])).length;
+    const missingFields = section.fields.filter((fieldKey) => !isFilledField(normalizedSource[fieldKey]));
+
+    return {
+      ...section,
+      completedFieldCount,
+      totalFieldCount: section.fields.length,
+      isComplete: missingFields.length === 0,
+      missingFields,
+    };
+  });
+
+  const totalFieldCount = sections.reduce((sum, section) => sum + section.totalFieldCount, 0);
+  const completedFieldCount = sections.reduce((sum, section) => sum + section.completedFieldCount, 0);
+  const percentage = totalFieldCount > 0 ? Math.round((completedFieldCount / totalFieldCount) * 100) : 0;
+  const currentStep = Math.max(
+    0,
+    sections.findIndex((section) => !section.isComplete)
+  );
+  const hasIncompleteSection = sections.some((section) => !section.isComplete);
+  const missingFieldLabels = sections
+    .flatMap((section) => section.missingFields)
+    .map((fieldKey) => profileCompletionFieldLabels[fieldKey] || fieldKey);
+
+  return {
+    percentage,
+    completedFieldCount,
+    totalFieldCount,
+    sections,
+    steps: sections.map((section) => ({
+      key: section.key,
+      label: section.label,
+      shortLabel: section.shortLabel,
+    })),
+    currentStep: hasIncompleteSection ? currentStep : Math.max(sections.length - 1, 0),
+    missingFieldLabels,
+    isComplete: missingFieldLabels.length === 0,
+  };
+};
+
+export const needsPersonalDetailsCompletion = (profile) => !buildProfileCompletionMeta(profile).isComplete;
+
+export const hasProfileFormChanges = (initialValues, currentValues) => (
+  JSON.stringify(normalizeComparableFormValues(initialValues))
+  !== JSON.stringify(normalizeComparableFormValues(currentValues))
 );
 
 const fetchRoleProfile = async (role, userId) => {
