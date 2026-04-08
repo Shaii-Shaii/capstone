@@ -35,6 +35,7 @@ import { donorDashboardNavItems, patientDashboardNavItems } from '../src/constan
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 const PROFILE_MINIMUM_AGE = 18;
+const MINIMUM_BIRTHDATE = new Date(1900, 0, 1);
 
 const getMaximumBirthdate = () => {
   const maxDate = new Date();
@@ -632,6 +633,7 @@ export default function ProfileScreen() {
                                     error={fieldState.error?.message}
                                     onChange={controllerField.onChange}
                                     onBlur={controllerField.onBlur}
+                                    minimumDate={MINIMUM_BIRTHDATE}
                                     maximumDate={getMaximumBirthdate()}
                                     onPress={() => Haptics.selectionAsync()}
                                   />

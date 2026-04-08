@@ -26,6 +26,14 @@ import donivraLogoNoText from '../src/assets/images/donivra_logo_no_text.png';
 
 const normalizePatientCode = (value) => value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
 const IMAGE_MEDIA_TYPES = ['images'];
+const PROFILE_MINIMUM_AGE = 18;
+const MINIMUM_BIRTHDATE = new Date(1900, 0, 1);
+
+const getMaximumBirthdate = () => {
+  const maxDate = new Date();
+  maxDate.setFullYear(maxDate.getFullYear() - PROFILE_MINIMUM_AGE);
+  return maxDate;
+};
 
 const getFileExtension = (mimeType = '', fileName = '') => {
   const normalizedMimeType = String(mimeType || '').toLowerCase();
@@ -599,6 +607,8 @@ function FirstTimeOnboarding() {
                     error={fieldState.error?.message}
                     onChange={onChange}
                     onBlur={onBlur}
+                    minimumDate={MINIMUM_BIRTHDATE}
+                    maximumDate={getMaximumBirthdate()}
                     onPress={() => Haptics.selectionAsync()}
                   />
                 )}

@@ -37,10 +37,10 @@ export const profileFieldConfig = [
     key: 'birthdate',
     formKey: 'birthdate',
     label: 'Birthdate',
-    placeholder: 'YYYY-MM-DD',
+    placeholder: 'Select birthdate',
     optional: true,
     editable: true,
-    helperText: 'Required. Use YYYY-MM-DD.',
+    helperText: 'Required.',
   },
   {
     key: 'gender',

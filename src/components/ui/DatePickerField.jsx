@@ -6,6 +6,12 @@ import { AppIcon } from './AppIcon';
 import { AppTextLink } from './AppTextLink';
 import { theme } from '../../design-system/theme';
 
+const readableDateFormatter = new Intl.DateTimeFormat(undefined, {
+  year: 'numeric',
+  month: 'long',
+  day: 'numeric',
+});
+
 const formatDateValue = (date) => {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -20,6 +26,12 @@ const parseDateValue = (value) => {
   return parsedDate;
 };
 
+const formatReadableDate = (value) => {
+  const parsedDate = value instanceof Date ? value : parseDateValue(value);
+  if (!parsedDate) return '';
+  return readableDateFormatter.format(parsedDate);
+};
+
 export function DatePickerField({
   label,
   value,
@@ -28,17 +40,31 @@ export function DatePickerField({
   error,
   onChange,
   onBlur,
+  minimumDate,
   maximumDate,
   onPress,
 }) {
   const [isPickerVisible, setIsPickerVisible] = useState(false);
+  const parsedDateValue = useMemo(() => parseDateValue(value), [value]);
   const maximumDateValue = useMemo(
     () => (maximumDate instanceof Date ? maximumDate : null),
     [maximumDate]
   );
+  const minimumDateValue = useMemo(
+    () => (minimumDate instanceof Date ? minimumDate : null),
+    [minimumDate]
+  );
   const maximumDateString = useMemo(
     () => (maximumDateValue ? formatDateValue(maximumDateValue) : undefined),
     [maximumDateValue]
+  );
+  const minimumDateString = useMemo(
+    () => (minimumDateValue ? formatDateValue(minimumDateValue) : undefined),
+    [minimumDateValue]
+  );
+  const readableValue = useMemo(
+    () => formatReadableDate(parsedDateValue),
+    [parsedDateValue]
   );
 
   if (Platform.OS === 'web') {
@@ -49,19 +75,22 @@ export function DatePickerField({
         variant="filled"
         helperText={helperText}
         value={value}
-        onChangeText={onChange}
         onChange={(event) => {
-          onChange(event?.target?.value || event?.nativeEvent?.text || '');
+          const nextValue = String(event?.target?.value || event?.nativeEvent?.text || '').trim();
+          const normalizedValue = parseDateValue(nextValue);
+          onChange(normalizedValue ? formatDateValue(normalizedValue) : nextValue);
         }}
         onBlur={onBlur}
         error={error}
+        min={minimumDateString}
         max={maximumDateString}
         type="date"
+        autoComplete="bday"
       />
     );
   }
 
-  const fallbackDate = parseDateValue(value) || maximumDateValue || new Date();
+  const fallbackDate = parsedDateValue || maximumDateValue || new Date();
 
   return (
     <View style={styles.fieldWrap}>
@@ -82,7 +111,7 @@ export function DatePickerField({
           styles.fieldValue,
           !value ? styles.fieldPlaceholder : null,
         ]}>
-          {value || placeholder}
+          {readableValue || placeholder}
         </Text>
         <AppIcon name="appointment" state={error ? 'danger' : 'muted'} />
       </Pressable>
@@ -93,6 +122,7 @@ export function DatePickerField({
             value={fallbackDate}
             mode="date"
             display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+            minimumDate={minimumDateValue || undefined}
             maximumDate={maximumDateValue || undefined}
             onChange={(event, selectedDate) => {
               if (Platform.OS === 'android') {
