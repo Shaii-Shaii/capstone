@@ -46,7 +46,7 @@ export const profileFieldConfig = [
     key: 'gender',
     formKey: 'gender',
     label: 'Gender',
-    placeholder: 'Female',
+    placeholder: 'Select gender',
     optional: true,
     editable: true,
     helperText: 'Required.',
@@ -114,6 +114,12 @@ export const profileFieldConfig = [
     editable: true,
     helperText: 'Editable.',
   },
+];
+
+export const profileGenderOptions = [
+  { label: 'Male', value: 'Male' },
+  { label: 'Female', value: 'Female' },
+  { label: 'Prefer not to say', value: 'Prefer not to say' },
 ];
 
 export const profileCompletionFieldLabels = {

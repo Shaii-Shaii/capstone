@@ -17,6 +17,7 @@ import { AppIcon } from '../src/components/ui/AppIcon';
 import { FormProgressStepper } from '../src/components/ui/FormProgressStepper';
 import { StatusBanner } from '../src/components/ui/StatusBanner';
 import { DashboardSectionHeader } from '../src/components/ui/DashboardSectionHeader';
+import { AddressOptionSheet, AddressSelectField, SignupAddressSection } from '../src/components/auth/SignupAddressSection';
 import { useProfileActions } from '../src/hooks/useProfileActions';
 import { useNotifications } from '../src/hooks/useNotifications';
 import { theme } from '../src/design-system/theme';
@@ -27,6 +28,7 @@ import {
   profileActionConfig,
   profileDisplayFields,
   profileFieldConfig,
+  profileGenderOptions,
   roleLabelMap,
 } from '../src/constants/profile';
 import { changePasswordSchema, profileUpdateSchema } from '../src/features/profile/profile.schema';
@@ -111,6 +113,7 @@ export default function ProfileScreen() {
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [passwordSuccess, setPasswordSuccess] = useState(false);
   const [isBirthdatePickerVisible, setIsBirthdatePickerVisible] = useState(false);
+  const [activeProfilePicker, setActiveProfilePicker] = useState('');
   const successTimerRef = useRef(null);
 
   const profileForm = useForm({
@@ -131,6 +134,7 @@ export default function ProfileScreen() {
   const watchedProfileValues = useWatch({
     control: profileForm.control,
   });
+  const profileErrors = profileForm.formState.errors;
 
   useEffect(() => {
     profileForm.reset(defaultValues);
@@ -242,6 +246,7 @@ export default function ProfileScreen() {
     user?.email,
   ]);
   const watchedNewPassword = passwordForm.watch('newPassword');
+  const watchedGender = useWatch({ control: profileForm.control, name: 'gender' });
   const editablePreviewRows = useMemo(() => (
     [
       fullName ? { key: 'preview_name', label: 'Name', value: fullName } : null,
@@ -354,6 +359,7 @@ export default function ProfileScreen() {
 
   const handleModalClose = useCallback(() => {
     setIsBirthdatePickerVisible(false);
+    setActiveProfilePicker('');
     if (mode === 'edit') {
       requestEditModalClose();
       return;
@@ -450,11 +456,13 @@ export default function ProfileScreen() {
 
   useEffect(() => {
     if (mode === 'edit') {
+      setActiveProfilePicker('');
       profileForm.reset(defaultValues);
     }
 
     if (mode === 'password') {
       setIsBirthdatePickerVisible(false);
+      setActiveProfilePicker('');
       passwordForm.reset({
         currentPassword: '',
         newPassword: '',
@@ -464,6 +472,7 @@ export default function ProfileScreen() {
 
     if (mode === 'view') {
       setIsBirthdatePickerVisible(false);
+      setActiveProfilePicker('');
     }
   }, [defaultValues, mode, passwordForm, profileForm]);
 
@@ -607,104 +616,158 @@ export default function ProfileScreen() {
                         </View>
                       </View>
 
-                      {profileFieldConfig.map((field) => (
-                        <Controller
-                          key={field.formKey}
-                          control={profileForm.control}
-                          name={field.formKey}
-                          render={({ field: controllerField, fieldState }) => {
-                            if (field.formKey === 'birthdate' && Platform.OS !== 'web') {
-                              const fallbackDate = parseDateValue(controllerField.value) || getMaximumBirthdate();
+                      {profileFieldConfig.map((field) => {
+                        if (field.formKey === 'street') {
+                          return (
+                            <SignupAddressSection
+                              key="profile-address-section"
+                              control={profileForm.control}
+                              errors={profileErrors}
+                              setValue={profileForm.setValue}
+                              showHeader={false}
+                              showHelperText={false}
+                              showTopBorder={false}
+                            />
+                          );
+                        }
+
+                        if (['barangay', 'region', 'city', 'province', 'country'].includes(field.formKey)) {
+                          return null;
+                        }
+
+                        return (
+                          <Controller
+                            key={field.formKey}
+                            control={profileForm.control}
+                            name={field.formKey}
+                            render={({ field: controllerField, fieldState }) => {
+                              if (field.formKey === 'birthdate' && Platform.OS !== 'web') {
+                                const fallbackDate = parseDateValue(controllerField.value) || getMaximumBirthdate();
+
+                                return (
+                                  <View style={styles.birthdateFieldWrap}>
+                                    <Text style={[
+                                      styles.birthdateFieldLabel,
+                                      fieldState.error ? styles.birthdateFieldLabelError : null,
+                                    ]}>
+                                      {field.label}
+                                    </Text>
+                                    <Pressable
+                                      onPress={async () => {
+                                        await Haptics.selectionAsync();
+                                        setIsBirthdatePickerVisible(true);
+                                      }}
+                                      style={[
+                                        styles.birthdateFieldShell,
+                                        fieldState.error ? styles.birthdateFieldShellError : null,
+                                      ]}
+                                    >
+                                      <Text style={[
+                                        styles.birthdateFieldValue,
+                                        !controllerField.value ? styles.birthdateFieldPlaceholder : null,
+                                      ]}>
+                                        {controllerField.value || field.placeholder}
+                                      </Text>
+                                      <AppIcon name="appointment" state={fieldState.error ? 'danger' : 'muted'} />
+                                    </Pressable>
+
+                                    {isBirthdatePickerVisible ? (
+                                      <View style={styles.birthdatePickerCard}>
+                                        <DateTimePicker
+                                          value={fallbackDate}
+                                          mode="date"
+                                          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                                          maximumDate={getMaximumBirthdate()}
+                                          onChange={(event, selectedDate) => {
+                                            if (Platform.OS === 'android') {
+                                              setIsBirthdatePickerVisible(false);
+                                            }
+
+                                            if (event.type === 'dismissed' || !selectedDate) {
+                                              return;
+                                            }
+
+                                            controllerField.onChange(formatDateValue(selectedDate));
+                                          }}
+                                        />
+
+                                        {Platform.OS === 'ios' ? (
+                                          <View style={styles.birthdatePickerActions}>
+                                            <AppTextLink
+                                              title="Cancel"
+                                              variant="muted"
+                                              onPress={() => setIsBirthdatePickerVisible(false)}
+                                            />
+                                            <AppTextLink
+                                              title="Done"
+                                              onPress={() => setIsBirthdatePickerVisible(false)}
+                                            />
+                                          </View>
+                                        ) : null}
+                                      </View>
+                                    ) : null}
+
+                                    {fieldState.error ? (
+                                      <Text style={styles.birthdateFieldError}>{fieldState.error.message}</Text>
+                                    ) : field.helperText ? (
+                                      <Text style={styles.birthdateFieldHelper}>{field.helperText}</Text>
+                                    ) : null}
+                                  </View>
+                                );
+                              }
+
+                              if (field.formKey === 'gender') {
+                                return (
+                                  <>
+                                    <AddressSelectField
+                                      label={field.label}
+                                      value={watchedGender}
+                                      placeholder={field.placeholder}
+                                      helperText={field.helperText}
+                                      error={fieldState.error?.message}
+                                      onPress={async () => {
+                                        await Haptics.selectionAsync();
+                                        setActiveProfilePicker('gender');
+                                      }}
+                                    />
+
+                                    <AddressOptionSheet
+                                      visible={activeProfilePicker === 'gender'}
+                                      title="Select Gender"
+                                      placeholder="Search gender"
+                                      options={profileGenderOptions}
+                                      selectedValue={watchedGender}
+                                      onClose={() => setActiveProfilePicker('')}
+                                      onSelect={(option) => {
+                                        profileForm.setValue('gender', option.value, {
+                                          shouldDirty: true,
+                                          shouldTouch: true,
+                                          shouldValidate: true,
+                                        });
+                                      }}
+                                    />
+                                  </>
+                                );
+                              }
 
                               return (
-                                <View style={styles.birthdateFieldWrap}>
-                                  <Text style={[
-                                    styles.birthdateFieldLabel,
-                                    fieldState.error ? styles.birthdateFieldLabelError : null,
-                                  ]}>
-                                    {field.label}
-                                  </Text>
-                                  <Pressable
-                                    onPress={async () => {
-                                      await Haptics.selectionAsync();
-                                      setIsBirthdatePickerVisible(true);
-                                    }}
-                                    style={[
-                                      styles.birthdateFieldShell,
-                                      fieldState.error ? styles.birthdateFieldShellError : null,
-                                    ]}
-                                  >
-                                    <Text style={[
-                                      styles.birthdateFieldValue,
-                                      !controllerField.value ? styles.birthdateFieldPlaceholder : null,
-                                    ]}>
-                                      {controllerField.value || field.placeholder}
-                                    </Text>
-                                    <AppIcon name="appointment" state={fieldState.error ? 'danger' : 'muted'} />
-                                  </Pressable>
-
-                                  {isBirthdatePickerVisible ? (
-                                    <View style={styles.birthdatePickerCard}>
-                                      <DateTimePicker
-                                        value={fallbackDate}
-                                        mode="date"
-                                        display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                                        maximumDate={getMaximumBirthdate()}
-                                        onChange={(event, selectedDate) => {
-                                          if (Platform.OS === 'android') {
-                                            setIsBirthdatePickerVisible(false);
-                                          }
-
-                                          if (event.type === 'dismissed' || !selectedDate) {
-                                            return;
-                                          }
-
-                                          controllerField.onChange(formatDateValue(selectedDate));
-                                        }}
-                                      />
-
-                                      {Platform.OS === 'ios' ? (
-                                        <View style={styles.birthdatePickerActions}>
-                                          <AppTextLink
-                                            title="Cancel"
-                                            variant="muted"
-                                            onPress={() => setIsBirthdatePickerVisible(false)}
-                                          />
-                                          <AppTextLink
-                                            title="Done"
-                                            onPress={() => setIsBirthdatePickerVisible(false)}
-                                          />
-                                        </View>
-                                      ) : null}
-                                    </View>
-                                  ) : null}
-
-                                  {fieldState.error ? (
-                                    <Text style={styles.birthdateFieldError}>{fieldState.error.message}</Text>
-                                  ) : field.helperText ? (
-                                    <Text style={styles.birthdateFieldHelper}>{field.helperText}</Text>
-                                  ) : null}
-                                </View>
+                                <AppInput
+                                  label={field.label}
+                                  placeholder={field.placeholder}
+                                  keyboardType={field.keyboardType}
+                                  variant="filled"
+                                  helperText={field.helperText}
+                                  disabled={field.editable === false}
+                                  value={controllerField.value}
+                                  onChangeText={controllerField.onChange}
+                                  onBlur={controllerField.onBlur}
+                                  error={fieldState.error?.message}
+                                />
                               );
-                            }
-
-                            return (
-                              <AppInput
-                                label={field.label}
-                                placeholder={field.placeholder}
-                                keyboardType={field.keyboardType}
-                                variant="filled"
-                                helperText={field.helperText}
-                                disabled={field.editable === false}
-                                value={controllerField.value}
-                                onChangeText={controllerField.onChange}
-                                onBlur={controllerField.onBlur}
-                                error={fieldState.error?.message}
-                              />
-                            );
-                          }}
-                        />
-                      ))}
+                            }}
+                          />
+                        );
+                      })}
 
                       <View style={styles.formActions}>
                         <AppButton

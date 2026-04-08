@@ -1,8 +1,10 @@
 import { z } from 'zod';
 import { birthdateField, nameField, passwordField, phoneField } from '../auth/validators/auth.schema';
 import { isPasswordReuse, reusedPasswordMessage } from '../../utils/passwordRules';
+import { profileGenderOptions } from '../../constants/profile';
 
 export const optionalTextField = z.string().max(80, 'Too long').optional().or(z.literal(''));
+const profileGenderValues = profileGenderOptions.map((option) => option.value);
 
 export const profileUpdateSchema = z.object({
   firstName: nameField,
@@ -10,7 +12,9 @@ export const profileUpdateSchema = z.object({
   lastName: nameField,
   suffix: optionalTextField,
   birthdate: birthdateField,
-  gender: z.string().trim().min(1, 'Gender is required').max(50, 'Too long'),
+  gender: z.enum(profileGenderValues, {
+    errorMap: () => ({ message: 'Gender is required' }),
+  }),
   phone: phoneField,
   street: optionalTextField,
   barangay: optionalTextField,

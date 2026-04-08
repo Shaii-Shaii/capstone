@@ -59,7 +59,7 @@ const toSelectOptions = (items = [], codeKey) => (
   }))
 );
 
-function AddressSelectField({
+export function AddressSelectField({
   label,
   value,
   placeholder,
@@ -102,7 +102,7 @@ function AddressSelectField({
   );
 }
 
-function AddressOptionSheet({
+export function AddressOptionSheet({
   visible,
   title,
   placeholder,
@@ -196,7 +196,14 @@ function AddressOptionSheet({
   );
 }
 
-export function SignupAddressSection({ control, errors, setValue, showHeader = true }) {
+export function SignupAddressSection({
+  control,
+  errors,
+  setValue,
+  showHeader = true,
+  showHelperText = true,
+  showTopBorder = true,
+}) {
   const { width } = useWindowDimensions();
   const isWide = width >= 390;
   const [activePicker, setActivePicker] = useState('');
@@ -280,15 +287,15 @@ export function SignupAddressSection({ control, errors, setValue, showHeader = t
   };
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, !showTopBorder ? styles.containerEmbedded : null]}>
       {showHeader ? (
         <>
           <Text style={styles.sectionTitle}>Address Details</Text>
-          <Text style={styles.sectionBody}>{helperText}</Text>
+          {showHelperText ? <Text style={styles.sectionBody}>{helperText}</Text> : null}
         </>
-      ) : (
+      ) : showHelperText ? (
         <Text style={styles.compactHelper}>{helperText}</Text>
-      )}
+      ) : null}
 
       <Controller
         control={control}
@@ -411,6 +418,11 @@ const styles = StyleSheet.create({
     paddingTop: theme.spacing.md,
     borderTopWidth: 1,
     borderTopColor: theme.colors.borderSubtle,
+  },
+  containerEmbedded: {
+    marginTop: 0,
+    paddingTop: 0,
+    borderTopWidth: 0,
   },
   sectionTitle: {
     fontFamily: theme.typography.fontFamilyDisplay,
