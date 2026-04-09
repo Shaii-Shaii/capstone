@@ -2,6 +2,7 @@ import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { theme } from '../../design-system/theme';
 import { appIconMap } from '../../constants/icons';
+import { useAuth } from '../../providers/AuthProvider';
 
 const ICON_STATE_COLORS = {
   default: theme.colors.textPrimary,
@@ -26,9 +27,19 @@ export const AppIcon = ({
   size = 'md',
   state = 'default',
 }) => {
+  const { resolvedTheme } = useAuth();
   const iconName = appIconMap[name] || name || appIconMap.empty;
   const iconSize = ICON_SIZES[size] || ICON_SIZES.md;
-  const iconColor = color || ICON_STATE_COLORS[state] || ICON_STATE_COLORS.default;
+  const themedStateColors = {
+    default: resolvedTheme?.primaryTextColor || ICON_STATE_COLORS.default,
+    muted: resolvedTheme?.secondaryTextColor || ICON_STATE_COLORS.muted,
+    active: resolvedTheme?.primaryColor || ICON_STATE_COLORS.active,
+    disabled: ICON_STATE_COLORS.disabled,
+    success: resolvedTheme?.primaryColor || ICON_STATE_COLORS.success,
+    danger: resolvedTheme?.primaryColor || ICON_STATE_COLORS.danger,
+    inverse: ICON_STATE_COLORS.inverse,
+  };
+  const iconColor = color || themedStateColors[state] || themedStateColors.default;
 
   return <MaterialCommunityIcons name={iconName} size={iconSize} color={iconColor} />;
 };

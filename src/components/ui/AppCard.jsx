@@ -2,6 +2,7 @@ import React from 'react';
 import { View, StyleSheet } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { theme } from '../../design-system/theme';
+import { useAuth } from '../../providers/AuthProvider';
 
 const CARD_VARIANTS = {
   default: {
@@ -57,7 +58,18 @@ export const AppCard = ({
   contentStyle,
   enteringDelay = 0,
 }) => {
+  const { resolvedTheme } = useAuth();
   const config = CARD_VARIANTS[variant] || CARD_VARIANTS.default;
+  const backgroundColor = variant === 'soft'
+    ? theme.colors.surfaceSoft
+    : resolvedTheme?.backgroundColor || config.backgroundColor;
+  const borderColor = resolvedTheme?.secondaryColor || config.borderColor;
+  const gradientColors = config.gradient
+    ? [
+        resolvedTheme?.primaryColor || config.gradient[0],
+        resolvedTheme?.tertiaryColor || resolvedTheme?.secondaryColor || config.gradient[1],
+      ]
+    : null;
   const resolvedPadding =
     padding === 'none'
       ? 0
@@ -73,17 +85,17 @@ export const AppCard = ({
     {
       borderRadius: theme.radius[radius] || theme.radius.lg,
       padding: resolvedPadding,
-      backgroundColor: config.backgroundColor,
-      borderColor: config.borderColor,
+      backgroundColor,
+      borderColor,
     },
     config.shadow,
     style,
   ];
 
-  if (config.gradient) {
+  if (gradientColors) {
     return (
       <View>
-        <LinearGradient colors={config.gradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={cardStyles}>
+        <LinearGradient colors={gradientColors} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={cardStyles}>
           <View style={contentStyle}>{children}</View>
         </LinearGradient>
       </View>

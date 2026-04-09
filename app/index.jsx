@@ -133,6 +133,7 @@ const getPickedMediaPayload = async (asset, fallbackPrefix) => {
 };
 
 function LoadingState() {
+  const { resolvedTheme } = useAuth();
   return (
     <ScreenContainer
       scrollable={false}
@@ -144,7 +145,15 @@ function LoadingState() {
         <View style={styles.logoWrap}>
           <Image source={donivraLogoNoText} style={styles.logo} resizeMode="contain" />
         </View>
-        <Text style={styles.brandName}>Donivra</Text>
+        <Text
+          style={[
+            styles.brandName,
+            resolvedTheme?.primaryTextColor ? { color: resolvedTheme.primaryTextColor } : null,
+            resolvedTheme?.secondaryFontFamily ? { fontFamily: resolvedTheme.secondaryFontFamily } : null,
+          ]}
+        >
+          {resolvedTheme?.brandName || 'Donivra'}
+        </Text>
       </View>
     </ScreenContainer>
   );
@@ -152,6 +161,7 @@ function LoadingState() {
 
 function PublicLanding() {
   const router = useRouter();
+  const { resolvedTheme } = useAuth();
 
   const navigateWithHaptic = async (path) => {
     await Haptics.selectionAsync();
@@ -172,11 +182,33 @@ function PublicLanding() {
             <Image source={donivraLogoNoText} style={styles.logo} resizeMode="contain" />
           </View>
 
-          <Text style={styles.brandName}>Donivra</Text>
+          <Text
+            style={[
+              styles.brandName,
+              resolvedTheme?.primaryTextColor ? { color: resolvedTheme.primaryTextColor } : null,
+              resolvedTheme?.secondaryFontFamily ? { fontFamily: resolvedTheme.secondaryFontFamily } : null,
+            ]}
+          >
+            {resolvedTheme?.brandName || 'Donivra'}
+          </Text>
 
           <View style={styles.copyBlock}>
-            <Text style={styles.heroTitle}>Welcome</Text>
-            <Text style={styles.heroSubtitle}>Sign up or log in to continue.</Text>
+            <Text
+              style={[
+                styles.heroTitle,
+                resolvedTheme?.primaryTextColor ? { color: resolvedTheme.primaryTextColor } : null,
+              ]}
+            >
+              Welcome
+            </Text>
+            <Text
+              style={[
+                styles.heroSubtitle,
+                resolvedTheme?.secondaryTextColor ? { color: resolvedTheme.secondaryTextColor } : null,
+              ]}
+            >
+              {resolvedTheme?.brandTagline || 'Sign up or log in to continue.'}
+            </Text>
           </View>
 
           <View style={styles.actionStack}>

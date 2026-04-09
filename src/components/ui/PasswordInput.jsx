@@ -11,6 +11,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { theme } from '../../design-system/theme';
 import { AppIcon } from './AppIcon';
+import { useAuth } from '../../providers/AuthProvider';
 
 const AnimatedView = Animated.createAnimatedComponent(View);
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
@@ -24,6 +25,7 @@ export const PasswordInput = ({
   style,
   ...props
 }) => {
+  const { resolvedTheme } = useAuth();
   const [isFocused, setIsFocused] = useState(false);
   const [isSecure, setIsSecure] = useState(true);
   const isFilled = variant === 'filled';
@@ -31,14 +33,21 @@ export const PasswordInput = ({
   const statusProgress = useSharedValue(error ? 1 : 0);
   const toggleScale = useSharedValue(1);
   const shakeX = useSharedValue(0);
+  const focusColor = resolvedTheme?.primaryColor || theme.colors.borderFocus;
+  const errorColor = resolvedTheme?.primaryColor || theme.colors.borderError;
+  const primaryTextColor = resolvedTheme?.primaryTextColor || theme.colors.textPrimary;
+  const secondaryTextColor = resolvedTheme?.secondaryTextColor || theme.colors.textSecondary;
+  const mutedTextColor = resolvedTheme?.secondaryTextColor || theme.colors.textMuted;
+  const filledBackgroundColor = resolvedTheme?.backgroundColor || theme.colors.surfaceSoft;
+  const defaultBackgroundColor = resolvedTheme?.backgroundColor || theme.colors.surfaceCard;
 
   const shellStyle = useAnimatedStyle(() => ({
     borderColor: error
-      ? interpolateColor(statusProgress.value, [0, 1], [theme.colors.borderFocus, theme.colors.borderError])
+      ? interpolateColor(statusProgress.value, [0, 1], [focusColor, errorColor])
       : interpolateColor(
           focusProgress.value,
           [0, 1],
-          [isFilled ? theme.colors.transparent : theme.colors.borderSubtle, theme.colors.borderFocus]
+          [isFilled ? theme.colors.transparent : theme.colors.borderSubtle, focusColor]
         ),
     shadowOpacity: focusProgress.value * 0.18,
     transform: [{ translateX: shakeX.value }],
@@ -50,8 +59,8 @@ export const PasswordInput = ({
 
   const labelStyle = useAnimatedStyle(() => ({
     color: error
-      ? theme.colors.textError
-      : interpolateColor(focusProgress.value, [0, 1], [theme.colors.textPrimary, theme.colors.brandPrimary]),
+      ? errorColor
+      : interpolateColor(focusProgress.value, [0, 1], [primaryTextColor, resolvedTheme?.primaryColor || theme.colors.brandPrimary]),
   }));
 
   React.useEffect(() => {
@@ -94,8 +103,8 @@ export const PasswordInput = ({
             backgroundColor: disabled
               ? theme.colors.surfaceDisabled
               : isFilled
-                ? theme.colors.surfaceSoft
-                : theme.colors.surfaceCard,
+                ? filledBackgroundColor
+                : defaultBackgroundColor,
           },
           isFocused ? styles.inputFocused : null,
         ]}
@@ -103,9 +112,9 @@ export const PasswordInput = ({
         <TextInput
           style={[
             styles.input,
-            { color: disabled ? theme.colors.textDisabled : theme.colors.textPrimary },
+            { color: disabled ? theme.colors.textDisabled : primaryTextColor },
           ]}
-          placeholderTextColor={theme.colors.textMuted}
+          placeholderTextColor={mutedTextColor}
           secureTextEntry={isSecure}
           editable={!disabled}
           onFocus={(e) => {
@@ -129,7 +138,7 @@ export const PasswordInput = ({
           {error}
         </Animated.Text>
       ) : helperText ? (
-        <Animated.Text style={styles.helperText}>
+        <Animated.Text style={[styles.helperText, { color: secondaryTextColor }]}>
           {helperText}
         </Animated.Text>
       ) : null}

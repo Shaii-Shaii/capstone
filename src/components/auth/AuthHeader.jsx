@@ -35,7 +35,7 @@ export const AuthHeader = ({
   const gradientColors = resolvedTheme
     ? [resolvedTheme.primaryColor || config.colors[0], resolvedTheme.tertiaryColor || resolvedTheme.secondaryColor || config.colors[1]]
     : config.colors;
-  const logoSource = resolvedTheme?.logoIcon ? { uri: resolvedTheme.logoIcon } : donivraLogoNoText;
+  const logoSource = donivraLogoNoText;
   const brandName = resolvedTheme?.brandName || 'Donivra';
   const titleColor = resolvedTheme?.primaryTextColor || theme.colors.textPrimary;
   const subtitleColor = resolvedTheme?.secondaryTextColor || theme.colors.textSecondary;

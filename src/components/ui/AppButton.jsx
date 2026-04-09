@@ -10,6 +10,7 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import { theme } from '../../design-system/theme';
+import { useAuth } from '../../providers/AuthProvider';
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
@@ -87,6 +88,7 @@ export const AppButton = ({
   backgroundColorOverride,
   borderColorOverride,
 }) => {
+  const { resolvedTheme } = useAuth();
   const palette = VARIANTS[variant] || VARIANTS.primary;
   const metrics = SIZES[size] || SIZES.md;
   const isInactive = disabled || loading;
@@ -167,8 +169,8 @@ export const AppButton = ({
       width: fullWidth ? '100%' : undefined,
       backgroundColor: isInactive
         ? theme.colors.actionDisabled
-        : (backgroundColorOverride || palette.backgroundColor),
-      borderColor: isInactive ? theme.colors.borderDisabled : (borderColorOverride || palette.borderColor),
+        : (backgroundColorOverride || (variant === 'primary' ? resolvedTheme?.primaryColor : undefined) || palette.backgroundColor),
+      borderColor: isInactive ? theme.colors.borderDisabled : (borderColorOverride || (variant === 'primary' ? resolvedTheme?.primaryColor : undefined) || palette.borderColor),
     },
     palette.shadow,
     variant === 'ghost' ? styles.ghostButton : null,
@@ -183,7 +185,9 @@ export const AppButton = ({
           style={[
             styles.text,
             {
-              color: isInactive ? theme.colors.textDisabled : (textColorOverride || palette.textColor),
+              color: isInactive
+                ? theme.colors.textDisabled
+                : (textColorOverride || (variant === 'primary' ? theme.colors.textOnBrand : resolvedTheme?.primaryTextColor) || palette.textColor),
               fontSize: metrics.fontSize,
             },
             textStyle,
@@ -211,7 +215,12 @@ export const AppButton = ({
       {variant === 'primary' && !isInactive ? (
         <View>
           <Animated.View pointerEvents="none" style={[styles.successGlow, glowStyle]} />
-          <LinearGradient colors={gradientColors || palette.gradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={shellStyle}>
+          <LinearGradient
+            colors={gradientColors || [resolvedTheme?.primaryColor || palette.gradient[0], resolvedTheme?.tertiaryColor || resolvedTheme?.secondaryColor || palette.gradient[1]]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={shellStyle}
+          >
             {contentNode}
           </LinearGradient>
         </View>

@@ -8,6 +8,7 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import { theme } from '../../design-system/theme';
+import { useAuth } from '../../providers/AuthProvider';
 
 const AnimatedView = Animated.createAnimatedComponent(View);
 
@@ -33,24 +34,33 @@ export const AppInput = ({
   inputStyle,
   ...props
 }) => {
+  const { resolvedTheme } = useAuth();
   const [isFocused, setIsFocused] = useState(false);
   const config = INPUT_VARIANTS[variant] || INPUT_VARIANTS.default;
   const focusProgress = useSharedValue(0);
   const statusProgress = useSharedValue(error ? 1 : 0);
   const shakeX = useSharedValue(0);
+  const focusColor = resolvedTheme?.primaryColor || theme.colors.borderFocus;
+  const errorColor = resolvedTheme?.primaryColor || theme.colors.borderError;
+  const primaryTextColor = resolvedTheme?.primaryTextColor || theme.colors.textPrimary;
+  const secondaryTextColor = resolvedTheme?.secondaryTextColor || theme.colors.textSecondary;
+  const mutedTextColor = resolvedTheme?.secondaryTextColor || theme.colors.textMuted;
+  const backgroundColor = variant === 'filled'
+    ? theme.colors.surfaceSoft
+    : resolvedTheme?.backgroundColor || config.backgroundColor;
 
   const shellStyle = useAnimatedStyle(() => ({
     borderColor: error
-      ? interpolateColor(statusProgress.value, [0, 1], [theme.colors.borderFocus, theme.colors.borderError])
-      : interpolateColor(focusProgress.value, [0, 1], [config.borderColor, theme.colors.borderFocus]),
+      ? interpolateColor(statusProgress.value, [0, 1], [focusColor, errorColor])
+      : interpolateColor(focusProgress.value, [0, 1], [config.borderColor, focusColor]),
     shadowOpacity: focusProgress.value * 0.18,
     transform: [{ translateX: shakeX.value }, { scale: 1 - focusProgress.value * 0.002 }],
   }));
 
   const labelStyle = useAnimatedStyle(() => ({
     color: error
-      ? theme.colors.textError
-      : interpolateColor(focusProgress.value, [0, 1], [theme.colors.textPrimary, theme.colors.brandPrimary]),
+      ? errorColor
+      : interpolateColor(focusProgress.value, [0, 1], [primaryTextColor, resolvedTheme?.primaryColor || theme.colors.brandPrimary]),
     transform: [{ translateY: focusProgress.value * -1 }],
   }));
 
@@ -83,7 +93,7 @@ export const AppInput = ({
           styles.inputShell,
           shellStyle,
           {
-            backgroundColor: disabled ? theme.colors.surfaceDisabled : config.backgroundColor,
+            backgroundColor: disabled ? theme.colors.surfaceDisabled : backgroundColor,
           },
           disabled && styles.disabledShell,
           isFocused && styles.focusedShell,
@@ -93,11 +103,11 @@ export const AppInput = ({
           style={[
             styles.input,
             {
-              color: disabled ? theme.colors.textDisabled : theme.colors.textPrimary,
+              color: disabled ? theme.colors.textDisabled : primaryTextColor,
             },
             inputStyle,
           ]}
-          placeholderTextColor={theme.colors.textMuted}
+          placeholderTextColor={mutedTextColor}
           editable={!disabled}
           onFocus={(e) => {
             setIsFocused(true);
@@ -115,7 +125,7 @@ export const AppInput = ({
           {error}
         </Animated.Text>
       ) : helperText ? (
-        <Animated.Text style={styles.helperText}>
+        <Animated.Text style={[styles.helperText, { color: secondaryTextColor }]}>
           {helperText}
         </Animated.Text>
       ) : null}

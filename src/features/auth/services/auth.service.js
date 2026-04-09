@@ -330,7 +330,7 @@ export const register = async (email, password, additionalData = {}) => {
   }
 };
 
-export const getResolvedLoginTheme = async () => {
+export const getResolvedSystemTheme = async () => {
   try {
     logAppEvent('auth.theme', 'Resolving login theme from database settings.', {
       tables: ['UI_Settings', 'Theme_Presets'],
@@ -382,6 +382,8 @@ export const getResolvedLoginTheme = async () => {
     };
   }
 };
+
+export const getResolvedLoginTheme = getResolvedSystemTheme;
 
 export const verifyEmail = async (email, code) => {
   try {

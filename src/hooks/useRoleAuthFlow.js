@@ -1,5 +1,5 @@
 import { Alert } from 'react-native';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { useAuthActions } from '../features/auth/hooks/useAuthActions';
@@ -8,33 +8,16 @@ import {
   authMessages,
   roleAuthConfig,
 } from '../constants/auth';
-import * as AuthService from '../features/auth/services/auth.service';
+import { useAuth } from '../providers/AuthProvider';
 import { savePendingSignupDraft, syncPendingSignupDraft } from '../features/auth/services/signupDraft.service';
 
 export const useRoleAuthFlow = (role) => {
   const router = useRouter();
   const { login, register, logout, isLoading, clearError } = useAuthActions();
+  const { resolvedTheme } = useAuth();
   const config = roleAuthConfig[role] || roleAuthConfig.access;
   const expectedRole = role === 'donor' || role === 'patient' ? role : undefined;
   const [loginError, setLoginError] = useState('');
-  const [resolvedTheme, setResolvedTheme] = useState(loginThemeFallback);
-
-  useEffect(() => {
-    let mounted = true;
-
-    const loadTheme = async () => {
-      const result = await AuthService.getResolvedLoginTheme();
-      if (mounted && result.data) {
-        setResolvedTheme(result.data);
-      }
-    };
-
-    loadTheme();
-
-    return () => {
-      mounted = false;
-    };
-  }, []);
 
   const clearLoginError = () => {
     setLoginError('');
@@ -120,7 +103,7 @@ export const useRoleAuthFlow = (role) => {
     config,
     loginError,
     clearLoginError,
-    resolvedTheme,
+    resolvedTheme: resolvedTheme || loginThemeFallback,
     handleSignup,
     handleLogin,
   };

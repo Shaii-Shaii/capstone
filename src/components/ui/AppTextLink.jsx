@@ -1,6 +1,7 @@
 import React from 'react';
 import { Pressable, Text, StyleSheet } from 'react-native';
 import { theme } from '../../design-system/theme';
+import { useAuth } from '../../providers/AuthProvider';
 
 const LINK_VARIANTS = {
   primary: {
@@ -18,7 +19,22 @@ const LINK_VARIANTS = {
 };
 
 export const AppTextLink = ({ title, onPress, variant = 'primary', disabled = false, style, textStyle }) => {
+  const { resolvedTheme } = useAuth();
   const palette = LINK_VARIANTS[variant] || LINK_VARIANTS.primary;
+  const resolvedPalette = {
+    primary: {
+      color: resolvedTheme?.primaryColor || palette.color,
+      pressedColor: resolvedTheme?.tertiaryTextColor || palette.pressedColor,
+    },
+    muted: {
+      color: resolvedTheme?.secondaryTextColor || palette.color,
+      pressedColor: resolvedTheme?.primaryTextColor || palette.pressedColor,
+    },
+    danger: {
+      color: resolvedTheme?.primaryColor || palette.color,
+      pressedColor: resolvedTheme?.tertiaryColor || palette.pressedColor,
+    },
+  }[variant] || palette;
 
   return (
     <Pressable
@@ -38,8 +54,8 @@ export const AppTextLink = ({ title, onPress, variant = 'primary', disabled = fa
               color: disabled
                 ? theme.colors.textDisabled
                 : pressed
-                  ? palette.pressedColor
-                  : palette.color,
+                  ? resolvedPalette.pressedColor
+                  : resolvedPalette.color,
             },
             textStyle,
           ]}

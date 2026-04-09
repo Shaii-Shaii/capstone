@@ -3,6 +3,7 @@ import { View, StyleSheet, Platform, ScrollView, KeyboardAvoidingView, useWindow
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { theme } from '../../design-system/theme';
+import { useAuth } from '../../providers/AuthProvider';
 
 export const ScreenContainer = ({
   children,
@@ -14,6 +15,7 @@ export const ScreenContainer = ({
   heroColors = [theme.colors.heroFrom, theme.colors.heroTo],
   authHeroImageUri = '',
 }) => {
+  const { resolvedTheme } = useAuth();
   const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
   const isAuth = variant === 'auth';
@@ -36,6 +38,12 @@ export const ScreenContainer = ({
   const dashboardHeroHeight = isShortScreen
     ? theme.layout.dashboardHeroMinHeightCompact
     : theme.layout.dashboardHeroMinHeight;
+  const backgroundCanvas = resolvedTheme?.backgroundColor || theme.colors.backgroundCanvas;
+  const authBaseBackground = resolvedTheme?.backgroundColor || theme.colors.backgroundCanvas;
+  const dashboardBaseBackground = resolvedTheme?.backgroundColor || theme.colors.backgroundSecondary;
+  const resolvedHeroColors = isAuth && resolvedTheme
+    ? [resolvedTheme.primaryColor || heroColors[0], resolvedTheme.tertiaryColor || resolvedTheme.secondaryColor || heroColors[1]]
+    : heroColors;
 
   const content = (
     <View
@@ -86,12 +94,18 @@ export const ScreenContainer = ({
   );
 
   const shell = (
-    <View style={[styles.container, isDashboard ? styles.dashboardContainer : null]}>
+    <View
+      style={[
+        styles.container,
+        isDashboard ? styles.dashboardContainer : null,
+        { backgroundColor: isDashboard ? dashboardBaseBackground : backgroundCanvas },
+      ]}
+    >
       {isAuth ? (
         <>
           <View style={[styles.authHero, { height: authHeroHeight }]}>
             <LinearGradient
-              colors={heroColors}
+              colors={resolvedHeroColors}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 1 }}
               style={styles.authHeroGradient}
@@ -102,7 +116,7 @@ export const ScreenContainer = ({
               </ImageBackground>
             ) : null}
           </View>
-          <View style={[styles.authBase, { top: authHeroHeight - theme.spacing.giant }]} />
+          <View style={[styles.authBase, { top: authHeroHeight - theme.spacing.giant, backgroundColor: authBaseBackground }]} />
           {keyboardWrapper}
         </>
       ) : (
@@ -110,12 +124,15 @@ export const ScreenContainer = ({
           {isDashboard ? (
             <>
               <LinearGradient
-                colors={[theme.colors.dashboardShellFrom, theme.colors.dashboardShellTo]}
+                colors={[
+                  resolvedTheme?.primaryColor || theme.colors.dashboardShellFrom,
+                  resolvedTheme?.tertiaryColor || resolvedTheme?.secondaryColor || theme.colors.dashboardShellTo,
+                ]}
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 1 }}
                 style={[styles.dashboardHero, { height: dashboardHeroHeight }]}
               />
-              <View style={[styles.dashboardBase, { top: dashboardHeroHeight - theme.spacing.lg }]} />
+              <View style={[styles.dashboardBase, { top: dashboardHeroHeight - theme.spacing.lg, backgroundColor: dashboardBaseBackground }]} />
             </>
           ) : null}
           {keyboardWrapper}
@@ -125,10 +142,10 @@ export const ScreenContainer = ({
   );
 
   if (!safeArea) {
-    return shell;
+    return <View style={[styles.safeArea, { backgroundColor: backgroundCanvas }]}>{shell}</View>;
   }
 
-  return <SafeAreaView style={styles.safeArea}>{shell}</SafeAreaView>;
+  return <SafeAreaView style={[styles.safeArea, { backgroundColor: backgroundCanvas }]}>{shell}</SafeAreaView>;
 };
 
 const styles = StyleSheet.create({
