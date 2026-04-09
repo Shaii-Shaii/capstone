@@ -4,10 +4,12 @@ import {
   recordNotifications,
 } from './notification.service';
 import {
+  hairDonationModeOptions,
   hairSubmissionImageTypes,
   hairSubmissionStatuses,
   hairSubmissionStorageBucket,
 } from './hairSubmission.constants';
+import { normalizeHairAnalyzerAnswers } from './hairSubmission.schema';
 import { logAppEvent, writeAuditLog } from '../utils/appErrors';
 
 const buildSubmissionCode = () => `HS-${Date.now().toString(36).toUpperCase()}`;
@@ -50,7 +52,7 @@ const uploadSelectedImages = async ({ userId, submissionId, detailId, photos }) 
     uploadedRows.push({
       submission_detail_id: detailId,
       file_path: filePath,
-      image_type: hairSubmissionImageTypes.donorUpload,
+      image_type: photo.viewKey || hairSubmissionImageTypes.donorUpload,
     });
   }
 
@@ -68,11 +70,43 @@ const buildRecommendationRows = ({ submissionId, recommendations = [] }) => (
     }))
 );
 
+const resolveSelectedDonationMode = (value = '') => (
+  hairDonationModeOptions.find((item) => item.value === value) || null
+);
+
+const buildLogisticsRowPayload = ({ submissionId, donationMode, logisticsSettings }) => {
+  if (!donationMode?.logistics_type) return null;
+
+  const notes = [];
+  if (donationMode.value === 'shipping') {
+    notes.push('Donor selected logistics / shipping after AI screening.');
+  }
+  if (donationMode.value === 'onsite_delivery') {
+    notes.push('Donor selected onsite delivery after AI screening.');
+  }
+  if (donationMode.value === 'pickup') {
+    notes.push('Donor requested pickup after AI screening.');
+    if (logisticsSettings?.pickup_notes) {
+      notes.push(logisticsSettings.pickup_notes);
+    }
+  }
+
+  return {
+    submission_id: submissionId,
+    logistics_type: donationMode.logistics_type,
+    shipment_status: donationMode.shipment_status || null,
+    notes: notes.filter(Boolean).join(' '),
+  };
+};
+
 export const saveHairSubmissionFlow = async ({
   userId,
   photos,
   aiAnalysis,
   confirmedValues,
+  questionnaireAnswers,
+  donationModeValue = '',
+  logisticsSettings = null,
 }) => {
   try {
     if (!userId) throw new Error('Your session is not ready.');
@@ -84,6 +118,7 @@ export const saveHairSubmissionFlow = async ({
       photoCount: photos.length,
       hasAnalysis: Boolean(aiAnalysis),
       analysisKeys: aiAnalysis ? Object.keys(aiAnalysis) : [],
+      donationModeValue,
     });
 
     const normalizedEstimatedLength = aiAnalysis?.estimated_length != null
@@ -92,12 +127,20 @@ export const saveHairSubmissionFlow = async ({
     const normalizedConfidenceScore = aiAnalysis?.confidence_score != null
       ? Number(aiAnalysis.confidence_score)
       : null;
+    const normalizedAnswers = normalizeHairAnalyzerAnswers(questionnaireAnswers);
+    const normalizedQuestionnaire = normalizedAnswers.questionnaire_answers || {};
+    const selectedDonationMode = resolveSelectedDonationMode(donationModeValue);
+    const hasTreatmentHistory = normalizedQuestionnaire.has_treatment_history === 'yes';
+    const colorStatus = normalizedQuestionnaire.color_status || '';
 
     const { data: submission, error: submissionError } = await HairSubmissionAPI.createHairSubmission({
       user_id: userId,
       submission_code: buildSubmissionCode(),
       bundle_quantity: 1,
       donation_source: 'mobile_app',
+      delivery_method: selectedDonationMode?.delivery_method
+        || (normalizedQuestionnaire.screening_intent === 'checking_eligibility_first' ? 'eligibility_check' : null),
+      pickup_request: selectedDonationMode?.pickup_request ?? false,
       status: hairSubmissionStatuses.submission.submitted,
       donor_notes: confirmedValues.detailNotes || null,
     });
@@ -115,9 +158,16 @@ export const saveHairSubmissionFlow = async ({
       submission_id: submission.submission_id,
       bundle_number: 1,
       declared_length: Number(confirmedValues.declaredLength),
+      declared_color: colorStatus && colorStatus !== 'no' ? colorStatus : null,
       declared_texture: confirmedValues.declaredTexture,
       declared_density: confirmedValues.declaredDensity,
       declared_condition: confirmedValues.declaredCondition,
+      is_chemically_treated: hasTreatmentHistory,
+      is_colored: ['colored', 'both'].includes(colorStatus),
+      is_bleached: ['bleached', 'both'].includes(colorStatus),
+      is_rebonded: Array.isArray(normalizedQuestionnaire.chemical_treatments)
+        ? normalizedQuestionnaire.chemical_treatments.includes('rebonded')
+        : false,
       detail_notes: confirmedValues.detailNotes || null,
       status: hairSubmissionStatuses.detail.pending,
     });
@@ -150,6 +200,26 @@ export const saveHairSubmissionFlow = async ({
       detailId: detail?.submission_detail_id || null,
       imageRowCount: imageRows.length,
     });
+
+    const logisticsPayload = buildLogisticsRowPayload({
+      submissionId: submission.submission_id,
+      donationMode: selectedDonationMode,
+      logisticsSettings,
+    });
+
+    if (logisticsPayload) {
+      const { error: logisticsError } = await HairSubmissionAPI.createHairSubmissionLogistics(logisticsPayload);
+
+      if (logisticsError) {
+        throw new Error(logisticsError.message || 'Unable to save the selected donation logistics path.');
+      }
+
+      logAppEvent('hair_submission.save', 'Hair submission logistics row created.', {
+        userId,
+        submissionId: submission?.submission_id || null,
+        logisticsType: logisticsPayload.logistics_type,
+      });
+    }
 
     const { data: screening, error: screeningError } = await HairSubmissionAPI.createAiScreening({
       submission_id: submission.submission_id,
@@ -273,9 +343,17 @@ export const getHairAnalyzerContext = async (userId) => {
     const [
       { data: donationRequirement, error: donationRequirementError },
       { data: latestSubmission, error: latestSubmissionError },
+      { data: logisticsSettings, error: logisticsSettingsError },
+      { data: upcomingHaircutSchedules, error: haircutSchedulesError },
+      { data: latestHaircutReservation, error: haircutReservationError },
+      { data: latestCertificate, error: latestCertificateError },
     ] = await Promise.all([
       HairSubmissionAPI.fetchLatestDonationRequirement(),
       HairSubmissionAPI.fetchLatestHairSubmissionByUserId(userId),
+      HairSubmissionAPI.fetchLatestLogisticsSettings(),
+      HairSubmissionAPI.fetchUpcomingHaircutSchedules(),
+      HairSubmissionAPI.fetchLatestHaircutReservationByUserId(userId),
+      HairSubmissionAPI.fetchLatestDonationCertificateByUserId(userId),
     ]);
 
     if (donationRequirementError) {
@@ -284,6 +362,18 @@ export const getHairAnalyzerContext = async (userId) => {
 
     if (latestSubmissionError) {
       throw new Error(latestSubmissionError.message || 'Unable to load your latest donation submission.');
+    }
+    if (logisticsSettingsError) {
+      throw new Error(logisticsSettingsError.message || 'Unable to load the logistics settings.');
+    }
+    if (haircutSchedulesError) {
+      throw new Error(haircutSchedulesError.message || 'Unable to load haircut schedules.');
+    }
+    if (haircutReservationError) {
+      throw new Error(haircutReservationError.message || 'Unable to load your haircut reservation status.');
+    }
+    if (latestCertificateError) {
+      throw new Error(latestCertificateError.message || 'Unable to load your certificate status.');
     }
 
     const { data: latestSubmissionDetail, error: latestDetailError } = latestSubmission?.submission_id
@@ -299,10 +389,18 @@ export const getHairAnalyzerContext = async (userId) => {
       hasDonationRequirement: Boolean(donationRequirement?.donation_requirement_id),
       latestSubmissionId: latestSubmission?.submission_id || null,
       latestSubmissionDetailId: latestSubmissionDetail?.submission_detail_id || null,
+      pickupEnabled: logisticsSettings?.is_pickup_enabled ?? null,
+      haircutScheduleCount: Array.isArray(upcomingHaircutSchedules) ? upcomingHaircutSchedules.length : 0,
+      latestReservationId: latestHaircutReservation?.reservation_id || null,
+      latestCertificateId: latestCertificate?.certificate_id || null,
     });
 
     return {
       donationRequirement,
+      logisticsSettings,
+      upcomingHaircutSchedules,
+      latestHaircutReservation,
+      latestCertificate,
       latestSubmission,
       latestSubmissionDetail,
       error: null,
@@ -310,9 +408,15 @@ export const getHairAnalyzerContext = async (userId) => {
   } catch (error) {
     return {
       donationRequirement: null,
+      logisticsSettings: null,
+      upcomingHaircutSchedules: [],
+      latestHaircutReservation: null,
+      latestCertificate: null,
       latestSubmission: null,
       latestSubmissionDetail: null,
       error: error.message || 'Unable to load the hair analyzer context.',
     };
   }
 };
+
+export const getHairDonationModuleContext = getHairAnalyzerContext;

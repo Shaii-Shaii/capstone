@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import * as ImagePicker from 'expo-image-picker';
 import { analyzeHairPhotos } from '../features/hairAnalysis.service';
-import { getHairAnalyzerContext, saveHairSubmissionFlow } from '../features/hairSubmission.service';
+import { getHairDonationModuleContext, saveHairSubmissionFlow } from '../features/hairSubmission.service';
 import { hairAnalysisRequiredViews } from '../features/hairSubmission.constants';
 import { logAppEvent } from '../utils/appErrors';
 
@@ -88,7 +88,12 @@ const mapAnalysisError = (message = '') => {
     );
   }
 
-  if (normalized.includes('top (scalp)') || normalized.includes('front') || normalized.includes('side') || normalized.includes('back')) {
+  if (
+    normalized.includes('front view photo')
+    || normalized.includes('back view photo')
+    || normalized.includes('hair ends close-up')
+    || normalized.includes('side view photo')
+  ) {
     return createErrorState(
       'More Hair Views Needed',
       message
@@ -189,6 +194,10 @@ export const useDonorHairSubmission = ({ userId }) => {
   const [analysis, setAnalysis] = useState(null);
   const [analyzerContext, setAnalyzerContext] = useState({
     donationRequirement: null,
+    logisticsSettings: null,
+    upcomingHaircutSchedules: [],
+    latestHaircutReservation: null,
+    latestCertificate: null,
     latestSubmission: null,
     latestSubmissionDetail: null,
   });
@@ -215,7 +224,7 @@ export const useDonorHairSubmission = ({ userId }) => {
     if (analysis) return 'Review AI result';
     if (hasCompletePhotoSet) return 'Ready for AI analysis';
     if (photos.length) return `${MAX_PHOTO_COUNT - photos.length} more view${MAX_PHOTO_COUNT - photos.length === 1 ? '' : 's'} needed`;
-    return 'Analyze hair';
+    return 'Ready to start screening';
   }, [analysis, hasCompletePhotoSet, isAnalyzing, isSaving, photos.length]);
 
   useEffect(() => {
@@ -223,11 +232,15 @@ export const useDonorHairSubmission = ({ userId }) => {
 
     const loadContext = async () => {
       setIsLoadingContext(true);
-      const result = await getHairAnalyzerContext(userId);
+      const result = await getHairDonationModuleContext(userId);
       setIsLoadingContext(false);
 
       setAnalyzerContext({
         donationRequirement: result.donationRequirement,
+        logisticsSettings: result.logisticsSettings,
+        upcomingHaircutSchedules: result.upcomingHaircutSchedules || [],
+        latestHaircutReservation: result.latestHaircutReservation,
+        latestCertificate: result.latestCertificate,
         latestSubmission: result.latestSubmission,
         latestSubmissionDetail: result.latestSubmissionDetail,
       });
@@ -235,6 +248,8 @@ export const useDonorHairSubmission = ({ userId }) => {
       logAppEvent('donor_hair_submission.context', 'Hair analyzer context loaded.', {
         userId,
         hasDonationRequirement: Boolean(result.donationRequirement?.donation_requirement_id),
+        pickupEnabled: result.logisticsSettings?.is_pickup_enabled ?? null,
+        haircutScheduleCount: Array.isArray(result.upcomingHaircutSchedules) ? result.upcomingHaircutSchedules.length : 0,
         latestSubmissionId: result.latestSubmission?.submission_id || null,
         latestSubmissionDetailId: result.latestSubmissionDetail?.submission_detail_id || null,
         hasError: Boolean(result.error),
@@ -247,6 +262,7 @@ export const useDonorHairSubmission = ({ userId }) => {
   const runAnalysis = async ({
     sourcePhotos = photos,
     questionnaireAnswers,
+    complianceContext = null,
   } = {}) => {
     if (sourcePhotos.length < MAX_PHOTO_COUNT) {
       const missingViews = hairAnalysisRequiredViews.slice(sourcePhotos.length).map((view) => view.label).join(', ');
@@ -278,6 +294,7 @@ export const useDonorHairSubmission = ({ userId }) => {
     const result = await analyzeHairPhotos({
       images: sourcePhotos,
       questionnaireAnswers,
+      complianceContext,
       donationRequirementContext: analyzerContext.donationRequirement,
       submissionContext,
     });
@@ -293,7 +310,7 @@ export const useDonorHairSubmission = ({ userId }) => {
     setAnalysis(result.analysis);
     logAppEvent('donor_hair_submission.analysis', 'Hair analysis ready for rendering.', {
       userId,
-      concernType: questionnaireAnswers?.losingHair === 'yes' ? 'hair_loss' : 'donation_eligibility',
+      screeningIntent: questionnaireAnswers?.screeningIntent || null,
       analysisKeys: result.analysis ? Object.keys(result.analysis) : [],
       renderKeys: [
         'estimated_length',
@@ -482,11 +499,11 @@ export const useDonorHairSubmission = ({ userId }) => {
     setSuccessMessage('');
   };
 
-  const analyzePhotos = async (questionnaireAnswers) => (
-    await runAnalysis({ sourcePhotos: photos, questionnaireAnswers })
+  const analyzePhotos = async ({ questionnaireAnswers, complianceContext } = {}) => (
+    await runAnalysis({ sourcePhotos: photos, questionnaireAnswers, complianceContext })
   );
 
-  const submitSubmission = async (confirmedValues) => {
+  const submitSubmission = async (confirmedValues, options = {}) => {
     setIsSaving(true);
     setError(null);
     setSuccessMessage('');
@@ -496,6 +513,9 @@ export const useDonorHairSubmission = ({ userId }) => {
       photos,
       aiAnalysis: analysis,
       confirmedValues,
+      questionnaireAnswers: options.questionnaireAnswers,
+      donationModeValue: options.donationModeValue || '',
+      logisticsSettings: analyzerContext.logisticsSettings,
     });
 
     setIsSaving(false);
@@ -525,6 +545,10 @@ export const useDonorHairSubmission = ({ userId }) => {
     requiredViews: hairAnalysisRequiredViews,
     analysis,
     donationRequirement: analyzerContext.donationRequirement,
+    logisticsSettings: analyzerContext.logisticsSettings,
+    upcomingHaircutSchedules: analyzerContext.upcomingHaircutSchedules,
+    latestHaircutReservation: analyzerContext.latestHaircutReservation,
+    latestCertificate: analyzerContext.latestCertificate,
     latestSubmission: analyzerContext.latestSubmission,
     latestSubmissionDetail: analyzerContext.latestSubmissionDetail,
     error,

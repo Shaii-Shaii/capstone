@@ -12,6 +12,10 @@ const qaAssessmentsTable = 'QA_Assessments';
 const aiScreeningsTable = 'AI_Screenings';
 const donorRecommendationsTable = 'Donor_Recommendations';
 const donationRequirementsTable = 'Donation_Requirements';
+const logisticsSettingsTable = 'Logistics_Settings';
+const haircutSchedulesTable = 'Haircut_Schedules';
+const haircutReservationsTable = 'Haircut_Reservations';
+const donationCertificatesTable = 'Donation_Certificates';
 
 const hairSubmissionSelect = `
   submission_id:Submission_ID,
@@ -127,6 +131,59 @@ const trackingEntrySelect = `
   description:Description,
   changed_by:Changed_By,
   updated_at:Updated_At
+`;
+
+const logisticsSettingsSelect = `
+  logistics_settings_id:Logistics_Settings_ID,
+  is_pickup_enabled:Is_Pickup_Enabled,
+  minimum_bundle_quantity:Minimum_Bundle_Quantity,
+  pickup_radius_km:Pickup_Radius_KM,
+  pickup_base_latitude:Pickup_Base_Latitude,
+  pickup_base_longitude:Pickup_Base_Longitude,
+  pickup_notes:Pickup_Notes,
+  updated_at:Updated_At,
+  updated_by:Updated_By
+`;
+
+const haircutScheduleSelect = `
+  schedule_id:Schedule_ID,
+  donation_drive_id:Donation_Drive_ID,
+  schedule_date:Schedule_Date,
+  start_time:Start_Time,
+  end_time:End_Time,
+  haircut_price:Haircut_Price,
+  reservation_limit:Reservation_Limit,
+  is_available:Is_Available,
+  created_at:Created_At,
+  updated_at:Updated_At
+`;
+
+const haircutReservationSelect = `
+  reservation_id:Reservation_ID,
+  user_id:User_ID,
+  schedule_id:Schedule_ID,
+  arrival_time:Arrival_Time,
+  status:Status,
+  receipt_number:Receipt_Number,
+  confirmed_by:Confirmed_By,
+  confirmed_at:Confirmed_At,
+  remarks:Remarks,
+  created_at:Created_At,
+  updated_at:Updated_At,
+  number_of_haircuts:Number_of_Haircuts,
+  total_amount:Total_Amount
+`;
+
+const donationCertificateSelect = `
+  certificate_id:Certificate_ID,
+  user_id:User_ID,
+  certificate_number:Certificate_Number,
+  certificate_type:Certificate_Type,
+  file_url:File_URL,
+  issued_by:Issued_By,
+  issued_at:Issued_At,
+  remarks:Remarks,
+  submission_id:Submission_ID
 `;
 
 const logHairQuery = (source, extras = {}) => {
@@ -271,6 +328,63 @@ const normalizeDonationRequirement = (row) => ({
   notes: row?.notes || '',
   updated_at: row?.updated_at || null,
   updated_by: row?.updated_by || null,
+});
+
+const normalizeLogisticsSettings = (row) => ({
+  id: row?.logistics_settings_id || null,
+  logistics_settings_id: row?.logistics_settings_id || null,
+  is_pickup_enabled: row?.is_pickup_enabled ?? null,
+  minimum_bundle_quantity: row?.minimum_bundle_quantity ?? null,
+  pickup_radius_km: row?.pickup_radius_km ?? null,
+  pickup_base_latitude: row?.pickup_base_latitude ?? null,
+  pickup_base_longitude: row?.pickup_base_longitude ?? null,
+  pickup_notes: row?.pickup_notes || '',
+  updated_at: row?.updated_at || null,
+  updated_by: row?.updated_by || null,
+});
+
+const normalizeHaircutSchedule = (row) => ({
+  id: row?.schedule_id || null,
+  schedule_id: row?.schedule_id || null,
+  donation_drive_id: row?.donation_drive_id || null,
+  schedule_date: row?.schedule_date || null,
+  start_time: row?.start_time || '',
+  end_time: row?.end_time || '',
+  haircut_price: row?.haircut_price ?? null,
+  reservation_limit: row?.reservation_limit ?? null,
+  is_available: row?.is_available ?? null,
+  created_at: row?.created_at || null,
+  updated_at: row?.updated_at || null,
+});
+
+const normalizeHaircutReservation = (row) => ({
+  id: row?.reservation_id || null,
+  reservation_id: row?.reservation_id || null,
+  user_id: row?.user_id || null,
+  schedule_id: row?.schedule_id || null,
+  arrival_time: row?.arrival_time || '',
+  status: row?.status || '',
+  receipt_number: row?.receipt_number || '',
+  confirmed_by: row?.confirmed_by || null,
+  confirmed_at: row?.confirmed_at || null,
+  remarks: row?.remarks || '',
+  created_at: row?.created_at || null,
+  updated_at: row?.updated_at || null,
+  number_of_haircuts: row?.number_of_haircuts ?? null,
+  total_amount: row?.total_amount ?? null,
+});
+
+const normalizeDonationCertificate = (row) => ({
+  id: row?.certificate_id || null,
+  certificate_id: row?.certificate_id || null,
+  user_id: row?.user_id || null,
+  certificate_number: row?.certificate_number || '',
+  certificate_type: row?.certificate_type || '',
+  file_url: row?.file_url || '',
+  issued_by: row?.issued_by || null,
+  issued_at: row?.issued_at || null,
+  remarks: row?.remarks || '',
+  submission_id: row?.submission_id || null,
 });
 
 export const createHairSubmission = async (payload) => {
@@ -451,6 +565,112 @@ export const fetchLatestDonationRequirement = async () => {
   };
 };
 
+export const fetchLatestLogisticsSettings = async () => {
+  logHairQuery('fetchLatestLogisticsSettings', {
+    table: logisticsSettingsTable,
+    phase: 'read',
+    columns: [
+      'Logistics_Settings_ID',
+      'Is_Pickup_Enabled',
+      'Minimum_Bundle_Quantity',
+      'Pickup_Radius_KM',
+      'Pickup_Base_Latitude',
+      'Pickup_Base_Longitude',
+      'Pickup_Notes',
+      'Updated_At',
+      'Updated_By',
+    ],
+  });
+
+  const result = await supabase
+    .from(logisticsSettingsTable)
+    .select(logisticsSettingsSelect)
+    .order('Updated_At', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  return {
+    data: result.data ? normalizeLogisticsSettings(result.data) : null,
+    error: result.error,
+  };
+};
+
+export const fetchUpcomingHaircutSchedules = async (limit = 3) => {
+  logHairQuery('fetchUpcomingHaircutSchedules', {
+    table: haircutSchedulesTable,
+    phase: 'read',
+    columns: ['Schedule_ID', 'Schedule_Date', 'Start_Time', 'End_Time', 'Haircut_Price', 'Reservation_Limit', 'Is_Available'],
+  });
+
+  const today = new Date().toISOString().slice(0, 10);
+  const result = await supabase
+    .from(haircutSchedulesTable)
+    .select(haircutScheduleSelect)
+    .eq('Is_Available', true)
+    .gte('Schedule_Date', today)
+    .order('Schedule_Date', { ascending: true })
+    .limit(limit);
+
+  return {
+    data: (result.data || []).map(normalizeHaircutSchedule),
+    error: result.error,
+  };
+};
+
+export const fetchLatestHaircutReservationByUserId = async (userId) => {
+  const resolvedUserId = await resolveSubmissionUserId(userId);
+  if (resolvedUserId.error) {
+    return { data: null, error: resolvedUserId.error };
+  }
+
+  logHairQuery('fetchLatestHaircutReservationByUserId', {
+    table: haircutReservationsTable,
+    phase: 'read',
+    filters: { User_ID: resolvedUserId.userId },
+    columns: ['Reservation_ID', 'User_ID', 'Schedule_ID', 'Status', 'Created_At', 'Updated_At'],
+  });
+
+  const result = await supabase
+    .from(haircutReservationsTable)
+    .select(haircutReservationSelect)
+    .eq('User_ID', resolvedUserId.userId)
+    .order('Created_At', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  return {
+    data: result.data ? normalizeHaircutReservation(result.data) : null,
+    error: result.error,
+  };
+};
+
+export const fetchLatestDonationCertificateByUserId = async (userId) => {
+  const resolvedUserId = await resolveSubmissionUserId(userId);
+  if (resolvedUserId.error) {
+    return { data: null, error: resolvedUserId.error };
+  }
+
+  logHairQuery('fetchLatestDonationCertificateByUserId', {
+    table: donationCertificatesTable,
+    phase: 'read',
+    filters: { User_ID: resolvedUserId.userId },
+    columns: ['Certificate_ID', 'User_ID', 'Certificate_Number', 'Certificate_Type', 'File_URL', 'Issued_At', 'Submission_ID'],
+  });
+
+  const result = await supabase
+    .from(donationCertificatesTable)
+    .select(donationCertificateSelect)
+    .eq('User_ID', resolvedUserId.userId)
+    .order('Issued_At', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  return {
+    data: result.data ? normalizeDonationCertificate(result.data) : null,
+    error: result.error,
+  };
+};
+
 export const fetchDonorRecommendationsBySubmissionId = async (submissionId, limit = 5) => {
   logHairQuery('fetchDonorRecommendationsBySubmissionId', {
     table: donorRecommendationsTable,
@@ -577,6 +797,34 @@ export const fetchLatestHairSubmissionDetailBySubmissionId = async (submissionId
 
   return {
     data: result.data ? normalizeHairSubmissionDetail(result.data) : null,
+    error: result.error,
+  };
+};
+
+export const createHairSubmissionLogistics = async (payload) => {
+  logHairQuery('createHairSubmissionLogistics', {
+    table: hairSubmissionLogisticsTable,
+    phase: 'create',
+    filters: { Submission_ID: payload?.submission_id },
+    columns: ['Submission_ID', 'Logistics_Type', 'Shipment_Status', 'Pickup_Schedule_Date', 'Notes'],
+  });
+
+  const result = await supabase
+    .from(hairSubmissionLogisticsTable)
+    .insert([{
+      Submission_ID: payload?.submission_id || null,
+      Logistics_Type: payload?.logistics_type || null,
+      Courier_Name: payload?.courier_name || null,
+      Tracking_Number: payload?.tracking_number || null,
+      Shipment_Status: payload?.shipment_status || null,
+      Pickup_Schedule_Date: payload?.pickup_schedule_date || null,
+      Notes: payload?.notes || null,
+    }])
+    .select(hairSubmissionLogisticsSelect)
+    .single();
+
+  return {
+    data: result.data ? normalizeHairSubmissionLogistics(result.data) : null,
     error: result.error,
   };
 };

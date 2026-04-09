@@ -7,137 +7,125 @@ const buildChoiceSchema = (choices, message) => (
   })
 );
 
-const optionalChoice = z.string().trim().optional().or(z.literal(''));
-
 const normalizeOptionalValue = (value) => {
   if (value === null || value === undefined) return '';
   return String(value).trim();
 };
 
+const normalizeOptionalArray = (value) => (
+  Array.isArray(value)
+    ? value.map((item) => normalizeOptionalValue(item)).filter(Boolean)
+    : []
+);
+
+const yesNoChoices = ['yes', 'no'];
+const screeningIntentChoices = ['initial_donation_screening', 'checking_eligibility_first'];
+const treatmentChoices = ['rebonded', 'permed', 'relaxed', 'keratin_treated', 'hair_botox', 'others', 'none'];
+const colorStatusChoices = ['no', 'colored', 'bleached', 'both'];
+const hairConditionChoices = ['healthy', 'slightly_dry', 'dry', 'damaged'];
+const washFrequencyWeeklyChoices = ['1_2_times', '3_4_times', '5_6_times', 'daily'];
+const heatStylingChoices = ['never', 'rarely', 'sometimes', 'often'];
+
 export const hairAnalyzerQuestionSchema = z.object({
-  losingHair: buildChoiceSchema(['yes', 'no'], 'Please answer the hair-loss question.'),
-  washFrequency: buildChoiceSchema(
-    ['daily', 'every_2_3_days', 'once_a_week', 'other'],
-    'Please choose how often you wash your hair.'
-  ),
-  washFrequencyOther: z.string().trim().max(80, 'Please keep the answer short').optional().or(z.literal('')),
-  showerWarmth: z.number().int().min(1, 'Select a shower warmth level').max(10, 'Select a shower warmth level'),
-  stressLevel: z.number().int().min(1, 'Select a stress level').max(10, 'Select a stress level'),
-  familyHairLoss: buildChoiceSchema(['yes', 'no'], 'Please answer the family hair-loss question.'),
-  hairLossDuration: optionalChoice,
-  hairLossArea: optionalChoice,
-  chemicallyTreated: optionalChoice,
-  bleached: optionalChoice,
-  colored: optionalChoice,
-  rebonded: optionalChoice,
-  hairCondition: optionalChoice,
-  plannedDonationLength: optionalChoice,
+  screeningIntent: buildChoiceSchema(screeningIntentChoices, 'Please choose the screening purpose.'),
+  estimatedHairLengthInches: z.string().trim().min(1, 'Please enter your estimated hair length.').refine((value) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0;
+  }, {
+    message: 'Please enter a valid hair length in inches.',
+  }),
+  chemicalTreatments: z.array(z.string()).min(1, 'Please choose at least one treatment option.').refine((values) => (
+    values.every((item) => treatmentChoices.includes(item))
+  ), {
+    message: 'Please use the available treatment options only.',
+  }),
+  treatmentTiming: z.string().trim().optional().or(z.literal('')),
+  colorStatus: buildChoiceSchema(colorStatusChoices, 'Please choose whether your hair was colored or bleached.'),
+  colorTiming: z.string().trim().optional().or(z.literal('')),
+  hairCondition: buildChoiceSchema(hairConditionChoices, 'Please describe your current hair condition.'),
+  splitEnds: buildChoiceSchema(yesNoChoices, 'Please answer the split ends question.'),
+  shedding: buildChoiceSchema(yesNoChoices, 'Please answer the shedding question.'),
+  washFrequencyWeekly: buildChoiceSchema(washFrequencyWeeklyChoices, 'Please choose how often you wash your hair in a week.'),
+  heatStylingFrequency: buildChoiceSchema(heatStylingChoices, 'Please choose how often you use heat styling tools.'),
 }).superRefine((values, context) => {
-  if (values.washFrequency === 'other' && !normalizeOptionalValue(values.washFrequencyOther)) {
+  const normalizedTreatments = normalizeOptionalArray(values.chemicalTreatments);
+  const hasTreatmentHistory = normalizedTreatments.some((item) => item !== 'none');
+
+  if (normalizedTreatments.includes('none') && normalizedTreatments.length > 1) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
-      path: ['washFrequencyOther'],
-      message: 'Please tell us how often you wash your hair.',
+      path: ['chemicalTreatments'],
+      message: 'Choose either "None" or the treatment types that apply.',
     });
   }
 
-  if (values.losingHair === 'yes') {
-    if (!normalizeOptionalValue(values.hairLossDuration)) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['hairLossDuration'],
-        message: 'Please tell us how long you have noticed hair loss.',
-      });
-    }
-
-    if (!normalizeOptionalValue(values.hairLossArea)) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['hairLossArea'],
-        message: 'Please tell us where you notice it most.',
-      });
-    }
+  if (hasTreatmentHistory && !normalizeOptionalValue(values.treatmentTiming)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['treatmentTiming'],
+      message: 'Please tell us when the treatment was done.',
+    });
   }
 
-  if (values.losingHair === 'no') {
-    [
-      ['chemicallyTreated', 'Please answer the chemical treatment question.'],
-      ['bleached', 'Please answer the bleaching question.'],
-      ['colored', 'Please answer the coloring question.'],
-      ['rebonded', 'Please answer the rebonding question.'],
-      ['hairCondition', 'Please describe your current hair condition.'],
-      ['plannedDonationLength', 'Please choose the hair length you plan to donate.'],
-    ].forEach(([field, message]) => {
-      if (!normalizeOptionalValue(values[field])) {
-        context.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: [field],
-          message,
-        });
-      }
+  if (values.colorStatus !== 'no' && !normalizeOptionalValue(values.colorTiming)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['colorTiming'],
+      message: 'Please tell us when the hair was last colored or bleached.',
     });
   }
 });
 
 export const hairAnalyzerQuestionDefaultValues = {
-  losingHair: '',
-  washFrequency: '',
-  washFrequencyOther: '',
-  showerWarmth: 0,
-  stressLevel: 0,
-  familyHairLoss: '',
-  hairLossDuration: '',
-  hairLossArea: '',
-  chemicallyTreated: '',
-  bleached: '',
-  colored: '',
-  rebonded: '',
+  screeningIntent: '',
+  estimatedHairLengthInches: '',
+  chemicalTreatments: [],
+  treatmentTiming: '',
+  colorStatus: '',
+  colorTiming: '',
   hairCondition: '',
-  plannedDonationLength: '',
+  splitEnds: '',
+  shedding: '',
+  washFrequencyWeekly: '',
+  heatStylingFrequency: '',
 };
 
-export const resolveHairAnalyzerConcernType = (answers = {}) => (
-  answers?.losingHair === 'yes'
-    ? hairAnalyzerConcernTypes.hairLoss
-    : hairAnalyzerConcernTypes.donationEligibility
+export const hairAnalyzerComplianceSchema = z.object({
+  acknowledged: z.literal(true, {
+    errorMap: () => ({ message: 'Please confirm the photo compliance checklist first.' }),
+  }),
+});
+
+export const hairAnalyzerComplianceDefaultValues = {
+  acknowledged: false,
+};
+
+export const resolveHairAnalyzerConcernType = () => (
+  hairAnalyzerConcernTypes.donationEligibility
 );
 
 export const normalizeHairAnalyzerAnswers = (answers = {}) => {
-  const concernType = resolveHairAnalyzerConcernType(answers);
+  const normalizedTreatments = normalizeOptionalArray(answers?.chemicalTreatments);
+  const hasTreatmentHistory = normalizedTreatments.some((item) => item !== 'none');
+  const estimatedHairLengthInches = Number(answers?.estimatedHairLengthInches);
 
   return {
-    concern_type: concernType,
+    concern_type: resolveHairAnalyzerConcernType(answers),
     questionnaire_answers: {
-      losing_hair: normalizeOptionalValue(answers?.losingHair),
-      wash_frequency: normalizeOptionalValue(answers?.washFrequency),
-      wash_frequency_other: normalizeOptionalValue(answers?.washFrequencyOther),
-      shower_warmth: Number(answers?.showerWarmth) || null,
-      stress_level: Number(answers?.stressLevel) || null,
-      family_hair_loss: normalizeOptionalValue(answers?.familyHairLoss),
-      hair_loss_duration: concernType === hairAnalyzerConcernTypes.hairLoss
-        ? normalizeOptionalValue(answers?.hairLossDuration)
+      screening_intent: normalizeOptionalValue(answers?.screeningIntent),
+      estimated_hair_length_inches: Number.isFinite(estimatedHairLengthInches) ? estimatedHairLengthInches : null,
+      chemical_treatments: normalizedTreatments,
+      has_treatment_history: hasTreatmentHistory ? 'yes' : 'no',
+      treatment_timing: hasTreatmentHistory ? normalizeOptionalValue(answers?.treatmentTiming) : '',
+      color_status: normalizeOptionalValue(answers?.colorStatus),
+      color_timing: normalizeOptionalValue(answers?.colorStatus) !== 'no'
+        ? normalizeOptionalValue(answers?.colorTiming)
         : '',
-      hair_loss_area: concernType === hairAnalyzerConcernTypes.hairLoss
-        ? normalizeOptionalValue(answers?.hairLossArea)
-        : '',
-      chemically_treated: concernType === hairAnalyzerConcernTypes.donationEligibility
-        ? normalizeOptionalValue(answers?.chemicallyTreated)
-        : '',
-      bleached: concernType === hairAnalyzerConcernTypes.donationEligibility
-        ? normalizeOptionalValue(answers?.bleached)
-        : '',
-      colored: concernType === hairAnalyzerConcernTypes.donationEligibility
-        ? normalizeOptionalValue(answers?.colored)
-        : '',
-      rebonded: concernType === hairAnalyzerConcernTypes.donationEligibility
-        ? normalizeOptionalValue(answers?.rebonded)
-        : '',
-      hair_condition: concernType === hairAnalyzerConcernTypes.donationEligibility
-        ? normalizeOptionalValue(answers?.hairCondition)
-        : '',
-      planned_donation_length: concernType === hairAnalyzerConcernTypes.donationEligibility
-        ? normalizeOptionalValue(answers?.plannedDonationLength)
-        : '',
+      hair_condition: normalizeOptionalValue(answers?.hairCondition),
+      split_ends: normalizeOptionalValue(answers?.splitEnds),
+      shedding: normalizeOptionalValue(answers?.shedding),
+      wash_frequency_weekly: normalizeOptionalValue(answers?.washFrequencyWeekly),
+      heat_styling_frequency: normalizeOptionalValue(answers?.heatStylingFrequency),
     },
   };
 };
@@ -152,10 +140,12 @@ export const hairReviewSchema = z.object({
   detailNotes: z.string().trim().max(400, 'Notes are too long').optional().or(z.literal('')),
 });
 
-export const buildHairReviewDefaultValues = (analysis) => ({
-  declaredLength: analysis?.estimated_length != null ? String(analysis.estimated_length) : '',
+export const buildHairReviewDefaultValues = (analysis, answers = {}) => ({
+  declaredLength: analysis?.estimated_length != null
+    ? String(analysis.estimated_length)
+    : normalizeOptionalValue(answers?.estimatedHairLengthInches),
   declaredTexture: analysis?.detected_texture || '',
   declaredDensity: analysis?.detected_density || '',
-  declaredCondition: analysis?.detected_condition || '',
+  declaredCondition: analysis?.detected_condition || normalizeOptionalValue(answers?.hairCondition),
   detailNotes: analysis?.visible_damage_notes || '',
 });

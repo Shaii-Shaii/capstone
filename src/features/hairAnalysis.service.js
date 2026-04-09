@@ -88,6 +88,7 @@ const resolveFunctionErrorMessage = async (error) => {
 export const analyzeHairPhotos = async ({
   images,
   questionnaireAnswers,
+  complianceContext = null,
   donationRequirementContext = null,
   submissionContext = null,
 }) => {
@@ -102,13 +103,20 @@ export const analyzeHairPhotos = async ({
     }
 
     const normalizedAnswers = normalizeHairAnalyzerAnswers(questionnaireAnswers);
-    if (!normalizedAnswers?.questionnaire_answers?.losing_hair) {
-      throw new Error('Please complete the guided hair questions before analysis.');
+    if (!normalizedAnswers?.questionnaire_answers?.screening_intent) {
+      throw new Error('Please complete the guided donation questions before analysis.');
+    }
+
+    if (!complianceContext?.acknowledged) {
+      throw new Error('Please confirm the photo compliance checklist before analysis.');
     }
 
     const payload = {
       concern_type: normalizedAnswers.concern_type,
       questionnaire_answers: normalizedAnswers.questionnaire_answers,
+      compliance_context: {
+        acknowledged: Boolean(complianceContext?.acknowledged),
+      },
       images: images.map((image) => ({
         mimeType: image.mimeType,
         dataUrl: image.dataUrl,
@@ -206,17 +214,19 @@ export const analyzeHairPhotos = async ({
 
     const userMessage = technicalMessage.includes('at least one hair photo')
       ? 'Please upload at least one clear hair photo before running the analysis.'
-      : technicalMessage.includes('guided hair questions')
+      : technicalMessage.includes('guided donation questions')
         ? 'Please complete the guided questions before analysis.'
-      : technicalMessage.includes('could not be read')
-        ? 'One of the selected photos could not be read. Please upload or retake that image again.'
-        : technicalMessage.includes('invalid jwt')
-          ? 'Your session has expired. Please sign in again, then retry the hair analysis.'
-          : technicalMessage.includes('requested function was not found') || technicalMessage.includes('not_found')
-            ? 'Hair analysis is still being connected on the server. Please try again in a moment.'
+      : technicalMessage.includes('compliance checklist')
+        ? 'Please confirm the photo checklist before analysis.'
+        : technicalMessage.includes('could not be read')
+          ? 'One of the selected photos could not be read. Please upload or retake that image again.'
+          : technicalMessage.includes('invalid jwt')
+            ? 'Your session has expired. Please sign in again, then retry the hair analysis.'
+            : technicalMessage.includes('requested function was not found') || technicalMessage.includes('not_found')
+              ? 'Hair analysis is still being connected on the server. Please try again in a moment.'
             : technicalMessage.includes('required hair views') || technicalMessage.includes('please add these required hair views')
               ? resolvedMessage
-            : technicalMessage.includes('top (scalp)') || technicalMessage.includes('front') || technicalMessage.includes('side') || technicalMessage.includes('back')
+            : technicalMessage.includes('front view photo') || technicalMessage.includes('back view photo') || technicalMessage.includes('hair ends close-up') || technicalMessage.includes('side view photo')
               ? resolvedMessage
             : technicalMessage.includes('does not clearly show hair') || technicalMessage.includes('not look like hair')
               ? resolvedMessage

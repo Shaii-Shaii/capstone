@@ -111,6 +111,10 @@ type HairImage = {
   viewLabel?: string;
 };
 
+type ComplianceContext = {
+  acknowledged?: boolean;
+};
+
 type DonationRequirementContext = {
   donation_requirement_id?: number | null;
   minimum_hair_length?: number | null;
@@ -133,31 +137,31 @@ type SubmissionContext = {
   declared_condition?: string;
 };
 
-const expectedViews = ['Top (Scalp)', 'Front', 'Side', 'Back'];
+const expectedViews = ['Front View Photo', 'Back View Photo', 'Hair Ends Close-Up', 'Side View Photo'];
 
 const instructions = [
   'You are analyzing donor hair photos for a hair donation mobile app.',
   'Return JSON only.',
-  'Use both the uploaded hair photos and the structured questionnaire answers.',
+  'Use the uploaded hair photos, the structured questionnaire answers, and any provided donation requirement context.',
   'This is AI-assisted screening guidance, not a medical diagnosis.',
   'Use safe wording such as "based on your answers and uploaded photos", "this screening suggests", and "this may indicate".',
   'First decide whether the uploaded images clearly show human hair intended for screening.',
   'If the images do not clearly show hair, set is_hair_detected to false, explain the issue in invalid_image_reason, and set decision to "Retake Photos".',
   'Review each uploaded image using its provided view label and use per_view_notes to explain whether that view is clearly usable.',
-  'Use missing_views to list any expected views that are absent or unclear: Top (Scalp), Front, Side, Back.',
+  'Use missing_views to list any expected views that are absent or unclear: Front View Photo, Back View Photo, Hair Ends Close-Up, Side View Photo.',
   'Describe only visible hair characteristics from the provided images and the structured questionnaire context.',
   'Do not diagnose medical conditions and do not invent details that are not visible or stated.',
   'If a field is uncertain, return an empty string or null instead of guessing.',
-  'estimated_length must be a numeric centimeter estimate when visible.',
+  'estimated_length must be a numeric length estimate when visible. Use the questionnaire length estimate as context, but prefer what is actually visible in the images.',
   'confidence_score must be a decimal between 0 and 1.',
   'detected_texture should use concise values like Straight, Wavy, Curly, Coily, or Mixed.',
   'detected_density should use concise values like Light, Medium, Thick, or Dense.',
   'detected_condition should use concise values like Healthy, Dry, Frizzy, Damaged, Chemically Treated, or Needs Better Photos.',
-  'If concern_type is "hair_loss", keep the result hair-loss-oriented and non-diagnostic.',
-  'If concern_type is "donation_eligibility", consider the questionnaire answers, visible hair characteristics, and donation requirement context when setting the decision and recommendations.',
+  'Treat this as donation pre-screening only. Use the screening_intent value to distinguish between an initial donation screening and an eligibility check.',
+  'Consider the questionnaire answers, visible hair characteristics, and donation requirement context when setting the decision and recommendations.',
   'If donation requirement context is provided, use it to compare visible eligibility signals such as minimum hair length and whether chemically treated, colored, bleached, or rebonded hair is currently allowed.',
   'Set decision to one short screening status such as Eligible, Needs Review, Retake Photos, or Not Yet Eligible.',
-  'Keep summary concise and actionable so the mobile app can show it directly.',
+  'Keep summary concise and actionable so the mobile app can show it directly. Always mention that final acceptance still requires manual review.',
   'Recommendations must be short, user-facing, and ordered by priority.',
 ].join(' ');
 
@@ -322,9 +326,7 @@ const normalizeAnalysisPayload = (
       ? (invalidImageReason || 'Based on your uploaded photos, the hair was not clear enough for screening.')
       : missingViews.length
         ? `Based on your uploaded photos, please retake these required views clearly: ${missingViews.join(', ')}.`
-        : concernType === 'hair_loss'
-          ? `Based on your answers and uploaded photos, this screening suggests ${detectedCondition || 'a hair condition that needs review'} with ${detectedDensity || 'unspecified'} density.`
-          : `Based on your answers and uploaded photos, this screening suggests ${detectedTexture || 'hair'} with ${detectedCondition || 'an unspecified condition'} for donation review.`;
+        : `Based on your answers and uploaded photos, this screening suggests ${detectedTexture || 'hair'} with ${detectedCondition || 'an unspecified condition'} for donation review. Final acceptance still requires manual review.`;
   }
 
   return {
@@ -358,6 +360,9 @@ Deno.serve(async (request) => {
     const donationRequirementContext = body?.donation_requirement_context && typeof body.donation_requirement_context === 'object'
       ? body.donation_requirement_context as DonationRequirementContext
       : null;
+    const complianceContext = body?.compliance_context && typeof body.compliance_context === 'object'
+      ? body.compliance_context as ComplianceContext
+      : null;
     const submissionContext = body?.submission_context && typeof body.submission_context === 'object'
       ? body.submission_context as SubmissionContext
       : null;
@@ -366,8 +371,12 @@ Deno.serve(async (request) => {
       return createJsonResponse({ error: 'Please upload at least one clear hair photo before analysis.' }, 400);
     }
 
-    if (!normalizeString(questionnaireAnswers?.losing_hair)) {
-      return createJsonResponse({ error: 'Please complete the guided hair questions before analysis.' }, 422);
+    if (!normalizeString(questionnaireAnswers?.screening_intent)) {
+      return createJsonResponse({ error: 'Please complete the guided donation questions before analysis.' }, 422);
+    }
+
+    if (!complianceContext?.acknowledged) {
+      return createJsonResponse({ error: 'Please confirm the photo compliance checklist before analysis.' }, 422);
     }
 
     const validImages = images.filter((image) => typeof image?.dataUrl === 'string' && image.dataUrl.startsWith('data:'));
@@ -391,6 +400,7 @@ Deno.serve(async (request) => {
       providedViews: Array.from(providedViews),
       missingProvidedViews,
       hasQuestionnaireAnswers: Boolean(Object.keys(questionnaireAnswers).length),
+      hasComplianceContext: Boolean(complianceContext?.acknowledged),
       hasDonationRequirementContext: Boolean(donationRequirementContext),
       hasSubmissionContext: Boolean(submissionContext?.submission_id),
     });
@@ -401,9 +411,11 @@ Deno.serve(async (request) => {
         text: [
           'Analyze these hair photos and return the requested JSON structure.',
           `concern_type: ${concernType}`,
-          'Expected views: Top (Scalp), Front, Side, Back.',
+          `screening_intent: ${normalizeString(questionnaireAnswers?.screening_intent) || 'not provided'}`,
+          'Expected views: Front View Photo, Back View Photo, Hair Ends Close-Up, Side View Photo.',
           'Only treat the upload as valid if the images clearly show human hair.',
           'Use the actual photo content plus the structured answers and requirement context as the source of truth.',
+          `photo_compliance_acknowledged: ${complianceContext?.acknowledged === true ? 'yes' : 'no'}`,
           'Questionnaire answers:',
           formatQuestionnaireAnswers(questionnaireAnswers),
           'Donation requirement context:',
