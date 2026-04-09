@@ -267,6 +267,7 @@ const resolveSafeAnalysisError = (error: unknown) => {
   if (
     technicalMessage.includes('unsupported image')
     || technicalMessage.includes('invalid image')
+    || technicalMessage.includes('does not represent a valid image')
     || technicalMessage.includes('image parse')
     || technicalMessage.includes('image_url')
   ) {
@@ -497,6 +498,7 @@ Deno.serve(async (request) => {
       schemaName: 'hair_analysis',
       schema: analysisSchema,
       maxOutputTokens: 1100,
+      model: 'gpt-4o-mini',
       input: [
         {
           role: 'user',

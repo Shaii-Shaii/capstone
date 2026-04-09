@@ -753,7 +753,7 @@ export function DonorHairSubmissionScreen() {
         hasUri: Boolean(photo?.uri),
       });
 
-      const saveResult = savePhotoAssetForSlot(activeCaptureSlotIndex, photo, 'capture');
+      const saveResult = await savePhotoAssetForSlot(activeCaptureSlotIndex, photo, 'capture');
       if (!saveResult?.success) {
         setCameraModalError(saveResult?.error || 'The captured photo could not be saved to this slot.');
         return;
@@ -1017,6 +1017,7 @@ export function DonorHairSubmissionScreen() {
 
   return (
     <DashboardLayout
+      showSupportChat={false}
       navItems={donorDashboardNavItems}
       activeNavKey="donations"
       navVariant="donor"

@@ -8,6 +8,8 @@ import { logAppEvent } from '../utils/appErrors';
 
 const MAX_PHOTO_COUNT = hairAnalysisRequiredViews.length;
 const IMAGE_MEDIA_TYPES = ['images'];
+const WEB_SLOT_IMAGE_MAX_SIZE = 1200;
+const WEB_SLOT_IMAGE_QUALITY = 0.68;
 
 const createErrorState = (title, message) => ({
   title,
@@ -30,6 +32,81 @@ const readWebFileAsDataUrl = (file) => new Promise((resolve, reject) => {
   reader.onerror = () => reject(new Error('Unable to read the selected hair image.'));
   reader.readAsDataURL(file);
 });
+
+const buildDataUrlFromAsset = (asset) => {
+  if (typeof asset?.dataUrl === 'string' && asset.dataUrl.startsWith('data:')) {
+    return asset.dataUrl;
+  }
+
+  if (typeof asset?.uri === 'string' && asset.uri.startsWith('data:')) {
+    return asset.uri;
+  }
+
+  if (asset?.base64) {
+    return `data:${asset.mimeType || 'image/jpeg'};base64,${asset.base64}`;
+  }
+
+  return '';
+};
+
+const normalizeWebAssetForHairAnalysis = async (asset) => {
+  if (Platform.OS !== 'web') return asset;
+  if (typeof window === 'undefined' || typeof document === 'undefined') return asset;
+
+  const sourceDataUrl = buildDataUrlFromAsset(asset);
+  if (!sourceDataUrl) {
+    throw new Error('The selected hair photo could not be prepared for analysis.');
+  }
+
+  return await new Promise((resolve, reject) => {
+    const previewImage = new Image();
+
+    previewImage.onload = () => {
+      try {
+        const width = Number(previewImage.naturalWidth || previewImage.width || 0);
+        const height = Number(previewImage.naturalHeight || previewImage.height || 0);
+
+        if (!width || !height) {
+          reject(new Error('The selected hair photo could not be prepared for analysis.'));
+          return;
+        }
+
+        const scale = Math.min(1, WEB_SLOT_IMAGE_MAX_SIZE / Math.max(width, height));
+        const targetWidth = Math.max(1, Math.round(width * scale));
+        const targetHeight = Math.max(1, Math.round(height * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = targetWidth;
+        canvas.height = targetHeight;
+
+        const context = canvas.getContext('2d');
+        if (!context) {
+          reject(new Error('The selected hair photo could not be prepared for analysis.'));
+          return;
+        }
+
+        context.drawImage(previewImage, 0, 0, targetWidth, targetHeight);
+        const normalizedDataUrl = canvas.toDataURL('image/jpeg', WEB_SLOT_IMAGE_QUALITY);
+        const [, normalizedBase64 = ''] = normalizedDataUrl.split(',');
+
+        resolve({
+          ...asset,
+          uri: normalizedDataUrl,
+          dataUrl: normalizedDataUrl,
+          base64: normalizedBase64,
+          mimeType: 'image/jpeg',
+          file: null,
+          width: targetWidth,
+          height: targetHeight,
+        });
+      } catch (error) {
+        reject(error);
+      }
+    };
+
+    previewImage.onerror = () => reject(new Error('The selected hair photo could not be processed for AI analysis.'));
+    previewImage.src = sourceDataUrl;
+  });
+};
 
 const pickWebImageAsset = async ({ capture = false } = {}) => {
   if (typeof document === 'undefined') {
@@ -136,6 +213,10 @@ const mapAnalysisError = (message = '') => {
 
   if (normalized.includes('could not be read')) {
     return createErrorState('Photo Could Not Be Read', 'One of the uploaded photos could not be processed. Please upload or retake that hair view again.');
+  }
+
+  if (normalized.includes('does not represent a valid image')) {
+    return createErrorState('Photos Could Not Be Processed', 'One of the uploaded hair photos was saved in an unsupported image format. Please retake or upload that view again.');
   }
 
   if (normalized.includes('too large for analysis')) {
@@ -307,8 +388,9 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
     setSuccessMessage('');
   };
 
-  const savePhotoAssetForSlot = (slotIndex, asset, sourceType = 'upload') => {
-    const normalizedPhoto = buildPhotoRecord(asset, slotIndex, sourceType);
+  const savePhotoAssetForSlot = async (slotIndex, asset, sourceType = 'upload') => {
+    const preparedAsset = await normalizeWebAssetForHairAnalysis(asset);
+    const normalizedPhoto = buildPhotoRecord(preparedAsset, slotIndex, sourceType);
 
     if (!normalizedPhoto) {
       const mappedError = createErrorState('Photos Could Not Be Read', 'Please choose a clear image file again. The selected photo could not be processed.');
@@ -368,7 +450,7 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
         hasAsset: Boolean(result.assets?.[0]?.uri),
       });
 
-      const saveResult = savePhotoAssetForSlot(slotIndex, result.assets?.[0], 'upload');
+      const saveResult = await savePhotoAssetForSlot(slotIndex, result.assets?.[0], 'upload');
       if (!saveResult.success) {
         throw new Error(saveResult.error || 'Unable to read the selected hair images.');
       }
@@ -435,7 +517,7 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
         hasAsset: Boolean(result.assets?.[0]?.uri),
       });
 
-      const saveResult = savePhotoAssetForSlot(slotIndex, result.assets?.[0], 'capture');
+      const saveResult = await savePhotoAssetForSlot(slotIndex, result.assets?.[0], 'capture');
       if (!saveResult.success) {
         throw new Error(saveResult.error || 'Unable to read the selected hair images.');
       }

@@ -3,8 +3,8 @@ import { hairAnalysisFunctionName } from './hairSubmission.constants';
 import { normalizeHairAnalyzerAnswers } from './hairSubmission.schema';
 import { getErrorMessage, logAppError, logAppEvent } from '../utils/appErrors';
 
-const WEB_ANALYSIS_IMAGE_MAX_SIZE = 1280;
-const WEB_ANALYSIS_IMAGE_QUALITY = 0.72;
+const WEB_ANALYSIS_IMAGE_MAX_SIZE = 1024;
+const WEB_ANALYSIS_IMAGE_QUALITY = 0.62;
 
 const normalizeRecommendations = (source = []) => (
   source
@@ -119,6 +119,10 @@ const prepareImagesForAnalysis = async (images = []) => (
   await Promise.all((images || []).map((image) => optimizeWebImageForAnalysis(image)))
 );
 
+const estimateImagePayloadBytes = (images = []) => (
+  (images || []).reduce((total, image) => total + (image?.base64 ? image.base64.length : 0), 0)
+);
+
 const resolveFunctionErrorMessage = async (error) => {
   const response = error?.context;
 
@@ -224,6 +228,7 @@ export const analyzeHairPhotos = async ({
       imageCount: payload.images.length,
       imageViews: payload.images.map((image) => image.viewLabel || image.viewKey).filter(Boolean),
       usesWebOptimizedImages: preparedImages.some((image, index) => image?.dataUrl !== images?.[index]?.dataUrl),
+      estimatedImagePayloadBytes: estimateImagePayloadBytes(preparedImages),
     });
 
     const functionResult = await invokeEdgeFunction(hairAnalysisFunctionName, {
@@ -294,6 +299,8 @@ export const analyzeHairPhotos = async ({
             : technicalMessage.includes('required hair views') || technicalMessage.includes('please add these required hair views')
               ? resolvedMessage
             : technicalMessage.includes('too large for analysis')
+              ? resolvedMessage
+            : technicalMessage.includes('does not represent a valid image')
               ? resolvedMessage
             : technicalMessage.includes('could not be processed for ai analysis')
               ? resolvedMessage

@@ -29,6 +29,7 @@ export const DashboardLayout = ({
   activeNavKey,
   onNavPress,
   navVariant = 'donor',
+  showSupportChat = true,
 }) => {
   const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
@@ -38,7 +39,7 @@ export const DashboardLayout = ({
   const isShortScreen = height < theme.layout.shortScreenHeight;
   const isCompactScreen = height < theme.layout.compactScreenHeight;
   const chatRole = navVariant === 'donor' || navVariant === 'patient' ? navVariant : null;
-  const isSupportChatAvailable = Boolean(chatRole && user?.id);
+  const isSupportChatAvailable = Boolean(showSupportChat && chatRole && user?.id);
   const availableChatModalHeight = height - Math.max(insets.top, theme.spacing.md) - theme.spacing.sm;
   const minimumChatModalHeight = Math.max(availableChatModalHeight * (isShortScreen ? 0.58 : 0.52), 420);
   const desiredChatModalHeight = availableChatModalHeight * (isShortScreen ? 0.76 : 0.68);
