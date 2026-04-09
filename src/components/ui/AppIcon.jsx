@@ -9,7 +9,7 @@ const ICON_STATE_COLORS = {
   muted: theme.colors.textSecondary,
   active: theme.colors.brandPrimary,
   disabled: theme.colors.textDisabled,
-  success: theme.colors.brandPrimary,
+  success: theme.colors.textSuccess,
   danger: theme.colors.textError,
   inverse: theme.colors.textInverse,
 };
@@ -35,8 +35,8 @@ export const AppIcon = ({
     muted: resolvedTheme?.secondaryTextColor || ICON_STATE_COLORS.muted,
     active: resolvedTheme?.primaryColor || ICON_STATE_COLORS.active,
     disabled: ICON_STATE_COLORS.disabled,
-    success: resolvedTheme?.primaryColor || ICON_STATE_COLORS.success,
-    danger: resolvedTheme?.primaryColor || ICON_STATE_COLORS.danger,
+    success: ICON_STATE_COLORS.success,
+    danger: ICON_STATE_COLORS.danger,
     inverse: ICON_STATE_COLORS.inverse,
   };
   const iconColor = color || themedStateColors[state] || themedStateColors.default;

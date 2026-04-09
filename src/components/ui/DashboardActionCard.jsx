@@ -4,6 +4,7 @@ import * as Haptics from 'expo-haptics';
 import { theme } from '../../design-system/theme';
 import { AppCard } from './AppCard';
 import { AppIcon } from './AppIcon';
+import { useAuth } from '../../providers/AuthProvider';
 
 const CARD_VARIANTS = {
   donor: {
@@ -52,7 +53,11 @@ export const DashboardActionCard = ({
   style,
   compact = false,
 }) => {
+  const { resolvedTheme } = useAuth();
   const config = disabled ? CARD_VARIANTS.disabled : (CARD_VARIANTS[variant] || CARD_VARIANTS.neutral);
+  const accentColor = resolvedTheme?.primaryColor || config.accent;
+  const badgeBackgroundColor = resolvedTheme?.secondaryColor || config.badgeBackground;
+  const badgeTextColor = resolvedTheme?.primaryColor || config.badgeText;
 
   const handlePress = async () => {
     if (disabled || !onPress) return;
@@ -70,7 +75,7 @@ export const DashboardActionCard = ({
       >
         {compact ? (
           <View style={styles.shortcutCard}>
-            <View style={[styles.shortcutIconWrap, { backgroundColor: config.accent }]}>
+            <View style={[styles.shortcutIconWrap, { backgroundColor: accentColor }]}>
               {icon ? (
                 <AppIcon
                   name={icon}
@@ -78,8 +83,8 @@ export const DashboardActionCard = ({
                 />
               ) : null}
               {badgeText ? (
-                <View style={[styles.shortcutBadge, { backgroundColor: config.badgeBackground }]}>
-                  <Text style={[styles.shortcutBadgeText, { color: config.badgeText }]}>{badgeText}</Text>
+                <View style={[styles.shortcutBadge, { backgroundColor: badgeBackgroundColor }]}>
+                  <Text style={[styles.shortcutBadgeText, { color: badgeTextColor }]}>{badgeText}</Text>
                 </View>
               ) : null}
             </View>
@@ -90,7 +95,7 @@ export const DashboardActionCard = ({
           </View>
         ) : (
           <>
-            <View style={[styles.accent, { backgroundColor: config.accent }]} />
+            <View style={[styles.accent, { backgroundColor: accentColor }]} />
             {icon ? (
               <View style={styles.iconWrap}>
                 <AppIcon name={icon} state={disabled ? 'disabled' : variant === 'patient' ? 'muted' : 'active'} />
@@ -99,8 +104,8 @@ export const DashboardActionCard = ({
             <View style={styles.header}>
               <Text style={[styles.title, { color: config.titleColor }]}>{title}</Text>
               {badgeText ? (
-                <View style={[styles.badge, { backgroundColor: config.badgeBackground }]}>
-                  <Text style={[styles.badgeText, { color: config.badgeText }]}>{badgeText}</Text>
+                <View style={[styles.badge, { backgroundColor: badgeBackgroundColor }]}>
+                  <Text style={[styles.badgeText, { color: badgeTextColor }]}>{badgeText}</Text>
                 </View>
               ) : null}
             </View>

@@ -31,8 +31,8 @@ export const AppTextLink = ({ title, onPress, variant = 'primary', disabled = fa
       pressedColor: resolvedTheme?.primaryTextColor || palette.pressedColor,
     },
     danger: {
-      color: resolvedTheme?.primaryColor || palette.color,
-      pressedColor: resolvedTheme?.tertiaryColor || palette.pressedColor,
+      color: theme.colors.textError,
+      pressedColor: theme.colors.actionDangerPressed,
     },
   }[variant] || palette;
 

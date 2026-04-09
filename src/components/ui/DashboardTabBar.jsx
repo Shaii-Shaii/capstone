@@ -11,6 +11,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { AppIcon } from './AppIcon';
 import { theme } from '../../design-system/theme';
+import { useAuth } from '../../providers/AuthProvider';
 
 export const DASHBOARD_TAB_BAR_HEIGHT = 72;
 
@@ -28,7 +29,10 @@ const TAB_VARIANTS = {
 };
 
 function DashboardTabItem({ item, isActive, onPress, variant }) {
+  const { resolvedTheme } = useAuth();
   const config = TAB_VARIANTS[variant] || TAB_VARIANTS.donor;
+  const activePillTextColor = resolvedTheme?.backgroundColor || config.pillText;
+  const inactiveTextColor = resolvedTheme?.secondaryTextColor || theme.colors.textSecondary;
   const scale = useSharedValue(1);
   const progress = useSharedValue(isActive ? 1 : 0);
 
@@ -44,7 +48,7 @@ function DashboardTabItem({ item, isActive, onPress, variant }) {
     color: interpolateColor(
       progress.value,
       [0, 1],
-      [theme.colors.textSecondary, config.pillText]
+      [inactiveTextColor, activePillTextColor]
     ),
   }));
 
@@ -72,7 +76,7 @@ function DashboardTabItem({ item, isActive, onPress, variant }) {
           <AppIcon
             name={isActive ? (item.activeIcon || item.icon) : item.icon}
             state={isActive ? 'inverse' : 'muted'}
-            color={isActive ? config.pillText : undefined}
+            color={isActive ? activePillTextColor : undefined}
             size="md"
           />
           {item.badge ? (
@@ -90,6 +94,7 @@ function DashboardTabItem({ item, isActive, onPress, variant }) {
 }
 
 export function DashboardTabBar({ items, activeKey, onPress, variant = 'donor' }) {
+  const { resolvedTheme } = useAuth();
   const { width } = useWindowDimensions();
   const isCompact = width < 390;
   const horizontalInset = isCompact ? theme.spacing.md : theme.spacing.lg;
@@ -98,6 +103,7 @@ export function DashboardTabBar({ items, activeKey, onPress, variant = 'donor' }
   const slotProgress = useSharedValue(activeIndex);
   const [surfaceWidth, setSurfaceWidth] = React.useState(0);
   const variantConfig = TAB_VARIANTS[variant] || TAB_VARIANTS.donor;
+  const activePillColor = resolvedTheme?.primaryColor || variantConfig.pill;
 
   React.useEffect(() => {
     slotProgress.value = withSpring(activeIndex, {
@@ -147,7 +153,7 @@ export function DashboardTabBar({ items, activeKey, onPress, variant = 'donor' }
           pointerEvents="none"
           style={[
             styles.activePill,
-            { backgroundColor: variantConfig.pill },
+            { backgroundColor: activePillColor },
             pillStyle,
           ]}
         />
@@ -233,7 +239,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 3,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: theme.colors.brandPrimary,
+    backgroundColor: theme.colors.actionPrimary,
     borderWidth: 1,
     borderColor: theme.colors.surfaceCard,
   },

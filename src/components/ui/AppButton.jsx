@@ -20,7 +20,6 @@ const VARIANTS = {
     textColor: theme.colors.textOnBrand,
     shadow: theme.shadows.card,
     pressedBackgroundColor: theme.colors.actionPrimaryPressed,
-    gradient: [theme.colors.brandPrimary, theme.colors.heroTo],
   },
   secondary: {
     backgroundColor: theme.colors.backgroundPrimary,

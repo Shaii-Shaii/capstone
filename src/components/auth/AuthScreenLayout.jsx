@@ -11,7 +11,7 @@ export const AuthScreenLayout = ({ children, cardStyle, role = 'donor', resolved
 
   const heroColors =
     resolvedTheme
-      ? [resolvedTheme.primaryColor || theme.colors.heroFrom, resolvedTheme.tertiaryColor || resolvedTheme.secondaryColor || theme.colors.heroTo]
+      ? [resolvedTheme.primaryColor || theme.colors.heroFrom, resolvedTheme.secondaryColor || theme.colors.heroTo]
       : role === 'patient'
         ? [theme.colors.dashboardPatientFrom, theme.colors.dashboardPatientTo]
         : [theme.colors.heroFrom, theme.colors.heroTo];
@@ -43,7 +43,7 @@ export const AuthScreenLayout = ({ children, cardStyle, role = 'donor', resolved
             style={[
               styles.topAccent,
               role === 'patient' ? styles.topAccentPatient : null,
-              resolvedTheme?.primaryColor ? { backgroundColor: resolvedTheme.primaryColor } : null,
+              { backgroundColor: resolvedTheme?.primaryColor || theme.colors.brandPrimary },
             ]}
           />
           {children}
@@ -103,6 +103,6 @@ const styles = StyleSheet.create({
     marginBottom: theme.spacing.md,
   },
   topAccentPatient: {
-    backgroundColor: theme.colors.brandSecondary,
+    backgroundColor: theme.colors.brandPrimary,
   },
 });

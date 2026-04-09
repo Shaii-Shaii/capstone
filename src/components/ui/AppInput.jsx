@@ -60,7 +60,7 @@ export const AppInput = ({
   const labelStyle = useAnimatedStyle(() => ({
     color: error
       ? errorColor
-      : interpolateColor(focusProgress.value, [0, 1], [primaryTextColor, resolvedTheme?.primaryColor || theme.colors.brandPrimary]),
+      : interpolateColor(focusProgress.value, [0, 1], [primaryTextColor, resolvedTheme?.primaryColor || theme.colors.borderFocus]),
     transform: [{ translateY: focusProgress.value * -1 }],
   }));
 

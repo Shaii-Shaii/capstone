@@ -14,6 +14,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { theme } from '../../design-system/theme';
 import { AppIcon } from './AppIcon';
+import { useAuth } from '../../providers/AuthProvider';
 
 const BANNER_VARIANTS = {
   success: {
@@ -44,8 +45,15 @@ export const StatusBanner = ({
   onDismiss,
   autoDismissMs = 2200,
 }) => {
+  const { resolvedTheme } = useAuth();
   const insets = useSafeAreaInsets();
   const config = BANNER_VARIANTS[variant] || BANNER_VARIANTS.info;
+  const resolvedBackgroundColor = variant === 'success'
+    ? resolvedTheme?.secondaryColor || config.backgroundColor
+    : config.backgroundColor;
+  const resolvedTextColor = variant === 'success'
+    ? resolvedTheme?.primaryColor || config.textColor
+    : config.textColor;
   const scale = useSharedValue(variant === 'success' ? 0.98 : 1);
   const isVisible = visible ?? Boolean(message);
   const isFloating = presentation === 'floating';
@@ -104,7 +112,7 @@ export const StatusBanner = ({
         style={[
           styles.container,
           isFloating ? styles.floatingCard : null,
-          { backgroundColor: config.backgroundColor },
+          { backgroundColor: resolvedBackgroundColor },
           style,
           animatedStyle,
         ]}
@@ -116,8 +124,8 @@ export const StatusBanner = ({
           />
         </View>
         <View style={styles.copyWrap}>
-          {title ? <Text style={[styles.title, { color: config.textColor }]}>{title}</Text> : null}
-          <Text style={[styles.message, { color: config.textColor }]}>{message}</Text>
+          {title ? <Text style={[styles.title, { color: resolvedTextColor }]}>{title}</Text> : null}
+          <Text style={[styles.message, { color: resolvedTextColor }]}>{message}</Text>
         </View>
       </Animated.View>
     </Animated.View>

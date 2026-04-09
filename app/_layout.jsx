@@ -1,28 +1,33 @@
 import React, { useEffect, useState } from 'react';
-import { Image, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Image, StyleSheet, Text, View } from 'react-native';
 import { Slot } from 'expo-router';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { StatusBar } from 'expo-status-bar';
 import { AuthProvider, useAuth } from '../src/providers/AuthProvider';
 import { useRoleRedirect } from '../src/hooks/useRoleRedirect';
 import { theme } from '../src/design-system/theme';
-import donivraLogoNoText from '../src/assets/images/donivra_logo_no_text.png';
 
 const SPLASH_DURATION_MS = 1000;
 
 function LaunchSplash({ resolvedTheme }) {
   return (
     <View style={[styles.splashScreen, resolvedTheme?.backgroundColor ? { backgroundColor: resolvedTheme.backgroundColor } : null]}>
-      <Image source={donivraLogoNoText} style={styles.splashLogo} resizeMode="contain" />
-      <Text
-        style={[
-          styles.splashBrand,
-          resolvedTheme?.primaryTextColor ? { color: resolvedTheme.primaryTextColor } : null,
-          resolvedTheme?.secondaryFontFamily ? { fontFamily: resolvedTheme.secondaryFontFamily } : null,
-        ]}
-      >
-        {resolvedTheme?.brandName || 'Donivra'}
-      </Text>
+      {resolvedTheme?.logoIcon ? (
+        <Image source={{ uri: resolvedTheme.logoIcon }} style={styles.splashLogo} resizeMode="contain" />
+      ) : (
+        <ActivityIndicator size="large" color={resolvedTheme?.primaryColor || theme.colors.actionPrimary} />
+      )}
+      {resolvedTheme?.brandName ? (
+        <Text
+          style={[
+            styles.splashBrand,
+            resolvedTheme?.primaryTextColor ? { color: resolvedTheme.primaryTextColor } : null,
+            resolvedTheme?.secondaryFontFamily ? { fontFamily: resolvedTheme.secondaryFontFamily } : null,
+          ]}
+        >
+          {resolvedTheme.brandName}
+        </Text>
+      ) : null}
     </View>
   );
 }

@@ -30,12 +30,8 @@ export const SignupForm = ({
 
   const passwordValue = watch('password');
   const errorBorderColor = resolvedTheme?.primaryColor || theme.colors.borderError;
-  const errorBackgroundColor = `${errorBorderColor}14`;
+  const errorBackgroundColor = resolvedTheme?.secondaryColor || theme.colors.surfaceSoft;
   const errorTextColor = resolvedTheme?.primaryTextColor || theme.colors.textError;
-  const buttonGradient = [
-    resolvedTheme?.primaryColor || theme.colors.brandPrimary,
-    resolvedTheme?.tertiaryColor || theme.colors.heroTo,
-  ];
 
   return (
     <View style={styles.container}>
@@ -133,7 +129,6 @@ export const SignupForm = ({
         disabled={isLoading}
         size="lg"
         style={styles.submitButton}
-        gradientColors={buttonGradient}
       />
     </View>
   );

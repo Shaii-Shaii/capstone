@@ -59,10 +59,11 @@ export const AppCard = ({
 }) => {
   const { resolvedTheme } = useAuth();
   const config = CARD_VARIANTS[variant] || CARD_VARIANTS.default;
+  const tintedBackgroundColor = resolvedTheme?.secondaryColor || resolvedTheme?.backgroundColor || config.backgroundColor;
   const backgroundColor = variant === 'soft'
     ? theme.colors.surfaceSoft
     : variant === 'hero' || variant === 'donorTint' || variant === 'patientTint'
-      ? resolvedTheme?.primaryColor || config.backgroundColor
+      ? tintedBackgroundColor
       : resolvedTheme?.backgroundColor || config.backgroundColor;
   const borderColor = resolvedTheme?.secondaryColor || config.borderColor;
   const resolvedPadding =

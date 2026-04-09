@@ -2,19 +2,20 @@ import React from 'react';
 import { Pressable, Text, StyleSheet, View } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import Animated, { FadeInDown, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
-import { LinearGradient } from 'expo-linear-gradient';
 import { AppCard } from '../ui/AppCard';
 import { AppIcon } from '../ui/AppIcon';
 import { theme } from '../../design-system/theme';
+import { useAuth } from '../../providers/AuthProvider';
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 export const AuthPathCard = ({ title, description, onPress, style, badgeText, role = 'donor' }) => {
+  const { resolvedTheme } = useAuth();
   const scale = useSharedValue(1);
   const isDonor = role === 'donor';
-  const gradientColors = isDonor
-    ? [theme.colors.donorCardFrom, theme.colors.surfaceSoft]
-    : [theme.colors.patientCardFrom, theme.colors.surfaceCardMuted];
+  const surfaceBackground = resolvedTheme?.backgroundColor || (isDonor ? theme.colors.donorCardTo : theme.colors.patientCardTo);
+  const accentColor = resolvedTheme?.primaryColor || (isDonor ? theme.colors.brandPrimary : theme.colors.brandSecondary);
+  const softAccentColor = resolvedTheme?.secondaryColor || (isDonor ? theme.colors.brandPrimaryMuted : theme.colors.surfaceSoft);
 
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: scale.value }],
@@ -38,17 +39,12 @@ export const AuthPathCard = ({ title, description, onPress, style, badgeText, ro
         style={animatedStyle}
       >
         <AppCard variant="elevated" radius="xl" padding="none" style={styles.card}>
-          <LinearGradient
-            colors={gradientColors}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={styles.surface}
-          >
-            <View style={[styles.accentBar, isDonor ? styles.accentDonor : styles.accentPatient]} />
+          <View style={[styles.surface, { backgroundColor: surfaceBackground }]}>
+            <View style={[styles.accentBar, { backgroundColor: accentColor }]} />
             <View style={styles.content}>
               <View style={styles.row}>
                 <View style={styles.leading}>
-                  <View style={[styles.iconWrap, isDonor ? styles.iconWrapDonor : styles.iconWrapPatient]}>
+                  <View style={[styles.iconWrap, { backgroundColor: softAccentColor }]}>
                     <AppIcon
                       name={isDonor ? 'donations' : 'support'}
                       size="md"
@@ -63,8 +59,8 @@ export const AuthPathCard = ({ title, description, onPress, style, badgeText, ro
 
                 <View style={styles.trailing}>
                   {badgeText ? (
-                    <View style={[styles.badge, isDonor ? styles.badgeDonor : styles.badgePatient]}>
-                      <Text style={[styles.badgeText, isDonor ? styles.badgeTextDonor : styles.badgeTextPatient]}>
+                    <View style={[styles.badge, { backgroundColor: softAccentColor }]}>
+                      <Text style={[styles.badgeText, { color: accentColor }]}>
                         {badgeText}
                       </Text>
                     </View>
@@ -75,7 +71,7 @@ export const AuthPathCard = ({ title, description, onPress, style, badgeText, ro
                 </View>
               </View>
             </View>
-          </LinearGradient>
+          </View>
         </AppCard>
       </AnimatedPressable>
     </Animated.View>
@@ -94,12 +90,6 @@ const styles = StyleSheet.create({
   },
   accentBar: {
     width: 5,
-  },
-  accentDonor: {
-    backgroundColor: theme.colors.brandPrimary,
-  },
-  accentPatient: {
-    backgroundColor: theme.colors.brandSecondary,
   },
   content: {
     flex: 1,
@@ -125,12 +115,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  iconWrapDonor: {
-    backgroundColor: theme.colors.brandPrimaryMuted,
-  },
-  iconWrapPatient: {
-    backgroundColor: theme.colors.surfaceSoft,
-  },
   copy: {
     flex: 1,
     gap: 2,
@@ -155,22 +139,10 @@ const styles = StyleSheet.create({
     paddingVertical: theme.spacing.xs,
     borderRadius: theme.radius.pill,
   },
-  badgeDonor: {
-    backgroundColor: theme.colors.brandPrimaryMuted,
-  },
-  badgePatient: {
-    backgroundColor: theme.colors.surfaceSoft,
-  },
   badgeText: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.caption,
     fontWeight: theme.typography.weights.semibold,
-  },
-  badgeTextDonor: {
-    color: theme.colors.brandPrimary,
-  },
-  badgeTextPatient: {
-    color: theme.colors.textSecondary,
   },
   arrowWrap: {
     width: 34,

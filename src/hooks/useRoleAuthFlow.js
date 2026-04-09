@@ -3,7 +3,6 @@ import { useState } from 'react';
 import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { useAuthActions } from '../features/auth/hooks/useAuthActions';
-import { loginThemeFallback } from '../design-system/theme';
 import {
   authMessages,
   roleAuthConfig,
@@ -112,7 +111,7 @@ export const useRoleAuthFlow = (role) => {
     signupError,
     clearLoginError,
     clearSignupError,
-    resolvedTheme: resolvedTheme || loginThemeFallback,
+    resolvedTheme,
     handleSignup,
     handleLogin,
   };

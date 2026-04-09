@@ -1,10 +1,10 @@
 import React from 'react';
 import { View, Text, StyleSheet, useWindowDimensions, Pressable, Image } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import { theme } from '../../design-system/theme';
 import { useAuthActions } from '../../features/auth/hooks/useAuthActions';
 import { AppIcon } from './AppIcon';
+import { useAuth } from '../../providers/AuthProvider';
 
 const HEADER_VARIANTS = {
   donor: {
@@ -21,7 +21,7 @@ const HEADER_VARIANTS = {
   },
   hero: {
     colors: [theme.colors.heroFrom, theme.colors.heroTo],
-    eyebrow: 'Donivra',
+    eyebrow: '',
     summaryBg: theme.colors.whiteOverlay,
     summaryText: theme.colors.textHeroSoft,
   },
@@ -42,11 +42,17 @@ export const DashboardHeader = ({
   showAvatar,
 }) => {
   const { logout, isLoading } = useAuthActions();
+  const { resolvedTheme } = useAuth();
   const { height } = useWindowDimensions();
   const compact = height < 760;
   const config = HEADER_VARIANTS[variant] || HEADER_VARIANTS.hero;
   const [imageFailed, setImageFailed] = React.useState(false);
   const shouldShowAvatar = showAvatar ?? !minimal;
+  const headerBackground = resolvedTheme?.primaryColor || config.colors[0];
+  const summaryBackground = resolvedTheme?.secondaryColor || config.summaryBg;
+  const summaryTextColor = resolvedTheme?.tertiaryTextColor || config.summaryText;
+  const actionColor = resolvedTheme?.primaryColor || theme.colors.actionPrimary;
+  const eyebrowText = resolvedTheme?.brandName || config.eyebrow;
 
   React.useEffect(() => {
     setImageFailed(false);
@@ -63,12 +69,7 @@ export const DashboardHeader = ({
   ];
 
   return (
-    <LinearGradient
-      colors={config.colors}
-      start={{ x: 0, y: 0 }}
-      end={{ x: 1, y: 1 }}
-      style={[styles.container, compact ? styles.containerCompact : null]}
-    >
+    <View style={[styles.container, compact ? styles.containerCompact : null, { backgroundColor: headerBackground }]}>
       <View style={styles.topRow}>
         <View style={styles.identityRow}>
           {shouldShowAvatar ? (
@@ -88,7 +89,7 @@ export const DashboardHeader = ({
             </View>
           ) : null}
           <View style={styles.textContainer}>
-            {!minimal ? <Text style={styles.eyebrow}>{config.eyebrow}</Text> : null}
+            {!minimal && eyebrowText ? <Text style={styles.eyebrow}>{eyebrowText}</Text> : null}
             <Text numberOfLines={1} style={[styles.title, compact ? styles.titleCompact : null]}>
               {title}
             </Text>
@@ -138,7 +139,7 @@ export const DashboardHeader = ({
             <AppIcon name="search" size="sm" state="muted" />
             <Text numberOfLines={1} style={styles.searchPlaceholder}>{searchPlaceholder}</Text>
           </View>
-          <View style={styles.searchAction}>
+          <View style={[styles.searchAction, { backgroundColor: actionColor }]}>
             <AppIcon name="filter" size="sm" state="inverse" />
           </View>
         </Pressable>
@@ -163,12 +164,12 @@ export const DashboardHeader = ({
       ) : null}
 
       {!minimal && summary ? (
-        <View style={[styles.summaryCard, compact ? styles.summaryCardCompact : null, { backgroundColor: config.summaryBg }]}>
-          <Text numberOfLines={2} style={[styles.summaryText, { color: config.summaryText }]}>{summary}</Text>
+        <View style={[styles.summaryCard, compact ? styles.summaryCardCompact : null, { backgroundColor: summaryBackground }]}>
+          <Text numberOfLines={2} style={[styles.summaryText, { color: summaryTextColor }]}>{summary}</Text>
         </View>
       ) : null}
 
-    </LinearGradient>
+    </View>
   );
 };
 
@@ -176,6 +177,7 @@ const styles = StyleSheet.create({
   container: {
     borderRadius: 30,
     padding: theme.spacing.sm,
+    backgroundColor: theme.colors.heroFrom,
     ...theme.shadows.hero,
   },
   containerCompact: {
@@ -224,7 +226,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 3,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: theme.colors.brandPrimary,
+    backgroundColor: theme.colors.actionPrimary,
     borderWidth: 1,
     borderColor: theme.colors.surfaceCard,
   },
@@ -320,7 +322,7 @@ const styles = StyleSheet.create({
     width: 38,
     height: 38,
     borderRadius: theme.radius.full,
-    backgroundColor: theme.colors.brandPrimary,
+    backgroundColor: theme.colors.actionPrimary,
     alignItems: 'center',
     justifyContent: 'center',
   },

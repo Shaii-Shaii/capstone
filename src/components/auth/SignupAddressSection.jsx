@@ -590,7 +590,7 @@ const styles = StyleSheet.create({
   },
   sheetOptionSelected: {
     borderColor: theme.colors.brandPrimaryMuted,
-    backgroundColor: '#f7ecef',
+    backgroundColor: theme.colors.brandPrimaryMuted,
   },
   sheetOptionPressed: {
     opacity: 0.9,

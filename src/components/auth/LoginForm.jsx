@@ -28,12 +28,8 @@ export const LoginForm = ({
   });
 
   const errorBorderColor = resolvedTheme?.primaryColor || theme.colors.borderError;
-  const errorBackgroundColor = `${errorBorderColor}14`;
+  const errorBackgroundColor = resolvedTheme?.secondaryColor || theme.colors.surfaceSoft;
   const errorTextColor = resolvedTheme?.primaryTextColor || theme.colors.textError;
-  const buttonGradient = [
-    resolvedTheme?.primaryColor || theme.colors.brandPrimary,
-    resolvedTheme?.tertiaryColor || theme.colors.heroTo,
-  ];
 
   return (
     <View style={styles.container}>
@@ -108,7 +104,6 @@ export const LoginForm = ({
         size="lg"
         enableHaptics={true}
         style={styles.submitBtn}
-        gradientColors={buttonGradient}
       />
     </View>
   );

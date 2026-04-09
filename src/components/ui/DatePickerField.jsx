@@ -4,6 +4,7 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import { AppIcon } from './AppIcon';
 import { AppTextLink } from './AppTextLink';
 import { theme } from '../../design-system/theme';
+import { useAuth } from '../../providers/AuthProvider';
 
 const readableDateFormatter = new Intl.DateTimeFormat(undefined, {
   year: 'numeric',
@@ -95,6 +96,7 @@ export function DatePickerField({
   maximumDate,
   onPress,
 }) {
+  const { resolvedTheme } = useAuth();
   const [isPickerVisible, setIsPickerVisible] = useState(false);
   const webFieldRef = useRef(null);
   const parsedDateValue = useMemo(() => parseDateValue(value), [value]);
@@ -147,6 +149,8 @@ export function DatePickerField({
     () => Array.from({ length: maximumYear - minimumYear + 1 }, (_, index) => minimumYear + index),
     [maximumYear, minimumYear]
   );
+  const selectedDayBackgroundColor = resolvedTheme?.primaryColor || theme.colors.actionPrimary;
+  const selectedDayTextColor = resolvedTheme?.backgroundColor || theme.colors.textOnBrand;
 
   const openWebPicker = async () => {
     await onPress?.();
@@ -264,7 +268,7 @@ export function DatePickerField({
                     style={[
                       styles.webDayCell,
                       !day.isCurrentMonth ? styles.webDayCellMuted : null,
-                      isSelected ? styles.webDayCellSelected : null,
+                      isSelected ? [styles.webDayCellSelected, { backgroundColor: selectedDayBackgroundColor }] : null,
                       isDisabled ? styles.webDayCellDisabled : null,
                     ]}
                   >
@@ -272,7 +276,7 @@ export function DatePickerField({
                       style={[
                         styles.webDayText,
                         !day.isCurrentMonth ? styles.webDayTextMuted : null,
-                        isSelected ? styles.webDayTextSelected : null,
+                        isSelected ? [styles.webDayTextSelected, { color: selectedDayTextColor }] : null,
                         isDisabled ? styles.webDayTextDisabled : null,
                       ]}
                     >
@@ -500,7 +504,7 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.surfaceSoft,
   },
   webDayCellSelected: {
-    backgroundColor: theme.colors.brandPrimary,
+    backgroundColor: theme.colors.actionPrimary,
   },
   webDayCellDisabled: {
     opacity: 0.35,

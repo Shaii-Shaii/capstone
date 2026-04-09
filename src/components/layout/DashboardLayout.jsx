@@ -32,7 +32,7 @@ export const DashboardLayout = ({
 }) => {
   const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
-  const { user } = useAuth();
+  const { user, resolvedTheme } = useAuth();
   const [isChatOpen, setIsChatOpen] = useState(false);
   const hasNav = navItems.length > 0;
   const isShortScreen = height < theme.layout.shortScreenHeight;
@@ -118,6 +118,7 @@ export const DashboardLayout = ({
               onPress={() => setIsChatOpen(true)}
               style={({ pressed }) => [
                 styles.chatLauncher,
+                resolvedTheme?.primaryColor ? { backgroundColor: resolvedTheme.primaryColor } : null,
                 { bottom: chatLauncherBottom },
                 pressed ? styles.chatLauncherPressed : null,
               ]}
@@ -167,7 +168,7 @@ export const DashboardLayout = ({
                           <Image source={chatbotIcon} style={styles.chatModalBotAvatar} resizeMode="contain" />
                         </View>
                         <View style={styles.chatModalBotCopy}>
-                          <Text style={styles.chatModalEyebrow}>Donivra AI</Text>
+                          <Text style={styles.chatModalEyebrow}>{resolvedTheme?.brandName ? `${resolvedTheme.brandName} AI` : 'AI Assistant'}</Text>
                           <Text style={styles.chatModalTitle}>
                             {chatRole === 'donor' ? 'Donation Support' : 'Patient Support'}
                           </Text>
@@ -341,7 +342,7 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamily,
     fontSize: 11,
     fontWeight: theme.typography.weights.semibold,
-    color: theme.colors.brandPrimary,
+    color: theme.colors.actionPrimary,
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },

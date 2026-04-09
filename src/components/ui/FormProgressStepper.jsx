@@ -1,10 +1,14 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { theme } from '../../design-system/theme';
+import { useAuth } from '../../providers/AuthProvider';
 
 export const FormProgressStepper = ({ steps = [], currentStep = 0, style }) => {
+  const { resolvedTheme } = useAuth();
   const safeSteps = Array.isArray(steps) ? steps : [];
   const activeIndex = Math.max(0, Math.min(currentStep, Math.max(safeSteps.length - 1, 0)));
+  const activeColor = resolvedTheme?.primaryColor || theme.colors.brandPrimary;
+  const activeSoftColor = resolvedTheme?.secondaryColor || theme.colors.brandPrimaryMuted;
 
   return (
     <View style={[styles.container, style]}>
@@ -19,13 +23,13 @@ export const FormProgressStepper = ({ steps = [], currentStep = 0, style }) => {
               <View style={styles.nodeWrap}>
                 <View style={[
                   styles.node,
-                  isCompleted ? styles.nodeCompleted : null,
-                  isActive ? styles.nodeActive : null,
+                  isCompleted ? [styles.nodeCompleted, { backgroundColor: activeColor, borderColor: activeColor }] : null,
+                  isActive ? [styles.nodeActive, { borderColor: activeColor, backgroundColor: activeSoftColor }] : null,
                 ]}>
                   <Text style={[
                     styles.nodeText,
                     isCompleted ? styles.nodeTextCompleted : null,
-                    isActive ? styles.nodeTextActive : null,
+                    isActive ? [styles.nodeTextActive, { color: activeColor }] : null,
                   ]}>
                     {index + 1}
                   </Text>
@@ -40,7 +44,7 @@ export const FormProgressStepper = ({ steps = [], currentStep = 0, style }) => {
 
               {index < safeSteps.length - 1 ? (
                 <View style={styles.connectorWrap}>
-                  <View style={[styles.connector, index < activeIndex ? styles.connectorCompleted : null]} />
+                  <View style={[styles.connector, index < activeIndex ? [styles.connectorCompleted, { backgroundColor: activeColor }] : null]} />
                 </View>
               ) : null}
             </React.Fragment>

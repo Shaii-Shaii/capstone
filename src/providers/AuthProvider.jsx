@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { useAuthSession } from '../hooks/useAuthSession';
 import { getResolvedSystemTheme } from '../features/auth/services/auth.service';
-import { loginThemeFallback } from '../design-system/theme';
+import { emptyResolvedTheme } from '../design-system/theme';
 
 const AuthContext = createContext({
   user: null,
@@ -14,13 +14,13 @@ const AuthContext = createContext({
   needsOnboarding: false,
   isLoading: true,
   refreshProfile: async () => null,
-  resolvedTheme: loginThemeFallback,
-  refreshResolvedTheme: async () => loginThemeFallback,
+  resolvedTheme: emptyResolvedTheme,
+  refreshResolvedTheme: async () => emptyResolvedTheme,
 });
 
 export const AuthProvider = ({ children }) => {
   const authState = useAuthSession();
-  const [resolvedTheme, setResolvedTheme] = useState(loginThemeFallback);
+  const [resolvedTheme, setResolvedTheme] = useState(emptyResolvedTheme);
 
   const refreshResolvedTheme = async () => {
     const result = await getResolvedSystemTheme();
@@ -29,8 +29,8 @@ export const AuthProvider = ({ children }) => {
       return result.data;
     }
 
-    setResolvedTheme(loginThemeFallback);
-    return loginThemeFallback;
+    setResolvedTheme(emptyResolvedTheme);
+    return emptyResolvedTheme;
   };
 
   useEffect(() => {

@@ -2,22 +2,6 @@ import React from 'react';
 import { View, StyleSheet, Text, Image } from 'react-native';
 import { theme } from '../../design-system/theme';
 import { AppTextLink } from '../ui/AppTextLink';
-import donivraLogoNoText from '../../assets/images/donivra_logo_no_text.png';
-
-const HEADER_VARIANTS = {
-  donor: {
-    colors: [theme.colors.dashboardDonorFrom, theme.colors.dashboardDonorTo],
-  },
-  patient: {
-    colors: [theme.colors.dashboardPatientFrom, theme.colors.dashboardPatientTo],
-  },
-  access: {
-    colors: [theme.colors.heroFrom, theme.colors.heroTo],
-  },
-  default: {
-    colors: [theme.colors.heroFrom, theme.colors.heroTo],
-  },
-};
 
 export const AuthHeader = ({
   title,
@@ -26,19 +10,17 @@ export const AuthHeader = ({
   style,
   backLabel,
   onBackPress,
-  role = 'default',
   minimal = false,
   resolvedTheme = null,
 }) => {
-  const config = HEADER_VARIANTS[role] || HEADER_VARIANTS.default;
-  const logoSource = donivraLogoNoText;
-  const brandName = resolvedTheme?.brandName || 'Donivra';
+  const logoUri = resolvedTheme?.logoIcon || '';
+  const brandName = resolvedTheme?.brandName || '';
   const titleColor = resolvedTheme?.primaryTextColor || theme.colors.textPrimary;
   const subtitleColor = resolvedTheme?.secondaryTextColor || theme.colors.textSecondary;
   const pillColor = resolvedTheme?.secondaryColor || theme.colors.whiteOverlay;
   const pillTextColor = resolvedTheme?.tertiaryTextColor || theme.colors.textInverse;
   const borderColor = resolvedTheme?.secondaryColor || theme.colors.borderSubtle;
-  const visualCardBackground = resolvedTheme?.primaryColor || config.colors[0];
+  const visualCardBackground = resolvedTheme?.primaryColor || theme.colors.heroFrom;
 
   return (
     <View style={[styles.container, style]}>
@@ -47,20 +29,26 @@ export const AuthHeader = ({
       ) : null}
 
       {minimal ? (
-        <View style={styles.minimalLogoWrap}>
-          <View style={[styles.minimalLogoFrame, { borderColor }]}>
-            <Image source={logoSource} style={styles.logoImage} resizeMode="contain" />
+        logoUri ? (
+          <View style={styles.minimalLogoWrap}>
+            <View style={[styles.minimalLogoFrame, { borderColor }]}>
+              <Image source={{ uri: logoUri }} style={styles.logoImage} resizeMode="contain" />
+            </View>
           </View>
-        </View>
+        ) : null
       ) : (
         <View style={[styles.visualCard, { backgroundColor: visualCardBackground }]}>
           <View style={styles.visualTopRow}>
             <View style={styles.logoGroup}>
-              <View style={[styles.logoFrame, { borderColor: pillColor }]}>
-                <Image source={logoSource} style={styles.logoImage} resizeMode="contain" />
-              </View>
+              {logoUri ? (
+                <View style={[styles.logoFrame, { borderColor: pillColor }]}>
+                  <Image source={{ uri: logoUri }} style={styles.logoImage} resizeMode="contain" />
+                </View>
+              ) : null}
               <View style={styles.visualCopy}>
-                <Text style={[styles.brandName, { color: theme.colors.textInverse, fontFamily: resolvedTheme?.secondaryFontFamily || theme.typography.fontFamilyDisplay }]}>{brandName}</Text>
+                {brandName ? (
+                  <Text style={[styles.brandName, { color: theme.colors.textInverse, fontFamily: resolvedTheme?.secondaryFontFamily || theme.typography.fontFamilyDisplay }]}>{brandName}</Text>
+                ) : null}
               </View>
             </View>
 

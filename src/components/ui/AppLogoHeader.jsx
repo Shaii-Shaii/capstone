@@ -1,63 +1,52 @@
 import React from 'react';
-import { View, Text, StyleSheet, Image, ImageBackground, useWindowDimensions } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
+import { View, Text, StyleSheet, Image, useWindowDimensions } from 'react-native';
 import { theme } from '../../design-system/theme';
-import donivraLogo from '../../assets/images/donivra_logo.png';
-import donivraLogoNoText from '../../assets/images/donivra_logo_no_text.png';
-import heroLanding from '../../assets/images/hero_landing.png';
+import { useAuth } from '../../providers/AuthProvider';
 
 export const AppLogoHeader = ({
   title,
   subtitle,
-  eyebrow = 'Donivra',
+  eyebrow = '',
   showLogo = true,
   variant = 'authHero',
   align = 'center',
   style,
 }) => {
+  const { resolvedTheme } = useAuth();
   const { width, height } = useWindowDimensions();
-  const isShortScreen = height < 760;
   const isCompactScreen = height < theme.layout.compactScreenHeight;
   const isCompact = variant === 'compact';
   const isAuthCard = variant === 'authCard';
-  const isLandingHero = variant === 'landingHero';
   const isNarrow = width < 390;
-  const titleColor = isCompact || isAuthCard ? theme.colors.textPrimary : theme.colors.textInverse;
-  const subtitleColor = isCompact || isAuthCard ? theme.colors.textSecondary : theme.colors.textHeroMuted;
-  const logoColors = isCompact || isAuthCard
-    ? [theme.colors.brandPrimary, theme.colors.heroTo]
-    : [theme.colors.heroFrom, theme.colors.heroTo];
-  const resolvedLogo = isCompact || isAuthCard ? donivraLogoNoText : donivraLogo;
+  const titleColor = isCompact || isAuthCard
+    ? (resolvedTheme?.primaryTextColor || theme.colors.textPrimary)
+    : theme.colors.textInverse;
+  const subtitleColor = isCompact || isAuthCard
+    ? (resolvedTheme?.secondaryTextColor || theme.colors.textSecondary)
+    : theme.colors.textHeroMuted;
+  const logoUri = resolvedTheme?.logoIcon || '';
+  const eyebrowLabel = eyebrow || resolvedTheme?.brandName || '';
+  const cardBackground = resolvedTheme?.primaryColor || (isCompact || isAuthCard ? theme.colors.surfaceCard : theme.colors.heroFrom);
 
   return (
     <View style={[styles.container, align === 'left' ? styles.leftAligned : null, style]}>
-      {showLogo ? (
-        isLandingHero ? (
-          <ImageBackground source={heroLanding} style={[styles.logoWrapLandingHero, isShortScreen ? styles.logoWrapLandingHeroCompact : null]} resizeMode="cover">
-            <LinearGradient
-              colors={['rgba(8,8,8,0.15)', 'rgba(8,8,8,0.85)']}
-              style={StyleSheet.absoluteFillObject}
-            />
+      {showLogo && (logoUri || eyebrowLabel) ? (
+        <View
+          style={[
+            styles.logoWrap,
+            { backgroundColor: cardBackground },
+            isCompact ? styles.logoWrapCompact : null,
+            isAuthCard ? styles.logoWrapAuthCard : null,
+            isAuthCard && isCompactScreen ? styles.logoWrapAuthCardCompact : null,
+            isNarrow ? styles.logoWrapNarrow : null,
+          ]}
+        >
+          {eyebrowLabel ? (
             <View style={styles.logoPill}>
-              <Text style={styles.logoPillText}>{eyebrow}</Text>
+              <Text style={styles.logoPillText}>{eyebrowLabel}</Text>
             </View>
-          </ImageBackground>
-        ) : (
-          <LinearGradient
-            colors={logoColors}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={[
-              styles.logoWrap,
-              isCompact ? styles.logoWrapCompact : null,
-              isAuthCard ? styles.logoWrapAuthCard : null,
-              isAuthCard && isCompactScreen ? styles.logoWrapAuthCardCompact : null,
-              isNarrow ? styles.logoWrapNarrow : null,
-            ]}
-          >
-            <View style={styles.logoPill}>
-              <Text style={styles.logoPillText}>{eyebrow}</Text>
-            </View>
+          ) : null}
+          {logoUri ? (
             <View
               style={[
                 styles.logoFrame,
@@ -66,17 +55,17 @@ export const AppLogoHeader = ({
                 isAuthCard && isCompactScreen ? styles.logoFrameAuthCardCompact : null,
               ]}
             >
-              <Image source={resolvedLogo} style={styles.logoImage} resizeMode="contain" />
+              <Image source={{ uri: logoUri }} style={styles.logoImage} resizeMode="contain" />
             </View>
-            {!isCompact ? <View style={[styles.logoGlow]} /> : null}
-          </LinearGradient>
-        )
+          ) : null}
+          {!isCompact && logoUri ? <View style={styles.logoGlow} /> : null}
+        </View>
       ) : null}
+
       {title ? (
         <Text
           style={[
             styles.title,
-            isLandingHero ? styles.titleLandingHero : null,
             isAuthCard ? styles.titleAuthCard : null,
             isAuthCard && isCompactScreen ? styles.titleAuthCardCompact : null,
             isNarrow ? styles.titleNarrow : null,
@@ -87,11 +76,11 @@ export const AppLogoHeader = ({
           {title}
         </Text>
       ) : null}
+
       {subtitle ? (
         <Text
           style={[
             styles.subtitle,
-            isLandingHero ? styles.subtitleLandingHero : null,
             isAuthCard ? styles.subtitleAuthCard : null,
             isAuthCard && isCompactScreen ? styles.subtitleAuthCardCompact : null,
             isNarrow ? styles.subtitleNarrow : null,
@@ -144,17 +133,6 @@ const styles = StyleSheet.create({
     paddingVertical: theme.spacing.xs,
     marginBottom: theme.spacing.sm,
   },
-  logoWrapLandingHero: {
-    width: '100%',
-    height: 280,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: theme.spacing.lg,
-    overflow: 'hidden',
-  },
-  logoWrapLandingHeroCompact: {
-    height: 220,
-  },
   logoWrapNarrow: {
     width: '100%',
     minWidth: 0,
@@ -198,10 +176,6 @@ const styles = StyleSheet.create({
     width: 50,
     height: 50,
   },
-  logoFrameLandingHero: {
-    width: 88,
-    height: 88,
-  },
   logoImage: {
     width: '100%',
     height: '100%',
@@ -214,9 +188,6 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.full,
     backgroundColor: theme.colors.accentStrong,
   },
-  logoGlowLandingHero: {
-    width: 72,
-  },
   title: {
     fontFamily: theme.typography.fontFamilyDisplay,
     fontSize: theme.typography.semantic.titleLg,
@@ -227,10 +198,6 @@ const styles = StyleSheet.create({
   },
   titleNarrow: {
     fontSize: theme.typography.semantic.titleMd,
-  },
-  titleLandingHero: {
-    maxWidth: 380,
-    paddingHorizontal: theme.spacing.xl,
   },
   titleAuthCard: {
     fontSize: theme.typography.semantic.titleMd,
@@ -250,10 +217,6 @@ const styles = StyleSheet.create({
   },
   subtitleNarrow: {
     fontSize: theme.typography.semantic.bodySm,
-  },
-  subtitleLandingHero: {
-    maxWidth: 340,
-    paddingHorizontal: theme.spacing.xl,
   },
   subtitleAuthCard: {
     maxWidth: 330,

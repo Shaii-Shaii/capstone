@@ -10,6 +10,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import { theme } from '../../design-system/theme';
+import { useAuth } from '../../providers/AuthProvider';
 
 const AnimatedView = Animated.createAnimatedComponent(View);
 
@@ -19,6 +20,7 @@ const OtpCell = ({
   error,
   success,
   disabled,
+  resolvedTheme,
   keyboardType,
   autoCapitalize,
   inputRef,
@@ -28,6 +30,9 @@ const OtpCell = ({
   onKeyPress,
 }) => {
   const emphasis = useSharedValue(isFocused ? 1 : cellValue ? 0.7 : 0);
+  const focusColor = resolvedTheme?.primaryColor || theme.colors.borderFocus;
+  const successColor = resolvedTheme?.primaryColor || theme.colors.textSuccess;
+  const successBackgroundColor = resolvedTheme?.secondaryColor || theme.colors.brandPrimaryMuted;
 
   useEffect(() => {
     emphasis.value = withSpring(isFocused ? 1 : cellValue ? 0.7 : 0, theme.motion.spring);
@@ -35,16 +40,16 @@ const OtpCell = ({
 
   const cellStyle = useAnimatedStyle(() => ({
     borderColor: success
-      ? theme.colors.brandPrimary
+      ? successColor
       : error
         ? theme.colors.borderError
         : interpolateColor(
             emphasis.value,
             [0, 0.7, 1],
-            [theme.colors.borderSubtle, theme.colors.borderStrong, theme.colors.borderFocus]
+            [theme.colors.borderSubtle, theme.colors.borderStrong, focusColor]
           ),
     backgroundColor: success
-      ? theme.colors.brandPrimaryMuted
+      ? successBackgroundColor
       : disabled
         ? theme.colors.surfaceDisabled
         : interpolateColor(
@@ -65,7 +70,7 @@ const OtpCell = ({
         ref={inputRef}
         style={[
           styles.input,
-          success ? styles.inputSuccess : null,
+          success ? [styles.inputSuccess, { color: successColor }] : null,
           disabled ? styles.inputDisabled : null,
         ]}
         value={cellValue || ''}
@@ -95,6 +100,7 @@ export const OtpInput = ({
   autoCapitalize,
   style,
 }) => {
+  const { resolvedTheme } = useAuth();
   const [internalCode, setInternalCode] = useState(value || '');
   const [focusedIndex, setFocusedIndex] = useState(-1);
   const inputRefs = useRef([]);
@@ -186,6 +192,7 @@ export const OtpInput = ({
             error={error}
             success={success}
             disabled={disabled}
+            resolvedTheme={resolvedTheme}
             keyboardType={keyboardType}
             autoCapitalize={autoCapitalize || (characterSet === 'alphanumeric' ? 'characters' : 'none')}
             inputRef={(ref) => {
@@ -228,9 +235,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     color: theme.colors.textPrimary,
   },
-  inputSuccess: {
-    color: theme.colors.brandPrimary,
-  },
+  inputSuccess: {},
   inputDisabled: {
     color: theme.colors.textDisabled,
   },

@@ -22,7 +22,6 @@ import {
 import { patientOnboardingSchema } from '../src/features/profile/profile.schema';
 import { guardianRelationshipOptions, profileGenderOptions } from '../src/constants/profile';
 import { theme } from '../src/design-system/theme';
-import donivraLogoNoText from '../src/assets/images/donivra_logo_no_text.png';
 
 const normalizePatientCode = (value) => value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
 const IMAGE_MEDIA_TYPES = ['images'];
@@ -143,17 +142,23 @@ function LoadingState() {
     >
       <View style={styles.centeredContainer}>
         <View style={styles.logoWrap}>
-          <Image source={donivraLogoNoText} style={styles.logo} resizeMode="contain" />
+          {resolvedTheme?.logoIcon ? (
+            <Image source={{ uri: resolvedTheme.logoIcon }} style={styles.logo} resizeMode="contain" />
+          ) : (
+            <AppIcon name="profile" size="xl" state="active" />
+          )}
         </View>
-        <Text
-          style={[
-            styles.brandName,
-            resolvedTheme?.primaryTextColor ? { color: resolvedTheme.primaryTextColor } : null,
-            resolvedTheme?.secondaryFontFamily ? { fontFamily: resolvedTheme.secondaryFontFamily } : null,
-          ]}
-        >
-          {resolvedTheme?.brandName || 'Donivra'}
-        </Text>
+        {resolvedTheme?.brandName ? (
+          <Text
+            style={[
+              styles.brandName,
+              resolvedTheme?.primaryTextColor ? { color: resolvedTheme.primaryTextColor } : null,
+              resolvedTheme?.secondaryFontFamily ? { fontFamily: resolvedTheme.secondaryFontFamily } : null,
+            ]}
+          >
+            {resolvedTheme.brandName}
+          </Text>
+        ) : null}
       </View>
     </ScreenContainer>
   );
@@ -179,18 +184,24 @@ function PublicLanding() {
       <View style={styles.centeredContainer}>
         <View style={styles.content}>
           <View style={styles.logoWrap}>
-            <Image source={donivraLogoNoText} style={styles.logo} resizeMode="contain" />
+            {resolvedTheme?.logoIcon ? (
+              <Image source={{ uri: resolvedTheme.logoIcon }} style={styles.logo} resizeMode="contain" />
+            ) : (
+              <AppIcon name="profile" size="xl" state="active" />
+            )}
           </View>
 
-          <Text
-            style={[
-              styles.brandName,
-              resolvedTheme?.primaryTextColor ? { color: resolvedTheme.primaryTextColor } : null,
-              resolvedTheme?.secondaryFontFamily ? { fontFamily: resolvedTheme.secondaryFontFamily } : null,
-            ]}
-          >
-            {resolvedTheme?.brandName || 'Donivra'}
-          </Text>
+          {resolvedTheme?.brandName ? (
+            <Text
+              style={[
+                styles.brandName,
+                resolvedTheme?.primaryTextColor ? { color: resolvedTheme.primaryTextColor } : null,
+                resolvedTheme?.secondaryFontFamily ? { fontFamily: resolvedTheme.secondaryFontFamily } : null,
+              ]}
+            >
+              {resolvedTheme.brandName}
+            </Text>
+          ) : null}
 
           <View style={styles.copyBlock}>
             <Text
@@ -261,7 +272,7 @@ function PatientPreviewCard({ patient }) {
 
 function FirstTimeOnboarding() {
   const router = useRouter();
-  const { user, profile, refreshProfile } = useAuth();
+  const { user, profile, refreshProfile, resolvedTheme } = useAuth();
   const [branchMode, setBranchMode] = useState('question');
   const [isIntroReady, setIsIntroReady] = useState(false);
   const [patientCode, setPatientCode] = useState('');
@@ -498,7 +509,7 @@ function FirstTimeOnboarding() {
       return (
         <AppCard variant="elevated" radius="xl" padding="lg" style={styles.onboardingCard}>
           <View style={styles.onboardingSection}>
-            <Text style={styles.onboardingQuestion}>Donivra helps support hair donation and patient care.</Text>
+            <Text style={styles.onboardingQuestion}>This account can continue to donation support and patient care.</Text>
           </View>
 
           <View style={styles.actionStack}>
@@ -1042,11 +1053,15 @@ function FirstTimeOnboarding() {
       <View style={styles.centeredContainer}>
         <View style={styles.content}>
           <View style={styles.logoWrap}>
-            <Image source={donivraLogoNoText} style={styles.logo} resizeMode="contain" />
+            {resolvedTheme?.logoIcon ? (
+              <Image source={{ uri: resolvedTheme.logoIcon }} style={styles.logo} resizeMode="contain" />
+            ) : (
+              <AppIcon name="profile" size="xl" state="active" />
+            )}
           </View>
 
           <Animated.Text style={[styles.heroTitle, { opacity: welcomeOpacity }]}>
-            Welcome to Donivra
+            {resolvedTheme?.brandName ? `Welcome to ${resolvedTheme.brandName}` : 'Welcome'}
           </Animated.Text>
 
           <Animated.Text style={[styles.heroTitle, { opacity: startOpacity }]}>

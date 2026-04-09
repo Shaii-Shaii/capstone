@@ -20,6 +20,7 @@ import { ChatQuickSuggestions } from './ChatQuickSuggestions';
 import { useChatbot } from '../../hooks/useChatbot';
 import { theme } from '../../design-system/theme';
 import chatbotIcon from '../../assets/images/chatbot_icon.png';
+import { useAuth } from '../../providers/AuthProvider';
 
 const MAX_ATTACHMENTS = 3;
 const IMAGE_MEDIA_TYPES = ['images'];
@@ -48,6 +49,7 @@ const normalizeAttachmentAssets = (assets = []) => (
 );
 
 export function ChatbotSupportPanel({ role, userId, variant = 'screen' }) {
+  const { resolvedTheme } = useAuth();
   const scrollRef = useRef(null);
   const [draftMessage, setDraftMessage] = useState('');
   const [attachments, setAttachments] = useState([]);
@@ -93,6 +95,7 @@ export function ChatbotSupportPanel({ role, userId, variant = 'screen' }) {
   const roleCopy = role === 'donor'
     ? 'Hair donation guidance, screening answers, and status help.'
     : 'Support answers, request guidance, and patient status help.';
+  const assistantLabel = resolvedTheme?.brandName ? `${resolvedTheme.brandName} AI` : 'AI Assistant';
   const containerProps = !isModal
     ? {
       behavior: Platform.OS === 'ios' ? 'padding' : 'height',
@@ -191,7 +194,7 @@ export function ChatbotSupportPanel({ role, userId, variant = 'screen' }) {
                 <Image source={chatbotIcon} style={styles.heroBotAvatar} resizeMode="contain" />
               </View>
               <View style={styles.heroBotCopy}>
-                <Text style={styles.heroBotName}>Donivra AI</Text>
+                <Text style={styles.heroBotName}>{assistantLabel}</Text>
                 <Text style={styles.heroBotRole}>{role === 'donor' ? 'Donor Support' : 'Patient Support'}</Text>
               </View>
             </View>
@@ -236,7 +239,7 @@ export function ChatbotSupportPanel({ role, userId, variant = 'screen' }) {
         <StatusBanner
           message="Loading your recent conversation and suggestions."
           variant="info"
-          title="Opening Donivra AI"
+          title={`Opening ${assistantLabel}`}
           style={styles.banner}
         />
       ) : null}
@@ -273,7 +276,7 @@ export function ChatbotSupportPanel({ role, userId, variant = 'screen' }) {
 
                 <View style={styles.welcomeBubble}>
                   <Text style={[styles.emptyTitle, isModal ? styles.emptyTitleModal : null]}>
-                    Donivra AI is ready to help
+                    {assistantLabel} is ready to help
                   </Text>
                   <Text style={[styles.emptyBody, isModal ? styles.emptyBodyModal : null]}>
                     Ask about donation requirements, eligibility, next steps, or your latest donation update.

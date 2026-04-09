@@ -2,6 +2,7 @@ import React from 'react';
 import { Image, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { theme } from '../../design-system/theme';
 import chatbotIcon from '../../assets/images/chatbot_icon.png';
+import { useAuth } from '../../providers/AuthProvider';
 
 const formatTime = (value) => {
   if (!value) return '';
@@ -31,10 +32,12 @@ function AttachmentPreview({ attachment }) {
 }
 
 export function ChatMessageBubble({ message }) {
+  const { resolvedTheme } = useAuth();
   const isUser = message.sender === 'user';
   const attachments = Array.isArray(message.attachments) ? message.attachments : [];
   const actions = Array.isArray(message.actions) ? message.actions : [];
   const timestamp = formatTime(message.createdAt);
+  const assistantLabel = resolvedTheme?.brandName ? `${resolvedTheme.brandName} AI` : 'AI Assistant';
 
   return (
     <View style={[styles.row, isUser ? styles.rowUser : styles.rowAssistant]}>
@@ -45,7 +48,7 @@ export function ChatMessageBubble({ message }) {
       ) : null}
 
       <View style={[styles.contentColumn, isUser ? styles.contentColumnUser : null]}>
-        {!isUser ? <Text style={styles.assistantName}>Donivra AI</Text> : null}
+        {!isUser ? <Text style={styles.assistantName}>{assistantLabel}</Text> : null}
 
         <View style={[styles.bubble, isUser ? styles.userBubble : styles.assistantBubble]}>
           {attachments.length ? (

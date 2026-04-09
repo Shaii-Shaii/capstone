@@ -5,7 +5,7 @@ import { authMessages } from '../../../constants/auth';
 import * as Linking from 'expo-linking';
 import { isPasswordReuse, reusedPasswordMessage } from '../../../utils/passwordRules';
 import { logAppError, logAppEvent, writeAuditLog } from '../../../utils/appErrors';
-import { loginThemeFallback } from '../../../design-system/theme';
+import { emptyResolvedTheme, theme } from '../../../design-system/theme';
 
 const isEmailConfirmed = (user) => Boolean(user?.email_confirmed_at || user?.confirmed_at);
 const loginErrorCodes = {
@@ -144,21 +144,20 @@ const resolveRoleMismatchError = (actualRole) => (
 );
 
 const resolveVisualTheme = ({ uiSettings = {}, preset = {} } = {}) => {
-  const fallback = loginThemeFallback;
   const resolved = {
-    brandName: normalizeVisualValue(uiSettings.brand_name) || fallback.brandName,
-    brandTagline: normalizeVisualValue(uiSettings.brand_tagline) || fallback.brandTagline,
-    logoIcon: normalizeVisualValue(uiSettings.logo_icon) || fallback.logoIcon,
-    loginBackgroundPhoto: normalizeVisualValue(uiSettings.login_background_photo) || fallback.loginBackgroundPhoto,
-    primaryColor: normalizeVisualValue(uiSettings.primary_color) || normalizeVisualValue(preset.primary_color) || fallback.primaryColor,
-    secondaryColor: normalizeVisualValue(uiSettings.secondary_color) || normalizeVisualValue(preset.secondary_color) || fallback.secondaryColor,
-    tertiaryColor: normalizeVisualValue(uiSettings.tertiary_color) || normalizeVisualValue(preset.tertiary_color) || fallback.tertiaryColor,
-    backgroundColor: normalizeVisualValue(uiSettings.background_color) || normalizeVisualValue(preset.background_color) || fallback.backgroundColor,
-    primaryTextColor: normalizeVisualValue(uiSettings.primary_text_color) || normalizeVisualValue(preset.primary_text_color) || fallback.primaryTextColor,
-    secondaryTextColor: normalizeVisualValue(uiSettings.secondary_text_color) || normalizeVisualValue(preset.secondary_text_color) || fallback.secondaryTextColor,
-    tertiaryTextColor: normalizeVisualValue(uiSettings.tertiary_text_color) || normalizeVisualValue(preset.tertiary_text_color) || fallback.tertiaryTextColor,
-    fontFamily: normalizeVisualValue(uiSettings.font_family) || normalizeVisualValue(preset.font_family) || fallback.fontFamily,
-    secondaryFontFamily: normalizeVisualValue(uiSettings.secondary_font_family) || normalizeVisualValue(preset.secondary_font_family) || fallback.secondaryFontFamily,
+    brandName: normalizeVisualValue(uiSettings.brand_name),
+    brandTagline: normalizeVisualValue(uiSettings.brand_tagline),
+    logoIcon: normalizeVisualValue(uiSettings.logo_icon),
+    loginBackgroundPhoto: normalizeVisualValue(uiSettings.login_background_photo),
+    primaryColor: normalizeVisualValue(uiSettings.primary_color) || normalizeVisualValue(preset.primary_color),
+    secondaryColor: normalizeVisualValue(uiSettings.secondary_color) || normalizeVisualValue(preset.secondary_color),
+    tertiaryColor: normalizeVisualValue(uiSettings.tertiary_color) || normalizeVisualValue(preset.tertiary_color),
+    backgroundColor: normalizeVisualValue(uiSettings.background_color) || normalizeVisualValue(preset.background_color),
+    primaryTextColor: normalizeVisualValue(uiSettings.primary_text_color) || normalizeVisualValue(preset.primary_text_color),
+    secondaryTextColor: normalizeVisualValue(uiSettings.secondary_text_color) || normalizeVisualValue(preset.secondary_text_color),
+    tertiaryTextColor: normalizeVisualValue(uiSettings.tertiary_text_color) || normalizeVisualValue(preset.tertiary_text_color),
+    fontFamily: normalizeVisualValue(uiSettings.font_family) || normalizeVisualValue(preset.font_family) || theme.typography.fontFamily,
+    secondaryFontFamily: normalizeVisualValue(uiSettings.secondary_font_family) || normalizeVisualValue(preset.secondary_font_family) || theme.typography.fontFamilyDisplay,
   };
 
   return resolved;
@@ -425,7 +424,7 @@ export const getResolvedSystemTheme = async () => {
     });
 
     return {
-      data: loginThemeFallback,
+      data: emptyResolvedTheme,
       error,
     };
   }

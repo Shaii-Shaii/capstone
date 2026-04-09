@@ -11,7 +11,7 @@ export const ScreenContainer = ({
   scrollable = true,
   safeArea = true,
   variant = 'default',
-  heroColors = [theme.colors.heroFrom, theme.colors.heroTo],
+  heroColors,
   authHeroImageUri = '',
 }) => {
   const { resolvedTheme } = useAuth();
@@ -40,8 +40,8 @@ export const ScreenContainer = ({
   const backgroundCanvas = resolvedTheme?.backgroundColor || theme.colors.backgroundCanvas;
   const authBaseBackground = resolvedTheme?.backgroundColor || theme.colors.backgroundCanvas;
   const dashboardBaseBackground = resolvedTheme?.backgroundColor || theme.colors.backgroundSecondary;
-  const authHeroBackground = resolvedTheme?.primaryColor || heroColors[0];
-  const dashboardHeroBackground = resolvedTheme?.primaryColor || theme.colors.dashboardShellFrom;
+  const authHeroBackground = resolvedTheme?.primaryColor || heroColors?.[0] || theme.colors.heroFrom;
+  const dashboardHeroBackground = resolvedTheme?.primaryColor || heroColors?.[0] || theme.colors.dashboardShellFrom;
 
   const content = (
     <View
