@@ -1,7 +1,7 @@
 import React from 'react';
-import { View, Text, StyleSheet, useWindowDimensions, Pressable, Image } from 'react-native';
+import { Alert, View, Text, StyleSheet, useWindowDimensions, Pressable, Image } from 'react-native';
 import * as Haptics from 'expo-haptics';
-import { theme } from '../../design-system/theme';
+import { theme, resolveThemeRoles } from '../../design-system/theme';
 import { useAuthActions } from '../../features/auth/hooks/useAuthActions';
 import { AppIcon } from './AppIcon';
 import { useAuth } from '../../providers/AuthProvider';
@@ -48,32 +48,75 @@ export const DashboardHeader = ({
   const config = HEADER_VARIANTS[variant] || HEADER_VARIANTS.hero;
   const [imageFailed, setImageFailed] = React.useState(false);
   const shouldShowAvatar = showAvatar ?? !minimal;
-  const headerBackground = resolvedTheme?.primaryColor || config.colors[0];
-  const summaryBackground = resolvedTheme?.secondaryColor || config.summaryBg;
-  const summaryTextColor = resolvedTheme?.tertiaryTextColor || config.summaryText;
-  const actionColor = resolvedTheme?.primaryColor || theme.colors.actionPrimary;
+  const roles = resolveThemeRoles(resolvedTheme);
+  const headerBackground = roles.heroBackground || config.colors[0];
+  const summaryBackground = roles.headerUtilityBackground || config.summaryBg;
+  const summaryTextColor = roles.heroBodyText || config.summaryText;
+  const actionColor = roles.headerSearchAccentBackground || resolvedTheme?.primaryColor || theme.colors.actionPrimary;
+  const actionTextColor = roles.headerSearchAccentText;
   const eyebrowText = resolvedTheme?.brandName || config.eyebrow;
 
   React.useEffect(() => {
     setImageFailed(false);
   }, [avatarUri]);
 
+  const handleLogoutPress = React.useCallback(() => {
+    if (isLoading) return;
+
+    Alert.alert(
+      'Log out?',
+      'Are you sure you want to log out?',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: 'Log out',
+          style: 'destructive',
+          onPress: () => {
+            logout();
+          },
+        },
+      ]
+    );
+  }, [isLoading, logout]);
+
   const utilityItems = [
     ...utilityActions,
     {
       key: 'logout',
       icon: 'signOut',
-      onPress: logout,
+      onPress: handleLogoutPress,
       loading: isLoading,
     },
   ];
 
   return (
-    <View style={[styles.container, compact ? styles.containerCompact : null, { backgroundColor: headerBackground }]}>
+    <View
+      style={[
+        styles.container,
+        compact ? styles.containerCompact : null,
+        {
+          backgroundColor: headerBackground,
+          borderColor: roles.heroBorder,
+        },
+      ]}
+    >
       <View style={styles.topRow}>
         <View style={styles.identityRow}>
           {shouldShowAvatar ? (
-            <View key={avatarUri || avatarInitials} style={[styles.avatar, compact ? styles.avatarCompact : null]}>
+            <View
+              key={avatarUri || avatarInitials}
+              style={[
+                styles.avatar,
+                compact ? styles.avatarCompact : null,
+                {
+                  backgroundColor: roles.headerUtilityBackground,
+                  borderColor: roles.heroBorder,
+                },
+              ]}
+            >
               {avatarUri && !imageFailed ? (
                 <Image
                   source={{ uri: avatarUri }}
@@ -82,18 +125,18 @@ export const DashboardHeader = ({
                   onError={() => setImageFailed(true)}
                 />
               ) : avatarInitials ? (
-                <Text style={styles.avatarText}>{avatarInitials.toUpperCase().slice(0, 2)}</Text>
+                <Text style={[styles.avatarText, { color: roles.headerUtilityText }]}>{avatarInitials.toUpperCase().slice(0, 2)}</Text>
               ) : (
-                <AppIcon name="profile" size="md" state="inverse" />
+                <AppIcon name="profile" size="md" state="default" color={roles.headerUtilityText} />
               )}
             </View>
           ) : null}
           <View style={styles.textContainer}>
-            {!minimal && eyebrowText ? <Text style={styles.eyebrow}>{eyebrowText}</Text> : null}
-            <Text numberOfLines={1} style={[styles.title, compact ? styles.titleCompact : null]}>
+            {!minimal && eyebrowText ? <Text style={[styles.eyebrow, { color: roles.heroMetaText }]}>{eyebrowText}</Text> : null}
+            <Text numberOfLines={1} style={[styles.title, compact ? styles.titleCompact : null, { color: roles.heroHeadingText }]}>
               {title}
             </Text>
-            {!minimal && subtitle ? <Text numberOfLines={1} style={styles.subtitle}>{subtitle}</Text> : null}
+            {!minimal && subtitle ? <Text numberOfLines={1} style={[styles.subtitle, { color: roles.heroBodyText }]}>{subtitle}</Text> : null}
           </View>
         </View>
 
@@ -104,18 +147,26 @@ export const DashboardHeader = ({
               onPress={item.loading ? undefined : item.onPress}
               style={({ pressed }) => [
                 styles.utilityButton,
+                {
+                  backgroundColor: roles.headerUtilityBackground,
+                  borderColor: roles.heroBorder,
+                },
                 item.loading ? styles.utilityButtonDisabled : null,
                 pressed ? styles.utilityButtonPressed : null,
               ]}
             >
-              <AppIcon
-                name={item.icon}
-                size="md"
-                state="inverse"
-              />
+              <AppIcon name={item.icon} size="md" state="default" color={roles.headerUtilityText} />
               {item.badge ? (
-                <View style={styles.utilityBadge}>
-                  <Text style={styles.utilityBadgeText}>{item.badge}</Text>
+                <View
+                  style={[
+                    styles.utilityBadge,
+                    {
+                      backgroundColor: roles.primaryActionBackground,
+                      borderColor: roles.pageBackground,
+                    },
+                  ]}
+                >
+                  <Text style={[styles.utilityBadgeText, { color: roles.primaryActionText }]}>{item.badge}</Text>
                 </View>
               ) : null}
             </Pressable>
@@ -135,12 +186,20 @@ export const DashboardHeader = ({
             pressed ? styles.searchRowPressed : null,
           ]}
         >
-          <View style={styles.searchInput}>
-            <AppIcon name="search" size="sm" state="muted" />
-            <Text numberOfLines={1} style={styles.searchPlaceholder}>{searchPlaceholder}</Text>
+          <View
+            style={[
+              styles.searchInput,
+              {
+                backgroundColor: roles.headerSearchBackground,
+                borderColor: roles.defaultCardBorder,
+              },
+            ]}
+          >
+            <AppIcon name="search" size="sm" state="default" color={roles.metaText} />
+            <Text numberOfLines={1} style={[styles.searchPlaceholder, { color: roles.headerSearchText }]}>{searchPlaceholder}</Text>
           </View>
           <View style={[styles.searchAction, { backgroundColor: actionColor }]}>
-            <AppIcon name="filter" size="sm" state="inverse" />
+            <AppIcon name="filter" size="sm" state="default" color={actionTextColor} />
           </View>
         </Pressable>
       ) : null}
@@ -153,18 +212,31 @@ export const DashboardHeader = ({
               onPress={item.onPress}
               style={({ pressed }) => [
                 styles.quickTool,
+                {
+                  backgroundColor: roles.headerUtilityBackground,
+                  borderColor: roles.heroBorder,
+                },
                 pressed ? styles.quickToolPressed : null,
               ]}
             >
-              <AppIcon name={item.icon} size="sm" state="inverse" />
-              <Text style={styles.quickToolText}>{item.label}</Text>
+              <AppIcon name={item.icon} size="sm" state="default" color={roles.headerUtilityText} />
+              <Text style={[styles.quickToolText, { color: roles.headerUtilityText }]}>{item.label}</Text>
             </Pressable>
           ))}
         </View>
       ) : null}
 
       {!minimal && summary ? (
-        <View style={[styles.summaryCard, compact ? styles.summaryCardCompact : null, { backgroundColor: summaryBackground }]}>
+        <View
+          style={[
+            styles.summaryCard,
+            compact ? styles.summaryCardCompact : null,
+            {
+              backgroundColor: summaryBackground,
+              borderColor: roles.heroBorder,
+            },
+          ]}
+        >
           <Text numberOfLines={2} style={[styles.summaryText, { color: summaryTextColor }]}>{summary}</Text>
         </View>
       ) : null}
@@ -178,6 +250,7 @@ const styles = StyleSheet.create({
     borderRadius: 30,
     padding: theme.spacing.sm,
     backgroundColor: theme.colors.heroFrom,
+    borderWidth: 1,
     ...theme.shadows.hero,
   },
   containerCompact: {
@@ -204,11 +277,9 @@ const styles = StyleSheet.create({
     width: 34,
     height: 34,
     borderRadius: theme.radius.full,
-    backgroundColor: theme.colors.whiteOverlay,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    borderColor: theme.colors.whiteOverlay,
   },
   utilityButtonPressed: {
     transform: [{ scale: 0.96 }],
@@ -226,25 +297,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: 3,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: theme.colors.actionPrimary,
     borderWidth: 1,
-    borderColor: theme.colors.surfaceCard,
   },
   utilityBadgeText: {
     fontFamily: theme.typography.fontFamily,
     fontSize: 9,
     fontWeight: theme.typography.weights.bold,
-    color: theme.colors.textInverse,
   },
   avatar: {
     width: 38,
     height: 38,
     borderRadius: theme.radius.full,
-    backgroundColor: theme.colors.whiteOverlay,
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: theme.colors.whiteOverlay,
   },
   avatarCompact: {
     width: 34,
@@ -254,7 +320,6 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.bodySm,
     fontWeight: theme.typography.weights.bold,
-    color: theme.colors.textInverse,
   },
   avatarImage: {
     width: '100%',
@@ -271,13 +336,11 @@ const styles = StyleSheet.create({
     fontWeight: theme.typography.weights.semibold,
     letterSpacing: 0.6,
     textTransform: 'uppercase',
-    color: theme.colors.textHeroMuted,
   },
   title: {
     fontFamily: theme.typography.fontFamilyDisplay,
     fontSize: theme.typography.compact.bodyLg,
     lineHeight: theme.typography.compact.bodyLg * theme.typography.lineHeights.snug,
-    color: theme.colors.textInverse,
   },
   titleCompact: {
     fontSize: theme.typography.compact.body,
@@ -288,7 +351,6 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.caption,
     lineHeight: theme.typography.compact.caption * theme.typography.lineHeights.normal,
-    color: theme.colors.textHeroSoft,
   },
   searchRow: {
     marginTop: theme.spacing.sm,
@@ -306,7 +368,7 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: 38,
     borderRadius: theme.radius.pill,
-    backgroundColor: theme.colors.surfaceCard,
+    borderWidth: 1,
     paddingHorizontal: theme.spacing.sm,
     flexDirection: 'row',
     alignItems: 'center',
@@ -316,13 +378,11 @@ const styles = StyleSheet.create({
     flex: 1,
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.bodySm,
-    color: theme.colors.textSecondary,
   },
   searchAction: {
     width: 38,
     height: 38,
     borderRadius: theme.radius.full,
-    backgroundColor: theme.colors.actionPrimary,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -339,7 +399,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: theme.spacing.sm,
     paddingVertical: 6,
     borderRadius: theme.radius.pill,
-    backgroundColor: theme.colors.whiteOverlay,
+    borderWidth: 1,
   },
   quickToolPressed: {
     opacity: 0.9,
@@ -348,13 +408,13 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.caption,
     fontWeight: theme.typography.weights.medium,
-    color: theme.colors.textInverse,
   },
   summaryCard: {
     marginTop: theme.spacing.sm,
     borderRadius: 18,
     paddingHorizontal: theme.spacing.sm,
     paddingVertical: theme.spacing.xs,
+    borderWidth: 1,
   },
   summaryCardCompact: {
     marginTop: theme.spacing.xs,
