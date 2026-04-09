@@ -210,7 +210,7 @@ const buildPhotoRecord = (asset, slotIndex, sourceType = 'upload') => {
   };
 };
 
-export const useDonorHairSubmission = ({ userId }) => {
+export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
   const [photos, setPhotos] = useState(createEmptyPhotoSlots);
   const [analysis, setAnalysis] = useState(null);
   const [analyzerContext, setAnalyzerContext] = useState({
@@ -247,11 +247,12 @@ export const useDonorHairSubmission = ({ userId }) => {
   }, [analysis, completedPhotoCount, hasCompletePhotoSet, isAnalyzing, isSaving]);
 
   useEffect(() => {
-    if (!userId) return;
+    const contextUserId = databaseUserId || userId;
+    if (!contextUserId) return;
 
     const loadContext = async () => {
       setIsLoadingContext(true);
-      const result = await getHairDonationModuleContext(userId);
+      const result = await getHairDonationModuleContext(contextUserId);
       setIsLoadingContext(false);
 
       setAnalyzerContext({
@@ -266,6 +267,7 @@ export const useDonorHairSubmission = ({ userId }) => {
 
       logAppEvent('donor_hair_submission.context', 'Hair analyzer context loaded.', {
         userId,
+        databaseUserId,
         hasDonationRequirement: Boolean(result.donationRequirement?.donation_requirement_id),
         pickupEnabled: result.logisticsSettings?.is_pickup_enabled ?? null,
         haircutScheduleCount: Array.isArray(result.upcomingHaircutSchedules) ? result.upcomingHaircutSchedules.length : 0,
@@ -276,7 +278,7 @@ export const useDonorHairSubmission = ({ userId }) => {
     };
 
     loadContext();
-  }, [userId]);
+  }, [databaseUserId, userId]);
 
   const setPhotoAtSlot = (slotIndex, photo) => {
     logAppEvent('donor_hair_submission.photo_slot_state', 'Hair photo slot updated.', {
@@ -529,6 +531,7 @@ export const useDonorHairSubmission = ({ userId }) => {
 
     logAppEvent('donor_hair_submission.save', 'Hair donation save started from final wizard step.', {
       userId,
+      databaseUserId,
       photoCount: photos.filter(Boolean).length,
       hasAnalysis: Boolean(analysis),
       donationModeValue: options.donationModeValue || '',
@@ -537,6 +540,7 @@ export const useDonorHairSubmission = ({ userId }) => {
 
     const result = await saveHairSubmissionFlow({
       userId,
+      databaseUserId,
       photos: photos.filter(Boolean),
       aiAnalysis: analysis,
       confirmedValues,

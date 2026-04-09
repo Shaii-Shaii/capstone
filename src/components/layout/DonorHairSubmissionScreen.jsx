@@ -75,21 +75,6 @@ const formatLengthLabel = (value) => {
   return `${numericValue.toFixed(1)} cm / ${inches.toFixed(1)} in`;
 };
 
-const formatCurrency = (value) => {
-  const numericValue = Number(value);
-  if (!Number.isFinite(numericValue) || numericValue <= 0) return 'PHP 400';
-
-  try {
-    return new Intl.NumberFormat('en-PH', {
-      style: 'currency',
-      currency: 'PHP',
-      maximumFractionDigits: 0,
-    }).format(numericValue);
-  } catch {
-    return `PHP ${numericValue}`;
-  }
-};
-
 const formatScheduleDateLabel = (dateValue, startTime = '', endTime = '') => {
   if (!dateValue) return 'Schedule to be announced';
 
@@ -103,37 +88,6 @@ const formatScheduleDateLabel = (dateValue, startTime = '', endTime = '') => {
   } catch {
     return [dateValue, startTime, endTime].filter(Boolean).join(' • ');
   }
-};
-
-const buildRequirementItems = (donationRequirement) => {
-  if (!donationRequirement?.donation_requirement_id) {
-    return [
-      'Hair should ideally be at least 14 inches.',
-      'Hair is preferably untreated.',
-      'Hair is preferably uncolored.',
-      'Hair is still subject to evaluation even if you meet the basic requirements.',
-      'Final acceptance is still for manual review by authorized personnel.',
-    ];
-  }
-
-  return [
-    donationRequirement.minimum_hair_length != null
-      ? `Current minimum hair length: ${donationRequirement.minimum_hair_length}.`
-      : 'Current minimum hair length is not set in the latest requirement record.',
-    donationRequirement.chemical_treatment_status === false
-      ? 'Chemically treated hair is currently not allowed.'
-      : 'Chemically treated hair may still be reviewed based on the latest requirement record.',
-    donationRequirement.colored_hair_status === false
-      ? 'Colored hair is currently not allowed.'
-      : 'Colored hair may still be reviewed based on the latest requirement record.',
-    donationRequirement.bleached_hair_status === false
-      ? 'Bleached hair is currently not allowed.'
-      : 'Bleached hair may still be reviewed based on the latest requirement record.',
-    donationRequirement.rebonded_hair_status === false
-      ? 'Rebonded or straightened hair is currently not allowed.'
-      : 'Rebonded or straightened hair may still be reviewed based on the latest requirement record.',
-    donationRequirement.notes || 'Final acceptance is still for manual review by authorized personnel.',
-  ];
 };
 
 const normalizeAnalysisText = (analysis) => (
@@ -201,24 +155,6 @@ const buildEligibilitySummary = ({ analysis, confirmedValues, questionnaireAnswe
 const getVisibleQuestions = (answers = {}) => (
   QUESTION_STEPS.filter((item) => !item.showWhen || item.showWhen(answers))
 );
-
-function StepInfoCard({ title, description, items, footer }) {
-  return (
-    <AppCard variant="elevated" radius="xl" padding="lg">
-      <Text style={styles.stepTitle}>{title}</Text>
-      <Text style={styles.stepDescription}>{description}</Text>
-      <View style={styles.bulletList}>
-        {items.map((item) => (
-          <View key={item} style={styles.bulletRow}>
-            <View style={styles.bulletDot} />
-            <Text style={styles.bulletText}>{item}</Text>
-          </View>
-        ))}
-      </View>
-      {footer ? <Text style={styles.stepFootnote}>{footer}</Text> : null}
-    </AppCard>
-  );
-}
 
 function ChoiceList({ value, options, onChange, multi = false }) {
   const values = Array.isArray(value) ? value : [];
@@ -476,8 +412,6 @@ export function DonorHairSubmissionScreen() {
     donationRequirement,
     logisticsSettings,
     upcomingHaircutSchedules,
-    latestHaircutReservation,
-    latestCertificate,
     error,
     successMessage,
     isLoadingContext,
@@ -493,12 +427,9 @@ export function DonorHairSubmissionScreen() {
     removePhoto,
     analyzePhotos,
     submitSubmission,
-  } = useDonorHairSubmission({ userId: user?.id });
+  } = useDonorHairSubmission({ userId: user?.id, databaseUserId: profile?.user_id });
 
   const avatarInitials = `${profile?.first_name?.[0] || ''}${profile?.last_name?.[0] || ''}`.trim();
-  const requirementItems = useMemo(() => buildRequirementItems(donationRequirement), [donationRequirement]);
-  const haircutPriceLabel = formatCurrency(upcomingHaircutSchedules?.[0]?.haircut_price || 400);
-
   const questionForm = useForm({
     resolver: zodResolver(hairAnalyzerQuestionSchema),
     mode: 'onChange',
@@ -544,26 +475,27 @@ export function DonorHairSubmissionScreen() {
     [analysis, reviewValues, questionnaireValues, donationRequirement]
   );
 
-  const stepTitles = [
-    'Hair Donation Requirements',
-    'How Can I Donate?',
-    'What Do I Get?',
-    'What Does the AI Do?',
-    'Begin AI Screening',
+  const stepTitles = useMemo(() => ([
     'Questionnaire',
     'Compliance checklist',
     'Required photo capture and upload',
     'AI result',
     'Next-step donation path',
-  ];
-  const screeningStepTitles = stepTitles.slice(5);
-  const isScreeningFlowActive = stepIndex >= 5;
-  const visibleStepNumber = isScreeningFlowActive ? stepIndex - 4 : stepIndex + 1;
-  const visibleStepTotal = isScreeningFlowActive ? screeningStepTitles.length : 5;
-  const visibleStepTitle = isScreeningFlowActive ? screeningStepTitles[stepIndex - 5] : stepTitles[stepIndex];
+  ]), []);
+  const visibleStepNumber = stepIndex + 1;
+  const visibleStepTotal = stepTitles.length;
+  const visibleStepTitle = stepTitles[stepIndex];
+
+  useEffect(() => {
+    logAppEvent('donor_hair_submission.flow', 'Donor screening flow initialized without intro wizard steps.', {
+      userId: user?.id || null,
+      databaseUserId: profile?.user_id || null,
+      visibleSteps: stepTitles,
+    });
+  }, [profile?.user_id, stepTitles, user?.id]);
 
   const canMovePastQuestion = isAnswered(currentQuestion, questionnaireValues);
-  const isAutoAdvanceQuestion = stepIndex === 5 && currentQuestion?.type === 'choice';
+  const isAutoAdvanceQuestion = stepIndex === 0 && currentQuestion?.type === 'choice';
   const isCurrentPhotoComplete = Boolean(photos[photoIndex]);
   const canProceedToDonationMode = eligibility.status !== 'Retake Photos' && eligibility.status !== 'Not Yet Eligible';
   const isReviewStepFilled = Boolean(
@@ -577,19 +509,18 @@ export function DonorHairSubmissionScreen() {
     && (!canProceedToDonationMode || Boolean(selectedDonationMode));
 
   const isNextDisabled = (
-    (stepIndex === 5 && !canMovePastQuestion)
-    || (stepIndex === 6 && !Boolean(complianceAcknowledged))
-    || (stepIndex === 7 && !isCurrentPhotoComplete)
-    || (stepIndex === 8 && isAnalyzing)
-    || (stepIndex === 9 && (!analysis || !isFinishStepComplete || isSaving))
+    (stepIndex === 0 && !canMovePastQuestion)
+    || (stepIndex === 1 && !Boolean(complianceAcknowledged))
+    || (stepIndex === 2 && !isCurrentPhotoComplete)
+    || (stepIndex === 3 && isAnalyzing)
+    || (stepIndex === 4 && (!analysis || !isFinishStepComplete || isSaving))
   );
 
   const nextButtonTitle = useMemo(() => {
-    if (stepIndex <= 4) return 'Next';
-    if (stepIndex === 5) return questionIndex === visibleQuestions.length - 1 ? 'Continue' : 'Next';
-    if (stepIndex === 6) return 'Continue';
-    if (stepIndex === 7) return photoIndex === requiredViews.length - 1 ? 'Analyze' : 'Next';
-    if (stepIndex === 8) return analysis ? 'Next' : 'Retry analysis';
+    if (stepIndex === 0) return questionIndex === visibleQuestions.length - 1 ? 'Continue' : 'Next';
+    if (stepIndex === 1) return 'Continue';
+    if (stepIndex === 2) return photoIndex === requiredViews.length - 1 ? 'Analyze' : 'Next';
+    if (stepIndex === 3) return analysis ? 'Next' : 'Retry analysis';
     return isSaving ? 'Saving...' : 'Finish';
   }, [analysis, isSaving, photoIndex, questionIndex, requiredViews.length, stepIndex, visibleQuestions.length]);
 
@@ -602,7 +533,7 @@ export function DonorHairSubmissionScreen() {
       return;
     }
 
-    setStepIndex(6);
+    setStepIndex(1);
   };
 
   const handleQuestionChoiceChange = async ({ fieldName, nextValue, fieldOnChange }) => {
@@ -640,11 +571,11 @@ export function DonorHairSubmissionScreen() {
   };
 
   const goPrevious = () => {
-    if (stepIndex === 5 && questionIndex > 0) {
+    if (stepIndex === 0 && questionIndex > 0) {
       setQuestionIndex((current) => current - 1);
       return;
     }
-    if (stepIndex === 7 && photoIndex > 0) {
+    if (stepIndex === 2 && photoIndex > 0) {
       setPhotoIndex((current) => current - 1);
       return;
     }
@@ -852,12 +783,7 @@ export function DonorHairSubmissionScreen() {
   };
 
   const handleNext = async () => {
-    if (stepIndex <= 4) {
-      setStepIndex((current) => current + 1);
-      return;
-    }
-
-    if (stepIndex === 5) {
+    if (stepIndex === 0) {
       const fieldName = currentQuestion?.key;
       const isValid = fieldName ? await questionForm.trigger(fieldName) : false;
       if (!isValid) return;
@@ -872,14 +798,14 @@ export function DonorHairSubmissionScreen() {
       return;
     }
 
-    if (stepIndex === 6) {
+    if (stepIndex === 1) {
       const isValid = await complianceForm.trigger('acknowledged');
       if (!isValid) return;
-      setStepIndex(7);
+      setStepIndex(2);
       return;
     }
 
-    if (stepIndex === 7) {
+    if (stepIndex === 2) {
       if (!photos[photoIndex]) return;
       if (photoIndex < requiredViews.length - 1) {
         setPhotoIndex((current) => current + 1);
@@ -887,7 +813,7 @@ export function DonorHairSubmissionScreen() {
       }
 
       if (photos.filter(Boolean).length !== requiredViews.length) return;
-      setStepIndex(8);
+      setStepIndex(3);
       if (!analysis) {
         await analyzePhotos({
           questionnaireAnswers: questionForm.getValues(),
@@ -897,7 +823,7 @@ export function DonorHairSubmissionScreen() {
       return;
     }
 
-    if (stepIndex === 8) {
+    if (stepIndex === 3) {
       if (!analysis) {
         await analyzePhotos({
           questionnaireAnswers: questionForm.getValues(),
@@ -905,11 +831,11 @@ export function DonorHairSubmissionScreen() {
         });
         return;
       }
-      setStepIndex(9);
+      setStepIndex(4);
       return;
     }
 
-    if (stepIndex === 9) {
+    if (stepIndex === 4) {
       if (!analysis) return;
 
       const canProceedToDonationMode = eligibility.status !== 'Retake Photos' && eligibility.status !== 'Not Yet Eligible';
@@ -939,76 +865,12 @@ export function DonorHairSubmissionScreen() {
     switch (stepIndex) {
       case 0:
         return (
-          <StepInfoCard
-            title="Hair Donation Requirements"
-            description="Review the current baseline donation requirements before starting the AI screening."
-            items={requirementItems}
-            footer={donationRequirement?.donation_requirement_id
-              ? 'These items come from the latest Donation_Requirements record when available.'
-              : 'The current requirement record was not available, so the module is showing the standard interview-based requirement summary.'}
-          />
-        );
-      case 1:
-        return (
-          <StepInfoCard
-            title="How Can I Donate?"
-            description="Choose the donation path that matches your location and readiness after screening."
-            items={[
-              `Logistics / shipping: send prepared hair to ${DONATION_DROP_OFF_ADDRESS}. Shipping fee is shouldered by the donor.`,
-              'Delivered onsite if you are near the area and ready for manual review.',
-              logisticsSettings?.is_pickup_enabled === false ? 'Pickup is currently disabled in the latest logistics settings.' : `Pickup if near the area. ${logisticsSettings?.pickup_notes || 'Pickup still depends on the latest logistics requirement logic.'}`,
-              upcomingHaircutSchedules?.length ? `Haircut assessment: available schedule previews include ${upcomingHaircutSchedules.map((item) => formatScheduleDateLabel(item.schedule_date, item.start_time, item.end_time)).join(' | ')}.` : 'Haircut assessment is still subject to screening first before final scheduling.',
-            ]}
-          />
-        );
-      case 2:
-        return (
-          <StepInfoCard
-            title="What Do I Get?"
-            description="These are the donor-side outcomes already supported in the current workflow."
-            items={[
-              latestCertificate?.certificate_id ? `Certificate of Appreciation is already linked to your latest donation record (${latestCertificate.certificate_number || 'certificate available'}).` : 'Certificate of Appreciation after a qualified donation review.',
-              `If haircut applies, the current discounted haircut amount in the flow is ${haircutPriceLabel}.`,
-              'If your hair is not yet ideal for donation, the AI can still save recommendations for future donation improvement.',
-              latestHaircutReservation?.reservation_id ? `Your latest haircut reservation status is ${latestHaircutReservation.status || 'pending'}.` : 'Haircut reservations become relevant only after assessment and scheduling.',
-            ]}
-          />
-        );
-      case 3:
-        return (
-          <StepInfoCard
-            title="What Does the AI Do?"
-            description="The AI gives an initial donation-oriented screening based on your guided answers and the required photo set."
-            items={[
-              'The AI first asks a short survey about your current hair state and treatment history.',
-              'Before taking photos: no accessories, no ponytail or braid, one person only, plain background, good lighting, dry hair, and no filters.',
-              'The AI checks visible length, density, texture, condition, and obvious damage signs against the current donation requirement context when available.',
-              ...requiredViews.map((view) => `${view.label}: required for screening.`),
-              'The screening is only an initial assessment. Final acceptance still requires manual review by Hair for Hope.',
-            ]}
-          />
-        );
-      case 4:
-        return (
-          <StepInfoCard
-            title="Begin AI Screening"
-            description="You are about to start the guided donation screening journey."
-            items={[
-              'You will answer the questions one at a time.',
-              'You will confirm the photo checklist before capture or upload.',
-              'You will add the four required donation views one slot at a time.',
-              'AI analysis runs only after the required answers and image slots are complete.',
-            ]}
-          />
-        );
-      case 5:
-        return (
           <AppCard variant="elevated" radius="xl" padding="lg">
             <Text style={styles.progressText}>Question {questionIndex + 1} of {visibleQuestions.length}</Text>
             {renderQuestionInput()}
           </AppCard>
         );
-      case 6:
+      case 1:
         return (
           <AppCard variant="elevated" radius="xl" padding="lg">
             <Text style={styles.stepTitle}>Compliance checklist</Text>
@@ -1033,7 +895,7 @@ export function DonorHairSubmissionScreen() {
             {complianceForm.formState.errors.acknowledged?.message ? <Text style={styles.questionError}>{complianceForm.formState.errors.acknowledged.message}</Text> : null}
           </AppCard>
         );
-      case 7:
+      case 2:
         return (
           <View style={styles.stepStack}>
             <AppCard variant="soft" radius="xl" padding="lg">
@@ -1065,7 +927,7 @@ export function DonorHairSubmissionScreen() {
             />
           </View>
         );
-      case 8:
+      case 3:
         return (
           <AppCard variant="elevated" radius="xl" padding="lg">
             <Text style={styles.stepTitle}>AI-assisted screening result</Text>
@@ -1100,7 +962,7 @@ export function DonorHairSubmissionScreen() {
             )}
           </AppCard>
         );
-      case 9:
+      case 4:
         return (
           <ScrollView contentContainerStyle={styles.stepStack}>
             <AppCard variant="elevated" radius="xl" padding="lg">
@@ -1206,7 +1068,7 @@ export function DonorHairSubmissionScreen() {
               title={nextButtonTitle}
               fullWidth={false}
               onPress={handleNext}
-              loading={(stepIndex === 7 || stepIndex === 8) && isAnalyzing}
+              loading={(stepIndex === 2 || stepIndex === 3) && isAnalyzing}
               disabled={isNextDisabled}
             />
           ) : null}

@@ -193,7 +193,28 @@ const logHairQuery = (source, extras = {}) => {
   });
 };
 
-const resolveSubmissionUserId = async (userId) => {
+const normalizeSubmissionUserId = (value) => {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+};
+
+const resolveSubmissionUserId = async (userId, databaseUserId = null) => {
+  const explicitDatabaseUserId = normalizeSubmissionUserId(databaseUserId);
+  if (explicitDatabaseUserId) {
+    return {
+      userId: explicitDatabaseUserId,
+      error: null,
+    };
+  }
+
+  const directUserId = normalizeSubmissionUserId(userId);
+  if (directUserId) {
+    return {
+      userId: directUserId,
+      error: null,
+    };
+  }
+
   const result = await resolveDatabaseUserId(userId, { ensure: false });
   if (result.error || !result.data) {
     return {
@@ -388,10 +409,16 @@ const normalizeDonationCertificate = (row) => ({
 });
 
 export const createHairSubmission = async (payload) => {
-  const { userId, error } = await resolveSubmissionUserId(payload?.user_id);
+  const { userId, error } = await resolveSubmissionUserId(payload?.user_id, payload?.database_user_id);
   if (error) {
     return { data: null, error };
   }
+
+  logAppEvent('hair_submission.query', 'Numeric donor user id resolved for submission create.', {
+    authUserId: payload?.user_id || null,
+    databaseUserId: payload?.database_user_id || null,
+    resolvedUserId: userId,
+  });
 
   logHairQuery('createHairSubmission', {
     table: hairSubmissionsTable,

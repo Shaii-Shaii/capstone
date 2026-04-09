@@ -202,14 +202,11 @@ const resolveSelectedDonationMode = (value = '') => (
 );
 
 const buildLogisticsRowPayload = ({ submissionId, donationMode, logisticsSettings }) => {
-  if (!donationMode?.logistics_type) return null;
+  if (!donationMode?.logistics_type || !['shipping', 'pickup'].includes(donationMode.value)) return null;
 
   const notes = [];
   if (donationMode.value === 'shipping') {
     notes.push('Donor selected logistics / shipping after AI screening.');
-  }
-  if (donationMode.value === 'onsite_delivery') {
-    notes.push('Donor selected onsite delivery after AI screening.');
   }
   if (donationMode.value === 'pickup') {
     notes.push('Donor requested pickup after AI screening.');
@@ -228,6 +225,7 @@ const buildLogisticsRowPayload = ({ submissionId, donationMode, logisticsSetting
 
 export const saveHairSubmissionFlow = async ({
   userId,
+  databaseUserId = null,
   photos,
   aiAnalysis,
   confirmedValues,
@@ -236,12 +234,13 @@ export const saveHairSubmissionFlow = async ({
   logisticsSettings = null,
 }) => {
   try {
-    if (!userId) throw new Error('Your session is not ready.');
+    if (!userId && !databaseUserId) throw new Error('Your session is not ready.');
     if (!photos?.length) throw new Error('Please upload at least one photo.');
     if (!aiAnalysis) throw new Error('Run the AI analysis before saving.');
 
     logAppEvent('hair_submission.save', 'Saving analyzed hair submission.', {
       userId,
+      databaseUserId,
       photoCount: photos.length,
       hasAnalysis: Boolean(aiAnalysis),
       analysisKeys: aiAnalysis ? Object.keys(aiAnalysis) : [],
@@ -261,6 +260,7 @@ export const saveHairSubmissionFlow = async ({
     const colorStatus = normalizedQuestionnaire.color_status || '';
     const submissionPayload = {
       user_id: userId,
+      database_user_id: databaseUserId,
       submission_code: buildSubmissionCode(),
       bundle_quantity: 1,
       donation_source: 'mobile_app',
@@ -273,6 +273,7 @@ export const saveHairSubmissionFlow = async ({
 
     logAppEvent('hair_submission.save', 'Hair submission payload built.', {
       userId,
+      databaseUserId,
       donationModeValue,
       selectedDonationMode: selectedDonationMode?.value || null,
       submissionPayloadKeys: Object.keys(submissionPayload),
