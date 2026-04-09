@@ -1,9 +1,11 @@
 import React from 'react';
-import { Alert, View, Text, StyleSheet, useWindowDimensions, Pressable, Image } from 'react-native';
+import { Modal, View, Text, StyleSheet, useWindowDimensions, Pressable, Image } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { theme, resolveThemeRoles } from '../../design-system/theme';
 import { useAuthActions } from '../../features/auth/hooks/useAuthActions';
 import { AppIcon } from './AppIcon';
+import { AppButton } from './AppButton';
+import { AppCard } from './AppCard';
 import { useAuth } from '../../providers/AuthProvider';
 
 const HEADER_VARIANTS = {
@@ -47,6 +49,7 @@ export const DashboardHeader = ({
   const compact = height < 760;
   const config = HEADER_VARIANTS[variant] || HEADER_VARIANTS.hero;
   const [imageFailed, setImageFailed] = React.useState(false);
+  const [isLogoutModalOpen, setIsLogoutModalOpen] = React.useState(false);
   const shouldShowAvatar = showAvatar ?? !minimal;
   const roles = resolveThemeRoles(resolvedTheme);
   const headerBackground = roles.heroBackground || config.colors[0];
@@ -62,25 +65,18 @@ export const DashboardHeader = ({
 
   const handleLogoutPress = React.useCallback(() => {
     if (isLoading) return;
+    setIsLogoutModalOpen(true);
+  }, [isLoading]);
 
-    Alert.alert(
-      'Log out?',
-      'Are you sure you want to log out?',
-      [
-        {
-          text: 'Cancel',
-          style: 'cancel',
-        },
-        {
-          text: 'Log out',
-          style: 'destructive',
-          onPress: () => {
-            logout();
-          },
-        },
-      ]
-    );
-  }, [isLoading, logout]);
+  const closeLogoutModal = React.useCallback(() => {
+    if (isLoading) return;
+    setIsLogoutModalOpen(false);
+  }, [isLoading]);
+
+  const confirmLogout = React.useCallback(() => {
+    setIsLogoutModalOpen(false);
+    logout();
+  }, [logout]);
 
   const utilityItems = [
     ...utilityActions,
@@ -93,155 +89,170 @@ export const DashboardHeader = ({
   ];
 
   return (
-    <View
-      style={[
-        styles.container,
-        compact ? styles.containerCompact : null,
-        {
-          backgroundColor: headerBackground,
-          borderColor: roles.heroBorder,
-        },
-      ]}
-    >
-      <View style={styles.topRow}>
-        <View style={styles.identityRow}>
-          {shouldShowAvatar ? (
-            <View
-              key={avatarUri || avatarInitials}
-              style={[
-                styles.avatar,
-                compact ? styles.avatarCompact : null,
-                {
-                  backgroundColor: roles.headerUtilityBackground,
-                  borderColor: roles.heroBorder,
-                },
-              ]}
-            >
-              {avatarUri && !imageFailed ? (
-                <Image
-                  source={{ uri: avatarUri }}
-                  style={styles.avatarImage}
-                  resizeMode="cover"
-                  onError={() => setImageFailed(true)}
-                />
-              ) : avatarInitials ? (
-                <Text style={[styles.avatarText, { color: roles.headerUtilityText }]}>{avatarInitials.toUpperCase().slice(0, 2)}</Text>
-              ) : (
-                <AppIcon name="profile" size="md" state="default" color={roles.headerUtilityText} />
-              )}
+    <>
+      <View
+        style={[
+          styles.container,
+          compact ? styles.containerCompact : null,
+          {
+            backgroundColor: headerBackground,
+            borderColor: roles.heroBorder,
+          },
+        ]}
+      >
+        <View style={styles.topRow}>
+          <View style={styles.identityRow}>
+            {shouldShowAvatar ? (
+              <View
+                key={avatarUri || avatarInitials}
+                style={[
+                  styles.avatar,
+                  compact ? styles.avatarCompact : null,
+                  {
+                    backgroundColor: roles.headerUtilityBackground,
+                    borderColor: roles.heroBorder,
+                  },
+                ]}
+              >
+                {avatarUri && !imageFailed ? (
+                  <Image
+                    source={{ uri: avatarUri }}
+                    style={styles.avatarImage}
+                    resizeMode="cover"
+                    onError={() => setImageFailed(true)}
+                  />
+                ) : avatarInitials ? (
+                  <Text style={[styles.avatarText, { color: roles.headerUtilityText }]}>{avatarInitials.toUpperCase().slice(0, 2)}</Text>
+                ) : (
+                  <AppIcon name="profile" size="md" state="default" color={roles.headerUtilityText} />
+                )}
+              </View>
+            ) : null}
+            <View style={styles.textContainer}>
+              {!minimal && eyebrowText ? <Text style={[styles.eyebrow, { color: roles.heroMetaText }]}>{eyebrowText}</Text> : null}
+              <Text numberOfLines={1} style={[styles.title, compact ? styles.titleCompact : null, { color: roles.heroHeadingText }]}>
+                {title}
+              </Text>
+              {!minimal && subtitle ? <Text numberOfLines={1} style={[styles.subtitle, { color: roles.heroBodyText }]}>{subtitle}</Text> : null}
             </View>
-          ) : null}
-          <View style={styles.textContainer}>
-            {!minimal && eyebrowText ? <Text style={[styles.eyebrow, { color: roles.heroMetaText }]}>{eyebrowText}</Text> : null}
-            <Text numberOfLines={1} style={[styles.title, compact ? styles.titleCompact : null, { color: roles.heroHeadingText }]}>
-              {title}
-            </Text>
-            {!minimal && subtitle ? <Text numberOfLines={1} style={[styles.subtitle, { color: roles.heroBodyText }]}>{subtitle}</Text> : null}
+          </View>
+
+          <View style={styles.utilityRow}>
+            {utilityItems.map((item) => (
+              <Pressable
+                key={item.key}
+                onPress={item.loading ? undefined : item.onPress}
+                style={({ pressed }) => [
+                  styles.utilityButton,
+                  {
+                    backgroundColor: roles.headerUtilityBackground,
+                    borderColor: roles.heroBorder,
+                  },
+                  item.loading ? styles.utilityButtonDisabled : null,
+                  pressed ? styles.utilityButtonPressed : null,
+                ]}
+              >
+                <AppIcon name={item.icon} size="md" state="default" color={roles.headerUtilityText} />
+                {item.badge ? (
+                  <View
+                    style={[
+                      styles.utilityBadge,
+                      {
+                        backgroundColor: roles.primaryActionBackground,
+                        borderColor: roles.pageBackground,
+                      },
+                    ]}
+                  >
+                    <Text style={[styles.utilityBadgeText, { color: roles.primaryActionText }]}>{item.badge}</Text>
+                  </View>
+                ) : null}
+              </Pressable>
+            ))}
           </View>
         </View>
 
-        <View style={styles.utilityRow}>
-          {utilityItems.map((item) => (
-            <Pressable
-              key={item.key}
-              onPress={item.loading ? undefined : item.onPress}
-              style={({ pressed }) => [
-                styles.utilityButton,
+        {!minimal && searchPlaceholder ? (
+          <Pressable
+            onPress={async () => {
+              await Haptics.selectionAsync();
+              onSearchPress?.();
+            }}
+            style={({ pressed }) => [
+              styles.searchRow,
+              compact ? styles.searchRowCompact : null,
+              pressed ? styles.searchRowPressed : null,
+            ]}
+          >
+            <View
+              style={[
+                styles.searchInput,
                 {
-                  backgroundColor: roles.headerUtilityBackground,
-                  borderColor: roles.heroBorder,
+                  backgroundColor: roles.headerSearchBackground,
+                  borderColor: roles.defaultCardBorder,
                 },
-                item.loading ? styles.utilityButtonDisabled : null,
-                pressed ? styles.utilityButtonPressed : null,
               ]}
             >
-              <AppIcon name={item.icon} size="md" state="default" color={roles.headerUtilityText} />
-              {item.badge ? (
-                <View
-                  style={[
-                    styles.utilityBadge,
-                    {
-                      backgroundColor: roles.primaryActionBackground,
-                      borderColor: roles.pageBackground,
-                    },
-                  ]}
-                >
-                  <Text style={[styles.utilityBadgeText, { color: roles.primaryActionText }]}>{item.badge}</Text>
-                </View>
-              ) : null}
-            </Pressable>
-          ))}
-        </View>
-      </View>
+              <AppIcon name="search" size="sm" state="default" color={roles.metaText} />
+              <Text numberOfLines={1} style={[styles.searchPlaceholder, { color: roles.headerSearchText }]}>{searchPlaceholder}</Text>
+            </View>
+            <View style={[styles.searchAction, { backgroundColor: actionColor }]}>
+              <AppIcon name="filter" size="sm" state="default" color={actionTextColor} />
+            </View>
+          </Pressable>
+        ) : null}
 
-      {!minimal && searchPlaceholder ? (
-        <Pressable
-          onPress={async () => {
-            await Haptics.selectionAsync();
-            onSearchPress?.();
-          }}
-          style={({ pressed }) => [
-            styles.searchRow,
-            compact ? styles.searchRowCompact : null,
-            pressed ? styles.searchRowPressed : null,
-          ]}
-        >
+        {!minimal && quickTools.length ? (
+          <View style={styles.quickToolRow}>
+            {quickTools.map((item) => (
+              <Pressable
+                key={item.key}
+                onPress={item.onPress}
+                style={({ pressed }) => [
+                  styles.quickTool,
+                  {
+                    backgroundColor: roles.headerUtilityBackground,
+                    borderColor: roles.heroBorder,
+                  },
+                  pressed ? styles.quickToolPressed : null,
+                ]}
+              >
+                <AppIcon name={item.icon} size="sm" state="default" color={roles.headerUtilityText} />
+                <Text style={[styles.quickToolText, { color: roles.headerUtilityText }]}>{item.label}</Text>
+              </Pressable>
+            ))}
+          </View>
+        ) : null}
+
+        {!minimal && summary ? (
           <View
             style={[
-              styles.searchInput,
+              styles.summaryCard,
+              compact ? styles.summaryCardCompact : null,
               {
-                backgroundColor: roles.headerSearchBackground,
-                borderColor: roles.defaultCardBorder,
+                backgroundColor: summaryBackground,
+                borderColor: roles.heroBorder,
               },
             ]}
           >
-            <AppIcon name="search" size="sm" state="default" color={roles.metaText} />
-            <Text numberOfLines={1} style={[styles.searchPlaceholder, { color: roles.headerSearchText }]}>{searchPlaceholder}</Text>
+            <Text numberOfLines={2} style={[styles.summaryText, { color: summaryTextColor }]}>{summary}</Text>
           </View>
-          <View style={[styles.searchAction, { backgroundColor: actionColor }]}>
-            <AppIcon name="filter" size="sm" state="default" color={actionTextColor} />
-          </View>
-        </Pressable>
-      ) : null}
+        ) : null}
+      </View>
 
-      {!minimal && quickTools.length ? (
-        <View style={styles.quickToolRow}>
-          {quickTools.map((item) => (
-            <Pressable
-              key={item.key}
-              onPress={item.onPress}
-              style={({ pressed }) => [
-                styles.quickTool,
-                {
-                  backgroundColor: roles.headerUtilityBackground,
-                  borderColor: roles.heroBorder,
-                },
-                pressed ? styles.quickToolPressed : null,
-              ]}
-            >
-              <AppIcon name={item.icon} size="sm" state="default" color={roles.headerUtilityText} />
-              <Text style={[styles.quickToolText, { color: roles.headerUtilityText }]}>{item.label}</Text>
-            </Pressable>
-          ))}
+      <Modal transparent visible={isLogoutModalOpen} animationType="fade" onRequestClose={closeLogoutModal}>
+        <View style={styles.logoutModalOverlay}>
+          <Pressable style={styles.logoutModalBackdrop} onPress={closeLogoutModal} />
+          <AppCard variant="elevated" radius="xl" padding="lg" style={styles.logoutModalCard}>
+            <Text style={styles.logoutModalTitle}>Log out?</Text>
+            <Text style={styles.logoutModalBody}>Are you sure you want to log out?</Text>
+            <View style={styles.logoutModalActions}>
+              <AppButton title="Cancel" variant="outline" fullWidth={false} onPress={closeLogoutModal} />
+              <AppButton title="Log out" fullWidth={false} onPress={confirmLogout} loading={isLoading} />
+            </View>
+          </AppCard>
         </View>
-      ) : null}
-
-      {!minimal && summary ? (
-        <View
-          style={[
-            styles.summaryCard,
-            compact ? styles.summaryCardCompact : null,
-            {
-              backgroundColor: summaryBackground,
-              borderColor: roles.heroBorder,
-            },
-          ]}
-        >
-          <Text numberOfLines={2} style={[styles.summaryText, { color: summaryTextColor }]}>{summary}</Text>
-        </View>
-      ) : null}
-
-    </View>
+      </Modal>
+    </>
   );
 };
 
@@ -424,5 +435,37 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.caption,
     lineHeight: theme.typography.compact.caption * theme.typography.lineHeights.relaxed,
+  },
+  logoutModalOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    padding: theme.spacing.lg,
+    backgroundColor: theme.colors.overlay,
+  },
+  logoutModalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  logoutModalCard: {
+    width: '100%',
+    maxWidth: 420,
+    alignSelf: 'center',
+  },
+  logoutModalTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.titleSm,
+    color: theme.colors.textPrimary,
+    marginBottom: theme.spacing.xs,
+  },
+  logoutModalBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textSecondary,
+    marginBottom: theme.spacing.md,
+  },
+  logoutModalActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: theme.spacing.sm,
   },
 });
