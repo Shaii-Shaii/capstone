@@ -19,6 +19,13 @@ const loginErrorCodes = {
   unexpected: 'UNEXPECTED_ERROR',
 };
 
+const signupErrorCodes = {
+  emailAlreadyRegistered: 'EMAIL_ALREADY_REGISTERED',
+  weakPassword: 'WEAK_PASSWORD',
+  network: 'NETWORK_ERROR',
+  unexpected: 'UNEXPECTED_ERROR',
+};
+
 const normalizeVisualValue = (value) => {
   if (typeof value !== 'string') return '';
   return value.trim();
@@ -51,6 +58,12 @@ const buildUserFacingLoginError = (message, code = loginErrorCodes.unexpected) =
   return error;
 };
 
+const buildUserFacingSignupError = (message, code = signupErrorCodes.unexpected) => {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+};
+
 const getFriendlyAuthError = (error) => {
   const msg = String(error?.message || '').trim();
   const normalized = msg.toLowerCase();
@@ -66,6 +79,40 @@ const getFriendlyAuthError = (error) => {
   }
 
   return buildUserFacingLoginError('Something went wrong. Please try again.');
+};
+
+const getFriendlySignupError = (error) => {
+  const msg = String(error?.message || '').trim();
+  const normalized = msg.toLowerCase();
+
+  if (
+    normalized.includes('already registered')
+    || normalized.includes('user already exists')
+    || normalized.includes('already been registered')
+    || normalized.includes('identities')
+  ) {
+    return buildUserFacingSignupError('This email is already registered. Please log in instead.', signupErrorCodes.emailAlreadyRegistered);
+  }
+
+  if (normalized.includes('weak password')) {
+    return buildUserFacingSignupError(
+      'Your password is too weak. Use uppercase, lowercase, numbers, and a special character.',
+      signupErrorCodes.weakPassword
+    );
+  }
+
+  if (normalized.includes('same password') || normalized.includes('new password should be different')) {
+    return buildUserFacingSignupError(reusedPasswordMessage, signupErrorCodes.weakPassword);
+  }
+
+  if (isNetworkErrorMessage(normalized)) {
+    return buildUserFacingSignupError(
+      'We could not connect right now. Please check your internet and try again.',
+      signupErrorCodes.network
+    );
+  }
+
+  return buildUserFacingSignupError('Something went wrong. Please try again.');
 };
 
 const validateSystemUserAccount = (systemUser) => {
@@ -267,10 +314,10 @@ export const register = async (email, password, additionalData = {}) => {
     };
     
     const { data, error } = await AuthAPI.registerWithEmail({ email, password, metadata });
-    if (error) throw getFriendlyError(error);
+    if (error) throw getFriendlySignupError(error);
 
     if (data?.user && !data?.session && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
-      throw new Error("This email is already registered. Please log in instead.");
+      throw buildUserFacingSignupError('This email is already registered. Please log in instead.', signupErrorCodes.emailAlreadyRegistered);
     }
 
     // When email confirmation is required, Supabase can create the auth user without
@@ -317,6 +364,7 @@ export const register = async (email, password, additionalData = {}) => {
     logAppError('auth.signup', error, {
       email,
       role: additionalData.role || null,
+      errorCode: error?.code || null,
     });
 
     await writeAuditLog({
@@ -326,7 +374,7 @@ export const register = async (email, password, additionalData = {}) => {
       resource: 'auth',
       status: 'failed',
     });
-    return { user: null, session: null, error: error.message };
+    return { user: null, session: null, error: error.message, errorCode: error.code };
   }
 };
 

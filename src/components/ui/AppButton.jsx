@@ -1,6 +1,5 @@
 import React from 'react';
 import { Pressable, Text, StyleSheet, ActivityIndicator, View } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import Animated, {
   useAnimatedStyle,
@@ -83,7 +82,6 @@ export const AppButton = ({
   enableHaptics,
   hapticStyle = Haptics.ImpactFeedbackStyle.Light,
   success = false,
-  gradientColors,
   textColorOverride,
   backgroundColorOverride,
   borderColorOverride,
@@ -212,26 +210,12 @@ export const AppButton = ({
       disabled={isInactive}
       style={animatedStyle}
     >
-      {variant === 'primary' && !isInactive ? (
-        <View>
-          <Animated.View pointerEvents="none" style={[styles.successGlow, glowStyle]} />
-          <LinearGradient
-            colors={gradientColors || [resolvedTheme?.primaryColor || palette.gradient[0], resolvedTheme?.tertiaryColor || resolvedTheme?.secondaryColor || palette.gradient[1]]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={shellStyle}
-          >
-            {contentNode}
-          </LinearGradient>
+      <View>
+        <Animated.View pointerEvents="none" style={[styles.successGlow, glowStyle]} />
+        <View style={shellStyle}>
+          {contentNode}
         </View>
-      ) : (
-        <View>
-          <Animated.View pointerEvents="none" style={[styles.successGlow, glowStyle]} />
-          <View style={shellStyle}>
-            {contentNode}
-          </View>
-        </View>
-      )}
+      </View>
     </AnimatedPressable>
   );
 };

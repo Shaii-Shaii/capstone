@@ -1,7 +1,6 @@
 import React from 'react';
 import { View, StyleSheet, Platform, ScrollView, KeyboardAvoidingView, useWindowDimensions, ImageBackground } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { LinearGradient } from 'expo-linear-gradient';
 import { theme } from '../../design-system/theme';
 import { useAuth } from '../../providers/AuthProvider';
 
@@ -41,9 +40,8 @@ export const ScreenContainer = ({
   const backgroundCanvas = resolvedTheme?.backgroundColor || theme.colors.backgroundCanvas;
   const authBaseBackground = resolvedTheme?.backgroundColor || theme.colors.backgroundCanvas;
   const dashboardBaseBackground = resolvedTheme?.backgroundColor || theme.colors.backgroundSecondary;
-  const resolvedHeroColors = isAuth && resolvedTheme
-    ? [resolvedTheme.primaryColor || heroColors[0], resolvedTheme.tertiaryColor || resolvedTheme.secondaryColor || heroColors[1]]
-    : heroColors;
+  const authHeroBackground = resolvedTheme?.primaryColor || heroColors[0];
+  const dashboardHeroBackground = resolvedTheme?.primaryColor || theme.colors.dashboardShellFrom;
 
   const content = (
     <View
@@ -103,13 +101,7 @@ export const ScreenContainer = ({
     >
       {isAuth ? (
         <>
-          <View style={[styles.authHero, { height: authHeroHeight }]}>
-            <LinearGradient
-              colors={resolvedHeroColors}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={styles.authHeroGradient}
-            />
+          <View style={[styles.authHero, { height: authHeroHeight, backgroundColor: authHeroBackground }]}>
             {authHeroImageUri ? (
               <ImageBackground source={{ uri: authHeroImageUri }} resizeMode="cover" style={styles.authHeroImage}>
                 <View style={styles.authHeroImageOverlay} />
@@ -123,14 +115,11 @@ export const ScreenContainer = ({
         <>
           {isDashboard ? (
             <>
-              <LinearGradient
-                colors={[
-                  resolvedTheme?.primaryColor || theme.colors.dashboardShellFrom,
-                  resolvedTheme?.tertiaryColor || resolvedTheme?.secondaryColor || theme.colors.dashboardShellTo,
+              <View
+                style={[
+                  styles.dashboardHero,
+                  { height: dashboardHeroHeight, backgroundColor: dashboardHeroBackground },
                 ]}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={[styles.dashboardHero, { height: dashboardHeroHeight }]}
               />
               <View style={[styles.dashboardBase, { top: dashboardHeroHeight - theme.spacing.lg, backgroundColor: dashboardBaseBackground }]} />
             </>
@@ -169,9 +158,6 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     overflow: 'hidden',
-  },
-  authHeroGradient: {
-    ...StyleSheet.absoluteFillObject,
   },
   authHeroImage: {
     ...StyleSheet.absoluteFillObject,

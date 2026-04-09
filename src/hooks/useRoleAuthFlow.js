@@ -18,13 +18,20 @@ export const useRoleAuthFlow = (role) => {
   const config = roleAuthConfig[role] || roleAuthConfig.access;
   const expectedRole = role === 'donor' || role === 'patient' ? role : undefined;
   const [loginError, setLoginError] = useState('');
+  const [signupError, setSignupError] = useState('');
 
   const clearLoginError = () => {
     setLoginError('');
     clearError?.();
   };
 
+  const clearSignupError = () => {
+    setSignupError('');
+    clearError?.();
+  };
+
   const handleSignup = async (data) => {
+    clearSignupError();
     const selectedRole = 'tentative';
 
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -55,7 +62,7 @@ export const useRoleAuthFlow = (role) => {
     }
 
     await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-    Alert.alert('Signup Failed', result.error || authMessages.signupFailed);
+    setSignupError(result.error || authMessages.signupFailed);
   };
 
   const handleLogin = async (data) => {
@@ -102,7 +109,9 @@ export const useRoleAuthFlow = (role) => {
     isLoading,
     config,
     loginError,
+    signupError,
     clearLoginError,
+    clearSignupError,
     resolvedTheme: resolvedTheme || loginThemeFallback,
     handleSignup,
     handleLogin,

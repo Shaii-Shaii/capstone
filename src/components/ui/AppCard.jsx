@@ -1,6 +1,5 @@
 import React from 'react';
 import { View, StyleSheet } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 import { theme } from '../../design-system/theme';
 import { useAuth } from '../../providers/AuthProvider';
 
@@ -62,14 +61,10 @@ export const AppCard = ({
   const config = CARD_VARIANTS[variant] || CARD_VARIANTS.default;
   const backgroundColor = variant === 'soft'
     ? theme.colors.surfaceSoft
-    : resolvedTheme?.backgroundColor || config.backgroundColor;
+    : variant === 'hero' || variant === 'donorTint' || variant === 'patientTint'
+      ? resolvedTheme?.primaryColor || config.backgroundColor
+      : resolvedTheme?.backgroundColor || config.backgroundColor;
   const borderColor = resolvedTheme?.secondaryColor || config.borderColor;
-  const gradientColors = config.gradient
-    ? [
-        resolvedTheme?.primaryColor || config.gradient[0],
-        resolvedTheme?.tertiaryColor || resolvedTheme?.secondaryColor || config.gradient[1],
-      ]
-    : null;
   const resolvedPadding =
     padding === 'none'
       ? 0
@@ -91,16 +86,6 @@ export const AppCard = ({
     config.shadow,
     style,
   ];
-
-  if (gradientColors) {
-    return (
-      <View>
-        <LinearGradient colors={gradientColors} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={cardStyles}>
-          <View style={contentStyle}>{children}</View>
-        </LinearGradient>
-      </View>
-    );
-  }
 
   return (
     <View style={cardStyles}>

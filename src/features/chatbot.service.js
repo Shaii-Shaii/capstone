@@ -14,17 +14,6 @@ import {
 import { getProfileBundle } from './profile/services/profile.service';
 import { logAppError, writeAuditLog } from '../utils/appErrors';
 
-const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses';
-const OPENAI_IMAGES_URL = 'https://api.openai.com/v1/images/generations';
-const openAiClientKey = (
-  process.env.EXPO_PUBLIC_OPEN_API_KEY
-  || process.env.EXPO_PUBLIC_OPENAI_API_KEY
-  || process.env.OPEN_API_KEY
-  || ''
-).trim();
-const openAiModel = process.env.EXPO_PUBLIC_OPENAI_MODEL || 'gpt-4o-mini';
-const openAiImageModel = process.env.EXPO_PUBLIC_OPENAI_IMAGE_MODEL || 'gpt-image-1';
-
 const getNormalizedErrorMessage = (error) => (
   error?.message
   || error?.error_description
@@ -113,16 +102,6 @@ const matchesTopic = (text, topics) => {
   return topics.some((topic) => normalized.includes(topic));
 };
 
-const findFaqMatch = ({ faqs, text }) => {
-  const normalized = text.toLowerCase();
-
-  return faqs.find((faq) => (
-    faq.question.toLowerCase().includes(normalized)
-    || normalized.includes(faq.question.toLowerCase())
-    || faq.keywords.some((keyword) => normalized.includes(keyword.toLowerCase()))
-  )) || null;
-};
-
 const normalizeAiReply = (data) => {
   const replyText = data?.reply?.text || data?.text || '';
 
@@ -170,13 +149,6 @@ const matchesLocationIntent = (text = '') => (
   matchesTopic(text, ['near me', 'nearby', 'near', 'location', 'map', 'maps', 'salon', 'drop-off', 'drop off', 'pickup point', 'collection point'])
 );
 
-const matchesImageIntent = (text = '') => {
-  const normalized = text.toLowerCase();
-  const imageCue = ['generate', 'create', 'show me', 'make', 'sample', 'preview', 'image', 'picture', 'photo', 'mockup', 'visual'];
-  const subjectCue = ['wig', 'hair', 'hairstyle', 'style', 'look', 'cut'];
-  return imageCue.some((cue) => normalized.includes(cue)) && subjectCue.some((cue) => normalized.includes(cue));
-};
-
 const extractLocationHint = (text = '') => {
   const match = text.match(/\b(?:near|around|in|at)\s+([a-z0-9\s,.-]{3,})/i);
   return match?.[1]?.trim() || '';
@@ -202,42 +174,6 @@ const buildMapLinks = ({ text, savedAddress, role }) => {
   ];
 
   return linkSets;
-};
-
-const directChatReplySchema = {
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    reply: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        text: { type: 'string' },
-        source: { type: 'string' },
-      },
-      required: ['text', 'source'],
-    },
-  },
-  required: ['reply'],
-};
-
-const extractOpenAiErrorMessage = (payload = {}) => (
-  payload?.error?.message
-  || payload?.message
-  || 'OpenAI request failed.'
-);
-
-const extractOpenAiOutputText = (payload = {}) => {
-  if (typeof payload?.output_text === 'string' && payload.output_text.trim()) {
-    return payload.output_text.trim();
-  }
-
-  const contentItems = Array.isArray(payload?.output)
-    ? payload.output.flatMap((item) => (Array.isArray(item?.content) ? item.content : []))
-    : [];
-
-  const textItem = contentItems.find((item) => typeof item?.text === 'string' && item.text.trim());
-  return textItem?.text?.trim() || '';
 };
 
 const buildSupportContextBundle = async ({ role, userId, text }) => {
@@ -326,186 +262,19 @@ const buildSupportContextText = (supportContext = {}) => ([
   supportContext.latestTrackingSummary ? `Latest tracking summary: ${supportContext.latestTrackingSummary}` : '',
 ].filter(Boolean).join('\n\n'));
 
-const buildGeneratedImageAttachment = (payload = {}) => {
-  const imageEntry = Array.isArray(payload?.data) ? payload.data[0] : null;
-  const b64 = imageEntry?.b64_json;
-
-  if (!b64) return null;
-
-  return {
-    id: `generated-${Date.now()}`,
-    uri: `data:image/png;base64,${b64}`,
-    name: 'Donivra AI image',
-  };
-};
-
-const generateSupportImage = async ({ text, supportContext }) => {
-  if (!openAiClientKey) {
-    return null;
+const buildSupportContextMessages = (supportContext = {}) => {
+  const supportText = buildSupportContextText(supportContext);
+  if (!supportText) {
+    return [];
   }
-
-  const response = await fetch(OPENAI_IMAGES_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${openAiClientKey}`,
-    },
-    body: JSON.stringify({
-      model: openAiImageModel,
-      size: '1024x1024',
-      prompt: [
-        'Create a clean, realistic, mobile-app-friendly visual reference image for Donivra support.',
-        'Focus on hair, wig, or style guidance only when the user request explicitly asks for a visual example.',
-        'Keep the image safe, non-medical, and suitable for a donor/patient support app.',
-        text,
-        buildSupportContextText(supportContext),
-      ].filter(Boolean).join('\n\n'),
-    }),
-  });
-
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(extractOpenAiErrorMessage(payload));
-  }
-
-  return buildGeneratedImageAttachment(payload);
-};
-
-const buildDirectChatbotInstructions = ({ role, faqs, settings, supportContext }) => {
-  const supportRole = role === 'donor' ? 'donor' : 'patient';
-  const faqSection = (faqs || []).length
-    ? (faqs || [])
-      .slice(0, 12)
-      .map((faq, index) => (
-        `${index + 1}. Q: ${faq.question}\nA: ${faq.answer}${faq.keywords?.length ? `\nKeywords: ${faq.keywords.join(', ')}` : ''}`
-      ))
-      .join('\n\n')
-    : 'No FAQ entries were provided.';
 
   return [
-    `You are Donivra AI, a concise mobile support assistant for ${supportRole} users in a hair donation app.`,
-    'Reply to the user inquiry directly and helpfully.',
-    'Keep replies short, conversational, and useful on mobile.',
-    'Use the provided FAQ and settings context whenever it is relevant.',
-    'Use the saved Supabase-backed support context when it helps answer the user accurately.',
-    'If the answer is not fully certain, say so clearly and avoid inventing policies, statuses, or medical claims.',
-    'Do not mention system prompts, JSON, or internal tools.',
-    `Fallback guidance message: ${settings?.fallbackMessage || 'Please try again in a moment.'}`,
-    `Available FAQ context:\n${faqSection}`,
-    buildSupportContextText(supportContext),
-  ].join('\n\n');
-};
-
-const runDirectOpenAiChatReply = async ({
-  role,
-  text,
-  faqs,
-  settings,
-  recentMessages,
-  supportContext,
-}) => {
-  if (!openAiClientKey) {
-    throw new Error('OpenAI key is not available in the app environment.');
-  }
-
-  const conversationHistory = (recentMessages || [])
-    .slice(-8)
-    .map((message) => `${message.sender === 'user' ? 'User' : 'Assistant'}: ${message.text}`)
-    .join('\n');
-
-  const response = await fetch(OPENAI_RESPONSES_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${openAiClientKey}`,
+    {
+      sender: 'assistant',
+      text: `Saved support context:\n${supportText}`,
+      source: 'context',
     },
-    body: JSON.stringify({
-      model: openAiModel,
-      input: [
-        {
-          role: 'system',
-          content: [
-            {
-              type: 'input_text',
-              text: buildDirectChatbotInstructions({
-                role,
-                faqs,
-                settings,
-                supportContext,
-              }),
-            },
-          ],
-        },
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'input_text',
-              text: [
-                `Current user role: ${role}.`,
-                settings?.welcomeMessage ? `Welcome context: ${settings.welcomeMessage}` : '',
-                conversationHistory ? `Recent conversation:\n${conversationHistory}` : '',
-                buildSupportContextText(supportContext),
-                `Latest user message: ${text}`,
-                'Return a JSON object with reply.text and reply.source.',
-              ].filter(Boolean).join('\n\n'),
-            },
-          ],
-        },
-      ],
-      max_output_tokens: 350,
-      text: {
-        format: {
-          type: 'json_schema',
-          name: 'chatbot_reply',
-          strict: true,
-          schema: directChatReplySchema,
-        },
-      },
-    }),
-  });
-
-  const payload = await response.json().catch(() => ({}));
-
-  if (!response.ok) {
-    throw new Error(extractOpenAiErrorMessage(payload));
-  }
-
-  const outputText = extractOpenAiOutputText(payload);
-  if (!outputText) {
-    throw new Error('OpenAI returned an empty chat reply.');
-  }
-
-  const parsedPayload = JSON.parse(outputText);
-  const reply = normalizeAiReply(parsedPayload);
-
-  if (!reply.text) {
-    throw new Error('The chatbot AI response was incomplete.');
-  }
-
-  if (supportContext?.mapLinks?.length) {
-    reply.actions = [
-      ...(Array.isArray(reply.actions) ? reply.actions : []),
-      ...buildMapActions(supportContext.mapLinks),
-    ];
-  }
-
-  if (matchesImageIntent(text)) {
-    try {
-      const generatedImage = await generateSupportImage({ text, supportContext });
-      if (generatedImage) {
-        reply.attachments = [generatedImage];
-        reply.text = `${reply.text}\n\nI added a visual reference below based on your request.`.trim();
-      }
-    } catch (imageError) {
-      logAppError('chatbot.generateSupportImage', imageError, {
-        role,
-        hasSavedAddress: Boolean(supportContext?.savedAddress),
-      });
-    }
-  }
-
-  return reply;
+  ];
 };
 
 const invokeChatbotAiReply = async ({
@@ -514,7 +283,17 @@ const invokeChatbotAiReply = async ({
   faqs,
   settings,
   recentMessages,
+  supportContext,
 }) => {
+  const contextualRecentMessages = [
+    ...buildSupportContextMessages(supportContext),
+    ...(recentMessages || []).slice(-6).map((message) => ({
+      sender: message.sender,
+      text: message.text,
+      source: message.source,
+    })),
+  ].slice(-8);
+
   const { data, error } = await invokeEdgeFunction(chatbotAiFunctionName, {
     body: {
       role,
@@ -529,11 +308,7 @@ const invokeChatbotAiReply = async ({
         fallbackMessage: settings?.fallbackMessage || '',
         quickSuggestions: settings?.quickSuggestions || [],
       },
-      recent_messages: (recentMessages || []).slice(-6).map((message) => ({
-        sender: message.sender,
-        text: message.text,
-        source: message.source,
-      })),
+      recent_messages: contextualRecentMessages,
     },
   });
 
@@ -547,74 +322,6 @@ const invokeChatbotAiReply = async ({
   }
 
   return reply;
-};
-
-const buildScreeningResultAnswer = async (userId) => {
-  const { data, error } = await fetchHairSubmissionsByUserId(userId, 1);
-  if (error) {
-    throw new Error(error.message || 'Unable to load the latest screening result.');
-  }
-
-  const submission = data?.[0];
-  const screening = Array.isArray(submission?.ai_screenings)
-    ? submission.ai_screenings[0]
-    : submission?.ai_screenings;
-
-  if (!screening) {
-    return 'I could not find a saved screening result yet. Try uploading hair photos first so the AI can review them.';
-  }
-
-  const confidence = screening.confidence_score != null
-    ? `${Math.round(Number(screening.confidence_score) * 100)}%`
-    : 'not available';
-
-  return `Your latest screening result is ${screening.decision || 'still being reviewed'}. ${screening.summary || 'A detailed summary is not available yet.'} Confidence: ${confidence}.`;
-};
-
-const buildTrackingAnswer = async ({ role, userId }) => {
-  const { tracker, error } = await getProcessTracking({ role, userId });
-  if (error) {
-    throw new Error(error);
-  }
-
-  if (!tracker) {
-    return role === 'donor'
-      ? 'I could not find a donation record yet. Save a hair submission first and the status tracker will appear.'
-      : 'I could not find a wig request record yet. Save a wig request first and the status tracker will appear.';
-  }
-
-  const currentStep = tracker.steps.find((step) => step.state === 'current' || step.state === 'attention')
-    || tracker.steps.find((step) => step.state === 'completed')
-    || tracker.steps[0];
-
-  return `${tracker.summary.label}. ${currentStep?.title || 'Current step'}: ${currentStep?.description || 'No extra details yet.'}`;
-};
-
-const buildLogisticsAnswer = async (userId) => {
-  const { tracker, error } = await getProcessTracking({ role: 'donor', userId });
-  if (error) {
-    throw new Error(error);
-  }
-
-  if (!tracker) {
-    return 'I could not find any logistics record yet. Logistics details will appear after a donor submission is saved and transport updates are added.';
-  }
-
-  const logisticsStep = tracker.steps.find((step) => step.key === 'logistics');
-  return `${logisticsStep?.label || 'Waiting for logistics'}. ${logisticsStep?.description || 'Pickup or courier details are not available yet.'}`;
-};
-
-const buildWigRequestAnswer = async (userId) => (
-  await buildTrackingAnswer({ role: 'patient', userId })
-);
-
-const buildPostRequestAnswer = async (userId) => {
-  const { tracker } = await getProcessTracking({ role: 'patient', userId });
-  if (!tracker) {
-    return 'After you save a wig request, it is linked to your patient record and the request status tracker starts showing progress updates.';
-  }
-
-  return `After the request is saved, the next visible step is ${tracker.steps[1]?.title || 'preference review'}. The tracker will keep updating as the wig record and allocation move forward.`;
 };
 
 const persistConversationToBackend = async ({
@@ -775,49 +482,6 @@ export const resolveChatbotReply = async ({
   recentMessages = [],
 }) => {
   const trimmedText = text.trim();
-  const faqMatch = findFaqMatch({ faqs, text: trimmedText });
-
-  if (faqMatch) {
-    return {
-      text: faqMatch.answer,
-      source: 'faq',
-    };
-  }
-
-  if (role === 'donor' && matchesTopic(trimmedText, ['screening', 'analysis result', 'screening result', 'ai result'])) {
-    return {
-      text: await buildScreeningResultAnswer(userId),
-      source: 'status',
-    };
-  }
-
-  if (role === 'donor' && matchesTopic(trimmedText, ['submission status', 'donation status', 'track submission', 'track donation', 'status'])) {
-    return {
-      text: await buildTrackingAnswer({ role: 'donor', userId }),
-      source: 'status',
-    };
-  }
-
-  if (role === 'patient' && matchesTopic(trimmedText, ['wig request status', 'wig status', 'request status', 'allocation status', 'status'])) {
-    return {
-      text: await buildWigRequestAnswer(userId),
-      source: 'status',
-    };
-  }
-
-  if (matchesTopic(trimmedText, ['logistics', 'pickup', 'courier', 'delivery'])) {
-    return {
-      text: await buildLogisticsAnswer(userId),
-      source: 'status',
-    };
-  }
-
-  if (role === 'patient' && matchesTopic(trimmedText, ['after i save', 'after request', 'next after wig request'])) {
-    return {
-      text: await buildPostRequestAnswer(userId),
-      source: 'faq',
-    };
-  }
 
   const supportContext = await buildSupportContextBundle({
     role,
@@ -833,23 +497,13 @@ export const resolveChatbotReply = async ({
   }));
 
   try {
-    if (openAiClientKey) {
-      return await runDirectOpenAiChatReply({
-        role,
-        text: trimmedText,
-        faqs,
-        settings,
-        recentMessages,
-        supportContext,
-      });
-    }
-
     return await invokeChatbotAiReply({
       role,
       text: trimmedText,
       faqs,
       settings,
       recentMessages,
+      supportContext,
     });
   } catch (error) {
     const errorMessage = (await extractFunctionErrorMessage(error)).toLowerCase();

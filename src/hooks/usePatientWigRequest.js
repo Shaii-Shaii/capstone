@@ -58,9 +58,23 @@ const mapPatientWigRequestError = (type, error) => {
   }
 
   if (type === 'preview') {
+    if (message.includes('front photo')) {
+      return createAppError(
+        'Front Photo Required',
+        'Please upload a clear front photo first.'
+      );
+    }
+
+    if (message.includes('sign in again') || message.includes('session has expired')) {
+      return createAppError(
+        'Session Expired',
+        'Please sign in again to continue the wig preview.'
+      );
+    }
+
     return createAppError(
       'Suggestion Unavailable',
-      'We could not generate the wig suggestion right now. Please try again.'
+      'Preview could not be generated right now.'
     );
   }
 
@@ -100,18 +114,34 @@ const buildStoredFrontPhoto = (uri, requestId) => (
     : null
 );
 
-const buildStoredPreview = (specification, wigRequest) => (
-  specification?.ai_wig_preview_url
-    ? {
-        summary: wigRequest?.notes || specification?.notes || '',
-        style_notes: specification?.notes || '',
-        recommended_style_name: specification?.style_preference || 'Saved wig preview',
-        recommended_style_family: specification?.preferred_length || 'Saved recommendation',
-        generated_image_data_url: specification.ai_wig_preview_url,
-        options: [],
-      }
-    : null
-);
+const buildStoredPreview = (specification, wigRequest) => {
+  const hasStoredGuidance = Boolean(
+    specification?.style_preference
+    || specification?.preferred_length
+    || specification?.preferred_color
+    || specification?.notes
+    || wigRequest?.notes
+    || specification?.ai_wig_preview_url
+  );
+
+  if (!hasStoredGuidance) {
+    return null;
+  }
+
+  const summaryParts = [
+    wigRequest?.notes || '',
+    specification?.notes || '',
+  ].filter(Boolean);
+
+  return {
+    summary: summaryParts.join('\n\n') || 'Saved wig recommendation.',
+    style_notes: specification?.notes || '',
+    recommended_style_name: specification?.style_preference || 'Saved wig recommendation',
+    recommended_style_family: specification?.preferred_length || 'Saved recommendation',
+    generated_image_data_url: specification?.ai_wig_preview_url || '',
+    options: [],
+  };
+};
 
 export const usePatientWigRequest = ({ userId }) => {
   const [referenceImage, setReferenceImage] = useState(null);
@@ -188,8 +218,9 @@ export const usePatientWigRequest = ({ userId }) => {
       });
     }
 
-    if (result.latestWigSpecification?.ai_wig_preview_url) {
-      setPreview((current) => current || buildStoredPreview(result.latestWigSpecification, result.latestWigRequest));
+    const storedPreview = buildStoredPreview(result.latestWigSpecification, result.latestWigRequest);
+    if (storedPreview) {
+      setPreview((current) => current || storedPreview);
     }
 
     if (result.error) {

@@ -37,13 +37,11 @@ export const readOpenAiKey = () => {
   const openAiKey = (
     Deno.env.get('OPEN_API_KEY')
     || Deno.env.get('OPENAI_API_KEY')
-    || Deno.env.get('EXPO_PUBLIC_OPEN_API_KEY')
-    || Deno.env.get('EXPO_PUBLIC_OPENAI_API_KEY')
     || ''
   ).trim();
 
   if (!openAiKey) {
-    throw new Error('OpenAI API key is not configured. Add OPEN_API_KEY to your .env file.');
+    throw new Error('OpenAI API key is not configured in Edge Function Secrets.');
   }
 
   return openAiKey;
@@ -51,7 +49,6 @@ export const readOpenAiKey = () => {
 
 export const getDefaultOpenAiModel = () => (
   Deno.env.get('OPENAI_MODEL')
-  || Deno.env.get('EXPO_PUBLIC_OPENAI_MODEL')
   || 'gpt-4o-mini'
 );
 

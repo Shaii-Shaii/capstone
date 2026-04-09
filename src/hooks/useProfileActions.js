@@ -83,7 +83,7 @@ const formFromProfile = (profile) => ({
   region: profile?.region || '',
   city: profile?.city || '',
   province: profile?.province || '',
-  country: profile?.country || '',
+  country: profile?.country || 'Philippines',
 });
 
 export const useProfileActions = () => {
@@ -108,7 +108,7 @@ export const useProfileActions = () => {
       city: profile?.city || '',
       province: profile?.province || '',
       region: profile?.region || '',
-      country: profile?.country || '',
+      country: profile?.country || 'Philippines',
     })
   ), [
     profile?.avatar_url,
@@ -140,11 +140,12 @@ export const useProfileActions = () => {
       city: values?.city,
       province: values?.province,
       region: values?.region,
-      country: values?.country,
+      country: values?.country || profile?.country || 'Philippines',
     })
   ), [
     defaultValues,
     profile?.avatar_url,
+    profile?.country,
     profile?.photo_path,
   ]);
 

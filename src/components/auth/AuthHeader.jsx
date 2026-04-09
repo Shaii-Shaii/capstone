@@ -1,6 +1,5 @@
 import React from 'react';
 import { View, StyleSheet, Text, Image } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 import { theme } from '../../design-system/theme';
 import { AppTextLink } from '../ui/AppTextLink';
 import donivraLogoNoText from '../../assets/images/donivra_logo_no_text.png';
@@ -32,9 +31,6 @@ export const AuthHeader = ({
   resolvedTheme = null,
 }) => {
   const config = HEADER_VARIANTS[role] || HEADER_VARIANTS.default;
-  const gradientColors = resolvedTheme
-    ? [resolvedTheme.primaryColor || config.colors[0], resolvedTheme.tertiaryColor || resolvedTheme.secondaryColor || config.colors[1]]
-    : config.colors;
   const logoSource = donivraLogoNoText;
   const brandName = resolvedTheme?.brandName || 'Donivra';
   const titleColor = resolvedTheme?.primaryTextColor || theme.colors.textPrimary;
@@ -42,6 +38,7 @@ export const AuthHeader = ({
   const pillColor = resolvedTheme?.secondaryColor || theme.colors.whiteOverlay;
   const pillTextColor = resolvedTheme?.tertiaryTextColor || theme.colors.textInverse;
   const borderColor = resolvedTheme?.secondaryColor || theme.colors.borderSubtle;
+  const visualCardBackground = resolvedTheme?.primaryColor || config.colors[0];
 
   return (
     <View style={[styles.container, style]}>
@@ -56,12 +53,7 @@ export const AuthHeader = ({
           </View>
         </View>
       ) : (
-        <LinearGradient
-          colors={gradientColors}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.visualCard}
-        >
+        <View style={[styles.visualCard, { backgroundColor: visualCardBackground }]}>
           <View style={styles.visualTopRow}>
             <View style={styles.logoGroup}>
               <View style={[styles.logoFrame, { borderColor: pillColor }]}>
@@ -78,7 +70,7 @@ export const AuthHeader = ({
               </View>
             ) : null}
           </View>
-        </LinearGradient>
+        </View>
       )}
 
       <View style={styles.copyBlock}>

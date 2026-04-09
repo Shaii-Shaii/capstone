@@ -10,10 +10,17 @@ import { useRoleAuthFlow } from '../../src/hooks/useRoleAuthFlow';
 
 export default function SignupScreen() {
   const router = useRouter();
-  const { config, handleSignup, isLoading } = useRoleAuthFlow('signup');
+  const {
+    config,
+    handleSignup,
+    isLoading,
+    signupError,
+    clearSignupError,
+    resolvedTheme,
+  } = useRoleAuthFlow('signup');
 
   return (
-    <AuthScreenLayout role="access">
+    <AuthScreenLayout role="access" resolvedTheme={resolvedTheme}>
       <AuthHeader
         title={config.signup.title}
         subtitle={config.signup.subtitle}
@@ -22,6 +29,7 @@ export default function SignupScreen() {
         minimal={true}
         backLabel="Back to home"
         onBackPress={() => router.replace('/')}
+        resolvedTheme={resolvedTheme}
       />
 
       <View style={authLayoutStyles.formSection}>
@@ -30,6 +38,9 @@ export default function SignupScreen() {
           onSubmit={handleSignup}
           isLoading={isLoading}
           buttonText={config.signup.buttonText}
+          submitError={signupError}
+          onFieldEdit={clearSignupError}
+          resolvedTheme={resolvedTheme}
         />
       </View>
 

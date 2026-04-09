@@ -211,9 +211,9 @@ export function SignupAddressSection({
   const { width } = useWindowDimensions();
   const isWide = width >= 390;
   const [activePicker, setActivePicker] = useState('');
-  const [region, province, city, barangay] = useWatch({
+  const [region, province, city, barangay, country] = useWatch({
     control,
-    name: ['region', 'province', 'city', 'barangay'],
+    name: ['region', 'province', 'city', 'barangay', 'country'],
   });
 
   const selectedRegion = useMemo(
@@ -247,12 +247,16 @@ export function SignupAddressSection({
   }, [selectedCity?.mun_code]);
 
   useEffect(() => {
+    if (normalizeValue(country) === normalizeValue('Philippines')) {
+      return;
+    }
+
     setValue('country', 'Philippines', {
       shouldDirty: false,
       shouldTouch: false,
       shouldValidate: true,
     });
-  }, [setValue]);
+  }, [country, setValue]);
 
   const helperText = 'Choose your address step by step. Street or landmark stays manual, while the rest uses free Philippine location data.';
 
@@ -365,7 +369,7 @@ export function SignupAddressSection({
           label={fieldConfig.country.label}
           placeholder={fieldConfig.country.placeholder}
           variant="filled"
-          value="Philippines"
+          value={country || 'Philippines'}
           editable={false}
           helperText="Country is fixed for this signup flow."
           style={isWide ? styles.rowField : null}

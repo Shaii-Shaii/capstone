@@ -510,6 +510,7 @@ function WigPreviewCard({
 function WigGenerationModal({
   visible,
   isGeneratingPreview,
+  frontPhotoUri,
   generatedImageUri,
   title,
   family,
@@ -537,18 +538,18 @@ function WigGenerationModal({
           <Text style={styles.generationModalTitle}>AI Wig Preview</Text>
           <Text style={styles.generationModalBody}>
             {isGeneratingPreview
-              ? 'Generating the wig style preview from the front photo.'
-              : 'Review the generated wig preview result.'}
+              ? 'Generating wig guidance from the submitted front photo.'
+              : 'Review the current wig guidance result.'}
           </Text>
 
           <View style={styles.generationStage}>
-            {generatedImageUri ? (
-              <Image source={{ uri: generatedImageUri }} style={styles.generationStageImage} />
+            {generatedImageUri || frontPhotoUri ? (
+              <Image source={{ uri: generatedImageUri || frontPhotoUri }} style={styles.generationStageImage} />
             ) : (
               <View style={styles.generationStagePlaceholder}>
                 <AppIcon name="sparkle" state="active" size="xl" />
                 <Text style={styles.generationStagePlaceholderText}>
-                  {isGeneratingPreview ? 'Generating preview...' : 'No generated wig preview yet.'}
+                  {isGeneratingPreview ? 'Generating preview...' : 'No wig guidance preview yet.'}
                 </Text>
               </View>
             )}
@@ -909,6 +910,7 @@ export function PatientWigRequestScreen() {
       <WigGenerationModal
         visible={isGenerationModalOpen}
         isGeneratingPreview={isGeneratingPreview}
+        frontPhotoUri={referenceImage?.uri}
         generatedImageUri={generatedImageUri}
         title={recommendationTitle}
         family={recommendationFamily}
