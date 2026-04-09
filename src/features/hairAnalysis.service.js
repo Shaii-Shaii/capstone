@@ -44,6 +44,15 @@ const normalizeAnalysis = (data) => ({
   recommendations: normalizeRecommendations(data?.recommendations || []),
 });
 
+const hasStructuredAnalysisContent = (analysis) => Boolean(
+  analysis?.summary
+  || analysis?.decision
+  || analysis?.detected_texture
+  || analysis?.detected_density
+  || analysis?.detected_condition
+  || (Array.isArray(analysis?.recommendations) && analysis.recommendations.length)
+);
+
 const resolveFunctionErrorMessage = async (error) => {
   const response = error?.context;
 
@@ -112,6 +121,7 @@ export const analyzeHairPhotos = async ({ images }) => {
     const analysisPayload = functionResult.data?.analysis ? functionResult.data.analysis : functionResult.data;
     logAppEvent('hairAnalysis.invoke', 'Hair analysis edge function returned.', {
       functionName: hairAnalysisFunctionName,
+      success: functionResult.data?.success ?? null,
       responseKeys: functionResult.data ? Object.keys(functionResult.data) : [],
       analysisKeys: analysisPayload ? Object.keys(analysisPayload) : [],
       recommendationCount: Array.isArray(analysisPayload?.recommendations)
@@ -125,21 +135,17 @@ export const analyzeHairPhotos = async ({ images }) => {
       throw new Error('The AI analysis response was incomplete.');
     }
 
-    if (
-      analysisPayload?.is_hair_detected !== false
-      && !analysisPayload?.summary
-      && !analysisPayload?.detected_texture
-      && !analysisPayload?.detected_condition
-      && !analysisPayload?.detected_density
-    ) {
+    const normalizedAnalysis = normalizeAnalysis({
+      ...analysisPayload,
+      recommendations: analysisPayload?.recommendations || functionResult.data?.recommendations || [],
+    });
+
+    if (!hasStructuredAnalysisContent(normalizedAnalysis)) {
       throw new Error('The uploaded photos were not clear enough for a reliable hair analysis. Please retake the photos in better lighting and try again.');
     }
 
     return {
-      analysis: normalizeAnalysis({
-        ...analysisPayload,
-        recommendations: analysisPayload?.recommendations || functionResult.data?.recommendations || [],
-      }),
+      analysis: normalizedAnalysis,
       error: null,
     };
   } catch (error) {

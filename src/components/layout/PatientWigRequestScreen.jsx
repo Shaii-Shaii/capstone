@@ -538,8 +538,8 @@ function WigGenerationModal({
           <Text style={styles.generationModalTitle}>AI Wig Preview</Text>
           <Text style={styles.generationModalBody}>
             {isGeneratingPreview
-              ? 'Generating wig guidance from the submitted front photo.'
-              : 'Review the current wig guidance result.'}
+              ? 'Generating a visual wig preview from the submitted front photo.'
+              : 'Review the current wig preview result.'}
           </Text>
 
           <View style={styles.generationStage}>
@@ -549,7 +549,7 @@ function WigGenerationModal({
               <View style={styles.generationStagePlaceholder}>
                 <AppIcon name="sparkle" state="active" size="xl" />
                 <Text style={styles.generationStagePlaceholderText}>
-                  {isGeneratingPreview ? 'Generating preview...' : 'No wig guidance preview yet.'}
+                  {isGeneratingPreview ? 'Generating preview...' : 'No wig preview yet.'}
                 </Text>
               </View>
             )}

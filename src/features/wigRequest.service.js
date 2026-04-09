@@ -189,7 +189,7 @@ export const savePatientWigRequestFlow = async ({
       cap_size: null,
       style_preference: preview?.recommended_style_name || null,
       notes: [preferences.notes, preview?.style_notes, preview?.summary].filter(Boolean).join('\n\n') || null,
-      ai_wig_preview_url: preview?.generated_image_data_url || null,
+      ai_wig_preview_url: preview?.preview_url || preview?.generated_image_data_url || null,
     });
 
     if (wigSpecificationError) {

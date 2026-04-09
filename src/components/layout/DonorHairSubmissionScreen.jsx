@@ -849,6 +849,7 @@ export function DonorHairSubmissionScreen() {
                 <ResultMetricCard label="Texture" value={analysis.detected_texture} />
                 <ResultMetricCard label="Density" value={analysis.detected_density} />
                 <ResultMetricCard label="Condition" value={analysis.detected_condition} />
+                <ResultMetricCard label="Decision" value={analysis.decision} />
                 <ResultMetricCard label="Image visibility" value={analysis.is_hair_detected ? 'Clear' : 'Needs review'} />
                 <ResultMetricCard label="Confidence" value={confidenceLabel} />
               </View>

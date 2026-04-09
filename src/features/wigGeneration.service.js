@@ -7,7 +7,8 @@ const normalizePreview = (data) => ({
   style_notes: data?.style_notes || '',
   recommended_style_name: data?.recommended_style_name || '',
   recommended_style_family: data?.recommended_style_family || '',
-  generated_image_data_url: data?.generated_image_data_url || '',
+  preview_url: data?.preview_url || data?.generated_image_data_url || '',
+  generated_image_data_url: data?.generated_image_data_url || data?.preview_url || '',
   options: Array.isArray(data?.options)
     ? data.options
         .map((item, index) => ({
@@ -92,17 +93,24 @@ export const generatePatientWigPreview = async ({ preferences, referenceImage })
       throw new Error(await resolveFunctionErrorMessage(error));
     }
 
-    const previewPayload = data?.preview ? data.preview : data;
+    const previewPayload = data?.preview
+      ? {
+          ...data.preview,
+          preview_url: data.preview.preview_url || data.preview.generated_image_data_url || data?.preview_url || '',
+          generated_image_data_url: data.preview.generated_image_data_url || data.preview.preview_url || data?.generated_image_data_url || '',
+        }
+      : data;
     const preview = normalizePreview(previewPayload);
 
     logAppEvent('wigGeneration.invoke', 'Wig preview edge function returned.', {
       functionName: wigGenerationFunctionName,
       responseKeys: data ? Object.keys(data) : [],
       previewKeys: previewPayload ? Object.keys(previewPayload) : [],
+      hasGeneratedImage: Boolean(preview.generated_image_data_url),
       optionCount: preview.options.length,
     });
 
-    if (!preview.summary && !preview.recommended_style_name && !preview.options.length) {
+    if (!preview.generated_image_data_url || (!preview.summary && !preview.recommended_style_name && !preview.options.length)) {
       throw new Error('The wig preview response was incomplete.');
     }
 
