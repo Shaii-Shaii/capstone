@@ -14,6 +14,40 @@ const patientOnboardingStorageBucket =
 const patientsTable = 'Patients';
 const hospitalRepresentativeTable = 'Hospital_Representative';
 const hospitalsTable = 'Hospitals';
+const patientSelectColumns = `
+  patient_id:Patient_ID,
+  user_id:User_ID,
+  hospital_id:Hospital_ID,
+  patient_code:Patient_Code,
+  medical_condition:Medical_Condition,
+  patient_picture:Patient_Picture,
+  date_of_diagnosis:Date_of_Diagnosis,
+  guardian:Guardian,
+  guardian_relationship:Guardian_Relationship,
+  guardian_contact_number:Guardian_Contact_Number,
+  medical_document:Medical_Document,
+  created_at:Created_At,
+  updated_at:Updated_At
+`;
+const hospitalStaffSelectColumns = `
+  link_id:Link_ID,
+  hospital_id:Hospital_ID,
+  user_id:User_ID,
+  assigned_date:Assigned_Date
+`;
+const hospitalSelectColumns = `
+  hospital_id:Hospital_ID,
+  hospital_name:Hospital_Name,
+  hospital_logo:Hospital_Logo,
+  country:Country,
+  region:Region,
+  city:City,
+  barangay:Barangay,
+  street:Street,
+  contact_number:Contact_Number,
+  created_at:Created_At,
+  updated_at:Updated_At
+`;
 const buildQueryContext = ({ table, filter, authUserId = '', systemUserId = null, patientId = null, hospitalId = null }) => ({
   table,
   filter,
@@ -48,6 +82,30 @@ const buildMutationContext = ({
   patientId: patientId || null,
   payloadKeys: getPayloadKeys(payload),
 });
+
+const logPatientQueryStart = ({
+  source,
+  phase,
+  table,
+  columns,
+  filter,
+  authUserId = '',
+  systemUserId = null,
+  patientId = null,
+  hospitalId = null,
+}) => {
+  logAppEvent('profile.patient_query.started', 'Patient-related query started.', {
+    source,
+    phase,
+    table,
+    columns,
+    filter,
+    authUserId: authUserId || null,
+    systemUserId: systemUserId || null,
+    patientId: patientId || null,
+    hospitalId: hospitalId || null,
+  });
+};
 
 const ensureMutationAuthContext = async ({
   table,
@@ -1030,15 +1088,25 @@ export const fetchPatientDetailsByUserId = async (userIdentifier) => {
     return { data: null, error: systemUserResult.error || new Error('System user could not be loaded.') };
   }
 
+  logPatientQueryStart({
+    source: 'fetchPatientDetailsByUserId',
+    phase: 'refetch',
+    table: patientsTable,
+    columns: patientSelectColumns,
+    filter: { User_ID: systemUserResult.data.user_id },
+    authUserId: isUuid(userIdentifier) ? userIdentifier : '',
+    systemUserId: systemUserResult.data.user_id,
+  });
+
   const result = await runSingleRowSelect({
     table: patientsTable,
-    filter: { user_id: systemUserResult.data.user_id },
+    filter: { User_ID: systemUserResult.data.user_id },
     authUserId: isUuid(userIdentifier) ? userIdentifier : '',
     systemUserId: systemUserResult.data.user_id,
     queryBuilder: supabase
       .from(patientsTable)
-      .select('*')
-      .eq('user_id', systemUserResult.data.user_id),
+      .select(patientSelectColumns)
+      .eq('User_ID', systemUserResult.data.user_id),
   });
 
   return {
@@ -1052,14 +1120,23 @@ export const fetchPatientDetailsByPatientId = async (patientId) => {
     return { data: null, error: new Error('Patient ID is required.') };
   }
 
+  logPatientQueryStart({
+    source: 'fetchPatientDetailsByPatientId',
+    phase: 'refetch',
+    table: patientsTable,
+    columns: patientSelectColumns,
+    filter: { Patient_ID: patientId },
+    patientId,
+  });
+
   const result = await runSingleRowSelect({
     table: patientsTable,
-    filter: { patient_id: patientId },
+    filter: { Patient_ID: patientId },
     patientId,
     queryBuilder: supabase
       .from(patientsTable)
-      .select('*')
-      .eq('patient_id', patientId),
+      .select(patientSelectColumns)
+      .eq('Patient_ID', patientId),
   });
 
   return {
@@ -1074,15 +1151,25 @@ export const fetchHospitalStaffByUserId = async (userIdentifier) => {
     return { data: null, error: systemUserResult.error || new Error('System user could not be loaded.') };
   }
 
+  logPatientQueryStart({
+    source: 'fetchHospitalStaffByUserId',
+    phase: 'redirect-check',
+    table: hospitalRepresentativeTable,
+    columns: hospitalStaffSelectColumns,
+    filter: { User_ID: systemUserResult.data.user_id },
+    authUserId: isUuid(userIdentifier) ? userIdentifier : '',
+    systemUserId: systemUserResult.data.user_id,
+  });
+
   const result = await runSingleRowSelect({
     table: hospitalRepresentativeTable,
-    filter: { user_id: systemUserResult.data.user_id },
+    filter: { User_ID: systemUserResult.data.user_id },
     authUserId: isUuid(userIdentifier) ? userIdentifier : '',
     systemUserId: systemUserResult.data.user_id,
     queryBuilder: supabase
       .from(hospitalRepresentativeTable)
-      .select('*')
-      .eq('user_id', systemUserResult.data.user_id),
+      .select(hospitalStaffSelectColumns)
+      .eq('User_ID', systemUserResult.data.user_id),
   });
 
   return {
@@ -1096,14 +1183,23 @@ export const fetchHospitalRepresentativeById = async (hospitalId) => {
     return { data: null, error: null };
   }
 
+  logPatientQueryStart({
+    source: 'fetchHospitalRepresentativeById',
+    phase: 'preview',
+    table: hospitalsTable,
+    columns: hospitalSelectColumns,
+    filter: { Hospital_ID: hospitalId },
+    hospitalId,
+  });
+
   const result = await runSingleRowSelect({
     table: hospitalsTable,
-    filter: { hospital_id: hospitalId },
+    filter: { Hospital_ID: hospitalId },
     hospitalId,
     queryBuilder: supabase
       .from(hospitalsTable)
-      .select('*')
-      .eq('hospital_id', hospitalId),
+      .select(hospitalSelectColumns)
+      .eq('Hospital_ID', hospitalId),
   });
 
   return {
@@ -1153,13 +1249,21 @@ export const fetchPatientDetailsByCode = async (patientCode) => {
     return { data: null, error: new Error('Patient code is required.') };
   }
 
+  logPatientQueryStart({
+    source: 'fetchPatientDetailsByCode',
+    phase: 'preview',
+    table: patientsTable,
+    columns: patientSelectColumns,
+    filter: { Patient_Code: normalizedCode },
+  });
+
   const result = await runSingleRowSelect({
     table: patientsTable,
-    filter: { patient_code: normalizedCode },
+    filter: { Patient_Code: normalizedCode },
     queryBuilder: supabase
       .from(patientsTable)
-      .select('*')
-      .ilike('patient_code', normalizedCode),
+      .select(patientSelectColumns)
+      .ilike('Patient_Code', normalizedCode),
   });
 
   if (result.error || !result.data) {
@@ -1245,24 +1349,34 @@ export const createPatientDetails = async (payload) => {
   const profileResult = await fetchProfileById(systemUserResult.data.auth_user_id);
   const profile = profileResult.data;
 
+  logPatientQueryStart({
+    source: 'createPatientDetails',
+    phase: 'create',
+    table: patientsTable,
+    columns: 'User_ID, Hospital_ID, Patient_Picture, Medical_Condition, Date_of_Diagnosis, Guardian, Guardian_Relationship, Guardian_Contact_Number, Medical_Document',
+    filter: { User_ID: systemUserResult.data.user_id },
+    authUserId: systemUserResult.data.auth_user_id || '',
+    systemUserId: systemUserResult.data.user_id,
+  });
+
   const result = await supabase
     .from(patientsTable)
     .insert([{
-      user_id: systemUserResult.data.user_id,
-      hospital_id: patientPayload.hospital_id,
-      patient_picture: patientPayload.patient_picture || profile?.photo_path || null,
-      medical_condition: patientPayload.medical_condition,
-      date_of_diagnosis: patientPayload.date_of_diagnosis,
-      guardian: patientPayload.guardian,
-      guardian_relationship: patientPayload.guardian_relationship,
-      guardian_contact_number: patientPayload.guardian_contact_number,
-      medical_document: patientPayload.medical_document,
+      User_ID: systemUserResult.data.user_id,
+      Hospital_ID: patientPayload.hospital_id,
+      Patient_Picture: patientPayload.patient_picture || profile?.photo_path || null,
+      Medical_Condition: patientPayload.medical_condition,
+      Date_of_Diagnosis: patientPayload.date_of_diagnosis,
+      Guardian: patientPayload.guardian,
+      Guardian_Relationship: patientPayload.guardian_relationship,
+      Guardian_Contact_Number: patientPayload.guardian_contact_number,
+      Medical_Document: patientPayload.medical_document,
     }]);
 
   if (result.error) {
     logAppError('profile.query.insert_failed', result.error, buildQueryContext({
       table: patientsTable,
-      filter: { user_id: systemUserResult.data.user_id },
+      filter: { User_ID: systemUserResult.data.user_id },
       authUserId: systemUserResult.data.auth_user_id || '',
       systemUserId: systemUserResult.data.user_id,
     }));
@@ -1278,7 +1392,7 @@ export const createPatientDetails = async (payload) => {
 
   logAppEvent('profile.query.insert_succeeded', 'Patients insert succeeded. Refetching by direct patient filters.', {
     table: patientsTable,
-    filter: { user_id: systemUserResult.data.user_id },
+    filter: { User_ID: systemUserResult.data.user_id },
     authUserId: systemUserResult.data.auth_user_id || '',
     systemUserId: systemUserResult.data.user_id,
   });
@@ -1287,18 +1401,27 @@ export const createPatientDetails = async (payload) => {
 };
 
 export const updatePatientPictureByPatientId = async (patientId, patientPicture) => {
+  logPatientQueryStart({
+    source: 'updatePatientPictureByPatientId',
+    phase: 'update',
+    table: patientsTable,
+    columns: 'Patient_Picture, Updated_At',
+    filter: { Patient_ID: patientId },
+    patientId,
+  });
+
   const result = await supabase
     .from(patientsTable)
     .update({
-      patient_picture: patientPicture,
-      updated_at: new Date().toISOString(),
+      Patient_Picture: patientPicture,
+      Updated_At: new Date().toISOString(),
     })
-    .eq('patient_id', patientId);
+    .eq('Patient_ID', patientId);
 
   if (result.error) {
     logAppError('profile.query.update_failed', result.error, buildQueryContext({
       table: patientsTable,
-      filter: { patient_id: patientId },
+      filter: { Patient_ID: patientId },
       patientId,
     }));
     return {
@@ -1337,15 +1460,15 @@ export const updatePatientDetails = async (userIdentifier, updates) => {
   }
 
   const patientPayload = {
-    hospital_id: updates.hospital_id ?? undefined,
-    medical_condition: updates.medical_condition ?? undefined,
-    patient_picture: updates.patient_picture ?? updates.avatar_url ?? undefined,
-    date_of_diagnosis: updates.date_of_diagnosis ?? undefined,
-    guardian: updates.guardian ?? undefined,
-    guardian_relationship: updates.guardian_relationship ?? undefined,
-    guardian_contact_number: updates.guardian_contact_number ?? undefined,
-    medical_document: updates.medical_document ?? undefined,
-    updated_at: new Date().toISOString(),
+    Hospital_ID: updates.hospital_id ?? undefined,
+    Medical_Condition: updates.medical_condition ?? undefined,
+    Patient_Picture: updates.patient_picture ?? updates.avatar_url ?? undefined,
+    Date_of_Diagnosis: updates.date_of_diagnosis ?? undefined,
+    Guardian: updates.guardian ?? undefined,
+    Guardian_Relationship: updates.guardian_relationship ?? undefined,
+    Guardian_Contact_Number: updates.guardian_contact_number ?? undefined,
+    Medical_Document: updates.medical_document ?? undefined,
+    Updated_At: new Date().toISOString(),
   };
 
   const authContext = await ensureMutationAuthContext({
@@ -1361,15 +1484,26 @@ export const updatePatientDetails = async (userIdentifier, updates) => {
     return { data: null, error: authContext.error };
   }
 
+  logPatientQueryStart({
+    source: 'updatePatientDetails',
+    phase: 'update',
+    table: patientsTable,
+    columns: 'Hospital_ID, Medical_Condition, Patient_Picture, Date_of_Diagnosis, Guardian, Guardian_Relationship, Guardian_Contact_Number, Medical_Document, Updated_At',
+    filter: { Patient_ID: refreshedPatient.data.patient_id },
+    authUserId: isUuid(userIdentifier) ? userIdentifier : '',
+    systemUserId: systemUserResult.data.user_id,
+    patientId: refreshedPatient.data.patient_id,
+  });
+
   const result = await supabase
     .from(patientsTable)
     .update(patientPayload)
-    .eq('patient_id', refreshedPatient.data.patient_id);
+    .eq('Patient_ID', refreshedPatient.data.patient_id);
 
   if (result.error) {
     logAppError('profile.query.update_failed', result.error, buildQueryContext({
       table: patientsTable,
-      filter: { patient_id: refreshedPatient.data.patient_id },
+      filter: { Patient_ID: refreshedPatient.data.patient_id },
       patientId: refreshedPatient.data.patient_id,
       authUserId: isUuid(userIdentifier) ? userIdentifier : '',
       systemUserId: refreshedPatient.data.user_id || null,
@@ -1386,7 +1520,7 @@ export const updatePatientDetails = async (userIdentifier, updates) => {
 
   logAppEvent('profile.query.update_succeeded', 'Patients update succeeded. Refetching by patient_id.', {
     table: patientsTable,
-    filter: { patient_id: refreshedPatient.data.patient_id },
+    filter: { Patient_ID: refreshedPatient.data.patient_id },
     patientId: refreshedPatient.data.patient_id,
     authUserId: isUuid(userIdentifier) ? userIdentifier : '',
     systemUserId: refreshedPatient.data.user_id || null,
@@ -1444,12 +1578,12 @@ export const linkPatientDetailsToUserByCode = async ({
   }
 
   const updates = {
-    user_id: systemUserResult.data.user_id,
-    updated_at: new Date().toISOString(),
+    User_ID: systemUserResult.data.user_id,
+    Updated_At: new Date().toISOString(),
   };
 
   if (patientPicture) {
-    updates.patient_picture = patientPicture;
+    updates.Patient_Picture = patientPicture;
   }
 
   const authContext = await ensureMutationAuthContext({
@@ -1465,15 +1599,26 @@ export const linkPatientDetailsToUserByCode = async ({
     return { data: null, error: authContext.error };
   }
 
+  logPatientQueryStart({
+    source: 'linkPatientDetailsToUserByCode',
+    phase: 'update',
+    table: patientsTable,
+    columns: 'User_ID, Updated_At, Patient_Picture',
+    filter: { Patient_ID: patientResult.data.patient_id },
+    authUserId: systemUserResult.data.auth_user_id || '',
+    systemUserId: systemUserResult.data.user_id,
+    patientId: patientResult.data.patient_id,
+  });
+
   const result = await supabase
     .from(patientsTable)
     .update(updates)
-    .eq('patient_id', patientResult.data.patient_id);
+    .eq('Patient_ID', patientResult.data.patient_id);
 
   if (result.error) {
     logAppError('profile.query.update_failed', result.error, buildQueryContext({
       table: patientsTable,
-      filter: { patient_id: patientResult.data.patient_id },
+      filter: { Patient_ID: patientResult.data.patient_id },
       patientId: patientResult.data.patient_id,
       authUserId: systemUserResult.data.auth_user_id || '',
       systemUserId: systemUserResult.data.user_id,
@@ -1490,7 +1635,7 @@ export const linkPatientDetailsToUserByCode = async ({
 
   logAppEvent('profile.query.update_succeeded', 'Patient link update succeeded. Refetching by patient_id.', {
     table: patientsTable,
-    filter: { patient_id: patientResult.data.patient_id },
+    filter: { Patient_ID: patientResult.data.patient_id },
     patientId: patientResult.data.patient_id,
     authUserId: systemUserResult.data.auth_user_id || '',
     systemUserId: systemUserResult.data.user_id,
