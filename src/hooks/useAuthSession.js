@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../api/supabase/client';
 import { getCurrentAccountBundle, needsPostLoginOnboarding } from '../features/profile/services/profile.service';
-import { ensureProfileInfrastructure } from '../features/profile/api/profile.api';
 
 export const useAuthSession = () => {
   const [user, setUser] = useState(null);
@@ -17,14 +16,6 @@ export const useAuthSession = () => {
   const refreshProfile = useCallback(async (userId) => {
     const targetUserId = userId || user?.id;
     if (!targetUserId) return null;
-
-    const currentEmail = targetUserId === user?.id ? user?.email || '' : '';
-    const currentRole = targetUserId === user?.id ? user?.user_metadata?.role || null : null;
-    await ensureProfileInfrastructure({
-      authUserId: targetUserId,
-      email: currentEmail,
-      role: currentRole,
-    });
 
     const {
       profile: userProfile,
@@ -46,7 +37,7 @@ export const useAuthSession = () => {
       onboardingCompleted,
     }));
     return userProfile;
-  }, [user?.email, user?.id, user?.user_metadata?.role]);
+  }, [user?.id]);
 
   useEffect(() => {
     let mounted = true;
@@ -73,12 +64,6 @@ export const useAuthSession = () => {
       }
       
       try {
-        await ensureProfileInfrastructure({
-          authUserId: newSession.user.id,
-          email: newSession.user.email || '',
-          role: newSession.user.user_metadata?.role || null,
-        });
-
         const {
           profile: userProfile,
           patientProfile: nextPatientProfile,

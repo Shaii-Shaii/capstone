@@ -1,12 +1,121 @@
 import * as AuthAPI from '../api/auth.api';
 import { getProfile } from '../../profile/services/profile.service';
-import { ensureProfileInfrastructure } from '../../profile/api/profile.api';
+import { ensureProfileInfrastructure, fetchSystemUserByAuthUserId } from '../../profile/api/profile.api';
 import { authMessages } from '../../../constants/auth';
 import * as Linking from 'expo-linking';
 import { isPasswordReuse, reusedPasswordMessage } from '../../../utils/passwordRules';
 import { logAppError, logAppEvent, writeAuditLog } from '../../../utils/appErrors';
+import { loginThemeFallback } from '../../../design-system/theme';
 
 const isEmailConfirmed = (user) => Boolean(user?.email_confirmed_at || user?.confirmed_at);
+const loginErrorCodes = {
+  emailNotConfirmed: 'EMAIL_NOT_CONFIRMED',
+  accountDetailsMissing: 'ACCOUNT_DETAILS_MISSING',
+  accountInactive: 'ACCOUNT_INACTIVE',
+  accessNotStarted: 'ACCESS_NOT_STARTED',
+  accessExpired: 'ACCESS_EXPIRED',
+  network: 'NETWORK_ERROR',
+  accountLoadFailed: 'ACCOUNT_LOAD_FAILED',
+  unexpected: 'UNEXPECTED_ERROR',
+};
+
+const normalizeVisualValue = (value) => {
+  if (typeof value !== 'string') return '';
+  return value.trim();
+};
+
+const toTimestamp = (value) => {
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.getTime();
+};
+
+const isNetworkErrorMessage = (message) => {
+  const normalized = String(message || '').trim().toLowerCase();
+  return (
+    normalized.includes('network request failed')
+    || normalized.includes('failed to fetch')
+    || normalized.includes('fetch failed')
+    || normalized.includes('networkerror')
+    || normalized.includes('timeout')
+    || normalized.includes('timed out')
+    || normalized.includes('internet')
+    || normalized.includes('offline')
+    || normalized.includes('connection')
+  );
+};
+
+const buildUserFacingLoginError = (message, code = loginErrorCodes.unexpected) => {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+};
+
+const getFriendlyAuthError = (error) => {
+  const msg = String(error?.message || '').trim();
+  const normalized = msg.toLowerCase();
+
+  if (normalized.includes('invalid login credentials') || normalized.includes('invalid credentials')) {
+    return buildUserFacingLoginError('Incorrect email or password.');
+  }
+  if (normalized.includes('email not confirmed')) {
+    return buildUserFacingLoginError('Please verify your email address before logging in.', loginErrorCodes.emailNotConfirmed);
+  }
+  if (isNetworkErrorMessage(normalized)) {
+    return buildUserFacingLoginError('We could not connect right now. Please check your internet and try again.', loginErrorCodes.network);
+  }
+
+  return buildUserFacingLoginError('Something went wrong. Please try again.');
+};
+
+const validateSystemUserAccount = (systemUser) => {
+  if (!systemUser?.user_id) {
+    return buildUserFacingLoginError('We could not find your account details.', loginErrorCodes.accountDetailsMissing);
+  }
+
+  if (systemUser.is_active === false) {
+    return buildUserFacingLoginError('Your account is currently inactive.', loginErrorCodes.accountInactive);
+  }
+
+  const now = Date.now();
+  const accessStart = toTimestamp(systemUser.access_start);
+  const accessEnd = toTimestamp(systemUser.access_end);
+
+  if (accessStart && accessStart > now) {
+    return buildUserFacingLoginError('Your account access has not started yet.', loginErrorCodes.accessNotStarted);
+  }
+
+  if (accessEnd && accessEnd < now) {
+    return buildUserFacingLoginError('Your account access has already expired.', loginErrorCodes.accessExpired);
+  }
+
+  return null;
+};
+
+const resolveRoleMismatchError = (actualRole) => (
+  buildUserFacingLoginError(`This account is registered as a ${actualRole}. Please continue through the ${actualRole} login.`)
+);
+
+const resolveVisualTheme = ({ uiSettings = {}, preset = {} } = {}) => {
+  const fallback = loginThemeFallback;
+  const resolved = {
+    brandName: normalizeVisualValue(uiSettings.brand_name) || fallback.brandName,
+    brandTagline: normalizeVisualValue(uiSettings.brand_tagline) || fallback.brandTagline,
+    logoIcon: normalizeVisualValue(uiSettings.logo_icon) || fallback.logoIcon,
+    loginBackgroundPhoto: normalizeVisualValue(uiSettings.login_background_photo) || fallback.loginBackgroundPhoto,
+    primaryColor: normalizeVisualValue(uiSettings.primary_color) || normalizeVisualValue(preset.primary_color) || fallback.primaryColor,
+    secondaryColor: normalizeVisualValue(uiSettings.secondary_color) || normalizeVisualValue(preset.secondary_color) || fallback.secondaryColor,
+    tertiaryColor: normalizeVisualValue(uiSettings.tertiary_color) || normalizeVisualValue(preset.tertiary_color) || fallback.tertiaryColor,
+    backgroundColor: normalizeVisualValue(uiSettings.background_color) || normalizeVisualValue(preset.background_color) || fallback.backgroundColor,
+    primaryTextColor: normalizeVisualValue(uiSettings.primary_text_color) || normalizeVisualValue(preset.primary_text_color) || fallback.primaryTextColor,
+    secondaryTextColor: normalizeVisualValue(uiSettings.secondary_text_color) || normalizeVisualValue(preset.secondary_text_color) || fallback.secondaryTextColor,
+    tertiaryTextColor: normalizeVisualValue(uiSettings.tertiary_text_color) || normalizeVisualValue(preset.tertiary_text_color) || fallback.tertiaryTextColor,
+    fontFamily: normalizeVisualValue(uiSettings.font_family) || normalizeVisualValue(preset.font_family) || fallback.fontFamily,
+    secondaryFontFamily: normalizeVisualValue(uiSettings.secondary_font_family) || normalizeVisualValue(preset.secondary_font_family) || fallback.secondaryFontFamily,
+  };
+
+  return resolved;
+};
 
 /**
  * Helper to translate raw Supabase errors into human-friendly strings
@@ -40,7 +149,10 @@ const getFriendlyError = (error) => {
   if (msg.toLowerCase().includes('auth session missing')) {
     return new Error('Your session is no longer active. Please log in again and retry the password change.');
   }
-  return new Error(msg);
+  if (isNetworkErrorMessage(msg)) {
+    return new Error('We could not connect right now. Please check your internet and try again.');
+  }
+  return new Error('Something went wrong. Please try again.');
 };
 
 
@@ -57,50 +169,49 @@ export const login = async (email, password, expectedRole) => {
     });
 
     const { data: authData, error } = await AuthAPI.loginWithEmail({ email, password });
-    if (error) throw getFriendlyError(error);
+    if (error) throw getFriendlyAuthError(error);
 
     if (!isEmailConfirmed(authData.user)) {
       await AuthAPI.logoutUser();
-      const unconfirmedError = new Error('Please verify your email address before logging in.');
-      unconfirmedError.code = 'EMAIL_NOT_CONFIRMED';
+      const unconfirmedError = buildUserFacingLoginError('Please verify your email address before logging in.', loginErrorCodes.emailNotConfirmed);
       throw unconfirmedError;
     }
-    
-    // Fetch profile to verify role
-    let actualRole = null;
-    let profile = null;
-    
-    let { profile: fetchedProfile, error: profileError } = await getProfile(authData.user.id);
-    if (profileError && String(profileError).toLowerCase().includes('not linked to an app user record')) {
-      const ensureSystemUserResult = await ensureProfileInfrastructure({
-        authUserId: authData.user.id,
-        email: authData.user.email || email,
-        role: authData.user?.user_metadata?.role || null,
+
+    logAppEvent('auth.login.account_lookup_started', 'Fetching public.users record after auth.', {
+      authUserId: authData.user?.id || null,
+      email,
+      expectedRole: expectedRole || null,
+    });
+
+    const systemUserResult = await fetchSystemUserByAuthUserId(authData.user.id);
+    if (systemUserResult.error) {
+      await AuthAPI.logoutUser();
+      const accountLoadError = buildUserFacingLoginError('Something went wrong while loading your account.', loginErrorCodes.accountLoadFailed);
+      logAppError('auth.login.account_lookup_failed', systemUserResult.error, {
+        authUserId: authData.user?.id || null,
+        email,
+        table: 'users',
+        filter: { auth_user_id: authData.user?.id || null },
       });
-
-      if (ensureSystemUserResult.error) {
-        throw new Error(ensureSystemUserResult.error.message || authMessages.roleNotFound);
-      }
-
-      const retryProfileResult = await getProfile(authData.user.id);
-      fetchedProfile = retryProfileResult.profile;
-      profileError = retryProfileResult.error;
+      throw accountLoadError;
     }
 
-    if (!profileError && fetchedProfile) {
-      profile = fetchedProfile;
-      actualRole = fetchedProfile.role || null;
+    const systemUser = systemUserResult.data || null;
+    const accountStateError = validateSystemUserAccount(systemUser);
+    if (accountStateError) {
+      await AuthAPI.logoutUser();
+      throw accountStateError;
     }
 
+    const actualRole = systemUser?.role || null;
     if (!actualRole) {
       await AuthAPI.logoutUser();
-      throw new Error(authMessages.roleNotFound);
+      throw buildUserFacingLoginError('We could not find your account details.', loginErrorCodes.accountDetailsMissing);
     }
 
     if (expectedRole && actualRole && actualRole !== expectedRole) {
-      // Force signout to block wrong-role access session persistence
       await AuthAPI.logoutUser();
-      throw new Error(`This account is registered as a ${actualRole}. Please continue through the ${actualRole} login.`);
+      throw resolveRoleMismatchError(actualRole);
     }
 
     await writeAuditLog({
@@ -114,15 +225,22 @@ export const login = async (email, password, expectedRole) => {
 
     logAppEvent('auth.login', 'Login succeeded.', {
       authUserId: authData.user?.id || null,
-      databaseUserId: profile?.user_id || null,
+      databaseUserId: systemUser?.user_id || null,
       role: actualRole,
     });
 
-    return { user: authData.user, session: authData.session, profile, role: actualRole, error: null };
+    return {
+      user: authData.user,
+      session: authData.session,
+      profile: systemUser,
+      role: actualRole,
+      error: null,
+    };
   } catch (error) {
     logAppError('auth.login', error, {
       email,
       expectedRole: expectedRole || null,
+      errorCode: error?.code || null,
     });
 
     await writeAuditLog({
@@ -209,6 +327,59 @@ export const register = async (email, password, additionalData = {}) => {
       status: 'failed',
     });
     return { user: null, session: null, error: error.message };
+  }
+};
+
+export const getResolvedLoginTheme = async () => {
+  try {
+    logAppEvent('auth.theme', 'Resolving login theme from database settings.', {
+      tables: ['UI_Settings', 'Theme_Presets'],
+    });
+
+    const [uiSettingsResult, defaultPresetResult] = await Promise.all([
+      AuthAPI.fetchUiSettings(),
+      AuthAPI.fetchDefaultThemePreset(),
+    ]);
+
+    if (uiSettingsResult.error) {
+      logAppError('auth.theme.ui_settings_failed', uiSettingsResult.error, {
+        table: 'UI_Settings',
+      });
+    }
+
+    if (defaultPresetResult.error) {
+      logAppError('auth.theme.theme_preset_failed', defaultPresetResult.error, {
+        table: 'Theme_Presets',
+        filter: { Is_Default: true, Is_Deleted: false },
+      });
+    }
+
+    const branding = resolveVisualTheme({
+      uiSettings: uiSettingsResult.data || {},
+      preset: defaultPresetResult.data || {},
+    });
+
+    logAppEvent('auth.theme', 'Resolved login theme for auth screens.', {
+      hasUiSettings: Boolean(uiSettingsResult.data),
+      hasDefaultPreset: Boolean(defaultPresetResult.data),
+      brandName: branding.brandName,
+      hasLogoIcon: Boolean(branding.logoIcon),
+      hasLoginBackgroundPhoto: Boolean(branding.loginBackgroundPhoto),
+    });
+
+    return {
+      data: branding,
+      error: null,
+    };
+  } catch (error) {
+    logAppError('auth.theme', error, {
+      tables: ['UI_Settings', 'Theme_Presets'],
+    });
+
+    return {
+      data: loginThemeFallback,
+      error,
+    };
   }
 };
 

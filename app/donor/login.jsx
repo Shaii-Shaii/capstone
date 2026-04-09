@@ -9,10 +9,10 @@ import { useRoleAuthFlow } from '../../src/hooks/useRoleAuthFlow';
 
 export default function DonorLoginScreen() {
   const router = useRouter();
-  const { config, handleLogin, isLoading } = useRoleAuthFlow('donor');
+  const { config, handleLogin, isLoading, loginError, clearLoginError, resolvedTheme } = useRoleAuthFlow('donor');
 
   return (
-    <AuthScreenLayout role="donor">
+    <AuthScreenLayout role="donor" resolvedTheme={resolvedTheme}>
       <AuthHeader
         title={config.login.title}
         subtitle={config.login.subtitle}
@@ -20,6 +20,7 @@ export default function DonorLoginScreen() {
         role="donor"
         backLabel="Back to access"
         onBackPress={() => router.back()}
+        resolvedTheme={resolvedTheme}
       />
 
       <View style={authLayoutStyles.formSection}>
@@ -28,6 +29,9 @@ export default function DonorLoginScreen() {
           isLoading={isLoading}
           onForgotPassword={() => router.push('/auth/forgot-password')}
           buttonText={config.login.buttonText}
+          submitError={loginError}
+          onFieldEdit={clearLoginError}
+          resolvedTheme={resolvedTheme}
         />
       </View>
 

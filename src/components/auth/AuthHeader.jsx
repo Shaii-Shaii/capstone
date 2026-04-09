@@ -29,8 +29,19 @@ export const AuthHeader = ({
   onBackPress,
   role = 'default',
   minimal = false,
+  resolvedTheme = null,
 }) => {
   const config = HEADER_VARIANTS[role] || HEADER_VARIANTS.default;
+  const gradientColors = resolvedTheme
+    ? [resolvedTheme.primaryColor || config.colors[0], resolvedTheme.tertiaryColor || resolvedTheme.secondaryColor || config.colors[1]]
+    : config.colors;
+  const logoSource = resolvedTheme?.logoIcon ? { uri: resolvedTheme.logoIcon } : donivraLogoNoText;
+  const brandName = resolvedTheme?.brandName || 'Donivra';
+  const titleColor = resolvedTheme?.primaryTextColor || theme.colors.textPrimary;
+  const subtitleColor = resolvedTheme?.secondaryTextColor || theme.colors.textSecondary;
+  const pillColor = resolvedTheme?.secondaryColor || theme.colors.whiteOverlay;
+  const pillTextColor = resolvedTheme?.tertiaryTextColor || theme.colors.textInverse;
+  const borderColor = resolvedTheme?.secondaryColor || theme.colors.borderSubtle;
 
   return (
     <View style={[styles.container, style]}>
@@ -40,30 +51,30 @@ export const AuthHeader = ({
 
       {minimal ? (
         <View style={styles.minimalLogoWrap}>
-          <View style={styles.minimalLogoFrame}>
-            <Image source={donivraLogoNoText} style={styles.logoImage} resizeMode="contain" />
+          <View style={[styles.minimalLogoFrame, { borderColor }]}>
+            <Image source={logoSource} style={styles.logoImage} resizeMode="contain" />
           </View>
         </View>
       ) : (
         <LinearGradient
-          colors={config.colors}
+          colors={gradientColors}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
           style={styles.visualCard}
         >
           <View style={styles.visualTopRow}>
             <View style={styles.logoGroup}>
-              <View style={styles.logoFrame}>
-                <Image source={donivraLogoNoText} style={styles.logoImage} resizeMode="contain" />
+              <View style={[styles.logoFrame, { borderColor: pillColor }]}>
+                <Image source={logoSource} style={styles.logoImage} resizeMode="contain" />
               </View>
               <View style={styles.visualCopy}>
-                <Text style={styles.brandName}>Donivra</Text>
+                <Text style={[styles.brandName, { color: theme.colors.textInverse, fontFamily: resolvedTheme?.secondaryFontFamily || theme.typography.fontFamilyDisplay }]}>{brandName}</Text>
               </View>
             </View>
 
             {eyebrow ? (
-              <View style={styles.eyebrowPill}>
-                <Text style={styles.eyebrowText}>{eyebrow}</Text>
+              <View style={[styles.eyebrowPill, { backgroundColor: pillColor, borderColor: pillColor }]}>
+                <Text style={[styles.eyebrowText, { color: pillTextColor, fontFamily: resolvedTheme?.fontFamily || theme.typography.fontFamily }]}>{eyebrow}</Text>
               </View>
             ) : null}
           </View>
@@ -71,8 +82,8 @@ export const AuthHeader = ({
       )}
 
       <View style={styles.copyBlock}>
-        <Text style={styles.title}>{title}</Text>
-        {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
+        <Text style={[styles.title, { color: titleColor, fontFamily: resolvedTheme?.secondaryFontFamily || theme.typography.fontFamilyDisplay }]}>{title}</Text>
+        {subtitle ? <Text style={[styles.subtitle, { color: subtitleColor, fontFamily: resolvedTheme?.fontFamily || theme.typography.fontFamily }]}>{subtitle}</Text> : null}
       </View>
     </View>
   );

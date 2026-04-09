@@ -4,15 +4,17 @@ import { ScreenContainer } from '../ui/ScreenContainer';
 import { AppCard } from '../ui/AppCard';
 import { theme } from '../../design-system/theme';
 
-export const AuthScreenLayout = ({ children, cardStyle, role = 'donor' }) => {
+export const AuthScreenLayout = ({ children, cardStyle, role = 'donor', resolvedTheme = null }) => {
   const { height } = useWindowDimensions();
   const isShortScreen = height < theme.layout.shortScreenHeight;
   const isCompactScreen = height < theme.layout.compactScreenHeight;
 
   const heroColors =
-    role === 'patient'
-      ? [theme.colors.dashboardPatientFrom, theme.colors.dashboardPatientTo]
-      : [theme.colors.heroFrom, theme.colors.heroTo];
+    resolvedTheme
+      ? [resolvedTheme.primaryColor || theme.colors.heroFrom, resolvedTheme.tertiaryColor || resolvedTheme.secondaryColor || theme.colors.heroTo]
+      : role === 'patient'
+        ? [theme.colors.dashboardPatientFrom, theme.colors.dashboardPatientTo]
+        : [theme.colors.heroFrom, theme.colors.heroTo];
 
   return (
     <ScreenContainer
@@ -20,6 +22,7 @@ export const AuthScreenLayout = ({ children, cardStyle, role = 'donor' }) => {
       safeArea={true}
       variant="auth"
       heroColors={heroColors}
+      authHeroImageUri={resolvedTheme?.loginBackgroundPhoto || ''}
       contentStyle={isCompactScreen ? styles.screenContentCompact : styles.screenContent}
     >
       <View
@@ -34,9 +37,15 @@ export const AuthScreenLayout = ({ children, cardStyle, role = 'donor' }) => {
           radius="xl"
           padding={isCompactScreen ? 'sm' : isShortScreen ? 'md' : 'lg'}
           contentStyle={styles.cardContent}
-          style={[styles.card, cardStyle]}
+          style={[styles.card, resolvedTheme?.backgroundColor ? { backgroundColor: resolvedTheme.backgroundColor } : null, cardStyle]}
         >
-          <View style={[styles.topAccent, role === 'patient' ? styles.topAccentPatient : null]} />
+          <View
+            style={[
+              styles.topAccent,
+              role === 'patient' ? styles.topAccentPatient : null,
+              resolvedTheme?.primaryColor ? { backgroundColor: resolvedTheme.primaryColor } : null,
+            ]}
+          />
           {children}
         </AppCard>
       </View>

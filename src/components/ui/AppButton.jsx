@@ -82,6 +82,10 @@ export const AppButton = ({
   enableHaptics,
   hapticStyle = Haptics.ImpactFeedbackStyle.Light,
   success = false,
+  gradientColors,
+  textColorOverride,
+  backgroundColorOverride,
+  borderColorOverride,
 }) => {
   const palette = VARIANTS[variant] || VARIANTS.primary;
   const metrics = SIZES[size] || SIZES.md;
@@ -163,8 +167,8 @@ export const AppButton = ({
       width: fullWidth ? '100%' : undefined,
       backgroundColor: isInactive
         ? theme.colors.actionDisabled
-        : palette.backgroundColor,
-      borderColor: isInactive ? theme.colors.borderDisabled : palette.borderColor,
+        : (backgroundColorOverride || palette.backgroundColor),
+      borderColor: isInactive ? theme.colors.borderDisabled : (borderColorOverride || palette.borderColor),
     },
     palette.shadow,
     variant === 'ghost' ? styles.ghostButton : null,
@@ -179,7 +183,7 @@ export const AppButton = ({
           style={[
             styles.text,
             {
-              color: isInactive ? theme.colors.textDisabled : palette.textColor,
+              color: isInactive ? theme.colors.textDisabled : (textColorOverride || palette.textColor),
               fontSize: metrics.fontSize,
             },
             textStyle,
@@ -207,7 +211,7 @@ export const AppButton = ({
       {variant === 'primary' && !isInactive ? (
         <View>
           <Animated.View pointerEvents="none" style={[styles.successGlow, glowStyle]} />
-          <LinearGradient colors={palette.gradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={shellStyle}>
+          <LinearGradient colors={gradientColors || palette.gradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={shellStyle}>
             {contentNode}
           </LinearGradient>
         </View>

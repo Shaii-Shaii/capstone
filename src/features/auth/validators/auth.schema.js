@@ -55,14 +55,14 @@ export const calculateAgeFromBirthdate = (birthdate) => {
 // Shared Field Rules
 export const emailField = z.string()
   .trim()
-  .min(1, 'Email is required')
+  .min(1, 'Please enter your email.')
   .max(254, 'Email is too long')
-  .email('Enter a valid email')
+  .email('Please enter a valid email address.')
   .refine((value) => !hasObviousEmailIssues(value), {
-    message: 'Enter a valid email',
+    message: 'Please enter a valid email address.',
   })
   .refine((value) => passesGmailProductRule(value), {
-    message: 'Gmail username must be at least 6 characters',
+    message: 'Please enter a valid email address.',
   })
   .transform(normalizeEmailValue);
 
@@ -119,7 +119,7 @@ export const signupDefaultValues = {
 // Login Schemas
 export const loginSchema = z.object({
   email: emailField,
-  password: z.string().min(1, 'Password is required'), // Login doesn't need strict validation checking
+  password: z.string().min(1, 'Please enter your password.'),
 });
 
 export const forgotPasswordSchema = z.object({

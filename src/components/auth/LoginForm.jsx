@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, StyleSheet } from 'react-native';
+import { View, StyleSheet, Text } from 'react-native';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { AppInput } from '../ui/AppInput';
@@ -9,7 +9,15 @@ import { AppTextLink } from '../ui/AppTextLink';
 import { loginSchema } from '../../features/auth/validators/auth.schema';
 import { theme } from '../../design-system/theme';
 
-export const LoginForm = ({ onSubmit, isLoading, onForgotPassword, buttonText = "Log In" }) => {
+export const LoginForm = ({
+  onSubmit,
+  isLoading,
+  onForgotPassword,
+  buttonText = 'Log In',
+  submitError = '',
+  onFieldEdit,
+  resolvedTheme,
+}) => {
   const { control, handleSubmit, formState: { errors } } = useForm({
     resolver: zodResolver(loginSchema),
     mode: 'onBlur',
@@ -19,8 +27,24 @@ export const LoginForm = ({ onSubmit, isLoading, onForgotPassword, buttonText = 
     }
   });
 
+  const errorBorderColor = resolvedTheme?.primaryColor || theme.colors.borderError;
+  const errorBackgroundColor = `${errorBorderColor}14`;
+  const errorTextColor = resolvedTheme?.primaryTextColor || theme.colors.textError;
+  const buttonGradient = [
+    resolvedTheme?.primaryColor || theme.colors.brandPrimary,
+    resolvedTheme?.tertiaryColor || theme.colors.heroTo,
+  ];
+
   return (
     <View style={styles.container}>
+      {submitError ? (
+        <View style={[styles.submitErrorWrap, { borderColor: errorBorderColor, backgroundColor: errorBackgroundColor }]}>
+          <Text style={[styles.submitErrorText, { color: errorTextColor }]}>
+            {submitError}
+          </Text>
+        </View>
+      ) : null}
+
       <Controller
         control={control}
         name="email"
@@ -33,9 +57,13 @@ export const LoginForm = ({ onSubmit, isLoading, onForgotPassword, buttonText = 
             autoCorrect={false}
             variant="filled"
             onBlur={onBlur}
-            onChangeText={onChange}
+            onChangeText={(nextValue) => {
+              onFieldEdit?.();
+              onChange(nextValue);
+            }}
             value={value}
             error={errors.email?.message}
+            disabled={isLoading}
           />
         )}
       />
@@ -49,9 +77,13 @@ export const LoginForm = ({ onSubmit, isLoading, onForgotPassword, buttonText = 
             placeholder="Password"
             variant="filled"
             onBlur={onBlur}
-            onChangeText={onChange}
+            onChangeText={(nextValue) => {
+              onFieldEdit?.();
+              onChange(nextValue);
+            }}
             value={value}
             error={errors.password?.message}
+            disabled={isLoading}
           />
         )}
       />
@@ -68,11 +100,15 @@ export const LoginForm = ({ onSubmit, isLoading, onForgotPassword, buttonText = 
 
       <AppButton
         title={buttonText}
-        onPress={handleSubmit(onSubmit)}
+        onPress={handleSubmit((values) => {
+          onFieldEdit?.();
+          return onSubmit(values);
+        })}
         loading={isLoading}
         size="lg"
         enableHaptics={true}
         style={styles.submitBtn}
+        gradientColors={buttonGradient}
       />
     </View>
   );
@@ -82,6 +118,19 @@ const styles = StyleSheet.create({
   container: {
     width: '100%',
     gap: 2,
+  },
+  submitErrorWrap: {
+    borderWidth: 1,
+    borderRadius: theme.radius.xl,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    marginBottom: theme.spacing.sm,
+  },
+  submitErrorText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+    fontWeight: theme.typography.weights.medium,
   },
   forgotPasswordContainer: {
     alignItems: 'flex-end',

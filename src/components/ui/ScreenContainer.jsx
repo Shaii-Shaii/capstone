@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, StyleSheet, Platform, ScrollView, KeyboardAvoidingView, useWindowDimensions } from 'react-native';
+import { View, StyleSheet, Platform, ScrollView, KeyboardAvoidingView, useWindowDimensions, ImageBackground } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { theme } from '../../design-system/theme';
@@ -12,6 +12,7 @@ export const ScreenContainer = ({
   safeArea = true,
   variant = 'default',
   heroColors = [theme.colors.heroFrom, theme.colors.heroTo],
+  authHeroImageUri = '',
 }) => {
   const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
@@ -88,12 +89,19 @@ export const ScreenContainer = ({
     <View style={[styles.container, isDashboard ? styles.dashboardContainer : null]}>
       {isAuth ? (
         <>
-          <LinearGradient
-            colors={heroColors}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={[styles.authHero, { height: authHeroHeight }]}
-          />
+          <View style={[styles.authHero, { height: authHeroHeight }]}>
+            <LinearGradient
+              colors={heroColors}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.authHeroGradient}
+            />
+            {authHeroImageUri ? (
+              <ImageBackground source={{ uri: authHeroImageUri }} resizeMode="cover" style={styles.authHeroImage}>
+                <View style={styles.authHeroImageOverlay} />
+              </ImageBackground>
+            ) : null}
+          </View>
           <View style={[styles.authBase, { top: authHeroHeight - theme.spacing.giant }]} />
           {keyboardWrapper}
         </>
@@ -143,6 +151,17 @@ const styles = StyleSheet.create({
     top: 0,
     left: 0,
     right: 0,
+    overflow: 'hidden',
+  },
+  authHeroGradient: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  authHeroImage: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  authHeroImageOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(8, 8, 8, 0.24)',
   },
   authBase: {
     ...StyleSheet.absoluteFillObject,

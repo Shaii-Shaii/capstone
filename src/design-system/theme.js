@@ -76,3 +76,19 @@ export const theme = {
     },
   },
 };
+
+export const loginThemeFallback = {
+  brandName: 'StrandShare',
+  brandTagline: 'Hair Donation and Wig Support',
+  logoIcon: '',
+  loginBackgroundPhoto: '',
+  primaryColor: '#97313a',
+  secondaryColor: '#c9c8c8',
+  tertiaryColor: '#646464',
+  backgroundColor: '#ffffff',
+  primaryTextColor: '#080808',
+  secondaryTextColor: '#646464',
+  tertiaryTextColor: '#97313a',
+  fontFamily: theme.typography.fontFamily,
+  secondaryFontFamily: theme.typography.fontFamilyDisplay,
+};

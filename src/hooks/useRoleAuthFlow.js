@@ -1,18 +1,45 @@
 import { Alert } from 'react-native';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { useAuthActions } from '../features/auth/hooks/useAuthActions';
+import { loginThemeFallback } from '../design-system/theme';
 import {
   authMessages,
   roleAuthConfig,
 } from '../constants/auth';
+import * as AuthService from '../features/auth/services/auth.service';
 import { savePendingSignupDraft, syncPendingSignupDraft } from '../features/auth/services/signupDraft.service';
 
 export const useRoleAuthFlow = (role) => {
   const router = useRouter();
-  const { login, register, logout, isLoading } = useAuthActions();
+  const { login, register, logout, isLoading, clearError } = useAuthActions();
   const config = roleAuthConfig[role] || roleAuthConfig.access;
   const expectedRole = role === 'donor' || role === 'patient' ? role : undefined;
+  const [loginError, setLoginError] = useState('');
+  const [resolvedTheme, setResolvedTheme] = useState(loginThemeFallback);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const loadTheme = async () => {
+      const result = await AuthService.getResolvedLoginTheme();
+      if (mounted && result.data) {
+        setResolvedTheme(result.data);
+      }
+    };
+
+    loadTheme();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const clearLoginError = () => {
+    setLoginError('');
+    clearError?.();
+  };
 
   const handleSignup = async (data) => {
     const selectedRole = 'tentative';
@@ -49,6 +76,7 @@ export const useRoleAuthFlow = (role) => {
   };
 
   const handleLogin = async (data) => {
+    clearLoginError();
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     const result = await login(data.email, data.password, expectedRole);
 
@@ -57,7 +85,7 @@ export const useRoleAuthFlow = (role) => {
       const resolvedRole = result.role || result.profile?.role;
 
       if (!resolvedRole) {
-        Alert.alert('Login Failed', authMessages.roleNotFound);
+        setLoginError(authMessages.roleNotFound);
         return;
       }
 
@@ -84,12 +112,15 @@ export const useRoleAuthFlow = (role) => {
       return;
     }
 
-    Alert.alert('Login Failed', result.error || authMessages.loginFailed);
+    setLoginError(result.error || authMessages.loginFailed);
   };
 
   return {
     isLoading,
     config,
+    loginError,
+    clearLoginError,
+    resolvedTheme,
     handleSignup,
     handleLogin,
   };

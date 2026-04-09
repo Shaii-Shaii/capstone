@@ -85,8 +85,8 @@ export const getHomeRouteForRole = (role) => roleAuthConfig[role]?.routes?.home 
 
 export const authMessages = {
   signupFailed: 'Please try again.',
-  loginFailed: 'Please check your credentials.',
-  roleNotFound: 'We could not determine the account role for this user. Please try again or contact support.',
+  loginFailed: 'Something went wrong. Please try again.',
+  roleNotFound: 'We could not find your account details.',
   verifyPromptTitle: 'Email Not Verified',
   verifyPromptBody: 'Please verify your email address before logging in.',
 };
