@@ -27,6 +27,7 @@ import {
   hairAnalyzerQuestionChoices,
   hairDonationModeOptions,
 } from '../../features/hairSubmission.constants';
+import donivraLogo from '../../assets/images/donivra_logo_no_text.png';
 
 const DONATION_DROP_OFF_ADDRESS = 'Unit 133 G/F Makati Shangri-La Hotel, Ayala Ave, Makati City, Metro Manila';
 const PHOTO_COMPLIANCE_ITEMS = [
@@ -520,6 +521,21 @@ export function DonorHairSubmissionScreen() {
     }
   }, [questionIndex, visibleQuestions.length]);
 
+  useEffect(() => {
+    const treatments = Array.isArray(questionnaireValues?.chemicalTreatments)
+      ? questionnaireValues.chemicalTreatments
+      : [];
+    const hasTreatmentHistory = treatments.some((item) => item && item !== 'none');
+
+    if (!hasTreatmentHistory && questionForm.getValues('treatmentTiming')) {
+      questionForm.setValue('treatmentTiming', '', { shouldDirty: true, shouldValidate: false });
+    }
+
+    if ((questionnaireValues?.colorStatus || '') === 'no' && questionForm.getValues('colorTiming')) {
+      questionForm.setValue('colorTiming', '', { shouldDirty: true, shouldValidate: false });
+    }
+  }, [questionForm, questionnaireValues?.chemicalTreatments, questionnaireValues?.colorStatus]);
+
   const renderQuestionInput = () => {
     if (!currentQuestion) return null;
     const fieldName = currentQuestion.key;
@@ -588,7 +604,9 @@ export function DonorHairSubmissionScreen() {
         return;
       }
 
-      const allQuestionsValid = await questionForm.trigger();
+      const allQuestionsValid = await questionForm.trigger(
+        visibleQuestions.map((question) => question.key)
+      );
       if (!allQuestionsValid) return;
       setStepIndex(6);
       return;
@@ -893,30 +911,69 @@ export function DonorHairSubmissionScreen() {
       {isLoadingContext ? <StatusBanner title="Loading donation context" message="The module is loading the current donation requirement, logistics settings, and donor support data." variant="info" style={styles.bannerGap} /> : null}
       {error ? <StatusBanner title={error.title} message={error.message} variant="error" style={styles.bannerGap} /> : null}
 
-      <View style={styles.progressHeader}>
-        <Text style={styles.progressText}>Step {stepIndex + 1} of 10</Text>
-        <Text style={styles.progressHelper}>{progressLabel}</Text>
-      </View>
+      <View style={styles.wizardStage}>
+        <View style={styles.brandMarkWrap}>
+          <View style={styles.brandMarkFrame}>
+            <Image source={donivraLogo} style={styles.brandMarkImage} resizeMode="contain" />
+          </View>
+        </View>
 
-      {renderStepContent()}
+        <View style={styles.progressHeader}>
+          <Text style={styles.progressText}>Step {stepIndex + 1} of 10</Text>
+          <Text style={styles.progressHelper}>{progressLabel}</Text>
+        </View>
 
-      <View style={styles.footerNav}>
-        <AppButton title="Previous" variant="outline" fullWidth={false} onPress={goPrevious} disabled={stepIndex === 0 && questionIndex === 0 && photoIndex === 0} />
-        <AppButton
-          title={nextButtonTitle}
-          fullWidth={false}
-          onPress={handleNext}
-          loading={(stepIndex === 7 || stepIndex === 8) && isAnalyzing}
-          disabled={isNextDisabled}
-        />
+        <View style={styles.stepContentWrap}>
+          {renderStepContent()}
+        </View>
+
+        <View style={styles.footerNav}>
+          <AppButton title="Previous" variant="outline" fullWidth={false} onPress={goPrevious} disabled={stepIndex === 0 && questionIndex === 0 && photoIndex === 0} />
+          <AppButton
+            title={nextButtonTitle}
+            fullWidth={false}
+            onPress={handleNext}
+            loading={(stepIndex === 7 || stepIndex === 8) && isAnalyzing}
+            disabled={isNextDisabled}
+          />
+        </View>
       </View>
     </DashboardLayout>
   );
 }
 
 const styles = StyleSheet.create({
+  wizardStage: {
+    width: '100%',
+    maxWidth: theme.layout.contentMaxWidth,
+    alignSelf: 'center',
+  },
+  brandMarkWrap: {
+    alignItems: 'center',
+    marginBottom: theme.spacing.md,
+  },
+  brandMarkFrame: {
+    width: 72,
+    height: 72,
+    borderRadius: theme.radius.xl,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.backgroundPrimary,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+    ...theme.shadows.soft,
+  },
+  brandMarkImage: {
+    width: 46,
+    height: 46,
+  },
+  stepContentWrap: {
+    width: '100%',
+    alignSelf: 'center',
+  },
   stepStack: {
     gap: theme.spacing.md,
+    width: '100%',
   },
   bannerGap: {
     marginBottom: theme.spacing.md,
