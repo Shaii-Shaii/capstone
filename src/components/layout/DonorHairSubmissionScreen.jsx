@@ -604,10 +604,6 @@ export function DonorHairSubmissionScreen() {
         return;
       }
 
-      const allQuestionsValid = await questionForm.trigger(
-        visibleQuestions.map((question) => question.key)
-      );
-      if (!allQuestionsValid) return;
       setStepIndex(6);
       return;
     }
