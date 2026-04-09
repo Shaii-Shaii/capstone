@@ -198,6 +198,10 @@ const buildEligibilitySummary = ({ analysis, confirmedValues, questionnaireAnswe
   };
 };
 
+const getVisibleQuestions = (answers = {}) => (
+  QUESTION_STEPS.filter((item) => !item.showWhen || item.showWhen(answers))
+);
+
 function StepInfoCard({ title, description, items, footer }) {
   return (
     <AppCard variant="elevated" radius="xl" padding="lg">
@@ -516,7 +520,7 @@ export function DonorHairSubmissionScreen() {
   const reviewValues = useWatch({ control: reviewForm.control });
 
   const visibleQuestions = useMemo(
-    () => QUESTION_STEPS.filter((item) => !item.showWhen || item.showWhen(questionnaireValues || {})),
+    () => getVisibleQuestions(questionnaireValues || {}),
     [questionnaireValues]
   );
   const currentQuestion = visibleQuestions[questionIndex] || visibleQuestions[0];
@@ -559,6 +563,7 @@ export function DonorHairSubmissionScreen() {
   const visibleStepTitle = isScreeningFlowActive ? screeningStepTitles[stepIndex - 5] : stepTitles[stepIndex];
 
   const canMovePastQuestion = isAnswered(currentQuestion, questionnaireValues);
+  const isAutoAdvanceQuestion = stepIndex === 5 && currentQuestion?.type === 'choice';
   const isCurrentPhotoComplete = Boolean(photos[photoIndex]);
   const canProceedToDonationMode = eligibility.status !== 'Retake Photos' && eligibility.status !== 'Not Yet Eligible';
   const isReviewStepFilled = Boolean(
@@ -587,6 +592,52 @@ export function DonorHairSubmissionScreen() {
     if (stepIndex === 8) return analysis ? 'Next' : 'Retry analysis';
     return isSaving ? 'Saving...' : 'Finish';
   }, [analysis, isSaving, photoIndex, questionIndex, requiredViews.length, stepIndex, visibleQuestions.length]);
+
+  const goToNextQuestionStep = (answersSnapshot = questionForm.getValues(), currentQuestionKey = currentQuestion?.key) => {
+    const nextVisibleQuestions = getVisibleQuestions(answersSnapshot);
+    const activeQuestionIndex = nextVisibleQuestions.findIndex((item) => item.key === currentQuestionKey);
+
+    if (activeQuestionIndex >= 0 && activeQuestionIndex < nextVisibleQuestions.length - 1) {
+      setQuestionIndex(activeQuestionIndex + 1);
+      return;
+    }
+
+    setStepIndex(6);
+  };
+
+  const handleQuestionChoiceChange = async ({ fieldName, nextValue, fieldOnChange }) => {
+    logAppEvent('donor_hair_submission.questionnaire', 'Question choice selected.', {
+      userId: user?.id || null,
+      questionKey: fieldName,
+      questionType: currentQuestion?.type || null,
+      value: nextValue,
+    });
+
+    fieldOnChange(nextValue);
+
+    const nextAnswers = {
+      ...questionForm.getValues(),
+      [fieldName]: nextValue,
+    };
+    const isValid = await questionForm.trigger(fieldName);
+
+    logAppEvent('donor_hair_submission.questionnaire', 'Question choice validation completed.', {
+      userId: user?.id || null,
+      questionKey: fieldName,
+      questionType: currentQuestion?.type || null,
+      isValid,
+    });
+
+    if (!isValid) return;
+
+    logAppEvent('donor_hair_submission.questionnaire', 'Question choice auto-advance triggered.', {
+      userId: user?.id || null,
+      questionKey: fieldName,
+      isFinalVisibleQuestion: getVisibleQuestions(nextAnswers).findIndex((item) => item.key === fieldName) === getVisibleQuestions(nextAnswers).length - 1,
+    });
+
+    goToNextQuestionStep(nextAnswers, fieldName);
+  };
 
   const goPrevious = () => {
     if (stepIndex === 5 && questionIndex > 0) {
@@ -661,7 +712,18 @@ export function DonorHairSubmissionScreen() {
             <ChoiceList
               value={field.value}
               options={hairAnalyzerQuestionChoices[currentQuestion.optionsKey]}
-              onChange={field.onChange}
+              onChange={(nextValue) => {
+                if (currentQuestion.type === 'choice') {
+                  handleQuestionChoiceChange({
+                    fieldName,
+                    nextValue,
+                    fieldOnChange: field.onChange,
+                  });
+                  return;
+                }
+
+                field.onChange(nextValue);
+              }}
               multi={currentQuestion.type === 'multi'}
             />
           )}
@@ -800,12 +862,13 @@ export function DonorHairSubmissionScreen() {
       const isValid = fieldName ? await questionForm.trigger(fieldName) : false;
       if (!isValid) return;
 
-      if (questionIndex < visibleQuestions.length - 1) {
-        setQuestionIndex((current) => current + 1);
-        return;
-      }
+      logAppEvent('donor_hair_submission.questionnaire', 'Manual question advance triggered.', {
+        userId: user?.id || null,
+        questionKey: fieldName || null,
+        questionType: currentQuestion?.type || null,
+      });
 
-      setStepIndex(6);
+      goToNextQuestionStep(questionForm.getValues(), fieldName);
       return;
     }
 
@@ -1138,13 +1201,15 @@ export function DonorHairSubmissionScreen() {
 
         <View style={styles.footerNav}>
           <AppButton title="Previous" variant="outline" fullWidth={false} onPress={goPrevious} disabled={stepIndex === 0 && questionIndex === 0 && photoIndex === 0} />
-          <AppButton
-            title={nextButtonTitle}
-            fullWidth={false}
-            onPress={handleNext}
-            loading={(stepIndex === 7 || stepIndex === 8) && isAnalyzing}
-            disabled={isNextDisabled}
-          />
+          {!isAutoAdvanceQuestion ? (
+            <AppButton
+              title={nextButtonTitle}
+              fullWidth={false}
+              onPress={handleNext}
+              loading={(stepIndex === 7 || stepIndex === 8) && isAnalyzing}
+              disabled={isNextDisabled}
+            />
+          ) : null}
         </View>
       </View>
 

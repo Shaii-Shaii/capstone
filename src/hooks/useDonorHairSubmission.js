@@ -197,6 +197,7 @@ const buildPhotoRecord = (asset, slotIndex, sourceType = 'upload') => {
   return {
     id: asset.assetId || `${asset.uri}-${view?.key || slotIndex}`,
     uri: asset.uri,
+    base64: asset.base64,
     mimeType: asset.mimeType || 'image/jpeg',
     width: asset.width,
     height: asset.height,

@@ -14,6 +14,24 @@ import { logAppEvent, writeAuditLog } from '../utils/appErrors';
 
 const buildSubmissionCode = () => `HS-${Date.now().toString(36).toUpperCase()}`;
 
+const decodeBase64ToArrayBuffer = (base64Value = '') => {
+  const normalizedBase64 = String(base64Value || '').trim();
+  if (!normalizedBase64) {
+    throw new Error('One of the required hair photos is missing its image data.');
+  }
+
+  if (typeof atob === 'function') {
+    const binary = atob(normalizedBase64);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    return bytes.buffer;
+  }
+
+  throw new Error('The app could not decode one of the required hair photos before upload.');
+};
+
 const getFileExtension = (mimeType = 'image/jpeg', fileName = '') => {
   const normalizedMimeType = String(mimeType || '').toLowerCase();
   const normalizedFileName = String(fileName || '').trim().toLowerCase();
@@ -32,6 +50,18 @@ const getPhotoUploadPayload = async (photo) => {
   if (photo?.file && typeof photo.file.arrayBuffer === 'function') {
     return {
       fileBody: await photo.file.arrayBuffer(),
+      contentType,
+      fileName,
+    };
+  }
+
+  const inlineBase64 = typeof photo?.base64 === 'string' && photo.base64.trim()
+    ? photo.base64.trim()
+    : String(photo?.dataUrl || '').split(',')[1] || '';
+
+  if (inlineBase64) {
+    return {
+      fileBody: decodeBase64ToArrayBuffer(inlineBase64),
       contentType,
       fileName,
     };
@@ -71,7 +101,36 @@ const uploadSelectedImages = async ({ userId, submissionId, detailId, photos }) 
       hasUri: Boolean(photo?.uri),
     });
 
-    const uploadPayload = await getPhotoUploadPayload(photo);
+    let uploadPayload;
+
+    try {
+      uploadPayload = await getPhotoUploadPayload(photo);
+    } catch (payloadError) {
+      const fallbackFilePath = photo?.dataUrl || photo?.uri || '';
+
+      logAppEvent('hair_submission.save', 'Hair submission photo payload preparation failed; falling back to direct image reference.', {
+        userId,
+        submissionId,
+        detailId,
+        index,
+        viewKey: photo?.viewKey || null,
+        message: payloadError?.message || 'Image payload could not be prepared.',
+        hasFallbackFilePath: Boolean(fallbackFilePath),
+      }, 'warn');
+
+      if (!fallbackFilePath) {
+        throw payloadError;
+      }
+
+      uploadedRows.push({
+        submission_detail_id: detailId,
+        file_path: fallbackFilePath,
+        image_type: photo.viewKey || hairSubmissionImageTypes.donorUpload,
+      });
+
+      continue;
+    }
+
     const extension = getFileExtension(uploadPayload.contentType, uploadPayload.fileName);
     const filePath = `${userId}/${submissionId}/${detailId}-${photo.viewKey || `view-${index + 1}`}.${extension}`;
     const uploadResult = await HairSubmissionAPI.uploadHairSubmissionImage({
