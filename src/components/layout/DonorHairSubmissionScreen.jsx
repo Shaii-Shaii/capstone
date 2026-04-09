@@ -18,10 +18,16 @@ import { useAuth } from '../../providers/AuthProvider';
 import { useDonorHairSubmission } from '../../hooks/useDonorHairSubmission';
 import { useNotifications } from '../../hooks/useNotifications';
 import {
+  hairAnalyzerQuestionDefaultValues,
+  hairAnalyzerQuestionSchema,
   buildHairReviewDefaultValues,
   hairReviewSchema,
+  resolveHairAnalyzerConcernType,
 } from '../../features/hairSubmission.schema';
-import { donorHairEligibilityRules } from '../../features/hairSubmission.constants';
+import {
+  hairAnalyzerConcernTypes,
+  hairAnalyzerQuestionChoices,
+} from '../../features/hairSubmission.constants';
 
 const ANALYZER_REMINDERS = ['Hair tied', 'No cap', 'Clear view'];
 const ANALYZER_HELP_STEPS = [
@@ -70,6 +76,17 @@ const formatLengthLabel = (value) => {
   return `${numericValue.toFixed(1)} cm / ${inches.toFixed(1)} in`;
 };
 
+const formatRequirementLengthLabel = (value) => {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue) || numericValue <= 0) return 'Not set';
+  const inches = numericValue / 2.54;
+  return `${numericValue.toFixed(1)} cm / ${inches.toFixed(1)} in`;
+};
+
+const getChoiceLabel = (choices = [], value = '') => (
+  choices.find((item) => item.value === value)?.label || value || 'Not set'
+);
+
 const normalizeAnalysisText = (analysis) => (
   [
     analysis?.summary,
@@ -89,41 +106,69 @@ const hasDetectedConcern = (source, keywords = [], negativePhrases = []) => (
   && !negativePhrases.some((phrase) => source.includes(phrase))
 );
 
-const buildEligibilitySummary = ({ analysis, confirmedValues }) => {
+const buildEligibilitySummary = ({
+  analysis,
+  confirmedValues,
+  questionnaireAnswers,
+  donationRequirement,
+}) => {
   if (!analysis) return { status: 'Pending', tone: 'info', reasons: [] };
 
   const reasons = [];
   const source = normalizeAnalysisText(analysis);
   const confirmedLength = Number(confirmedValues?.declaredLength || analysis?.estimated_length);
+  const concernType = resolveHairAnalyzerConcernType(questionnaireAnswers);
 
   if (!analysis.is_hair_detected) reasons.push('Hair must be clearly visible in the photo.');
   if (analysis?.missing_views?.length) reasons.push(`Required views are incomplete: ${analysis.missing_views.join(', ')}.`);
-  if (Number.isFinite(confirmedLength) && confirmedLength < donorHairEligibilityRules.minimumLengthCentimeters) {
-    reasons.push(`Hair length must be at least ${donorHairEligibilityRules.minimumLengthInches} inches.`);
-  }
-  if (donorHairEligibilityRules.requireHairTied && hasDetectedConcern(source, ['untied', 'hair down', 'not tied', 'loose hair'], ['hair tied', 'tied hair'])) {
-    reasons.push('Hair should be tied for screening.');
-  }
-  if (donorHairEligibilityRules.rejectCapDetected && hasDetectedConcern(source, ['cap', 'hat', 'head covering', 'hood'], ['no cap', 'without cap', 'cap not detected'])) {
-    reasons.push('No cap or head covering should be present.');
-  }
-  if (donorHairEligibilityRules.rejectAccessoryObstruction && hasDetectedConcern(source, ['clip', 'accessory', 'obstruction', 'blocked'], ['no clip', 'no accessory', 'not blocked'])) {
-    reasons.push('Hair accessories or other objects should not block the hair.');
-  }
-  if (donorHairEligibilityRules.rejectVisibleDandruffConcern && hasDetectedConcern(source, ['dandruff'], ['no dandruff', 'dandruff not visible'])) {
-    reasons.push('Visible dandruff concern was detected.');
-  }
-  if (donorHairEligibilityRules.rejectVisibleLiceConcern && hasDetectedConcern(source, ['lice'], ['no lice', 'lice not visible'])) {
-    reasons.push('Visible lice concern was detected.');
-  }
-  if (donorHairEligibilityRules.requireNaturalColor && hasDetectedConcern(source, ['dyed', 'bleached', 'colored', 'rebonded'], [])) {
-    reasons.push('Hair must appear natural based on the current Donivra rule set.');
+
+  if (concernType === hairAnalyzerConcernTypes.hairLoss) {
+    return {
+      status: analysis.decision || 'Hair-Loss Screening',
+      tone: analysis.decision === 'Retake Photos' ? 'error' : 'info',
+      reasons,
+      contextNote: 'Based on your answers and uploaded photos, this guided screening suggests a hair-loss pattern but does not provide a diagnosis.',
+    };
   }
 
+  if (
+    donationRequirement?.minimum_hair_length != null
+    && Number.isFinite(confirmedLength)
+    && confirmedLength < Number(donationRequirement.minimum_hair_length)
+  ) {
+    reasons.push(`Current donation rules require at least ${formatRequirementLengthLabel(donationRequirement.minimum_hair_length)} of hair.`);
+  }
+  if (donationRequirement?.chemical_treatment_status === false && questionnaireAnswers?.chemicallyTreated === 'yes') {
+    reasons.push('Current donation rules do not allow chemically treated hair.');
+  }
+  if (donationRequirement?.colored_hair_status === false && questionnaireAnswers?.colored === 'yes') {
+    reasons.push('Current donation rules do not allow colored hair.');
+  }
+  if (donationRequirement?.bleached_hair_status === false && questionnaireAnswers?.bleached === 'yes') {
+    reasons.push('Current donation rules do not allow bleached hair.');
+  }
+  if (donationRequirement?.rebonded_hair_status === false && questionnaireAnswers?.rebonded === 'yes') {
+    reasons.push('Current donation rules do not allow rebonded or straightened hair.');
+  }
+  if (hasDetectedConcern(source, ['cap', 'hat', 'head covering', 'hood'], ['no cap', 'without cap', 'cap not detected'])) {
+    reasons.push('No cap or head covering should be present.');
+  }
+  if (hasDetectedConcern(source, ['clip', 'accessory', 'obstruction', 'blocked'], ['no clip', 'no accessory', 'not blocked'])) {
+    reasons.push('Hair accessories or other objects should not block the hair.');
+  }
+
+  const status = reasons.length
+    ? (analysis.decision === 'Retake Photos' ? 'Retake Photos' : 'Needs Review')
+    : analysis.decision || 'Eligible';
+  const tone = status === 'Eligible' ? 'success' : status === 'Retake Photos' ? 'error' : 'info';
+
   return {
-    status: reasons.length ? 'Not Eligible' : 'Eligible',
-    tone: reasons.length ? 'error' : 'success',
+    status,
+    tone,
     reasons,
+    contextNote: donationRequirement?.donation_requirement_id
+      ? 'This result compares your answers and uploaded photos with the current donation requirement record.'
+      : 'Donation requirement data was not available, so this screening used your answers and uploaded photos only.',
   };
 };
 
@@ -190,6 +235,113 @@ function RecommendationCard({ recommendation, isTopPriority }) {
       </View>
       <Text style={styles.recommendationBody}>{recommendation.recommendation_text}</Text>
     </View>
+  );
+}
+
+function QuestionBlock({ label, helperText, error, children }) {
+  return (
+    <View style={styles.questionBlock}>
+      <Text style={styles.questionLabel}>{label}</Text>
+      {helperText ? <Text style={styles.questionHelper}>{helperText}</Text> : null}
+      {children}
+      {error ? <Text style={styles.questionError}>{error}</Text> : null}
+    </View>
+  );
+}
+
+function ChoiceChipRow({ value, options, onChange }) {
+  return (
+    <View style={styles.choiceChipRow}>
+      {options.map((option) => {
+        const isActive = value === option.value;
+
+        return (
+          <Pressable
+            key={option.value}
+            onPress={() => onChange(option.value)}
+            style={[styles.choiceChip, isActive ? styles.choiceChipActive : null]}
+          >
+            <Text style={[styles.choiceChipText, isActive ? styles.choiceChipTextActive : null]}>
+              {option.label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+function ScaleSelector({ value, onChange }) {
+  return (
+    <View style={styles.scaleRow}>
+      {Array.from({ length: 10 }, (_item, index) => {
+        const scaleValue = index + 1;
+        const isActive = Number(value) === scaleValue;
+
+        return (
+          <Pressable
+            key={scaleValue}
+            onPress={() => onChange(scaleValue)}
+            style={[styles.scaleChip, isActive ? styles.scaleChipActive : null]}
+          >
+            <Text style={[styles.scaleChipText, isActive ? styles.scaleChipTextActive : null]}>
+              {scaleValue}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+function QuestionnaireSummaryCard({ questionnaireAnswers, donationRequirement, onEdit }) {
+  const concernType = resolveHairAnalyzerConcernType(questionnaireAnswers);
+
+  return (
+    <AppCard variant="elevated" radius="xl" padding="lg" style={styles.questionnaireSummaryCard}>
+      <View style={styles.questionnaireSummaryHeader}>
+        <View>
+          <Text style={styles.questionnaireSummaryEyebrow}>Step 1</Text>
+          <Text style={styles.questionnaireSummaryTitle}>Guided answers ready</Text>
+        </View>
+
+        <AppButton
+          title="Edit"
+          variant="outline"
+          fullWidth={false}
+          onPress={onEdit}
+        />
+      </View>
+
+      <View style={styles.questionnaireSummaryGrid}>
+        <View style={styles.questionnaireSummaryItem}>
+          <Text style={styles.questionnaireSummaryLabel}>Concern type</Text>
+          <Text style={styles.questionnaireSummaryValue}>
+            {concernType === hairAnalyzerConcernTypes.hairLoss ? 'Hair loss screening' : 'Donation eligibility screening'}
+          </Text>
+        </View>
+        <View style={styles.questionnaireSummaryItem}>
+          <Text style={styles.questionnaireSummaryLabel}>Wash frequency</Text>
+          <Text style={styles.questionnaireSummaryValue}>
+            {getChoiceLabel(hairAnalyzerQuestionChoices.washFrequency, questionnaireAnswers?.washFrequency)}
+          </Text>
+        </View>
+        <View style={styles.questionnaireSummaryItem}>
+          <Text style={styles.questionnaireSummaryLabel}>Shower warmth</Text>
+          <Text style={styles.questionnaireSummaryValue}>{questionnaireAnswers?.showerWarmth || 'Not set'}/10</Text>
+        </View>
+        <View style={styles.questionnaireSummaryItem}>
+          <Text style={styles.questionnaireSummaryLabel}>Stress level</Text>
+          <Text style={styles.questionnaireSummaryValue}>{questionnaireAnswers?.stressLevel || 'Not set'}/10</Text>
+        </View>
+      </View>
+
+      <Text style={styles.questionnaireSummaryFootnote}>
+        {donationRequirement?.donation_requirement_id
+          ? 'Current donation requirement data is loaded and will be included during AI screening.'
+          : 'Donation requirement data is not available right now. The screening will continue using your answers and uploaded photos.'}
+      </Text>
+    </AppCard>
   );
 }
 
@@ -518,14 +670,18 @@ export function DonorHairSubmissionScreen() {
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [isCapturingPhoto, setIsCapturingPhoto] = useState(false);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
+  const [hasCompletedQuestionnaireStep, setHasCompletedQuestionnaireStep] = useState(false);
   const { user, profile } = useAuth();
   const { unreadCount } = useNotifications({ role: 'donor', userId: user?.id, databaseUserId: profile?.user_id });
   const {
     photos,
     requiredViews,
     analysis,
+    donationRequirement,
+    latestSubmission,
     error,
     successMessage,
+    isLoadingContext,
     isPickingImages,
     isGuidedCaptureOpen,
     currentGuidedView,
@@ -555,10 +711,19 @@ export function DonorHairSubmissionScreen() {
   const recommendations = (analysis?.recommendations || []).slice(0, 2);
   const primaryPhoto = photos[0]?.uri || null;
   const hasActiveAnalyzerState = Boolean(photos.length || analysis || isAnalyzing || error);
-  const showLanding = !hasActiveAnalyzerState;
   const confidenceLabel = analysis?.confidence_score != null
     ? `${Math.round(Number(analysis.confidence_score) * 100)}% confidence`
     : 'Confidence unavailable';
+
+  const {
+    control: questionControl,
+    handleSubmit: handleQuestionSubmit,
+    formState: { errors: questionErrors },
+  } = useForm({
+    resolver: zodResolver(hairAnalyzerQuestionSchema),
+    mode: 'onBlur',
+    defaultValues: hairAnalyzerQuestionDefaultValues,
+  });
 
   const {
     control,
@@ -570,10 +735,22 @@ export function DonorHairSubmissionScreen() {
     mode: 'onBlur',
     defaultValues: reviewDefaults,
   });
+  const questionnaireValues = useWatch({ control: questionControl });
   const reviewValues = useWatch({ control });
+  const concernType = useMemo(
+    () => resolveHairAnalyzerConcernType(questionnaireValues),
+    [questionnaireValues]
+  );
+  const canOpenCaptureStep = hasCompletedQuestionnaireStep || hasActiveAnalyzerState;
+  const shouldShowQuestionnaireSummary = hasCompletedQuestionnaireStep && !analysis && !isGuidedCaptureOpen;
   const eligibility = useMemo(
-    () => buildEligibilitySummary({ analysis, confirmedValues: reviewValues }),
-    [analysis, reviewValues]
+    () => buildEligibilitySummary({
+      analysis,
+      confirmedValues: reviewValues,
+      questionnaireAnswers: questionnaireValues,
+      donationRequirement,
+    }),
+    [analysis, donationRequirement, questionnaireValues, reviewValues]
   );
 
   useEffect(() => {
@@ -590,6 +767,11 @@ export function DonorHairSubmissionScreen() {
     if (!item.route || item.route === '/donor/donations') return;
     router.navigate(item.route);
   };
+
+  const handleContinueToCapture = handleQuestionSubmit(async () => {
+    setHasCompletedQuestionnaireStep(true);
+    return { success: true };
+  });
 
   const handleSaveSubmission = async (values) => {
     await submitSubmission(values);
@@ -613,6 +795,17 @@ export function DonorHairSubmissionScreen() {
   const handleUploadGuidedPhoto = async () => {
     await pickImageForCurrentView();
   };
+
+  const handleAnalyzeWithQuestions = handleQuestionSubmit(async (values) => {
+    setHasCompletedQuestionnaireStep(true);
+    return await analyzePhotos(values);
+  });
+
+  const handleOpenCaptureStep = handleQuestionSubmit(async () => {
+    setHasCompletedQuestionnaireStep(true);
+    await startGuidedCapture();
+    return { success: true };
+  });
 
   return (
     <DashboardLayout
@@ -648,7 +841,7 @@ export function DonorHairSubmissionScreen() {
         />
       ) : null}
 
-      {showLanding ? (
+      {!canOpenCaptureStep ? (
         <AppCard variant="elevated" radius="xl" padding="lg">
           <View style={styles.helpButtonRow}>
             <AppButton
@@ -660,13 +853,230 @@ export function DonorHairSubmissionScreen() {
             />
           </View>
 
-          <View style={styles.landingHero}>
-            <View style={styles.landingHeroIcon}>
-              <AppIcon name="sparkle" state="active" />
-            </View>
-            <Text style={styles.landingHeroTitle}>Analyze My Hair</Text>
-            <Text style={styles.landingHeroBody}>Use camera or upload for guided screening.</Text>
+          <DashboardSectionHeader
+            title="Step 1 - Guided Questions"
+            description="Answer a few quick questions first. This decides whether the analyzer should focus on hair-loss guidance or donation eligibility."
+            style={styles.sectionHeader}
+          />
 
+          {isLoadingContext ? (
+            <StatusBanner
+              title="Loading donation rules"
+              message="The analyzer is checking the current donation requirement context now."
+              variant="info"
+              style={styles.inlineBanner}
+            />
+          ) : null}
+
+          <QuestionBlock
+            label="Are you losing hair?"
+            error={questionErrors.losingHair?.message}
+          >
+            <Controller
+              control={questionControl}
+              name="losingHair"
+              render={({ field }) => (
+                <ChoiceChipRow
+                  value={field.value}
+                  options={hairAnalyzerQuestionChoices.yesNo}
+                  onChange={field.onChange}
+                />
+              )}
+            />
+          </QuestionBlock>
+
+          <QuestionBlock
+            label="How often do you wash your hair?"
+            error={questionErrors.washFrequency?.message}
+          >
+            <Controller
+              control={questionControl}
+              name="washFrequency"
+              render={({ field }) => (
+                <ChoiceChipRow
+                  value={field.value}
+                  options={hairAnalyzerQuestionChoices.washFrequency}
+                  onChange={field.onChange}
+                />
+              )}
+            />
+          </QuestionBlock>
+
+          {questionnaireValues?.washFrequency === 'other' ? (
+            <Controller
+              control={questionControl}
+              name="washFrequencyOther"
+              render={({ field }) => (
+                <AppInput
+                  label="How often do you wash your hair?"
+                  placeholder="Please specify"
+                  variant="filled"
+                  value={field.value}
+                  onChangeText={field.onChange}
+                  onBlur={field.onBlur}
+                  error={questionErrors.washFrequencyOther?.message}
+                />
+              )}
+            />
+          ) : null}
+
+          <QuestionBlock
+            label="How warm is your typical shower?"
+            helperText="1 = coldest, 10 = hottest"
+            error={questionErrors.showerWarmth?.message}
+          >
+            <Controller
+              control={questionControl}
+              name="showerWarmth"
+              render={({ field }) => (
+                <ScaleSelector value={field.value} onChange={field.onChange} />
+              )}
+            />
+          </QuestionBlock>
+
+          <QuestionBlock
+            label="Stress can affect your hair. How often do you feel stress?"
+            helperText="1 = rarely / very low, 10 = very often / very high"
+            error={questionErrors.stressLevel?.message}
+          >
+            <Controller
+              control={questionControl}
+              name="stressLevel"
+              render={({ field }) => (
+                <ScaleSelector value={field.value} onChange={field.onChange} />
+              )}
+            />
+          </QuestionBlock>
+
+          <QuestionBlock
+            label="Does hair loss run in your family?"
+            error={questionErrors.familyHairLoss?.message}
+          >
+            <Controller
+              control={questionControl}
+              name="familyHairLoss"
+              render={({ field }) => (
+                <ChoiceChipRow
+                  value={field.value}
+                  options={hairAnalyzerQuestionChoices.yesNo}
+                  onChange={field.onChange}
+                />
+              )}
+            />
+          </QuestionBlock>
+
+          {concernType === hairAnalyzerConcernTypes.hairLoss ? (
+            <>
+              <QuestionBlock
+                label="How long have you noticed hair loss?"
+                error={questionErrors.hairLossDuration?.message}
+              >
+                <Controller
+                  control={questionControl}
+                  name="hairLossDuration"
+                  render={({ field }) => (
+                    <ChoiceChipRow
+                      value={field.value}
+                      options={hairAnalyzerQuestionChoices.hairLossDuration}
+                      onChange={field.onChange}
+                    />
+                  )}
+                />
+              </QuestionBlock>
+
+              <QuestionBlock
+                label="Where do you notice it most?"
+                error={questionErrors.hairLossArea?.message}
+              >
+                <Controller
+                  control={questionControl}
+                  name="hairLossArea"
+                  render={({ field }) => (
+                    <ChoiceChipRow
+                      value={field.value}
+                      options={hairAnalyzerQuestionChoices.hairLossArea}
+                      onChange={field.onChange}
+                    />
+                  )}
+                />
+              </QuestionBlock>
+            </>
+          ) : (
+            <>
+              <QuestionBlock label="Have you chemically treated your hair?" error={questionErrors.chemicallyTreated?.message}>
+                <Controller
+                  control={questionControl}
+                  name="chemicallyTreated"
+                  render={({ field }) => (
+                    <ChoiceChipRow value={field.value} options={hairAnalyzerQuestionChoices.yesNo} onChange={field.onChange} />
+                  )}
+                />
+              </QuestionBlock>
+
+              <QuestionBlock label="Have you bleached your hair?" error={questionErrors.bleached?.message}>
+                <Controller
+                  control={questionControl}
+                  name="bleached"
+                  render={({ field }) => (
+                    <ChoiceChipRow value={field.value} options={hairAnalyzerQuestionChoices.yesNo} onChange={field.onChange} />
+                  )}
+                />
+              </QuestionBlock>
+
+              <QuestionBlock label="Have you colored your hair?" error={questionErrors.colored?.message}>
+                <Controller
+                  control={questionControl}
+                  name="colored"
+                  render={({ field }) => (
+                    <ChoiceChipRow value={field.value} options={hairAnalyzerQuestionChoices.yesNo} onChange={field.onChange} />
+                  )}
+                />
+              </QuestionBlock>
+
+              <QuestionBlock label="Have you rebonded or straightened your hair?" error={questionErrors.rebonded?.message}>
+                <Controller
+                  control={questionControl}
+                  name="rebonded"
+                  render={({ field }) => (
+                    <ChoiceChipRow value={field.value} options={hairAnalyzerQuestionChoices.yesNo} onChange={field.onChange} />
+                  )}
+                />
+              </QuestionBlock>
+
+              <QuestionBlock label="How would you describe your hair condition?" error={questionErrors.hairCondition?.message}>
+                <Controller
+                  control={questionControl}
+                  name="hairCondition"
+                  render={({ field }) => (
+                    <ChoiceChipRow value={field.value} options={hairAnalyzerQuestionChoices.hairCondition} onChange={field.onChange} />
+                  )}
+                />
+              </QuestionBlock>
+
+              <QuestionBlock label="About how long is the hair you plan to donate?" error={questionErrors.plannedDonationLength?.message}>
+                <Controller
+                  control={questionControl}
+                  name="plannedDonationLength"
+                  render={({ field }) => (
+                    <ChoiceChipRow value={field.value} options={hairAnalyzerQuestionChoices.donationLength} onChange={field.onChange} />
+                  )}
+                />
+              </QuestionBlock>
+
+              <StatusBanner
+                title={donationRequirement?.donation_requirement_id ? 'Donation rules loaded' : 'Donation rules unavailable'}
+                message={
+                  donationRequirement?.donation_requirement_id
+                    ? `Current minimum length: ${formatRequirementLengthLabel(donationRequirement.minimum_hair_length)}.`
+                    : 'The analyzer will still work, but donation rule comparison is limited until the current requirement record is available.'
+                }
+                variant="info"
+                style={styles.inlineBanner}
+              />
+            </>
+          )}
+
+          <View style={styles.questionnaireFooter}>
             <View style={styles.reminderRow}>
               {ANALYZER_REMINDERS.map((item) => (
                 <View key={item} style={styles.reminderPill}>
@@ -676,17 +1086,25 @@ export function DonorHairSubmissionScreen() {
             </View>
 
             <AppButton
-              title="Analyze My Hair"
-              onPress={startGuidedCapture}
+              title="Continue to Photo Capture"
+              onPress={handleContinueToCapture}
               trailing={<AppIcon name="chevronRight" state="inverse" />}
-              style={styles.primaryAnalyzerButton}
             />
-
-            <Text style={styles.landingHeroFootnote}>Camera and upload are both available.</Text>
           </View>
         </AppCard>
       ) : (
         <>
+          {shouldShowQuestionnaireSummary ? (
+            <QuestionnaireSummaryCard
+              questionnaireAnswers={questionnaireValues}
+              donationRequirement={donationRequirement}
+              onEdit={() => {
+                setHasCompletedQuestionnaireStep(false);
+                resetFlow();
+              }}
+            />
+          ) : null}
+
           <AppCard variant="elevated" radius="xl" padding="lg">
             <View style={styles.helpButtonRow}>
               <AppButton
@@ -699,10 +1117,19 @@ export function DonorHairSubmissionScreen() {
             </View>
 
             <DashboardSectionHeader
-              title="Hair Analyzer"
-              description="Use camera or upload a photo for AI screening. Keep the hair tied, clear, and fully visible."
+              title="Step 2 - Capture Hair Photos"
+              description="Use camera or upload the required photo set after the guided questions are complete. Keep the hair tied, clear, and fully visible."
               style={styles.sectionHeader}
             />
+
+            {latestSubmission?.submission_id ? (
+              <StatusBanner
+                title="Previous submission found"
+                message="The analyzer also loaded your latest donation submission context so the AI can use it when helpful."
+                variant="info"
+                style={styles.inlineBanner}
+              />
+            ) : null}
 
             <View style={styles.analyzerPreviewCard}>
               {primaryPhoto ? (
@@ -712,7 +1139,7 @@ export function DonorHairSubmissionScreen() {
                   <AppIcon name="camera" state="active" size="xl" />
                   <Text style={styles.analyzerPreviewPlaceholderTitle}>No photo set yet</Text>
                   <Text style={styles.analyzerPreviewPlaceholderBody}>
-                    Open the analyzer to capture or upload a clear hair photo set.
+                    Open the guided camera or upload the required Top, Front, Side, and Back views.
                   </Text>
                 </View>
               )}
@@ -751,7 +1178,7 @@ export function DonorHairSubmissionScreen() {
                 icon="camera"
                 variant="primary"
                 size="lg"
-                onPress={startGuidedCapture}
+                onPress={handleOpenCaptureStep}
                 accessibilityLabel="Open guided camera"
                 style={styles.modulePrimaryIconButton}
               />
@@ -768,12 +1195,12 @@ export function DonorHairSubmissionScreen() {
             {photos.length ? (
               <View style={styles.secondaryActionRow}>
                 <AppButton
-                  title="Analyze Again"
+                  title={analysis ? 'Analyze Again' : 'Analyze With AI'}
                   variant="outline"
                   loading={isAnalyzing}
                   disabled={!canAnalyze}
                   leading={<AppIcon name="sparkle" state="muted" />}
-                  onPress={analyzePhotos}
+                  onPress={handleAnalyzeWithQuestions}
                   fullWidth={false}
                 />
                 <AppButton
@@ -785,11 +1212,20 @@ export function DonorHairSubmissionScreen() {
               </View>
             ) : null}
 
+            {hasCompletedQuestionnaireStep && photos.length && !analysis && !isAnalyzing ? (
+              <StatusBanner
+                message="Your guided answers and required views are ready. Run the AI screening when you want the result."
+                variant="info"
+                title="Step 3 - Analyze with AI"
+                style={styles.inlineBanner}
+              />
+            ) : null}
+
             {isAnalyzing ? (
               <StatusBanner
-                message="The uploaded photos are being reviewed now. Your result will appear below."
+                message="Your answers, uploaded photos, and donation rule context are being reviewed now. The result will appear below."
                 variant="info"
-                title="Analyzing photos"
+                title="Analyzing with AI"
                 style={styles.inlineBanner}
               />
             ) : null}
@@ -807,8 +1243,12 @@ export function DonorHairSubmissionScreen() {
           {analysis ? (
             <AppCard variant="elevated" radius="xl" padding="lg">
               <DashboardSectionHeader
-                title="Hair Analysis Result"
-                description="Review the AI result, correct anything inaccurate, then confirm the screening."
+                title="Step 4 - Hair Analysis Result"
+                description={
+                  concernType === hairAnalyzerConcernTypes.hairLoss
+                    ? 'Review the guided screening result based on your answers and uploaded hair photos.'
+                    : 'Review the AI result, compare it with the donation rule context, then confirm the screening.'
+                }
                 style={styles.sectionHeader}
               />
 
@@ -826,7 +1266,7 @@ export function DonorHairSubmissionScreen() {
                 message={
                   eligibility.reasons.length
                     ? eligibility.reasons[0]
-                    : 'This photo set currently meets the configured Donivra screening rules.'
+                    : eligibility.contextNote || 'The AI screening result is ready for review.'
                 }
                 variant={eligibility.tone}
                 title={eligibility.status}
@@ -861,94 +1301,105 @@ export function DonorHairSubmissionScreen() {
                 </Text>
               </View>
 
-              <Controller
-                control={control}
-                name="declaredLength"
-                render={({ field }) => (
-                  <AppInput
-                    label="Confirm length (cm)"
-                    placeholder="35.6"
-                    keyboardType="decimal-pad"
-                    variant="filled"
-                    helperText={`AI result: ${formatLengthLabel(analysis.estimated_length)}`}
-                    value={field.value}
-                    onChangeText={field.onChange}
-                    onBlur={field.onBlur}
-                    error={errors.declaredLength?.message}
+              {concernType === hairAnalyzerConcernTypes.donationEligibility ? (
+                <>
+                  <Controller
+                    control={control}
+                    name="declaredLength"
+                    render={({ field }) => (
+                      <AppInput
+                        label="Confirm length (cm)"
+                        placeholder="35.6"
+                        keyboardType="decimal-pad"
+                        variant="filled"
+                        helperText={`AI result: ${formatLengthLabel(analysis.estimated_length)}`}
+                        value={field.value}
+                        onChangeText={field.onChange}
+                        onBlur={field.onBlur}
+                        error={errors.declaredLength?.message}
+                      />
+                    )}
                   />
-                )}
-              />
 
-              <Controller
-                control={control}
-                name="declaredTexture"
-                render={({ field }) => (
-                  <AppInput
-                    label="Confirm texture"
-                    placeholder="Straight"
-                    variant="filled"
-                    helperText={`AI result: ${analysis.detected_texture || 'No value'}`}
-                    value={field.value}
-                    onChangeText={field.onChange}
-                    onBlur={field.onBlur}
-                    error={errors.declaredTexture?.message}
+                  <Controller
+                    control={control}
+                    name="declaredTexture"
+                    render={({ field }) => (
+                      <AppInput
+                        label="Confirm texture"
+                        placeholder="Straight"
+                        variant="filled"
+                        helperText={`AI result: ${analysis.detected_texture || 'No value'}`}
+                        value={field.value}
+                        onChangeText={field.onChange}
+                        onBlur={field.onBlur}
+                        error={errors.declaredTexture?.message}
+                      />
+                    )}
                   />
-                )}
-              />
 
-              <Controller
-                control={control}
-                name="declaredDensity"
-                render={({ field }) => (
-                  <AppInput
-                    label="Confirm density"
-                    placeholder="Medium"
-                    variant="filled"
-                    helperText={`AI result: ${analysis.detected_density || 'No value'}`}
-                    value={field.value}
-                    onChangeText={field.onChange}
-                    onBlur={field.onBlur}
-                    error={errors.declaredDensity?.message}
+                  <Controller
+                    control={control}
+                    name="declaredDensity"
+                    render={({ field }) => (
+                      <AppInput
+                        label="Confirm density"
+                        placeholder="Medium"
+                        variant="filled"
+                        helperText={`AI result: ${analysis.detected_density || 'No value'}`}
+                        value={field.value}
+                        onChangeText={field.onChange}
+                        onBlur={field.onBlur}
+                        error={errors.declaredDensity?.message}
+                      />
+                    )}
                   />
-                )}
-              />
 
-              <Controller
-                control={control}
-                name="declaredCondition"
-                render={({ field }) => (
-                  <AppInput
-                    label="Confirm condition"
-                    placeholder="Healthy"
-                    variant="filled"
-                    helperText={`AI result: ${analysis.detected_condition || 'No value'}`}
-                    value={field.value}
-                    onChangeText={field.onChange}
-                    onBlur={field.onBlur}
-                    error={errors.declaredCondition?.message}
+                  <Controller
+                    control={control}
+                    name="declaredCondition"
+                    render={({ field }) => (
+                      <AppInput
+                        label="Confirm condition"
+                        placeholder="Healthy"
+                        variant="filled"
+                        helperText={`AI result: ${analysis.detected_condition || 'No value'}`}
+                        value={field.value}
+                        onChangeText={field.onChange}
+                        onBlur={field.onBlur}
+                        error={errors.declaredCondition?.message}
+                      />
+                    )}
                   />
-                )}
-              />
 
-              <Controller
-                control={control}
-                name="detailNotes"
-                render={({ field }) => (
-                  <AppInput
-                    label="Correction notes"
-                    placeholder="Add corrections if the AI missed something"
-                    variant="filled"
-                    multiline={true}
-                    numberOfLines={4}
-                    helperText={`AI notes: ${analysis.visible_damage_notes || 'No extra notes'}`}
-                    value={field.value}
-                    onChangeText={field.onChange}
-                    onBlur={field.onBlur}
-                    error={errors.detailNotes?.message}
-                    inputStyle={styles.multilineInput}
+                  <Controller
+                    control={control}
+                    name="detailNotes"
+                    render={({ field }) => (
+                      <AppInput
+                        label="Correction notes"
+                        placeholder="Add corrections if the AI missed something"
+                        variant="filled"
+                        multiline={true}
+                        numberOfLines={4}
+                        helperText={`AI notes: ${analysis.visible_damage_notes || 'No extra notes'}`}
+                        value={field.value}
+                        onChangeText={field.onChange}
+                        onBlur={field.onBlur}
+                        error={errors.detailNotes?.message}
+                        inputStyle={styles.multilineInput}
+                      />
+                    )}
                   />
-                )}
-              />
+                </>
+              ) : (
+                <StatusBanner
+                  title="Hair-loss guidance only"
+                  message="This result stays as guided pre-screening only. It will not create a donation submission."
+                  variant="info"
+                  style={styles.inlineBanner}
+                />
+              )}
 
               {recommendations.length ? (
                 <View style={styles.recommendationList}>
@@ -963,17 +1414,19 @@ export function DonorHairSubmissionScreen() {
               ) : null}
 
               <View style={styles.confirmActionRow}>
-                <AppButton
-                  title="Confirm & Continue"
-                  loading={isSaving}
-                  onPress={handleSubmit(handleSaveSubmission)}
-                  fullWidth={true}
-                />
+                {concernType === hairAnalyzerConcernTypes.donationEligibility ? (
+                  <AppButton
+                    title="Confirm & Continue"
+                    loading={isSaving}
+                    onPress={handleSubmit(handleSaveSubmission)}
+                    fullWidth={true}
+                  />
+                ) : null}
                 <View style={styles.reviewActionRow}>
                   <AppButton
                     title="Retake Photos"
                     variant="outline"
-                    onPress={startGuidedCapture}
+                    onPress={handleOpenCaptureStep}
                     fullWidth={false}
                   />
                   <AppButton
@@ -1024,6 +1477,144 @@ const styles = StyleSheet.create({
   },
   inlineBanner: {
     marginBottom: theme.spacing.md,
+  },
+  questionnaireSummaryCard: {
+    marginBottom: theme.spacing.md,
+  },
+  questionnaireSummaryHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: theme.spacing.md,
+    marginBottom: theme.spacing.md,
+  },
+  questionnaireSummaryEyebrow: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.brandPrimary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    marginBottom: 4,
+  },
+  questionnaireSummaryTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.titleSm,
+    color: theme.colors.textPrimary,
+  },
+  questionnaireSummaryGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.spacing.sm,
+    marginBottom: theme.spacing.md,
+  },
+  questionnaireSummaryItem: {
+    minWidth: '45%',
+    flexGrow: 1,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.surfaceSoft,
+  },
+  questionnaireSummaryLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    color: theme.colors.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+    marginBottom: 4,
+  },
+  questionnaireSummaryValue: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textPrimary,
+  },
+  questionnaireSummaryFootnote: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textSecondary,
+  },
+  questionBlock: {
+    marginBottom: theme.spacing.md,
+    gap: theme.spacing.xs,
+  },
+  questionLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textPrimary,
+  },
+  questionHelper: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    color: theme.colors.textSecondary,
+  },
+  questionError: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    color: theme.colors.textError,
+  },
+  choiceChipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.spacing.xs,
+  },
+  choiceChip: {
+    minHeight: 42,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    borderRadius: theme.radius.pill,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+    backgroundColor: theme.colors.backgroundPrimary,
+    justifyContent: 'center',
+  },
+  choiceChipActive: {
+    borderColor: theme.colors.brandPrimary,
+    backgroundColor: theme.colors.brandPrimaryMuted,
+  },
+  choiceChipText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    color: theme.colors.textSecondary,
+  },
+  choiceChipTextActive: {
+    color: theme.colors.brandPrimary,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  scaleRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.spacing.xs,
+  },
+  scaleChip: {
+    width: 34,
+    height: 34,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+    backgroundColor: theme.colors.backgroundPrimary,
+  },
+  scaleChipActive: {
+    borderColor: theme.colors.brandPrimary,
+    backgroundColor: theme.colors.brandPrimaryMuted,
+  },
+  scaleChipText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    color: theme.colors.textSecondary,
+  },
+  scaleChipTextActive: {
+    color: theme.colors.brandPrimary,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  questionnaireFooter: {
+    gap: theme.spacing.md,
+    marginTop: theme.spacing.sm,
   },
   landingHero: {
     alignItems: 'center',

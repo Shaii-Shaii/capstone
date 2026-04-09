@@ -111,27 +111,55 @@ type HairImage = {
   viewLabel?: string;
 };
 
+type DonationRequirementContext = {
+  donation_requirement_id?: number | null;
+  minimum_hair_length?: number | null;
+  chemical_treatment_status?: boolean | null;
+  colored_hair_status?: boolean | null;
+  bleached_hair_status?: boolean | null;
+  rebonded_hair_status?: boolean | null;
+  hair_texture_status?: string;
+  notes?: string;
+};
+
+type SubmissionContext = {
+  submission_id?: number | null;
+  donation_drive_id?: number | null;
+  organization_id?: number | null;
+  detail_id?: number | null;
+  declared_length?: number | null;
+  declared_texture?: string;
+  declared_density?: string;
+  declared_condition?: string;
+};
+
+const expectedViews = ['Top (Scalp)', 'Front', 'Side', 'Back'];
+
 const instructions = [
   'You are analyzing donor hair photos for a hair donation mobile app.',
   'Return JSON only.',
-  'First decide whether the uploaded images clearly show human hair intended for donation review.',
+  'Use both the uploaded hair photos and the structured questionnaire answers.',
+  'This is AI-assisted screening guidance, not a medical diagnosis.',
+  'Use safe wording such as "based on your answers and uploaded photos", "this screening suggests", and "this may indicate".',
+  'First decide whether the uploaded images clearly show human hair intended for screening.',
   'If the images do not clearly show hair, set is_hair_detected to false, explain the issue in invalid_image_reason, and set decision to "Retake Photos".',
   'Review each uploaded image using its provided view label and use per_view_notes to explain whether that view is clearly usable.',
   'Use missing_views to list any expected views that are absent or unclear: Top (Scalp), Front, Side, Back.',
-  'Describe only visible hair characteristics from the provided images.',
-  'Do not diagnose medical conditions and do not invent details that are not visible.',
+  'Describe only visible hair characteristics from the provided images and the structured questionnaire context.',
+  'Do not diagnose medical conditions and do not invent details that are not visible or stated.',
   'If a field is uncertain, return an empty string or null instead of guessing.',
-  'Set decision to one short donor-facing screening status such as Eligible, Needs Review, or Retake Photos.',
-  'Keep summary concise and actionable so the mobile app can show it directly.',
-  'Recommendations must be short, donor-facing, and ordered by priority.',
   'estimated_length must be a numeric centimeter estimate when visible.',
   'confidence_score must be a decimal between 0 and 1.',
   'detected_texture should use concise values like Straight, Wavy, Curly, Coily, or Mixed.',
   'detected_density should use concise values like Light, Medium, Thick, or Dense.',
   'detected_condition should use concise values like Healthy, Dry, Frizzy, Damaged, Chemically Treated, or Needs Better Photos.',
+  'If concern_type is "hair_loss", keep the result hair-loss-oriented and non-diagnostic.',
+  'If concern_type is "donation_eligibility", consider the questionnaire answers, visible hair characteristics, and donation requirement context when setting the decision and recommendations.',
+  'If donation requirement context is provided, use it to compare visible eligibility signals such as minimum hair length and whether chemically treated, colored, bleached, or rebonded hair is currently allowed.',
+  'Set decision to one short screening status such as Eligible, Needs Review, Retake Photos, or Not Yet Eligible.',
+  'Keep summary concise and actionable so the mobile app can show it directly.',
+  'Recommendations must be short, user-facing, and ordered by priority.',
 ].join(' ');
-
-const expectedViews = ['Top (Scalp)', 'Front', 'Side', 'Back'];
 
 const normalizeString = (value: unknown) => (
   typeof value === 'string' ? value.trim() : ''
@@ -164,7 +192,7 @@ const normalizeMissingViews = (source: unknown) => {
   });
 };
 
-const normalizeRecommendations = (source: unknown, decision: string, summary: string) => {
+const normalizeRecommendations = (source: unknown, decision: string, summary: string, concernType: string) => {
   const rows = Array.isArray(source)
     ? source
       .map((item, index) => {
@@ -187,19 +215,64 @@ const normalizeRecommendations = (source: unknown, decision: string, summary: st
   if (decision === 'Retake Photos') {
     return [{
       title: 'Retake Photo Set',
-      recommendation_text: summary || 'Retake the required hair photos in brighter lighting and keep the tied hair centered.',
+      recommendation_text: summary || 'Please retake the required hair photos in brighter lighting and keep the hair centered in every view.',
       priority_order: 1,
     }];
   }
 
   return [{
-    title: 'Review Hair Result',
-    recommendation_text: summary || 'Review the detected hair condition and confirm the result before continuing.',
+    title: concernType === 'hair_loss' ? 'Review Hair-Loss Guidance' : 'Review Donation Screening',
+    recommendation_text: summary || 'Review the screening result before continuing.',
     priority_order: 1,
   }];
 };
 
-const normalizeAnalysisPayload = (analysis: Record<string, unknown>, providedViews: string[]) => {
+const formatRequirementContext = (requirementContext: DonationRequirementContext | null) => {
+  if (!requirementContext) {
+    return 'No donation requirement context was available for this screening.';
+  }
+
+  return [
+    `donation_requirement_id: ${requirementContext.donation_requirement_id ?? 'not provided'}`,
+    `minimum_hair_length_cm: ${requirementContext.minimum_hair_length ?? 'not provided'}`,
+    `chemical_treatment_allowed: ${requirementContext.chemical_treatment_status ?? 'unknown'}`,
+    `colored_hair_allowed: ${requirementContext.colored_hair_status ?? 'unknown'}`,
+    `bleached_hair_allowed: ${requirementContext.bleached_hair_status ?? 'unknown'}`,
+    `rebonded_hair_allowed: ${requirementContext.rebonded_hair_status ?? 'unknown'}`,
+    `hair_texture_status: ${normalizeString(requirementContext.hair_texture_status) || 'not provided'}`,
+    `notes: ${normalizeString(requirementContext.notes) || 'not provided'}`,
+  ].join('\n');
+};
+
+const formatSubmissionContext = (submissionContext: SubmissionContext | null) => {
+  if (!submissionContext?.submission_id) {
+    return 'No prior submission context was provided.';
+  }
+
+  return [
+    `submission_id: ${submissionContext.submission_id}`,
+    `donation_drive_id: ${submissionContext.donation_drive_id ?? 'not provided'}`,
+    `organization_id: ${submissionContext.organization_id ?? 'not provided'}`,
+    `detail_id: ${submissionContext.detail_id ?? 'not provided'}`,
+    `declared_length: ${submissionContext.declared_length ?? 'not provided'}`,
+    `declared_texture: ${normalizeString(submissionContext.declared_texture) || 'not provided'}`,
+    `declared_density: ${normalizeString(submissionContext.declared_density) || 'not provided'}`,
+    `declared_condition: ${normalizeString(submissionContext.declared_condition) || 'not provided'}`,
+  ].join('\n');
+};
+
+const formatQuestionnaireAnswers = (answers: Record<string, unknown> = {}) => (
+  Object.entries(answers)
+    .map(([key, value]) => `${key}: ${value === '' || value === null || value === undefined ? 'not provided' : String(value)}`)
+    .join('\n')
+);
+
+const normalizeAnalysisPayload = (
+  analysis: Record<string, unknown>,
+  providedViews: string[],
+  concernType: string,
+  requirementContext: DonationRequirementContext | null
+) => {
   const isHairDetected = analysis?.is_hair_detected !== false;
   const normalizedMissingViews = normalizeMissingViews(analysis?.missing_views);
   const normalizedViewNotes = Array.isArray(analysis?.per_view_notes)
@@ -223,22 +296,35 @@ const normalizeAnalysisPayload = (analysis: Record<string, unknown>, providedVie
 
   let decision = normalizeString(analysis?.decision);
   if (!decision) {
-    decision = !isHairDetected || missingViews.length
-      ? 'Retake Photos'
-      : detectedCondition.toLowerCase().includes('damage')
-        || detectedCondition.toLowerCase().includes('treated')
-        || detectedCondition.toLowerCase().includes('frizz')
-        ? 'Needs Review'
-        : 'Eligible';
+    if (!isHairDetected || missingViews.length) {
+      decision = 'Retake Photos';
+    } else if (
+      concernType === 'donation_eligibility'
+      && requirementContext?.minimum_hair_length != null
+      && estimatedLength != null
+      && estimatedLength < Number(requirementContext.minimum_hair_length)
+    ) {
+      decision = 'Not Yet Eligible';
+    } else if (
+      detectedCondition.toLowerCase().includes('damage')
+      || detectedCondition.toLowerCase().includes('treated')
+      || detectedCondition.toLowerCase().includes('frizz')
+    ) {
+      decision = 'Needs Review';
+    } else {
+      decision = 'Eligible';
+    }
   }
 
   let summary = normalizeString(analysis?.summary);
   if (!summary) {
     summary = !isHairDetected
-      ? (invalidImageReason || 'The uploaded photos did not clearly show the donor hair for screening.')
+      ? (invalidImageReason || 'Based on your uploaded photos, the hair was not clear enough for screening.')
       : missingViews.length
-        ? `Please retake these required views clearly: ${missingViews.join(', ')}.`
-        : `Detected ${detectedTexture || 'hair'} with ${detectedDensity || 'unspecified'} density and ${detectedCondition || 'an unspecified condition'}.`;
+        ? `Based on your uploaded photos, please retake these required views clearly: ${missingViews.join(', ')}.`
+        : concernType === 'hair_loss'
+          ? `Based on your answers and uploaded photos, this screening suggests ${detectedCondition || 'a hair condition that needs review'} with ${detectedDensity || 'unspecified'} density.`
+          : `Based on your answers and uploaded photos, this screening suggests ${detectedTexture || 'hair'} with ${detectedCondition || 'an unspecified condition'} for donation review.`;
   }
 
   return {
@@ -254,7 +340,7 @@ const normalizeAnalysisPayload = (analysis: Record<string, unknown>, providedVie
     confidence_score: confidenceScore,
     decision,
     summary,
-    recommendations: normalizeRecommendations(analysis?.recommendations, decision, summary),
+    recommendations: normalizeRecommendations(analysis?.recommendations, decision, summary, concernType),
   };
 };
 
@@ -265,9 +351,23 @@ Deno.serve(async (request) => {
   try {
     const body = await request.json();
     const images = Array.isArray(body?.images) ? body.images.filter(Boolean) as HairImage[] : [];
+    const concernType = normalizeString(body?.concern_type) || 'donation_eligibility';
+    const questionnaireAnswers = body?.questionnaire_answers && typeof body.questionnaire_answers === 'object'
+      ? body.questionnaire_answers as Record<string, unknown>
+      : {};
+    const donationRequirementContext = body?.donation_requirement_context && typeof body.donation_requirement_context === 'object'
+      ? body.donation_requirement_context as DonationRequirementContext
+      : null;
+    const submissionContext = body?.submission_context && typeof body.submission_context === 'object'
+      ? body.submission_context as SubmissionContext
+      : null;
 
     if (!images.length) {
       return createJsonResponse({ error: 'Please upload at least one clear hair photo before analysis.' }, 400);
+    }
+
+    if (!normalizeString(questionnaireAnswers?.losing_hair)) {
+      return createJsonResponse({ error: 'Please complete the guided hair questions before analysis.' }, 422);
     }
 
     const validImages = images.filter((image) => typeof image?.dataUrl === 'string' && image.dataUrl.startsWith('data:'));
@@ -285,34 +385,44 @@ Deno.serve(async (request) => {
     }
 
     console.info('[analyze-hair-submission] invoked', {
+      concernType,
       imageCount: images.length,
       validImageCount: validImages.length,
       providedViews: Array.from(providedViews),
       missingProvidedViews,
+      hasQuestionnaireAnswers: Boolean(Object.keys(questionnaireAnswers).length),
+      hasDonationRequirementContext: Boolean(donationRequirementContext),
+      hasSubmissionContext: Boolean(submissionContext?.submission_id),
     });
 
     const userContent = [
       {
         type: 'input_text',
         text: [
-          'Analyze these donor hair photos and return the requested JSON structure.',
+          'Analyze these hair photos and return the requested JSON structure.',
+          `concern_type: ${concernType}`,
           'Expected views: Top (Scalp), Front, Side, Back.',
           'Only treat the upload as valid if the images clearly show human hair.',
-          'Use the actual photo content as the source of truth and do not guess any value that is not visible.',
-        ].join(' '),
+          'Use the actual photo content plus the structured answers and requirement context as the source of truth.',
+          'Questionnaire answers:',
+          formatQuestionnaireAnswers(questionnaireAnswers),
+          'Donation requirement context:',
+          formatRequirementContext(donationRequirementContext),
+          'Previous submission context:',
+          formatSubmissionContext(submissionContext),
+        ].join('\n'),
       },
-      ...validImages
-        .flatMap((image, index) => ([
-          {
-            type: 'input_text',
-            text: `Image ${index + 1} view: ${image.viewLabel || image.viewKey || `Photo ${index + 1}`}.`,
-          },
-          {
-            type: 'input_image',
-            image_url: image.dataUrl,
-            detail: 'high',
-          },
-        ])),
+      ...validImages.flatMap((image, index) => ([
+        {
+          type: 'input_text',
+          text: `Image ${index + 1} view: ${image.viewLabel || image.viewKey || `Photo ${index + 1}`}.`,
+        },
+        {
+          type: 'input_image',
+          image_url: image.dataUrl,
+          detail: 'high',
+        },
+      ])),
     ];
 
     if (userContent.length === 1) {
@@ -323,7 +433,7 @@ Deno.serve(async (request) => {
       instructions,
       schemaName: 'hair_analysis',
       schema: analysisSchema,
-      maxOutputTokens: 900,
+      maxOutputTokens: 1100,
       input: [
         {
           role: 'user',
@@ -332,9 +442,15 @@ Deno.serve(async (request) => {
       ],
     });
 
-    const analysis = normalizeAnalysisPayload(result?.analysis || {}, Array.from(providedViews));
+    const analysis = normalizeAnalysisPayload(
+      result?.analysis || {},
+      Array.from(providedViews),
+      concernType,
+      donationRequirementContext
+    );
 
     console.info('[analyze-hair-submission] openai result ready', {
+      concernType,
       hasAnalysis: Boolean(analysis),
       isHairDetected: analysis?.is_hair_detected ?? null,
       missingViews: Array.isArray(analysis?.missing_views) ? analysis.missing_views : [],

@@ -11,6 +11,7 @@ const hairBundleTrackingHistoryTable = 'Hair_Bundle_Tracking_History';
 const qaAssessmentsTable = 'QA_Assessments';
 const aiScreeningsTable = 'AI_Screenings';
 const donorRecommendationsTable = 'Donor_Recommendations';
+const donationRequirementsTable = 'Donation_Requirements';
 
 const hairSubmissionSelect = `
   submission_id:Submission_ID,
@@ -76,6 +77,20 @@ const donorRecommendationSelect = `
   recommendation_text:Recommendation_Text,
   priority_order:Priority_Order,
   created_at:Created_At
+`;
+
+const donationRequirementSelect = `
+  donation_requirement_id:Donation_Requirement_ID,
+  minimum_number_donor:Minimum_Number_Donor,
+  minimum_hair_length:Minimum_Hair_Length,
+  chemical_treatment_status:Chemical_Treatment_Status,
+  colored_hair_status:Colored_Hair_Status,
+  bleached_hair_status:Bleached_Hair_Status,
+  rebonded_hair_status:Rebonded_Hair_Status,
+  hair_texture_status:Hair_Texture_Status,
+  notes:Notes,
+  updated_at:Updated_At,
+  updated_by:Updated_By
 `;
 
 const hairSubmissionLogisticsSelect = `
@@ -243,6 +258,21 @@ const normalizeTrackingEntry = (row) => ({
   updated_at: row?.updated_at || null,
 });
 
+const normalizeDonationRequirement = (row) => ({
+  id: row?.donation_requirement_id || null,
+  donation_requirement_id: row?.donation_requirement_id || null,
+  minimum_number_donor: row?.minimum_number_donor ?? null,
+  minimum_hair_length: row?.minimum_hair_length ?? null,
+  chemical_treatment_status: row?.chemical_treatment_status ?? null,
+  colored_hair_status: row?.colored_hair_status ?? null,
+  bleached_hair_status: row?.bleached_hair_status ?? null,
+  rebonded_hair_status: row?.rebonded_hair_status ?? null,
+  hair_texture_status: row?.hair_texture_status || '',
+  notes: row?.notes || '',
+  updated_at: row?.updated_at || null,
+  updated_by: row?.updated_by || null,
+});
+
 export const createHairSubmission = async (payload) => {
   const { userId, error } = await resolveSubmissionUserId(payload?.user_id);
   if (error) {
@@ -385,6 +415,38 @@ export const createDonorRecommendations = async (rows) => {
 
   return {
     data: (result.data || []).map(normalizeDonorRecommendation),
+    error: result.error,
+  };
+};
+
+export const fetchLatestDonationRequirement = async () => {
+  logHairQuery('fetchLatestDonationRequirement', {
+    table: donationRequirementsTable,
+    phase: 'read',
+    columns: [
+      'Donation_Requirement_ID',
+      'Minimum_Number_Donor',
+      'Minimum_Hair_Length',
+      'Chemical_Treatment_Status',
+      'Colored_Hair_Status',
+      'Bleached_Hair_Status',
+      'Rebonded_Hair_Status',
+      'Hair_Texture_Status',
+      'Notes',
+      'Updated_At',
+      'Updated_By',
+    ],
+  });
+
+  const result = await supabase
+    .from(donationRequirementsTable)
+    .select(donationRequirementSelect)
+    .order('Updated_At', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  return {
+    data: result.data ? normalizeDonationRequirement(result.data) : null,
     error: result.error,
   };
 };

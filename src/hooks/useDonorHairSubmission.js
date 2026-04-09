@@ -1,7 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import * as ImagePicker from 'expo-image-picker';
 import { analyzeHairPhotos } from '../features/hairAnalysis.service';
-import { saveHairSubmissionFlow } from '../features/hairSubmission.service';
+import { getHairAnalyzerContext, saveHairSubmissionFlow } from '../features/hairSubmission.service';
 import { hairAnalysisRequiredViews } from '../features/hairSubmission.constants';
 import { logAppEvent } from '../utils/appErrors';
 
@@ -187,12 +187,18 @@ const readSinglePickedAsset = (asset, view, fallbackIndex) => (
 export const useDonorHairSubmission = ({ userId }) => {
   const [photos, setPhotos] = useState([]);
   const [analysis, setAnalysis] = useState(null);
+  const [analyzerContext, setAnalyzerContext] = useState({
+    donationRequirement: null,
+    latestSubmission: null,
+    latestSubmissionDetail: null,
+  });
   const [isPickingImages, setIsPickingImages] = useState(false);
   const [isGuidedCaptureOpen, setIsGuidedCaptureOpen] = useState(false);
   const [guidedCaptureIndex, setGuidedCaptureIndex] = useState(0);
   const [guidedPhotos, setGuidedPhotos] = useState([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isLoadingContext, setIsLoadingContext] = useState(false);
   const [error, setError] = useState(null);
   const [successMessage, setSuccessMessage] = useState('');
 
@@ -207,11 +213,41 @@ export const useDonorHairSubmission = ({ userId }) => {
     if (isSaving) return 'Saving your submission';
     if (isAnalyzing) return 'Running AI analysis';
     if (analysis) return 'Review AI result';
+    if (hasCompletePhotoSet) return 'Ready for AI analysis';
     if (photos.length) return `${MAX_PHOTO_COUNT - photos.length} more view${MAX_PHOTO_COUNT - photos.length === 1 ? '' : 's'} needed`;
     return 'Analyze hair';
-  }, [analysis, isAnalyzing, isSaving, photos.length]);
+  }, [analysis, hasCompletePhotoSet, isAnalyzing, isSaving, photos.length]);
 
-  const runAnalysis = async (sourcePhotos = photos) => {
+  useEffect(() => {
+    if (!userId) return;
+
+    const loadContext = async () => {
+      setIsLoadingContext(true);
+      const result = await getHairAnalyzerContext(userId);
+      setIsLoadingContext(false);
+
+      setAnalyzerContext({
+        donationRequirement: result.donationRequirement,
+        latestSubmission: result.latestSubmission,
+        latestSubmissionDetail: result.latestSubmissionDetail,
+      });
+
+      logAppEvent('donor_hair_submission.context', 'Hair analyzer context loaded.', {
+        userId,
+        hasDonationRequirement: Boolean(result.donationRequirement?.donation_requirement_id),
+        latestSubmissionId: result.latestSubmission?.submission_id || null,
+        latestSubmissionDetailId: result.latestSubmissionDetail?.submission_detail_id || null,
+        hasError: Boolean(result.error),
+      });
+    };
+
+    loadContext();
+  }, [userId]);
+
+  const runAnalysis = async ({
+    sourcePhotos = photos,
+    questionnaireAnswers,
+  } = {}) => {
     if (sourcePhotos.length < MAX_PHOTO_COUNT) {
       const missingViews = hairAnalysisRequiredViews.slice(sourcePhotos.length).map((view) => view.label).join(', ');
       const mappedError = createErrorState(
@@ -226,7 +262,25 @@ export const useDonorHairSubmission = ({ userId }) => {
     setError(null);
     setSuccessMessage('');
 
-    const result = await analyzeHairPhotos({ images: sourcePhotos });
+    const submissionContext = analyzerContext.latestSubmission
+      ? {
+          submission_id: analyzerContext.latestSubmission.submission_id || null,
+          donation_drive_id: analyzerContext.latestSubmission.donation_drive_id || null,
+          organization_id: analyzerContext.latestSubmission.organization_id || null,
+          submission_detail_id: analyzerContext.latestSubmissionDetail?.submission_detail_id || null,
+          declared_length: analyzerContext.latestSubmissionDetail?.declared_length ?? null,
+          declared_texture: analyzerContext.latestSubmissionDetail?.declared_texture || '',
+          declared_density: analyzerContext.latestSubmissionDetail?.declared_density || '',
+          declared_condition: analyzerContext.latestSubmissionDetail?.declared_condition || '',
+        }
+      : null;
+
+    const result = await analyzeHairPhotos({
+      images: sourcePhotos,
+      questionnaireAnswers,
+      donationRequirementContext: analyzerContext.donationRequirement,
+      submissionContext,
+    });
     setIsAnalyzing(false);
 
     if (result.error) {
@@ -239,6 +293,7 @@ export const useDonorHairSubmission = ({ userId }) => {
     setAnalysis(result.analysis);
     logAppEvent('donor_hair_submission.analysis', 'Hair analysis ready for rendering.', {
       userId,
+      concernType: questionnaireAnswers?.losingHair === 'yes' ? 'hair_loss' : 'donation_eligibility',
       analysisKeys: result.analysis ? Object.keys(result.analysis) : [],
       renderKeys: [
         'estimated_length',
@@ -288,7 +343,10 @@ export const useDonorHairSubmission = ({ userId }) => {
 
       setPhotos(selectedPhotos.slice(0, MAX_PHOTO_COUNT));
       setAnalysis(null);
-      await runAnalysis(selectedPhotos.slice(0, MAX_PHOTO_COUNT));
+      logAppEvent('donor_hair_submission.images', 'Hair image set ready from library.', {
+        userId,
+        photoCount: selectedPhotos.slice(0, MAX_PHOTO_COUNT).length,
+      });
     } catch (error) {
       setIsPickingImages(false);
       setError(mapImagePickerError(error.message));
@@ -409,7 +467,12 @@ export const useDonorHairSubmission = ({ userId }) => {
     setIsGuidedCaptureOpen(false);
     setGuidedCaptureIndex(0);
     setGuidedPhotos([]);
-    return await runAnalysis(completedPhotos);
+    logAppEvent('donor_hair_submission.guided_capture', 'Guided capture complete.', {
+      userId,
+      photoCount: completedPhotos.length,
+    });
+
+    return { success: true, completed: true, photos: completedPhotos };
   };
 
   const removePhoto = (photoId) => {
@@ -419,8 +482,8 @@ export const useDonorHairSubmission = ({ userId }) => {
     setSuccessMessage('');
   };
 
-  const analyzePhotos = async () => (
-    await runAnalysis(photos)
+  const analyzePhotos = async (questionnaireAnswers) => (
+    await runAnalysis({ sourcePhotos: photos, questionnaireAnswers })
   );
 
   const submitSubmission = async (confirmedValues) => {
@@ -461,8 +524,12 @@ export const useDonorHairSubmission = ({ userId }) => {
     photos,
     requiredViews: hairAnalysisRequiredViews,
     analysis,
+    donationRequirement: analyzerContext.donationRequirement,
+    latestSubmission: analyzerContext.latestSubmission,
+    latestSubmissionDetail: analyzerContext.latestSubmissionDetail,
     error,
     successMessage,
+    isLoadingContext,
     isPickingImages,
     isGuidedCaptureOpen,
     currentGuidedView,

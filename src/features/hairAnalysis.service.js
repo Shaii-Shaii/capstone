@@ -1,5 +1,6 @@
 import { invokeEdgeFunction } from '../api/supabase/client';
 import { hairAnalysisFunctionName } from './hairSubmission.constants';
+import { normalizeHairAnalyzerAnswers } from './hairSubmission.schema';
 import { getErrorMessage, logAppError, logAppEvent } from '../utils/appErrors';
 
 const normalizeRecommendations = (source = []) => (
@@ -84,7 +85,12 @@ const resolveFunctionErrorMessage = async (error) => {
   return getErrorMessage(error);
 };
 
-export const analyzeHairPhotos = async ({ images }) => {
+export const analyzeHairPhotos = async ({
+  images,
+  questionnaireAnswers,
+  donationRequirementContext = null,
+  submissionContext = null,
+}) => {
   try {
     if (!images?.length) {
       throw new Error('Please upload at least one hair photo before analysis.');
@@ -95,17 +101,52 @@ export const analyzeHairPhotos = async ({ images }) => {
       throw new Error('One or more uploaded photos could not be read. Please upload or retake the unclear image again.');
     }
 
+    const normalizedAnswers = normalizeHairAnalyzerAnswers(questionnaireAnswers);
+    if (!normalizedAnswers?.questionnaire_answers?.losing_hair) {
+      throw new Error('Please complete the guided hair questions before analysis.');
+    }
+
     const payload = {
+      concern_type: normalizedAnswers.concern_type,
+      questionnaire_answers: normalizedAnswers.questionnaire_answers,
       images: images.map((image) => ({
         mimeType: image.mimeType,
         dataUrl: image.dataUrl,
         viewKey: image.viewKey,
         viewLabel: image.viewLabel,
       })),
+      donation_requirement_context: donationRequirementContext
+        ? {
+            donation_requirement_id: donationRequirementContext.donation_requirement_id || null,
+            minimum_hair_length: donationRequirementContext.minimum_hair_length ?? null,
+            chemical_treatment_status: donationRequirementContext.chemical_treatment_status ?? null,
+            colored_hair_status: donationRequirementContext.colored_hair_status ?? null,
+            bleached_hair_status: donationRequirementContext.bleached_hair_status ?? null,
+            rebonded_hair_status: donationRequirementContext.rebonded_hair_status ?? null,
+            hair_texture_status: donationRequirementContext.hair_texture_status || '',
+            notes: donationRequirementContext.notes || '',
+          }
+        : null,
+      submission_context: submissionContext
+        ? {
+            submission_id: submissionContext.submission_id || null,
+            donation_drive_id: submissionContext.donation_drive_id || null,
+            organization_id: submissionContext.organization_id || null,
+            detail_id: submissionContext.submission_detail_id || null,
+            declared_length: submissionContext.declared_length ?? null,
+            declared_texture: submissionContext.declared_texture || '',
+            declared_density: submissionContext.declared_density || '',
+            declared_condition: submissionContext.declared_condition || '',
+          }
+        : null,
     };
 
     logAppEvent('hairAnalysis.invoke', 'Invoking hair analysis edge function.', {
       functionName: hairAnalysisFunctionName,
+      concernType: payload.concern_type,
+      hasDonationRequirementContext: Boolean(payload.donation_requirement_context),
+      hasSubmissionContext: Boolean(payload.submission_context?.submission_id),
+      questionKeys: Object.keys(payload.questionnaire_answers || {}),
       imageCount: payload.images.length,
       imageViews: payload.images.map((image) => image.viewLabel || image.viewKey).filter(Boolean),
     });
@@ -165,6 +206,8 @@ export const analyzeHairPhotos = async ({ images }) => {
 
     const userMessage = technicalMessage.includes('at least one hair photo')
       ? 'Please upload at least one clear hair photo before running the analysis.'
+      : technicalMessage.includes('guided hair questions')
+        ? 'Please complete the guided questions before analysis.'
       : technicalMessage.includes('could not be read')
         ? 'One of the selected photos could not be read. Please upload or retake that image again.'
         : technicalMessage.includes('invalid jwt')

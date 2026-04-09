@@ -259,3 +259,60 @@ export const saveHairSubmissionFlow = async ({
     };
   }
 };
+
+export const getHairAnalyzerContext = async (userId) => {
+  try {
+    if (!userId) {
+      throw new Error('Your session is not ready.');
+    }
+
+    logAppEvent('hair_submission.context', 'Loading hair analyzer context.', {
+      userId,
+    });
+
+    const [
+      { data: donationRequirement, error: donationRequirementError },
+      { data: latestSubmission, error: latestSubmissionError },
+    ] = await Promise.all([
+      HairSubmissionAPI.fetchLatestDonationRequirement(),
+      HairSubmissionAPI.fetchLatestHairSubmissionByUserId(userId),
+    ]);
+
+    if (donationRequirementError) {
+      throw new Error(donationRequirementError.message || 'Unable to load the current donation requirement.');
+    }
+
+    if (latestSubmissionError) {
+      throw new Error(latestSubmissionError.message || 'Unable to load your latest donation submission.');
+    }
+
+    const { data: latestSubmissionDetail, error: latestDetailError } = latestSubmission?.submission_id
+      ? await HairSubmissionAPI.fetchLatestHairSubmissionDetailBySubmissionId(latestSubmission.submission_id)
+      : { data: null, error: null };
+
+    if (latestDetailError) {
+      throw new Error(latestDetailError.message || 'Unable to load your latest donation detail.');
+    }
+
+    logAppEvent('hair_submission.context', 'Hair analyzer context ready.', {
+      userId,
+      hasDonationRequirement: Boolean(donationRequirement?.donation_requirement_id),
+      latestSubmissionId: latestSubmission?.submission_id || null,
+      latestSubmissionDetailId: latestSubmissionDetail?.submission_detail_id || null,
+    });
+
+    return {
+      donationRequirement,
+      latestSubmission,
+      latestSubmissionDetail,
+      error: null,
+    };
+  } catch (error) {
+    return {
+      donationRequirement: null,
+      latestSubmission: null,
+      latestSubmissionDetail: null,
+      error: error.message || 'Unable to load the hair analyzer context.',
+    };
+  }
+};
