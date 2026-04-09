@@ -1,101 +1,142 @@
 import { createJsonResponse, handleCorsPreflight } from '../_shared/cors.ts';
 import { createImageEdit, createStructuredResponse } from '../_shared/openai.ts';
 
+const MAX_PREVIEW_VARIANTS = 3;
+
 const previewSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    preview: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        summary: {
-          type: 'string',
-        },
-        style_notes: {
-          type: 'string',
-        },
-        recommended_style_name: {
-          type: 'string',
-        },
-        recommended_style_family: {
-          type: 'string',
-        },
-        options: {
-          type: 'array',
-          items: {
-            type: 'object',
-            additionalProperties: false,
-            properties: {
-              name: {
-                type: 'string',
-              },
-              note: {
-                type: 'string',
-              },
-            },
-            required: ['name', 'note'],
+    previews: {
+      type: 'array',
+      minItems: MAX_PREVIEW_VARIANTS,
+      maxItems: MAX_PREVIEW_VARIANTS,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          option_index: {
+            type: 'integer',
+            minimum: 1,
+            maximum: MAX_PREVIEW_VARIANTS,
+          },
+          summary: {
+            type: 'string',
+          },
+          style_notes: {
+            type: 'string',
+          },
+          recommended_style_name: {
+            type: 'string',
+          },
+          recommended_style_family: {
+            type: 'string',
+          },
+          match_label: {
+            type: 'string',
+          },
+          image_prompt_hint: {
+            type: 'string',
           },
         },
+        required: [
+          'option_index',
+          'summary',
+          'style_notes',
+          'recommended_style_name',
+          'recommended_style_family',
+          'match_label',
+          'image_prompt_hint',
+        ],
       },
-      required: [
-        'summary',
-        'style_notes',
-        'recommended_style_name',
-        'recommended_style_family',
-        'options',
-      ],
     },
   },
-  required: ['preview'],
+  required: ['previews'],
 };
 
 const instructions = [
-  'You are generating a realistic wig preview plan for a patient support mobile app.',
+  'You are generating realistic wig try-on variants for a patient support mobile app.',
   'Return JSON only.',
   'Use the provided preference data and optional front reference image.',
-  'Prepare the structured wig recommendation that will drive an actual image-generation step.',
-  'Keep the response donor-safe, patient-safe, and concise.',
-  'Summary should explain the suggested wig direction.',
-  'Style notes should mention color, length, silhouette, and fit considerations only when supported by the input.',
-  'recommended_style_name should be a short patient-facing wig style label.',
+  'Create exactly 3 distinct wig preview variants for the same person and same request.',
+  'All 3 variants must remain appropriate for the same patient request and must stay wearable, natural, and patient-safe.',
+  'The variants must differ meaningfully in style, silhouette, texture treatment, or volume.',
+  'Do not make the 3 variants identical, and do not suggest unrelated or costume styles.',
+  'summary should briefly explain why the variant fits the request.',
+  'style_notes should mention color, length, silhouette, texture, and fit considerations for that specific variant.',
+  'recommended_style_name should be a short patient-facing wig style label for that specific variant.',
   'recommended_style_family should be a short category such as soft bob, layered waves, or natural pixie.',
-  'options should contain 2 or 3 concise wig options, each with a name and a short note.',
-  'Do not invent percentages, stock counts, or medical claims.',
+  'match_label should be a short UI label such as Closest Match, Soft Volume, or Sleek Option.',
+  'image_prompt_hint should be a concise image-generation hint describing what makes the specific variant visually distinct.',
+  'Do not invent medical claims, percentages, stock counts, or product availability.',
 ].join(' ');
 
-const normalizePreview = (preview: Record<string, unknown>, generatedImageDataUrl: string) => ({
-  generated_image_data_url: generatedImageDataUrl,
-  preview_url: generatedImageDataUrl,
-  summary: typeof preview?.summary === 'string' ? preview.summary.trim() : '',
-  style_notes: typeof preview?.style_notes === 'string' ? preview.style_notes.trim() : '',
-  recommended_style_name: typeof preview?.recommended_style_name === 'string'
-    ? preview.recommended_style_name.trim()
-    : '',
-  recommended_style_family: typeof preview?.recommended_style_family === 'string'
-    ? preview.recommended_style_family.trim()
-    : '',
-  options: Array.isArray(preview?.options)
-    ? preview.options
-      .map((item) => ({
-        name: typeof item?.name === 'string' ? item.name.trim() : '',
-        note: typeof item?.note === 'string' ? item.note.trim() : '',
-      }))
-      .filter((item) => item.name || item.note)
-      .slice(0, 3)
-    : [],
-});
+const normalizeVariant = (variant: Record<string, unknown>, generatedImageDataUrl: string, fallbackIndex: number) => {
+  const optionIndex = Number.isFinite(Number(variant?.option_index))
+    ? Math.min(Math.max(Number(variant.option_index), 1), MAX_PREVIEW_VARIANTS)
+    : fallbackIndex + 1;
+
+  return {
+    id: `variant-${optionIndex}`,
+    option_index: optionIndex,
+    generated_image_data_url: generatedImageDataUrl,
+    preview_url: generatedImageDataUrl,
+    summary: typeof variant?.summary === 'string' ? variant.summary.trim() : '',
+    style_notes: typeof variant?.style_notes === 'string' ? variant.style_notes.trim() : '',
+    recommended_style_name: typeof variant?.recommended_style_name === 'string'
+      ? variant.recommended_style_name.trim()
+      : '',
+    recommended_style_family: typeof variant?.recommended_style_family === 'string'
+      ? variant.recommended_style_family.trim()
+      : '',
+    match_label: typeof variant?.match_label === 'string' ? variant.match_label.trim() : `Option ${optionIndex}`,
+    image_prompt_hint: typeof variant?.image_prompt_hint === 'string' ? variant.image_prompt_hint.trim() : '',
+  };
+};
+
+const buildPreviewPayload = (normalizedPreviews: Array<Record<string, unknown>>) => {
+  const previews = normalizedPreviews.slice(0, MAX_PREVIEW_VARIANTS);
+  const primaryPreview = previews[0] || null;
+
+  const optionPayload = previews.map((preview) => ({
+    id: preview.id,
+    option_index: preview.option_index,
+    name: preview.recommended_style_name,
+    note: preview.style_notes || preview.summary,
+    summary: preview.summary,
+    style_notes: preview.style_notes,
+    family: preview.recommended_style_family,
+    match_label: preview.match_label,
+    generated_image_data_url: preview.generated_image_data_url,
+    preview_url: preview.preview_url,
+  }));
+
+  return {
+    preview_url: typeof primaryPreview?.preview_url === 'string' ? primaryPreview.preview_url : '',
+    generated_image_data_url: typeof primaryPreview?.generated_image_data_url === 'string'
+      ? primaryPreview.generated_image_data_url
+      : '',
+    preview: primaryPreview
+      ? {
+          ...primaryPreview,
+          options: optionPayload,
+        }
+      : null,
+    previews,
+    selected_preview_url: null,
+  };
+};
 
 const buildImagePrompt = ({
   preferredColor,
   preferredLength,
   notes,
-  preview,
+  variant,
 }: {
   preferredColor: string;
   preferredLength: string;
   notes: string;
-  preview: Record<string, unknown>;
+  variant: Record<string, unknown>;
 }) => [
   'Create one photorealistic wig try-on preview by editing the provided front-facing patient photo.',
   'Keep the same person, face identity, pose, camera angle, lighting direction, clothing, and background.',
@@ -103,9 +144,12 @@ const buildImagePrompt = ({
   'The final image must look like a believable patient-facing wig preview, not an illustration or collage.',
   'Do not add extra people, accessories, hats, text overlays, split screens, or watermarks.',
   'Keep the face unobstructed and preserve natural proportions.',
-  `Suggested wig style name: ${typeof preview?.recommended_style_name === 'string' ? preview.recommended_style_name : 'Natural patient wig'}.`,
-  `Suggested wig family: ${typeof preview?.recommended_style_family === 'string' ? preview.recommended_style_family : 'Natural wearable style'}.`,
-  `Suggested style notes: ${typeof preview?.style_notes === 'string' ? preview.style_notes : 'Natural patient-safe styling.'}.`,
+  `This is wig preview option ${typeof variant?.option_index === 'number' ? variant.option_index : '1'} of ${MAX_PREVIEW_VARIANTS}.`,
+  `Suggested wig style name: ${typeof variant?.recommended_style_name === 'string' ? variant.recommended_style_name : 'Natural patient wig'}.`,
+  `Suggested wig family: ${typeof variant?.recommended_style_family === 'string' ? variant.recommended_style_family : 'Natural wearable style'}.`,
+  `Variant summary: ${typeof variant?.summary === 'string' ? variant.summary : 'Create a wearable patient-safe wig variant.'}.`,
+  `Variant style notes: ${typeof variant?.style_notes === 'string' ? variant.style_notes : 'Natural patient-safe styling.'}.`,
+  `Variant distinction hint: ${typeof variant?.image_prompt_hint === 'string' ? variant.image_prompt_hint : 'Make this version visually distinct from the other options while staying appropriate for the same request.'}.`,
   `Preferred color: ${preferredColor || 'keep the most natural color based on the source photo'}.`,
   `Preferred length: ${preferredLength || 'keep a wearable medical wig length based on the style recommendation'}.`,
   `Additional patient notes: ${notes || 'none provided'}.`,
@@ -166,9 +210,9 @@ Deno.serve(async (request) => {
 
     const result = await createStructuredResponse({
       instructions,
-      schemaName: 'wig_guidance',
+      schemaName: 'wig_preview_variants',
       schema: previewSchema,
-      maxOutputTokens: 700,
+      maxOutputTokens: 1200,
       input: [
         {
           role: 'user',
@@ -177,45 +221,65 @@ Deno.serve(async (request) => {
       ],
     });
 
-    console.info('[generate-wig-preview] structured wig guidance ready', {
-      hasPreview: Boolean(result?.preview),
-      styleName: result?.preview?.recommended_style_name || '',
+    const rawVariants = Array.isArray(result?.previews) ? result.previews.slice(0, MAX_PREVIEW_VARIANTS) : [];
+    if (rawVariants.length !== MAX_PREVIEW_VARIANTS) {
+      throw new Error('OpenAI did not return the required wig preview variants.');
+    }
+
+    console.info('[generate-wig-preview] variant plan ready', {
+      variantCount: rawVariants.length,
       responseKeys: result && typeof result === 'object' ? Object.keys(result) : [],
     });
 
-    const generatedImage = await createImageEdit({
-      prompt: buildImagePrompt({
-        preferredColor,
-        preferredLength,
-        notes,
-        preview: result?.preview || {},
-      }),
-      images: [{ image_url: referenceImage }],
-      quality: 'medium',
-      size: '1024x1024',
-      outputFormat: 'png',
-      moderation: 'low',
-    });
+    const normalizedPreviews: Array<Record<string, unknown>> = [];
+    for (const [index, variant] of rawVariants.entries()) {
+      console.info('[generate-wig-preview] generating wig preview variant', {
+        optionIndex: index + 1,
+        styleName: typeof variant?.recommended_style_name === 'string' ? variant.recommended_style_name : '',
+      });
 
-    const generatedImageDataUrl = generatedImage?.imageDataUrl || generatedImage?.imageUrl || '';
-    if (!generatedImageDataUrl) {
-      throw new Error('OpenAI did not return a usable wig preview image.');
+      const generatedImage = await createImageEdit({
+        prompt: buildImagePrompt({
+          preferredColor,
+          preferredLength,
+          notes,
+          variant: variant || {},
+        }),
+        images: [{ image_url: referenceImage }],
+        quality: 'medium',
+        size: '1024x1024',
+        outputFormat: 'png',
+        moderation: 'low',
+      });
+
+      const generatedImageDataUrl = generatedImage?.imageDataUrl || generatedImage?.imageUrl || '';
+      if (!generatedImageDataUrl) {
+        throw new Error(`OpenAI did not return a usable wig preview image for option ${index + 1}.`);
+      }
+
+      normalizedPreviews.push(normalizeVariant(variant || {}, generatedImageDataUrl, index));
+
+      console.info('[generate-wig-preview] wig preview variant completed', {
+        optionIndex: index + 1,
+        hasGeneratedImage: Boolean(generatedImageDataUrl),
+      });
     }
 
-    const normalizedPreview = normalizePreview(result?.preview || {}, generatedImageDataUrl);
+    if (normalizedPreviews.length !== MAX_PREVIEW_VARIANTS) {
+      throw new Error('We could not finish generating all wig preview variants.');
+    }
 
-    console.info('[generate-wig-preview] openai result ready', {
-      hasPreview: Boolean(normalizedPreview),
-      hasGeneratedImage: Boolean(normalizedPreview.generated_image_data_url),
-      optionCount: normalizedPreview.options.length,
-      responseKeys: normalizedPreview ? Object.keys(normalizedPreview) : [],
+    const payload = buildPreviewPayload(normalizedPreviews);
+
+    console.info('[generate-wig-preview] final wig preview payload ready', {
+      previewCount: payload.previews.length,
+      hasPrimaryPreview: Boolean(payload.preview?.generated_image_data_url),
+      responseKeys: Object.keys(payload),
     });
 
     return createJsonResponse({
       success: true,
-      preview_url: normalizedPreview.preview_url,
-      generated_image_data_url: normalizedPreview.generated_image_data_url,
-      preview: normalizedPreview,
+      ...payload,
     });
   } catch (error) {
     console.error('[generate-wig-preview]', error);

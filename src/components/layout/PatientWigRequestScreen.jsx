@@ -70,9 +70,13 @@ const buildRecommendationOptions = ({ preview, specification, draftValues }) => 
       id: option.id || `option-${index}`,
       name: option.name || `Style ${index + 1}`,
       note: option.note || 'Suggested wig option',
+      summary: option.summary || option.note || '',
+      styleNotes: option.style_notes || option.note || '',
       family: option.family || '',
       matchLabel: option.match_label || option.matchLabel || '',
+      optionIndex: option.option_index || index + 1,
       generatedImageUri: option.generated_image_data_url || option.generatedImageDataUrl || '',
+      previewUrl: option.preview_url || option.generated_image_data_url || option.generatedImageDataUrl || '',
     }));
   }
 
@@ -410,7 +414,7 @@ function WigOptionCard({ option, isActive, onPress, fallbackImageUri }) {
       <Text style={styles.optionNote} numberOfLines={2}>{option.note}</Text>
       <View style={[styles.tryOnButton, isActive ? styles.tryOnButtonActive : null]}>
         <Text style={[styles.tryOnButtonText, isActive ? styles.tryOnButtonTextActive : null]}>
-          {isActive ? 'Try On ✓' : 'Try On'}
+          {isActive ? 'Selected' : 'Try On'}
         </Text>
       </View>
     </Pressable>
@@ -573,7 +577,7 @@ function WigStyleOptionsSection({
 }) {
   return (
     <AppCard variant="elevated" radius="xl" padding="lg" style={styles.optionsSectionCard}>
-      <Text style={styles.optionsSectionTitle}>Available Wig Styles from Donated Hair</Text>
+      <Text style={styles.optionsSectionTitle}>AI Wig Preview Options</Text>
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
@@ -675,7 +679,8 @@ export function PatientWigRequestScreen() {
     specification: latestWigSpecification,
     draftValues,
   });
-  const recommendationSummary = selectedOption?.note
+  const recommendationSummary = selectedOption?.summary
+    || selectedOption?.note
     || preview?.summary
     || latestWigRequest?.notes
     || 'Your suggested wig recommendation will appear here after the front photo is processed.';
@@ -740,7 +745,7 @@ export function PatientWigRequestScreen() {
   });
 
   const handleSaveRequest = handleSubmit(async (values) => {
-    const result = await saveRequest(values);
+    const result = await saveRequest(values, selectedOptionId);
 
     if (result?.success) {
       await refreshTracking();

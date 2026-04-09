@@ -142,6 +142,8 @@ export const savePatientWigRequestFlow = async ({
       hasReferenceImage: Boolean(referenceImage?.uri),
       hasPreview: Boolean(preview),
       previewKeys: preview ? Object.keys(preview) : [],
+      selectedOptionId: preview?.selected_option_id || '',
+      selectedOptionIndex: preview?.selected_option_index || null,
     });
 
     const patientDetails = await ensurePatientDetails(userId);
@@ -196,6 +198,8 @@ export const savePatientWigRequestFlow = async ({
       userId,
       reqId: wigRequest?.req_id || null,
       previewPayloadKeys: preview ? Object.keys(preview) : [],
+      selectedOptionId: preview?.selected_option_id || '',
+      selectedPreviewUrl: preview?.preview_url || preview?.generated_image_data_url || '',
       dbPayloadKeys: [
         'preferred_color',
         'preferred_length',

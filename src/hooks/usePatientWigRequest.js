@@ -138,8 +138,33 @@ const buildStoredPreview = (specification, wigRequest) => {
     style_notes: specification?.notes || '',
     recommended_style_name: specification?.style_preference || 'Saved wig recommendation',
     recommended_style_family: specification?.preferred_length || 'Saved recommendation',
+    preview_url: specification?.ai_wig_preview_url || '',
     generated_image_data_url: specification?.ai_wig_preview_url || '',
     options: [],
+  };
+};
+
+const buildSelectedPreview = (preview, selectedOptionId) => {
+  if (!preview) return null;
+
+  const options = Array.isArray(preview?.options) ? preview.options : [];
+  const selectedOption = options.find((option) => option.id === selectedOptionId) || options[0] || null;
+
+  if (!selectedOption) {
+    return preview;
+  }
+
+  return {
+    ...preview,
+    summary: selectedOption.summary || selectedOption.note || preview.summary || '',
+    style_notes: selectedOption.style_notes || selectedOption.note || preview.style_notes || '',
+    recommended_style_name: selectedOption.name || preview.recommended_style_name || '',
+    recommended_style_family: selectedOption.family || preview.recommended_style_family || '',
+    preview_url: selectedOption.preview_url || selectedOption.generated_image_data_url || preview.preview_url || preview.generated_image_data_url || '',
+    generated_image_data_url: selectedOption.generated_image_data_url || selectedOption.preview_url || preview.generated_image_data_url || preview.preview_url || '',
+    selected_option_id: selectedOption.id || '',
+    selected_option_index: selectedOption.option_index || null,
+    options,
   };
 };
 
@@ -273,6 +298,7 @@ export const usePatientWigRequest = ({ userId }) => {
     logAppEvent('patient_wig_request.preview', 'Wig preview ready for rendering.', {
       userId,
       previewKeys: result.preview ? Object.keys(result.preview) : [],
+      previewCount: Array.isArray(result.previews) ? result.previews.length : result.preview?.options?.length || 0,
       renderKeys: ['generated_image_data_url', 'recommended_style_name', 'recommended_style_family', 'summary'],
     });
     return { success: true, preview: result.preview };
@@ -392,7 +418,7 @@ export const usePatientWigRequest = ({ userId }) => {
     });
   }, [buildSavedPreferences, buildSavedReferenceImage, referenceImage, requestPreview]);
 
-  const saveRequest = async (preferences) => {
+  const saveRequest = async (preferences, selectedOptionId = '') => {
     if (!referenceImage?.uri) {
       setError(FRONT_PHOTO_REQUIRED_ERROR);
       return { success: false, error: FRONT_PHOTO_REQUIRED_ERROR.message };
@@ -407,10 +433,19 @@ export const usePatientWigRequest = ({ userId }) => {
     setError(null);
     setSuccessMessage('');
 
+    const selectedPreview = buildSelectedPreview(preview, selectedOptionId);
+
+    logAppEvent('patient_wig_request.save_selection', 'Selected wig preview prepared for saving.', {
+      userId,
+      selectedOptionId: selectedPreview?.selected_option_id || '',
+      selectedOptionIndex: selectedPreview?.selected_option_index || null,
+      hasSelectedPreviewImage: Boolean(selectedPreview?.generated_image_data_url || selectedPreview?.preview_url),
+    });
+
     const result = await savePatientWigRequestFlow({
       userId,
       preferences,
-      preview,
+      preview: selectedPreview,
       referenceImage,
     });
 
