@@ -552,6 +552,11 @@ export function DonorHairSubmissionScreen() {
     'AI result',
     'Next-step donation path',
   ];
+  const screeningStepTitles = stepTitles.slice(5);
+  const isScreeningFlowActive = stepIndex >= 5;
+  const visibleStepNumber = isScreeningFlowActive ? stepIndex - 4 : stepIndex + 1;
+  const visibleStepTotal = isScreeningFlowActive ? screeningStepTitles.length : 5;
+  const visibleStepTitle = isScreeningFlowActive ? screeningStepTitles[stepIndex - 5] : stepTitles[stepIndex];
 
   const canMovePastQuestion = isAnswered(currentQuestion, questionnaireValues);
   const isCurrentPhotoComplete = Boolean(photos[photoIndex]);
@@ -1097,7 +1102,7 @@ export function DonorHairSubmissionScreen() {
       header={(
         <DashboardHeader
           title="Hair Donation"
-          subtitle={stepTitles[stepIndex]}
+          subtitle={visibleStepTitle}
           summary=""
           avatarInitials={avatarInitials}
           avatarUri={profile?.avatar_url}
@@ -1123,7 +1128,7 @@ export function DonorHairSubmissionScreen() {
         </View>
 
         <View style={styles.progressHeader}>
-          <Text style={styles.progressText}>Step {stepIndex + 1} of 10</Text>
+          <Text style={styles.progressText}>Step {visibleStepNumber} of {visibleStepTotal}</Text>
           <Text style={styles.progressHelper}>{progressLabel}</Text>
         </View>
 
