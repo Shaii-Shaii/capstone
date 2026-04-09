@@ -20,12 +20,31 @@ const getFileExtension = (mimeType = 'image/jpeg') => {
   return 'jpg';
 };
 
+const buildUploadSourceUri = (photo) => photo?.dataUrl || photo?.uri || '';
+
 const uploadSelectedImages = async ({ userId, submissionId, detailId, photos }) => {
   const uploadedRows = [];
 
   for (let index = 0; index < photos.length; index += 1) {
     const photo = photos[index];
-    const fileResponse = await fetch(photo.uri);
+    const uploadSourceUri = buildUploadSourceUri(photo);
+
+    logAppEvent('hair_submission.save', 'Preparing hair submission photo upload.', {
+      userId,
+      submissionId,
+      detailId,
+      index,
+      viewKey: photo?.viewKey || null,
+      sourceType: photo?.sourceType || null,
+      usesDataUrl: Boolean(photo?.dataUrl),
+      hasUri: Boolean(photo?.uri),
+    });
+
+    if (!uploadSourceUri) {
+      throw new Error('One of the required hair photos is missing its upload source.');
+    }
+
+    const fileResponse = await fetch(uploadSourceUri);
     const fileBody = await fileResponse.arrayBuffer();
     const extension = getFileExtension(photo.mimeType);
     const filePath = `${userId}/${submissionId}/${detailId}-${photo.viewKey || `view-${index + 1}`}.${extension}`;
@@ -132,8 +151,7 @@ export const saveHairSubmissionFlow = async ({
     const selectedDonationMode = resolveSelectedDonationMode(donationModeValue);
     const hasTreatmentHistory = normalizedQuestionnaire.has_treatment_history === 'yes';
     const colorStatus = normalizedQuestionnaire.color_status || '';
-
-    const { data: submission, error: submissionError } = await HairSubmissionAPI.createHairSubmission({
+    const submissionPayload = {
       user_id: userId,
       submission_code: buildSubmissionCode(),
       bundle_quantity: 1,
@@ -143,7 +161,18 @@ export const saveHairSubmissionFlow = async ({
       pickup_request: selectedDonationMode?.pickup_request ?? false,
       status: hairSubmissionStatuses.submission.submitted,
       donor_notes: confirmedValues.detailNotes || null,
+    };
+
+    logAppEvent('hair_submission.save', 'Hair submission payload built.', {
+      userId,
+      donationModeValue,
+      selectedDonationMode: selectedDonationMode?.value || null,
+      submissionPayloadKeys: Object.keys(submissionPayload),
+      deliveryMethod: submissionPayload.delivery_method,
+      pickupRequest: submissionPayload.pickup_request,
     });
+
+    const { data: submission, error: submissionError } = await HairSubmissionAPI.createHairSubmission(submissionPayload);
 
     if (submissionError) {
       throw new Error(submissionError.message || 'Unable to create the hair submission.');
@@ -154,7 +183,7 @@ export const saveHairSubmissionFlow = async ({
       submissionId: submission?.submission_id || null,
     });
 
-    const { data: detail, error: detailError } = await HairSubmissionAPI.createHairSubmissionDetail({
+    const detailPayload = {
       submission_id: submission.submission_id,
       bundle_number: 1,
       declared_length: Number(confirmedValues.declaredLength),
@@ -170,7 +199,21 @@ export const saveHairSubmissionFlow = async ({
         : false,
       detail_notes: confirmedValues.detailNotes || null,
       status: hairSubmissionStatuses.detail.pending,
+    };
+
+    logAppEvent('hair_submission.save', 'Hair submission detail payload built.', {
+      userId,
+      submissionId: submission?.submission_id || null,
+      detailPayloadKeys: Object.keys(detailPayload),
+      declaredLength: detailPayload.declared_length,
+      declaredColor: detailPayload.declared_color,
+      isChemicallyTreated: detailPayload.is_chemically_treated,
+      isColored: detailPayload.is_colored,
+      isBleached: detailPayload.is_bleached,
+      isRebonded: detailPayload.is_rebonded,
     });
+
+    const { data: detail, error: detailError } = await HairSubmissionAPI.createHairSubmissionDetail(detailPayload);
 
     if (detailError) {
       throw new Error(detailError.message || 'Unable to save the donor-confirmed hair details.');
@@ -208,6 +251,13 @@ export const saveHairSubmissionFlow = async ({
     });
 
     if (logisticsPayload) {
+      logAppEvent('hair_submission.save', 'Hair submission logistics payload built.', {
+        userId,
+        submissionId: submission?.submission_id || null,
+        logisticsPayloadKeys: Object.keys(logisticsPayload),
+        logisticsType: logisticsPayload.logistics_type || null,
+      });
+
       const { error: logisticsError } = await HairSubmissionAPI.createHairSubmissionLogistics(logisticsPayload);
 
       if (logisticsError) {
@@ -289,11 +339,19 @@ export const saveHairSubmissionFlow = async ({
     });
 
     if (notificationEvents.length) {
-      await recordNotifications({
-        userId,
-        role: 'donor',
-        notifications: notificationEvents,
-      });
+      try {
+        await recordNotifications({
+          userId,
+          role: 'donor',
+          notifications: notificationEvents,
+        });
+      } catch (notificationError) {
+        logAppEvent('hair_submission.save', 'Notification persistence failed after submission save.', {
+          userId,
+          submissionId: submission?.submission_id || null,
+          message: notificationError?.message || 'Unable to persist notifications.',
+        }, 'warn');
+      }
     }
 
     await writeAuditLog({
@@ -312,6 +370,11 @@ export const saveHairSubmissionFlow = async ({
       error: null,
     };
   } catch (error) {
+    logAppEvent('hair_submission.save', 'Hair submission save failed.', {
+      userId,
+      message: error.message || 'Unable to save your hair submission.',
+    }, 'error');
+
     await writeAuditLog({
       authUserId: userId,
       action: 'hair_submission.create',

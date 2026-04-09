@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Platform } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { analyzeHairPhotos } from '../features/hairAnalysis.service';
 import { getHairDonationModuleContext, saveHairSubmissionFlow } from '../features/hairSubmission.service';
@@ -15,6 +16,77 @@ const createErrorState = (title, message) => ({
 
 const createEmptyPhotoSlots = () => Array.from({ length: MAX_PHOTO_COUNT }, () => null);
 
+const supportsMobileWebCameraCapture = () => {
+  if (typeof navigator === 'undefined') return false;
+
+  const userAgent = navigator.userAgent || '';
+  return /android|iphone|ipad|ipod/i.test(userAgent);
+};
+
+const readWebFileAsDataUrl = (file) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+
+  reader.onload = () => resolve(reader.result);
+  reader.onerror = () => reject(new Error('Unable to read the selected hair image.'));
+  reader.readAsDataURL(file);
+});
+
+const pickWebImageAsset = async ({ capture = false } = {}) => {
+  if (typeof document === 'undefined') {
+    throw new Error(capture
+      ? 'Camera capture is not available in this environment.'
+      : 'Image upload is not available in this environment.');
+  }
+
+  if (capture && !supportsMobileWebCameraCapture()) {
+    throw new Error('Camera capture is not available in this browser. Use Upload instead.');
+  }
+
+  return new Promise((resolve, reject) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+
+    if (capture) {
+      input.setAttribute('capture', 'environment');
+    }
+
+    input.onchange = async () => {
+      const file = input.files?.[0];
+
+      if (!file) {
+        resolve({ canceled: true });
+        return;
+      }
+
+      try {
+        const dataUrl = await readWebFileAsDataUrl(file);
+        const [, base64 = ''] = String(dataUrl).split(',');
+
+        resolve({
+          canceled: false,
+          assets: [{
+            uri: dataUrl,
+            base64,
+            mimeType: file.type || 'image/jpeg',
+            assetId: file.name || `${Date.now()}`,
+            width: undefined,
+            height: undefined,
+          }],
+        });
+      } catch (error) {
+        reject(error);
+      }
+    };
+
+    input.onerror = () => reject(new Error(capture
+      ? 'Unable to open the camera right now.'
+      : 'Unable to open the image picker right now.'));
+
+    input.click();
+  });
+};
+
 const mapImagePickerError = (message = '') => {
   const normalized = message.toLowerCase();
 
@@ -24,6 +96,10 @@ const mapImagePickerError = (message = '') => {
 
   if (normalized.includes('camera access')) {
     return createErrorState('Camera Access Needed', 'Allow camera access first so you can take guided hair photos.');
+  }
+
+  if (normalized.includes('camera capture is not available')) {
+    return createErrorState('Camera Unavailable', 'Camera capture is not available here. Use Upload instead to continue this screening step.');
   }
 
   if (normalized.includes('read the selected hair images')) {
@@ -86,10 +162,32 @@ const mapSaveError = (message = '') => {
     return createErrorState('Analysis Needed', 'Wait for the AI result or run the analysis again before saving.');
   }
 
+  if (normalized.includes('create the hair submission')) {
+    return createErrorState('Submission Could Not Start', 'The donation submission record could not be created right now. Please try again.');
+  }
+
+  if (normalized.includes('save the donor-confirmed hair details')) {
+    return createErrorState('Details Could Not Be Saved', 'Your confirmed hair details could not be saved right now. Please review them and try again.');
+  }
+
+  if (normalized.includes('failed to upload one of the selected photos')
+    || normalized.includes('uploaded image references')
+    || normalized.includes('missing its upload source')) {
+    return createErrorState('Photo Save Failed', 'One of the required hair photos could not be attached to the submission. Please retake or upload that image again and try saving.');
+  }
+
+  if (normalized.includes('selected donation logistics path')) {
+    return createErrorState('Donation Path Could Not Be Saved', 'The selected donation path could not be saved right now. Please try again.');
+  }
+
+  if (normalized.includes('ai screening result')) {
+    return createErrorState('Screening Result Could Not Be Saved', 'The AI screening result could not be linked to the donation right now. Please try again.');
+  }
+
   return createErrorState('Unable To Save Donation', 'Your donation details were not saved yet. Please review the form and try again.');
 };
 
-const buildPhotoRecord = (asset, slotIndex) => {
+const buildPhotoRecord = (asset, slotIndex, sourceType = 'upload') => {
   if (!asset?.uri || !asset?.base64) return null;
 
   const view = hairAnalysisRequiredViews[slotIndex];
@@ -102,6 +200,7 @@ const buildPhotoRecord = (asset, slotIndex) => {
     dataUrl: `data:${asset.mimeType || 'image/jpeg'};base64,${asset.base64}`,
     viewKey: view?.key || `view_${slotIndex + 1}`,
     viewLabel: view?.label || `View ${slotIndex + 1}`,
+    sourceType,
   };
 };
 
@@ -174,6 +273,14 @@ export const useDonorHairSubmission = ({ userId }) => {
   }, [userId]);
 
   const setPhotoAtSlot = (slotIndex, photo) => {
+    logAppEvent('donor_hair_submission.photo_slot_state', 'Hair photo slot updated.', {
+      userId,
+      slotIndex,
+      viewKey: photo?.viewKey || hairAnalysisRequiredViews[slotIndex]?.key || null,
+      sourceType: photo?.sourceType || null,
+      hasPhoto: Boolean(photo?.uri),
+    });
+
     setPhotos((current) => {
       const next = [...current];
       next[slotIndex] = photo;
@@ -190,7 +297,19 @@ export const useDonorHairSubmission = ({ userId }) => {
       setSuccessMessage('');
       setIsPickingImages(true);
 
+      logAppEvent('donor_hair_submission.photo_picker', 'Upload button pressed for hair photo slot.', {
+        userId,
+        slotIndex,
+        viewKey: hairAnalysisRequiredViews[slotIndex]?.key || null,
+      });
+
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      logAppEvent('donor_hair_submission.photo_picker', 'Upload permission resolved for hair photo slot.', {
+        userId,
+        slotIndex,
+        granted: permission.granted,
+      });
+
       if (!permission.granted) {
         throw new Error('Please allow photo library access to upload hair images.');
       }
@@ -207,7 +326,13 @@ export const useDonorHairSubmission = ({ userId }) => {
         return { success: false, canceled: true };
       }
 
-      const selectedPhoto = buildPhotoRecord(result.assets?.[0], slotIndex);
+      logAppEvent('donor_hair_submission.photo_picker', 'Upload handler received image for hair photo slot.', {
+        userId,
+        slotIndex,
+        hasAsset: Boolean(result.assets?.[0]?.uri),
+      });
+
+      const selectedPhoto = buildPhotoRecord(result.assets?.[0], slotIndex, 'upload');
       if (!selectedPhoto) {
         throw new Error('Unable to read the selected hair images.');
       }
@@ -234,24 +359,54 @@ export const useDonorHairSubmission = ({ userId }) => {
       setSuccessMessage('');
       setIsCapturingImages(true);
 
-      const permission = await ImagePicker.requestCameraPermissionsAsync();
-      if (!permission.granted) {
-        throw new Error('Please allow camera access to take guided hair photos.');
-      }
-
-      const result = await ImagePicker.launchCameraAsync({
-        mediaTypes: IMAGE_MEDIA_TYPES,
-        quality: 1,
-        base64: true,
-        cameraType: ImagePicker.CameraType.back,
+      logAppEvent('donor_hair_submission.photo_camera', 'Capture button pressed for hair photo slot.', {
+        userId,
+        slotIndex,
+        viewKey: hairAnalysisRequiredViews[slotIndex]?.key || null,
+        platform: Platform.OS,
       });
+
+      let result;
+
+      if (Platform.OS === 'web') {
+        logAppEvent('donor_hair_submission.photo_camera', 'Web camera capture handler invoked for hair photo slot.', {
+          userId,
+          slotIndex,
+          viewKey: hairAnalysisRequiredViews[slotIndex]?.key || null,
+        });
+        result = await pickWebImageAsset({ capture: true });
+      } else {
+        const permission = await ImagePicker.requestCameraPermissionsAsync();
+        logAppEvent('donor_hair_submission.photo_camera', 'Camera permission resolved for hair photo slot.', {
+          userId,
+          slotIndex,
+          granted: permission.granted,
+        });
+
+        if (!permission.granted) {
+          throw new Error('Please allow camera access to take guided hair photos.');
+        }
+
+        result = await ImagePicker.launchCameraAsync({
+          mediaTypes: IMAGE_MEDIA_TYPES,
+          quality: 1,
+          base64: true,
+          cameraType: ImagePicker.CameraType.back,
+        });
+      }
 
       setIsCapturingImages(false);
       if (result.canceled) {
         return { success: false, canceled: true };
       }
 
-      const capturedPhoto = buildPhotoRecord(result.assets?.[0], slotIndex);
+      logAppEvent('donor_hair_submission.photo_camera', 'Camera handler received image for hair photo slot.', {
+        userId,
+        slotIndex,
+        hasAsset: Boolean(result.assets?.[0]?.uri),
+      });
+
+      const capturedPhoto = buildPhotoRecord(result.assets?.[0], slotIndex, 'capture');
       if (!capturedPhoto) {
         throw new Error('Unable to read the selected hair images.');
       }
@@ -360,6 +515,14 @@ export const useDonorHairSubmission = ({ userId }) => {
     setError(null);
     setSuccessMessage('');
 
+    logAppEvent('donor_hair_submission.save', 'Hair donation save started from final wizard step.', {
+      userId,
+      photoCount: photos.filter(Boolean).length,
+      hasAnalysis: Boolean(analysis),
+      donationModeValue: options.donationModeValue || '',
+      confirmedValueKeys: Object.keys(confirmedValues || {}),
+    });
+
     const result = await saveHairSubmissionFlow({
       userId,
       photos: photos.filter(Boolean),
@@ -373,10 +536,20 @@ export const useDonorHairSubmission = ({ userId }) => {
     setIsSaving(false);
 
     if (result.error) {
+      logAppEvent('donor_hair_submission.save', 'Hair donation save failed in hook.', {
+        userId,
+        message: result.error,
+      }, 'error');
+
       const mappedError = mapSaveError(result.error);
       setError(mappedError);
       return { success: false, error: mappedError.message };
     }
+
+    logAppEvent('donor_hair_submission.save', 'Hair donation save completed in hook.', {
+      userId,
+      submissionId: result.submission?.submission_id || null,
+    });
 
     setSuccessMessage('Hair submission saved successfully. Your AI result, donor-confirmed details, and guidance recommendations are now linked to the submission.');
     setPhotos(createEmptyPhotoSlots());
