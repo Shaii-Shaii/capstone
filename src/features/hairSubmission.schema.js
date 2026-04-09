@@ -11,7 +11,7 @@ export const hairReviewSchema = z.object({
 });
 
 export const buildHairReviewDefaultValues = (analysis) => ({
-  declaredLength: analysis?.estimated_length ? String(analysis.estimated_length) : '',
+  declaredLength: analysis?.estimated_length != null ? String(analysis.estimated_length) : '',
   declaredTexture: analysis?.detected_texture || '',
   declaredDensity: analysis?.detected_density || '',
   declaredCondition: analysis?.detected_condition || '',

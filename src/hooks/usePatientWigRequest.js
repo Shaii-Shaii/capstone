@@ -5,7 +5,7 @@ import {
   getPatientWigRequestContext,
   savePatientWigRequestFlow,
 } from '../features/wigRequest.service';
-import { createAppError, getErrorMessage, logAppError } from '../utils/appErrors';
+import { createAppError, getErrorMessage, logAppError, logAppEvent } from '../utils/appErrors';
 
 const IMAGE_MEDIA_TYPES = ['images'];
 
@@ -270,6 +270,11 @@ export const usePatientWigRequest = ({ userId }) => {
     }
 
     setPreview(result.preview);
+    logAppEvent('patient_wig_request.preview', 'Wig preview ready for rendering.', {
+      userId,
+      previewKeys: result.preview ? Object.keys(result.preview) : [],
+      renderKeys: ['generated_image_data_url', 'recommended_style_name', 'recommended_style_family', 'summary'],
+    });
     return { success: true, preview: result.preview };
   }, [userId]);
 

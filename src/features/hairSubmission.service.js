@@ -86,6 +86,13 @@ export const saveHairSubmissionFlow = async ({
       analysisKeys: aiAnalysis ? Object.keys(aiAnalysis) : [],
     });
 
+    const normalizedEstimatedLength = aiAnalysis?.estimated_length != null
+      ? Number(aiAnalysis.estimated_length)
+      : null;
+    const normalizedConfidenceScore = aiAnalysis?.confidence_score != null
+      ? Number(aiAnalysis.confidence_score)
+      : null;
+
     const { data: submission, error: submissionError } = await HairSubmissionAPI.createHairSubmission({
       user_id: userId,
       submission_code: buildSubmissionCode(),
@@ -146,14 +153,31 @@ export const saveHairSubmissionFlow = async ({
 
     const { data: screening, error: screeningError } = await HairSubmissionAPI.createAiScreening({
       submission_id: submission.submission_id,
-      estimated_length: aiAnalysis.estimated_length ? Number(aiAnalysis.estimated_length) : null,
+      estimated_length: Number.isFinite(normalizedEstimatedLength) ? normalizedEstimatedLength : null,
       detected_texture: aiAnalysis.detected_texture || null,
       detected_density: aiAnalysis.detected_density || null,
       detected_condition: aiAnalysis.detected_condition || null,
       visible_damage_notes: aiAnalysis.visible_damage_notes || null,
-      confidence_score: aiAnalysis.confidence_score ? Number(aiAnalysis.confidence_score) : null,
+      confidence_score: Number.isFinite(normalizedConfidenceScore) ? normalizedConfidenceScore : null,
       decision: aiAnalysis.decision || null,
       summary: aiAnalysis.summary || null,
+    });
+
+    logAppEvent('hair_submission.save', 'AI screening payload prepared.', {
+      userId,
+      submissionId: submission?.submission_id || null,
+      analysisKeys: aiAnalysis ? Object.keys(aiAnalysis) : [],
+      dbPayloadKeys: [
+        'estimated_length',
+        'detected_texture',
+        'detected_density',
+        'detected_condition',
+        'visible_damage_notes',
+        'confidence_score',
+        'decision',
+        'summary',
+      ],
+      recommendationCount: Array.isArray(aiAnalysis?.recommendations) ? aiAnalysis.recommendations.length : 0,
     });
 
     if (screeningError) {

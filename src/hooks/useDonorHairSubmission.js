@@ -3,6 +3,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { analyzeHairPhotos } from '../features/hairAnalysis.service';
 import { saveHairSubmissionFlow } from '../features/hairSubmission.service';
 import { hairAnalysisRequiredViews } from '../features/hairSubmission.constants';
+import { logAppEvent } from '../utils/appErrors';
 
 const MAX_PHOTO_COUNT = hairAnalysisRequiredViews.length;
 const IMAGE_MEDIA_TYPES = ['images'];
@@ -236,6 +237,21 @@ export const useDonorHairSubmission = ({ userId }) => {
     }
 
     setAnalysis(result.analysis);
+    logAppEvent('donor_hair_submission.analysis', 'Hair analysis ready for rendering.', {
+      userId,
+      analysisKeys: result.analysis ? Object.keys(result.analysis) : [],
+      renderKeys: [
+        'estimated_length',
+        'detected_texture',
+        'detected_density',
+        'detected_condition',
+        'visible_damage_notes',
+        'confidence_score',
+        'decision',
+        'summary',
+        'recommendations',
+      ],
+    });
     return { success: true, analysis: result.analysis };
   };
 

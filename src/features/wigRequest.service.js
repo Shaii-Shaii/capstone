@@ -192,6 +192,20 @@ export const savePatientWigRequestFlow = async ({
       ai_wig_preview_url: preview?.preview_url || preview?.generated_image_data_url || null,
     });
 
+    logAppEvent('wig_request.save', 'Wig specification payload prepared.', {
+      userId,
+      reqId: wigRequest?.req_id || null,
+      previewPayloadKeys: preview ? Object.keys(preview) : [],
+      dbPayloadKeys: [
+        'preferred_color',
+        'preferred_length',
+        'style_preference',
+        'notes',
+        'ai_wig_preview_url',
+      ],
+      renderKey: 'ai_wig_preview_url',
+    });
+
     if (wigSpecificationError) {
       throw new Error(wigSpecificationError.message || 'Unable to save the wig specifications.');
     }

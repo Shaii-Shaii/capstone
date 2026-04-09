@@ -556,7 +556,7 @@ export function DonorHairSubmissionScreen() {
   const primaryPhoto = photos[0]?.uri || null;
   const hasActiveAnalyzerState = Boolean(photos.length || analysis || isAnalyzing || error);
   const showLanding = !hasActiveAnalyzerState;
-  const confidenceLabel = analysis?.confidence_score
+  const confidenceLabel = analysis?.confidence_score != null
     ? `${Math.round(Number(analysis.confidence_score) * 100)}% confidence`
     : 'Confidence unavailable';
 
