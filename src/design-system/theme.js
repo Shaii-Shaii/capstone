@@ -3,6 +3,7 @@ import { spacing } from './spacing';
 import { typography } from './typography';
 import { radius } from './radius';
 import { shadows } from './shadows';
+import donivraLogo from '../assets/images/donivra_logo_no_text.png';
 
 export const theme = {
   colors,
@@ -92,3 +93,250 @@ export const emptyResolvedTheme = {
   fontFamily: theme.typography.fontFamily,
   secondaryFontFamily: theme.typography.fontFamilyDisplay,
 };
+
+export const bundledBrandLogoSource = donivraLogo;
+
+export function resolveBrandLogoUri(resolvedTheme = emptyResolvedTheme) {
+  if (typeof resolvedTheme?.logoIcon !== 'string') return '';
+
+  const normalized = resolvedTheme.logoIcon.trim();
+  if (!normalized) return '';
+
+  return /^(https?:\/\/|file:\/\/|content:\/\/|data:image\/)/i.test(normalized)
+    ? normalized
+    : '';
+}
+
+export function resolveBrandLogoSource(resolvedTheme = emptyResolvedTheme, imageFailed = false) {
+  const logoUri = resolveBrandLogoUri(resolvedTheme);
+  if (!imageFailed && logoUri) {
+    return { uri: logoUri };
+  }
+
+  return bundledBrandLogoSource;
+}
+
+const clampChannel = (value) => Math.max(0, Math.min(255, Math.round(value)));
+const clampAlpha = (value) => Math.max(0, Math.min(1, Number.isFinite(value) ? value : 1));
+
+function parseColorValue(color) {
+  if (!color || typeof color !== 'string') return null;
+
+  const normalized = color.trim();
+
+  if (/^#([0-9a-f]{3}|[0-9a-f]{4})$/i.test(normalized)) {
+    const value = normalized.slice(1);
+    const [r, g, b, a] = value.length === 3 || value.length === 4
+      ? value.split('').map((channel) => channel + channel)
+      : [];
+    return {
+      r: parseInt(r, 16),
+      g: parseInt(g, 16),
+      b: parseInt(b, 16),
+      a: a ? parseInt(a, 16) / 255 : 1,
+    };
+  }
+
+  if (/^#([0-9a-f]{6}|[0-9a-f]{8})$/i.test(normalized)) {
+    const value = normalized.slice(1);
+    return {
+      r: parseInt(value.slice(0, 2), 16),
+      g: parseInt(value.slice(2, 4), 16),
+      b: parseInt(value.slice(4, 6), 16),
+      a: value.length === 8 ? parseInt(value.slice(6, 8), 16) / 255 : 1,
+    };
+  }
+
+  const rgbMatch = normalized.match(/^rgba?\(([^)]+)\)$/i);
+  if (!rgbMatch) return null;
+
+  const parts = rgbMatch[1].split(',').map((part) => part.trim());
+  if (parts.length < 3) return null;
+
+  return {
+    r: clampChannel(Number(parts[0])),
+    g: clampChannel(Number(parts[1])),
+    b: clampChannel(Number(parts[2])),
+    a: parts.length > 3 ? clampAlpha(Number(parts[3])) : 1,
+  };
+}
+
+function toColorString(value) {
+  if (!value) return '';
+  const r = clampChannel(value.r);
+  const g = clampChannel(value.g);
+  const b = clampChannel(value.b);
+  const a = clampAlpha(value.a);
+  return a >= 0.999 ? `rgb(${r}, ${g}, ${b})` : `rgba(${r}, ${g}, ${b}, ${Number(a.toFixed(3))})`;
+}
+
+function mixColors(baseColor, overlayColor, amount = 0.5) {
+  const base = parseColorValue(baseColor);
+  const overlay = parseColorValue(overlayColor);
+
+  if (!base && !overlay) return '';
+  if (!base) return toColorString(overlay);
+  if (!overlay) return toColorString(base);
+
+  const weight = clampAlpha(amount);
+  return toColorString({
+    r: base.r + (overlay.r - base.r) * weight,
+    g: base.g + (overlay.g - base.g) * weight,
+    b: base.b + (overlay.b - base.b) * weight,
+    a: base.a + (overlay.a - base.a) * weight,
+  });
+}
+
+function relativeLuminance(color) {
+  const parsed = parseColorValue(color);
+  if (!parsed) return 0;
+
+  const channels = [parsed.r, parsed.g, parsed.b].map((channel) => {
+    const normalized = channel / 255;
+    return normalized <= 0.03928
+      ? normalized / 12.92
+      : ((normalized + 0.055) / 1.055) ** 2.4;
+  });
+
+  return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+}
+
+function contrastRatio(backgroundColor, foregroundColor) {
+  const background = relativeLuminance(backgroundColor);
+  const foreground = relativeLuminance(foregroundColor);
+  const lighter = Math.max(background, foreground);
+  const darker = Math.min(background, foreground);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function pickReadableColor(backgroundColor, candidates = [], fallback = theme.colors.textPrimary) {
+  const background = parseColorValue(backgroundColor);
+  if (!background) {
+    return candidates.find((candidate) => parseColorValue(candidate)) || fallback;
+  }
+
+  return candidates
+    .filter((candidate) => parseColorValue(candidate))
+    .sort((left, right) => contrastRatio(backgroundColor, right) - contrastRatio(backgroundColor, left))[0]
+    || fallback;
+}
+
+export function resolveThemeRoles(resolvedTheme = emptyResolvedTheme) {
+  const background = resolvedTheme?.backgroundColor || theme.colors.backgroundCanvas;
+  const primary = resolvedTheme?.primaryColor || '';
+  const secondary = resolvedTheme?.secondaryColor || '';
+  const tertiary = resolvedTheme?.tertiaryColor || '';
+  const heading = resolvedTheme?.primaryTextColor || theme.colors.textPrimary;
+  const body = resolvedTheme?.secondaryTextColor || theme.colors.textSecondary;
+  const meta = resolvedTheme?.tertiaryTextColor || theme.colors.textMuted;
+  const supportSeed = secondary || tertiary || body || heading;
+  const accentSeed = tertiary || secondary || meta || body || heading;
+  const cardSeed = supportSeed || heading;
+
+  const pageBackground = background;
+  const defaultCardBackground = mixColors(pageBackground, cardSeed, secondary ? 0.06 : 0.04) || pageBackground;
+  const defaultCardBorder = mixColors(pageBackground, cardSeed, secondary ? 0.18 : 0.1) || theme.colors.borderSubtle;
+  const supportCardBackground = mixColors(pageBackground, supportSeed, secondary ? 0.12 : 0.08) || defaultCardBackground;
+  const supportCardBorder = mixColors(pageBackground, supportSeed, secondary ? 0.28 : 0.16) || defaultCardBorder;
+  const accentCardBackground = mixColors(pageBackground, accentSeed, tertiary ? 0.14 : 0.1) || supportCardBackground;
+  const accentCardBorder = mixColors(pageBackground, accentSeed, tertiary ? 0.3 : 0.2) || supportCardBorder;
+  const heroBackground = primary
+    ? mixColors(pageBackground, primary, 0.18) || primary
+    : supportCardBackground;
+  const heroBorder = primary
+    ? mixColors(pageBackground, primary, 0.3) || supportCardBorder
+    : supportCardBorder;
+  const primaryActionBackground = primary || heading;
+  const primaryActionText = pickReadableColor(
+    primaryActionBackground,
+    [pageBackground, heading, body, theme.colors.textInverse],
+    theme.colors.textInverse
+  );
+  const secondaryActionBackground = supportCardBackground;
+  const secondaryActionBorder = supportCardBorder;
+  const secondaryActionText = pickReadableColor(
+    secondaryActionBackground,
+    [heading, body, meta, pageBackground],
+    heading
+  );
+  const tertiaryAccentBackground = accentCardBackground;
+  const tertiaryAccentText = pickReadableColor(
+    tertiaryAccentBackground,
+    [meta, body, heading, pageBackground],
+    meta
+  );
+  const iconPrimarySurface = primary
+    ? mixColors(pageBackground, primary, 0.16) || supportCardBackground
+    : supportCardBackground;
+  const iconSupportSurface = supportCardBackground;
+  const iconAccentSurface = accentCardBackground;
+  const navSurface = mixColors(pageBackground, supportSeed, secondary ? 0.1 : 0.06) || defaultCardBackground;
+  const navBorder = mixColors(pageBackground, supportSeed, secondary ? 0.22 : 0.12) || defaultCardBorder;
+  const headerUtilityBackground = mixColors(heroBackground, pageBackground, 0.34) || supportCardBackground;
+  const headerUtilityText = pickReadableColor(
+    headerUtilityBackground,
+    [heading, body, meta, pageBackground, theme.colors.textInverse],
+    heading
+  );
+  const heroHeadingText = pickReadableColor(
+    heroBackground,
+    [heading, pageBackground, body, theme.colors.textInverse],
+    heading
+  );
+  const heroBodyText = pickReadableColor(
+    heroBackground,
+    [body, meta, pageBackground, theme.colors.textInverse],
+    body
+  );
+  const heroMetaText = pickReadableColor(
+    heroBackground,
+    [meta, body, pageBackground, theme.colors.textInverse],
+    meta
+  );
+
+  return {
+    pageBackground,
+    defaultCardBackground,
+    defaultCardBorder,
+    supportCardBackground,
+    supportCardBorder,
+    accentCardBackground,
+    accentCardBorder,
+    heroBackground,
+    heroBorder,
+    primaryActionBackground,
+    primaryActionText,
+    secondaryActionBackground,
+    secondaryActionBorder,
+    secondaryActionText,
+    tertiaryAccentBackground,
+    tertiaryAccentText,
+    headingText: heading,
+    bodyText: body,
+    metaText: meta,
+    heroHeadingText,
+    heroBodyText,
+    heroMetaText,
+    navSurface,
+    navBorder,
+    navActiveBackground: primaryActionBackground,
+    navActiveText: primaryActionText,
+    navInactiveText: meta || body,
+    badgeBackground: tertiaryAccentBackground,
+    badgeText: tertiaryAccentText,
+    badgeStrongBackground: supportCardBackground,
+    badgeStrongText: secondaryActionText,
+    iconPrimarySurface,
+    iconSupportSurface,
+    iconAccentSurface,
+    iconPrimaryColor: pickReadableColor(iconPrimarySurface, [primary, heading, body, meta], heading),
+    iconSupportColor: pickReadableColor(iconSupportSurface, [heading, body, meta, secondary], heading),
+    iconAccentColor: pickReadableColor(iconAccentSurface, [meta, body, heading, tertiary], meta),
+    headerUtilityBackground,
+    headerUtilityText,
+    headerSearchBackground: defaultCardBackground,
+    headerSearchText: body,
+    headerSearchAccentBackground: primaryActionBackground,
+    headerSearchAccentText: primaryActionText,
+  };
+}

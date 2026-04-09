@@ -1,8 +1,9 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Image, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Controller, useForm, useWatch } from 'react-hook-form';
 import { useRouter } from 'expo-router';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import { DashboardLayout } from './DashboardLayout';
 import { DashboardHeader } from '../ui/DashboardHeader';
 import { AppCard } from '../ui/AppCard';
@@ -10,7 +11,7 @@ import { AppButton } from '../ui/AppButton';
 import { AppIcon } from '../ui/AppIcon';
 import { AppInput } from '../ui/AppInput';
 import { StatusBanner } from '../ui/StatusBanner';
-import { theme } from '../../design-system/theme';
+import { resolveBrandLogoSource, theme } from '../../design-system/theme';
 import { donorDashboardNavItems } from '../../constants/dashboard';
 import { useAuth } from '../../providers/AuthProvider';
 import { useNotifications } from '../../hooks/useNotifications';
@@ -27,7 +28,7 @@ import {
   hairAnalyzerQuestionChoices,
   hairDonationModeOptions,
 } from '../../features/hairSubmission.constants';
-import donivraLogo from '../../assets/images/donivra_logo_no_text.png';
+import { logAppEvent } from '../../utils/appErrors';
 
 const DONATION_DROP_OFF_ADDRESS = 'Unit 133 G/F Makati Shangri-La Hotel, Ayala Ave, Makati City, Metro Manila';
 const PHOTO_COMPLIANCE_ITEMS = [
@@ -277,6 +278,72 @@ function PhotoSlotCard({ view, photo, onCapture, onUpload, onRemove, isCapturing
   );
 }
 
+function PhotoCaptureModal({
+  visible,
+  view,
+  hasCameraPermission,
+  cameraRef,
+  isCapturing,
+  errorMessage,
+  onClose,
+  onCapture,
+  onUpload,
+  onRequestPermission,
+}) {
+  if (!visible || !view) return null;
+
+  return (
+    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
+      <View style={styles.captureModalOverlay}>
+        <Pressable style={styles.captureModalBackdrop} onPress={onClose} />
+
+        <AppCard variant="elevated" radius="xl" padding="lg" style={styles.captureModalCard}>
+          <View style={styles.captureModalHeader}>
+            <View>
+              <Text style={styles.stepTitle}>{view.label}</Text>
+              <Text style={styles.stepDescription}>Use the live camera to capture this required donation view.</Text>
+            </View>
+            <Pressable onPress={onClose} style={styles.captureModalClose}>
+              <AppIcon name="close" state="muted" />
+            </Pressable>
+          </View>
+
+          <View style={styles.captureModalStage}>
+            {hasCameraPermission ? (
+              <CameraView
+                ref={cameraRef}
+                style={styles.captureModalPreview}
+                facing="back"
+                mode="picture"
+                animateShutter
+              />
+            ) : (
+              <View style={styles.captureModalPlaceholder}>
+                <AppIcon name="camera" state="active" size="xl" />
+                <Text style={styles.captureModalPlaceholderTitle}>Camera access needed</Text>
+                <Text style={styles.captureModalPlaceholderBody}>
+                  Allow camera access to capture this hair photo. You can still upload an image if needed.
+                </Text>
+              </View>
+            )}
+          </View>
+
+          {errorMessage ? <Text style={styles.questionError}>{errorMessage}</Text> : null}
+
+          <View style={styles.captureModalActions}>
+            <AppButton title="Upload Instead" variant="outline" fullWidth={false} onPress={onUpload} />
+            {hasCameraPermission ? (
+              <AppButton title={isCapturing ? 'Capturing...' : 'Capture Photo'} fullWidth={false} onPress={onCapture} loading={isCapturing} />
+            ) : (
+              <AppButton title="Allow Camera" fullWidth={false} onPress={onRequestPermission} />
+            )}
+          </View>
+        </AppCard>
+      </View>
+    </Modal>
+  );
+}
+
 function ResultMetricCard({ label, value }) {
   return (
     <View style={styles.metricCard}>
@@ -385,11 +452,18 @@ const QUESTION_STEPS = [
 
 export function DonorHairSubmissionScreen() {
   const router = useRouter();
+  const cameraRef = useRef(null);
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [stepIndex, setStepIndex] = useState(0);
   const [questionIndex, setQuestionIndex] = useState(0);
   const [photoIndex, setPhotoIndex] = useState(0);
   const [selectedDonationMode, setSelectedDonationMode] = useState('');
-  const { user, profile } = useAuth();
+  const [isPhotoCaptureOpen, setIsPhotoCaptureOpen] = useState(false);
+  const [activeCaptureSlotIndex, setActiveCaptureSlotIndex] = useState(null);
+  const [isCapturingPhoto, setIsCapturingPhoto] = useState(false);
+  const [cameraModalError, setCameraModalError] = useState('');
+  const [brandLogoFailed, setBrandLogoFailed] = useState(false);
+  const { user, profile, resolvedTheme } = useAuth();
   const { unreadCount } = useNotifications({ role: 'donor', userId: user?.id, databaseUserId: profile?.user_id });
   const {
     photos,
@@ -411,6 +485,7 @@ export function DonorHairSubmissionScreen() {
     progressLabel,
     pickPhotoForSlot,
     capturePhotoForSlot,
+    savePhotoAssetForSlot,
     removePhoto,
     analyzePhotos,
     submitSubmission,
@@ -447,6 +522,13 @@ export function DonorHairSubmissionScreen() {
   const currentQuestion = visibleQuestions[questionIndex] || visibleQuestions[0];
   const currentView = requiredViews[photoIndex];
   const currentPhoto = photos[photoIndex];
+  const activeCaptureView = activeCaptureSlotIndex != null ? requiredViews[activeCaptureSlotIndex] : null;
+  const hasCameraPermission = Boolean(cameraPermission?.granted);
+  const brandLogoSource = resolveBrandLogoSource(resolvedTheme, brandLogoFailed);
+
+  useEffect(() => {
+    setBrandLogoFailed(false);
+  }, [resolvedTheme?.logoIcon]);
 
   const eligibility = useMemo(
     () => buildEligibilitySummary({
@@ -587,6 +669,120 @@ export function DonorHairSubmissionScreen() {
   useEffect(() => {
     reviewForm.reset(buildHairReviewDefaultValues(analysis, questionnaireValues));
   }, [analysis, questionnaireValues, reviewForm]);
+
+  const closePhotoCaptureModal = () => {
+    setIsPhotoCaptureOpen(false);
+    setActiveCaptureSlotIndex(null);
+    setCameraModalError('');
+  };
+
+  const openPhotoCaptureModal = async (slotIndex) => {
+    setActiveCaptureSlotIndex(slotIndex);
+    setIsPhotoCaptureOpen(true);
+    setCameraModalError('');
+
+    logAppEvent('donor_hair_submission.photo_camera', 'Opening camera capture flow for donation photo slot.', {
+      userId: user?.id || null,
+      slotIndex,
+      viewKey: requiredViews[slotIndex]?.key || null,
+      platform: Platform.OS,
+      hasCameraPermission,
+    });
+
+    if (!hasCameraPermission) {
+      const permissionResult = await requestCameraPermission();
+      logAppEvent('donor_hair_submission.photo_camera', 'Camera permission requested from donation photo modal.', {
+        userId: user?.id || null,
+        slotIndex,
+        granted: permissionResult?.granted ?? false,
+        canAskAgain: permissionResult?.canAskAgain ?? null,
+      });
+
+      if (!permissionResult?.granted) {
+        setCameraModalError(permissionResult?.canAskAgain === false
+          ? 'Camera access is blocked for this browser or device. Enable it in settings, or use Upload instead.'
+          : 'Camera access was not granted. Allow camera access to capture this photo, or use Upload instead.');
+      }
+    }
+  };
+
+  const handleCapturePhoto = async () => {
+    if (activeCaptureSlotIndex == null) return;
+
+    logAppEvent('donor_hair_submission.photo_camera', 'Camera capture requested from donation photo modal.', {
+      userId: user?.id || null,
+      slotIndex: activeCaptureSlotIndex,
+      viewKey: requiredViews[activeCaptureSlotIndex]?.key || null,
+      platform: Platform.OS,
+      hasCameraPermission,
+    });
+
+    if (!hasCameraPermission) {
+      const permissionResult = await requestCameraPermission();
+      logAppEvent('donor_hair_submission.photo_camera', 'Camera permission re-requested before capture.', {
+        userId: user?.id || null,
+        slotIndex: activeCaptureSlotIndex,
+        granted: permissionResult?.granted ?? false,
+        canAskAgain: permissionResult?.canAskAgain ?? null,
+      });
+
+      if (!permissionResult?.granted) {
+        setCameraModalError(permissionResult?.canAskAgain === false
+          ? 'Camera access is blocked for this browser or device. Enable it in settings, or use Upload instead.'
+          : 'Camera access was not granted. Allow camera access to capture this photo, or use Upload instead.');
+        return;
+      }
+    }
+
+    if (!cameraRef.current || isCapturingPhoto) {
+      setCameraModalError('The camera is still starting. Please wait a moment and try again.');
+      return;
+    }
+
+    setIsCapturingPhoto(true);
+    setCameraModalError('');
+
+    try {
+      const photo = await cameraRef.current.takePictureAsync({
+        quality: 0.8,
+        base64: true,
+      });
+
+      logAppEvent('donor_hair_submission.photo_camera', 'Camera photo captured from donation photo modal.', {
+        userId: user?.id || null,
+        slotIndex: activeCaptureSlotIndex,
+        viewKey: requiredViews[activeCaptureSlotIndex]?.key || null,
+        hasUri: Boolean(photo?.uri),
+      });
+
+      const saveResult = savePhotoAssetForSlot(activeCaptureSlotIndex, photo, 'capture');
+      if (!saveResult?.success) {
+        setCameraModalError(saveResult?.error || 'The captured photo could not be saved to this slot.');
+        return;
+      }
+
+      closePhotoCaptureModal();
+    } catch (captureError) {
+      logAppEvent('donor_hair_submission.photo_camera', 'Camera capture failed from donation photo modal.', {
+        userId: user?.id || null,
+        slotIndex: activeCaptureSlotIndex,
+        viewKey: requiredViews[activeCaptureSlotIndex]?.key || null,
+        message: captureError?.message || 'Unknown camera capture error.',
+      }, 'error');
+
+      setCameraModalError('The camera could not capture a photo right now. Please try again, or use Upload instead.');
+    } finally {
+      setIsCapturingPhoto(false);
+    }
+  };
+
+  const handleUploadFromCameraModal = async () => {
+    if (activeCaptureSlotIndex == null) return;
+
+    const uploadSlotIndex = activeCaptureSlotIndex;
+    closePhotoCaptureModal();
+    await pickPhotoForSlot(uploadSlotIndex);
+  };
 
   const handleNext = async () => {
     if (stepIndex <= 4) {
@@ -786,7 +982,14 @@ export function DonorHairSubmissionScreen() {
             <PhotoSlotCard
               view={currentView}
               photo={currentPhoto}
-              onCapture={() => capturePhotoForSlot(photoIndex)}
+              onCapture={() => {
+                if (Platform.OS === 'web') {
+                  openPhotoCaptureModal(photoIndex);
+                  return;
+                }
+
+                capturePhotoForSlot(photoIndex);
+              }}
               onUpload={() => pickPhotoForSlot(photoIndex)}
               onRemove={() => removePhoto(photoIndex)}
               isCapturing={isCapturingImages}
@@ -910,7 +1113,12 @@ export function DonorHairSubmissionScreen() {
       <View style={styles.wizardStage}>
         <View style={styles.brandMarkWrap}>
           <View style={styles.brandMarkFrame}>
-            <Image source={donivraLogo} style={styles.brandMarkImage} resizeMode="contain" />
+            <Image
+              source={brandLogoSource}
+              style={styles.brandMarkImage}
+              resizeMode="contain"
+              onError={() => setBrandLogoFailed(true)}
+            />
           </View>
         </View>
 
@@ -934,6 +1142,35 @@ export function DonorHairSubmissionScreen() {
           />
         </View>
       </View>
+
+      <PhotoCaptureModal
+        visible={isPhotoCaptureOpen}
+        view={activeCaptureView}
+        hasCameraPermission={hasCameraPermission}
+        cameraRef={cameraRef}
+        isCapturing={isCapturingPhoto}
+        errorMessage={cameraModalError}
+        onClose={closePhotoCaptureModal}
+        onCapture={handleCapturePhoto}
+        onUpload={handleUploadFromCameraModal}
+        onRequestPermission={async () => {
+          const permissionResult = await requestCameraPermission();
+          logAppEvent('donor_hair_submission.photo_camera', 'Camera permission manually requested from donation photo modal.', {
+            userId: user?.id || null,
+            slotIndex: activeCaptureSlotIndex,
+            granted: permissionResult?.granted ?? false,
+            canAskAgain: permissionResult?.canAskAgain ?? null,
+          });
+
+          if (!permissionResult?.granted) {
+            setCameraModalError(permissionResult?.canAskAgain === false
+              ? 'Camera access is blocked for this browser or device. Enable it in settings, or use Upload instead.'
+              : 'Camera access was not granted. Allow camera access to capture this photo, or use Upload instead.');
+          } else {
+            setCameraModalError('');
+          }
+        }}
+      />
     </DashboardLayout>
   );
 }
@@ -1327,5 +1564,69 @@ const styles = StyleSheet.create({
     gap: theme.spacing.sm,
     marginTop: theme.spacing.md,
     marginBottom: theme.spacing.sm,
+  },
+  captureModalOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    padding: theme.spacing.lg,
+    backgroundColor: theme.colors.overlay,
+  },
+  captureModalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  captureModalCard: {
+    width: '100%',
+    maxWidth: 520,
+    alignSelf: 'center',
+  },
+  captureModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: theme.spacing.sm,
+  },
+  captureModalClose: {
+    width: 36,
+    height: 36,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.surfaceSoft,
+  },
+  captureModalStage: {
+    marginTop: theme.spacing.sm,
+    marginBottom: theme.spacing.md,
+    borderRadius: theme.radius.xl,
+    overflow: 'hidden',
+    backgroundColor: theme.colors.backgroundDark,
+    minHeight: 320,
+  },
+  captureModalPreview: {
+    width: '100%',
+    height: 320,
+  },
+  captureModalPlaceholder: {
+    minHeight: 320,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.xl,
+  },
+  captureModalPlaceholderTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    color: theme.colors.textPrimary,
+  },
+  captureModalPlaceholderBody: {
+    textAlign: 'center',
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    color: theme.colors.textSecondary,
+  },
+  captureModalActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+    marginTop: theme.spacing.sm,
   },
 });

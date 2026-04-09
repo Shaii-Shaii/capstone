@@ -70,6 +70,8 @@ const pickWebImageAsset = async ({ capture = false } = {}) => {
             base64,
             mimeType: file.type || 'image/jpeg',
             assetId: file.name || `${Date.now()}`,
+            file,
+            fileName: file.name || '',
             width: undefined,
             height: undefined,
           }],
@@ -200,6 +202,8 @@ const buildPhotoRecord = (asset, slotIndex, sourceType = 'upload') => {
     dataUrl: `data:${asset.mimeType || 'image/jpeg'};base64,${asset.base64}`,
     viewKey: view?.key || `view_${slotIndex + 1}`,
     viewLabel: view?.label || `View ${slotIndex + 1}`,
+    file: asset.file || null,
+    fileName: asset.fileName || asset.file?.name || '',
     sourceType,
   };
 };
@@ -291,6 +295,26 @@ export const useDonorHairSubmission = ({ userId }) => {
     setSuccessMessage('');
   };
 
+  const savePhotoAssetForSlot = (slotIndex, asset, sourceType = 'upload') => {
+    const normalizedPhoto = buildPhotoRecord(asset, slotIndex, sourceType);
+
+    if (!normalizedPhoto) {
+      const mappedError = createErrorState('Photos Could Not Be Read', 'Please choose a clear image file again. The selected photo could not be processed.');
+      setError(mappedError);
+      return { success: false, error: mappedError.message };
+    }
+
+    setPhotoAtSlot(slotIndex, normalizedPhoto);
+    logAppEvent('donor_hair_submission.photo_slot', 'Hair photo saved for slot.', {
+      userId,
+      slotIndex,
+      viewKey: normalizedPhoto.viewKey,
+      sourceType,
+    });
+
+    return { success: true, photo: normalizedPhoto };
+  };
+
   const pickPhotoForSlot = async (slotIndex) => {
     try {
       setError(null);
@@ -332,19 +356,12 @@ export const useDonorHairSubmission = ({ userId }) => {
         hasAsset: Boolean(result.assets?.[0]?.uri),
       });
 
-      const selectedPhoto = buildPhotoRecord(result.assets?.[0], slotIndex, 'upload');
-      if (!selectedPhoto) {
-        throw new Error('Unable to read the selected hair images.');
+      const saveResult = savePhotoAssetForSlot(slotIndex, result.assets?.[0], 'upload');
+      if (!saveResult.success) {
+        throw new Error(saveResult.error || 'Unable to read the selected hair images.');
       }
 
-      setPhotoAtSlot(slotIndex, selectedPhoto);
-      logAppEvent('donor_hair_submission.photo_slot', 'Hair photo uploaded for slot.', {
-        userId,
-        slotIndex,
-        viewKey: selectedPhoto.viewKey,
-      });
-
-      return { success: true, photo: selectedPhoto };
+      return saveResult;
     } catch (pickedError) {
       setIsPickingImages(false);
       const mappedError = mapImagePickerError(pickedError.message);
@@ -406,19 +423,12 @@ export const useDonorHairSubmission = ({ userId }) => {
         hasAsset: Boolean(result.assets?.[0]?.uri),
       });
 
-      const capturedPhoto = buildPhotoRecord(result.assets?.[0], slotIndex, 'capture');
-      if (!capturedPhoto) {
-        throw new Error('Unable to read the selected hair images.');
+      const saveResult = savePhotoAssetForSlot(slotIndex, result.assets?.[0], 'capture');
+      if (!saveResult.success) {
+        throw new Error(saveResult.error || 'Unable to read the selected hair images.');
       }
 
-      setPhotoAtSlot(slotIndex, capturedPhoto);
-      logAppEvent('donor_hair_submission.photo_slot', 'Hair photo captured for slot.', {
-        userId,
-        slotIndex,
-        viewKey: capturedPhoto.viewKey,
-      });
-
-      return { success: true, photo: capturedPhoto };
+      return saveResult;
     } catch (captureError) {
       setIsCapturingImages(false);
       const mappedError = mapImagePickerError(captureError.message);
@@ -587,6 +597,7 @@ export const useDonorHairSubmission = ({ userId }) => {
     progressLabel,
     pickPhotoForSlot,
     capturePhotoForSlot,
+    savePhotoAssetForSlot,
     removePhoto,
     analyzePhotos,
     submitSubmission,

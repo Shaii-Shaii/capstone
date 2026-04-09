@@ -14,21 +14,51 @@ import { logAppEvent, writeAuditLog } from '../utils/appErrors';
 
 const buildSubmissionCode = () => `HS-${Date.now().toString(36).toUpperCase()}`;
 
-const getFileExtension = (mimeType = 'image/jpeg') => {
-  if (mimeType.includes('png')) return 'png';
-  if (mimeType.includes('webp')) return 'webp';
+const getFileExtension = (mimeType = 'image/jpeg', fileName = '') => {
+  const normalizedMimeType = String(mimeType || '').toLowerCase();
+  const normalizedFileName = String(fileName || '').trim().toLowerCase();
+
+  if (normalizedMimeType.includes('png') || normalizedFileName.endsWith('.png')) return 'png';
+  if (normalizedMimeType.includes('webp') || normalizedFileName.endsWith('.webp')) return 'webp';
   return 'jpg';
 };
 
 const buildUploadSourceUri = (photo) => photo?.dataUrl || photo?.uri || '';
+
+const getPhotoUploadPayload = async (photo) => {
+  const contentType = photo?.mimeType || photo?.file?.type || 'image/jpeg';
+  const fileName = photo?.fileName || photo?.file?.name || `hair-photo.${getFileExtension(contentType)}`;
+
+  if (photo?.file && typeof photo.file.arrayBuffer === 'function') {
+    return {
+      fileBody: await photo.file.arrayBuffer(),
+      contentType,
+      fileName,
+    };
+  }
+
+  const uploadSourceUri = buildUploadSourceUri(photo);
+  if (!uploadSourceUri) {
+    throw new Error('One of the required hair photos is missing its upload source.');
+  }
+
+  const fileResponse = await fetch(uploadSourceUri);
+  if (!fileResponse.ok) {
+    throw new Error('Failed to read one of the required hair photos before upload.');
+  }
+
+  return {
+    fileBody: await fileResponse.arrayBuffer(),
+    contentType,
+    fileName,
+  };
+};
 
 const uploadSelectedImages = async ({ userId, submissionId, detailId, photos }) => {
   const uploadedRows = [];
 
   for (let index = 0; index < photos.length; index += 1) {
     const photo = photos[index];
-    const uploadSourceUri = buildUploadSourceUri(photo);
-
     logAppEvent('hair_submission.save', 'Preparing hair submission photo upload.', {
       userId,
       submissionId,
@@ -36,22 +66,18 @@ const uploadSelectedImages = async ({ userId, submissionId, detailId, photos }) 
       index,
       viewKey: photo?.viewKey || null,
       sourceType: photo?.sourceType || null,
+      usesFileObject: Boolean(photo?.file && typeof photo.file.arrayBuffer === 'function'),
       usesDataUrl: Boolean(photo?.dataUrl),
       hasUri: Boolean(photo?.uri),
     });
 
-    if (!uploadSourceUri) {
-      throw new Error('One of the required hair photos is missing its upload source.');
-    }
-
-    const fileResponse = await fetch(uploadSourceUri);
-    const fileBody = await fileResponse.arrayBuffer();
-    const extension = getFileExtension(photo.mimeType);
+    const uploadPayload = await getPhotoUploadPayload(photo);
+    const extension = getFileExtension(uploadPayload.contentType, uploadPayload.fileName);
     const filePath = `${userId}/${submissionId}/${detailId}-${photo.viewKey || `view-${index + 1}`}.${extension}`;
     const uploadResult = await HairSubmissionAPI.uploadHairSubmissionImage({
       path: filePath,
-      fileBody,
-      contentType: photo.mimeType || 'image/jpeg',
+      fileBody: uploadPayload.fileBody,
+      contentType: uploadPayload.contentType,
       bucket: hairSubmissionStorageBucket,
     });
 
