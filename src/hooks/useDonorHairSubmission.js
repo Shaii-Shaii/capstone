@@ -174,7 +174,8 @@ const mapSaveError = (message = '') => {
 
   if (normalized.includes('failed to upload one of the selected photos')
     || normalized.includes('uploaded image references')
-    || normalized.includes('missing its upload source')) {
+    || normalized.includes('missing its upload source')
+    || normalized.includes('failed to read one of the required hair photos before upload')) {
     return createErrorState('Photo Save Failed', 'One of the required hair photos could not be attached to the submission. Please retake or upload that image again and try saving.');
   }
 

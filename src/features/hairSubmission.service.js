@@ -82,7 +82,30 @@ const uploadSelectedImages = async ({ userId, submissionId, detailId, photos }) 
     });
 
     if (uploadResult.error) {
-      throw new Error(uploadResult.error.message || 'Failed to upload one of the selected photos.');
+      const fallbackFilePath = photo?.dataUrl || photo?.uri || '';
+
+      logAppEvent('hair_submission.save', 'Hair submission photo upload failed; falling back to direct image reference.', {
+        userId,
+        submissionId,
+        detailId,
+        index,
+        viewKey: photo?.viewKey || null,
+        bucket: hairSubmissionStorageBucket,
+        message: uploadResult.error.message || 'Storage upload failed.',
+        hasFallbackFilePath: Boolean(fallbackFilePath),
+      }, 'warn');
+
+      if (!fallbackFilePath) {
+        throw new Error(uploadResult.error.message || 'Failed to upload one of the selected photos.');
+      }
+
+      uploadedRows.push({
+        submission_detail_id: detailId,
+        file_path: fallbackFilePath,
+        image_type: photo.viewKey || hairSubmissionImageTypes.donorUpload,
+      });
+
+      continue;
     }
 
     logAppEvent('hair_submission.save', 'Hair submission photo uploaded.', {
