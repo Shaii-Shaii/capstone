@@ -3,6 +3,9 @@ import { hairAnalysisFunctionName } from './hairSubmission.constants';
 import { normalizeHairAnalyzerAnswers } from './hairSubmission.schema';
 import { getErrorMessage, logAppError, logAppEvent } from '../utils/appErrors';
 
+const WEB_ANALYSIS_IMAGE_MAX_SIZE = 1280;
+const WEB_ANALYSIS_IMAGE_QUALITY = 0.72;
+
 const normalizeRecommendations = (source = []) => (
   source
     .map((item, index) => {
@@ -54,6 +57,68 @@ const hasStructuredAnalysisContent = (analysis) => Boolean(
   || (Array.isArray(analysis?.recommendations) && analysis.recommendations.length)
 );
 
+const optimizeWebImageForAnalysis = async (image) => {
+  if (typeof window === 'undefined' || typeof document === 'undefined') {
+    return image;
+  }
+
+  if (typeof image?.dataUrl !== 'string' || !image.dataUrl.startsWith('data:')) {
+    return image;
+  }
+
+  const optimizedAsset = await new Promise((resolve, reject) => {
+    const previewImage = new Image();
+    previewImage.onload = () => {
+      try {
+        const width = Number(previewImage.naturalWidth || previewImage.width || 0);
+        const height = Number(previewImage.naturalHeight || previewImage.height || 0);
+
+        if (!width || !height) {
+          resolve(image);
+          return;
+        }
+
+        const scale = Math.min(1, WEB_ANALYSIS_IMAGE_MAX_SIZE / Math.max(width, height));
+        const targetWidth = Math.max(1, Math.round(width * scale));
+        const targetHeight = Math.max(1, Math.round(height * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = targetWidth;
+        canvas.height = targetHeight;
+
+        const context = canvas.getContext('2d');
+        if (!context) {
+          resolve(image);
+          return;
+        }
+
+        context.drawImage(previewImage, 0, 0, targetWidth, targetHeight);
+        const optimizedDataUrl = canvas.toDataURL('image/jpeg', WEB_ANALYSIS_IMAGE_QUALITY);
+        const [, optimizedBase64 = ''] = optimizedDataUrl.split(',');
+
+        resolve({
+          ...image,
+          uri: optimizedDataUrl,
+          dataUrl: optimizedDataUrl,
+          base64: optimizedBase64,
+          mimeType: 'image/jpeg',
+          width: targetWidth,
+          height: targetHeight,
+        });
+      } catch (error) {
+        reject(error);
+      }
+    };
+    previewImage.onerror = () => reject(new Error('The uploaded hair photo could not be prepared for analysis.'));
+    previewImage.src = image.dataUrl;
+  });
+
+  return optimizedAsset;
+};
+
+const prepareImagesForAnalysis = async (images = []) => (
+  await Promise.all((images || []).map((image) => optimizeWebImageForAnalysis(image)))
+);
+
 const resolveFunctionErrorMessage = async (error) => {
   const response = error?.context;
 
@@ -97,7 +162,8 @@ export const analyzeHairPhotos = async ({
       throw new Error('Please upload at least one hair photo before analysis.');
     }
 
-    const invalidImages = images.filter((image) => !image?.dataUrl || !image?.mimeType);
+    const preparedImages = await prepareImagesForAnalysis(images);
+    const invalidImages = preparedImages.filter((image) => !image?.dataUrl || !image?.mimeType);
     if (invalidImages.length) {
       throw new Error('One or more uploaded photos could not be read. Please upload or retake the unclear image again.');
     }
@@ -117,7 +183,7 @@ export const analyzeHairPhotos = async ({
       compliance_context: {
         acknowledged: Boolean(complianceContext?.acknowledged),
       },
-      images: images.map((image) => ({
+      images: preparedImages.map((image) => ({
         mimeType: image.mimeType,
         dataUrl: image.dataUrl,
         viewKey: image.viewKey,
@@ -157,6 +223,7 @@ export const analyzeHairPhotos = async ({
       questionKeys: Object.keys(payload.questionnaire_answers || {}),
       imageCount: payload.images.length,
       imageViews: payload.images.map((image) => image.viewLabel || image.viewKey).filter(Boolean),
+      usesWebOptimizedImages: preparedImages.some((image, index) => image?.dataUrl !== images?.[index]?.dataUrl),
     });
 
     const functionResult = await invokeEdgeFunction(hairAnalysisFunctionName, {
@@ -225,6 +292,10 @@ export const analyzeHairPhotos = async ({
             : technicalMessage.includes('requested function was not found') || technicalMessage.includes('not_found')
               ? 'Hair analysis is still being connected on the server. Please try again in a moment.'
             : technicalMessage.includes('required hair views') || technicalMessage.includes('please add these required hair views')
+              ? resolvedMessage
+            : technicalMessage.includes('too large for analysis')
+              ? resolvedMessage
+            : technicalMessage.includes('could not be processed for ai analysis')
               ? resolvedMessage
             : technicalMessage.includes('front view photo') || technicalMessage.includes('back view photo') || technicalMessage.includes('hair ends close-up') || technicalMessage.includes('side view photo')
               ? resolvedMessage

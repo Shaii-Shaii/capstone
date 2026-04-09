@@ -138,6 +138,14 @@ const mapAnalysisError = (message = '') => {
     return createErrorState('Photo Could Not Be Read', 'One of the uploaded photos could not be processed. Please upload or retake that hair view again.');
   }
 
+  if (normalized.includes('too large for analysis')) {
+    return createErrorState('Photos Too Large', 'The uploaded hair photos are too large for AI analysis right now. Please retake or upload clearer but smaller images and try again.');
+  }
+
+  if (normalized.includes('could not be processed for ai analysis')) {
+    return createErrorState('Photos Could Not Be Processed', 'One of the uploaded hair photos could not be processed for AI analysis. Please retake or upload that view again.');
+  }
+
   if (normalized.includes('front view photo') || normalized.includes('back view photo') || normalized.includes('hair ends close-up') || normalized.includes('side view photo')) {
     return createErrorState('More Hair Views Needed', message);
   }

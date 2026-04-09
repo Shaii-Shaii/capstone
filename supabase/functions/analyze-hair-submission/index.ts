@@ -231,6 +231,57 @@ const normalizeRecommendations = (source: unknown, decision: string, summary: st
   }];
 };
 
+const resolveSafeAnalysisError = (error: unknown) => {
+  const message = normalizeString(error instanceof Error ? error.message : String(error || ''));
+  const technicalMessage = message.toLowerCase();
+
+  if (!message) {
+    return {
+      status: 500,
+      message: 'We could not analyze the hair photos right now. Please try again.',
+    };
+  }
+
+  if (
+    technicalMessage.includes('guided donation questions')
+    || technicalMessage.includes('compliance checklist')
+    || technicalMessage.includes('required hair views')
+    || technicalMessage.includes('clear hair photo')
+    || technicalMessage.includes('no valid image payload')
+  ) {
+    return { status: 422, message };
+  }
+
+  if (
+    technicalMessage.includes('too large')
+    || technicalMessage.includes('maximum context length')
+    || technicalMessage.includes('request entity too large')
+    || technicalMessage.includes('413')
+  ) {
+    return {
+      status: 422,
+      message: 'The uploaded photos are too large for analysis right now. Please retake or upload clearer but smaller images.',
+    };
+  }
+
+  if (
+    technicalMessage.includes('unsupported image')
+    || technicalMessage.includes('invalid image')
+    || technicalMessage.includes('image parse')
+    || technicalMessage.includes('image_url')
+  ) {
+    return {
+      status: 422,
+      message: 'One of the uploaded photos could not be processed for AI analysis. Please retake or upload that view again.',
+    };
+  }
+
+  return {
+    status: 500,
+    message,
+  };
+};
+
 const formatRequirementContext = (requirementContext: DonationRequirementContext | null) => {
   if (!requirementContext) {
     return 'No donation requirement context was available for this screening.';
@@ -432,7 +483,7 @@ Deno.serve(async (request) => {
         {
           type: 'input_image',
           image_url: image.dataUrl,
-          detail: 'high',
+          detail: 'low',
         },
       ])),
     ];
@@ -477,9 +528,10 @@ Deno.serve(async (request) => {
     });
   } catch (error) {
     console.error('[analyze-hair-submission]', error);
+    const safeError = resolveSafeAnalysisError(error);
 
     return createJsonResponse({
-      error: 'We could not analyze the hair photos right now. Please try again.',
-    }, 500);
+      error: safeError.message,
+    }, safeError.status);
   }
 });
