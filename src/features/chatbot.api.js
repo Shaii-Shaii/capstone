@@ -1,5 +1,56 @@
 import { supabase } from '../api/supabase/client';
 import { resolveDatabaseUserId } from './profile/api/profile.api';
+import { logAppError, logAppEvent } from '../utils/appErrors';
+
+const chatbotSettingsTable = 'Chatbot_Settings';
+const chatbotFaqsTable = 'Chatbot_FAQS';
+const chatbotConversationsTable = 'Chatbot_Conversations';
+const chatbotMessagesTable = 'Chatbot_Messages';
+
+const chatbotSettingsSelect = `
+  chatbot_settings_id:Chatbot_Settings_ID,
+  welcome_message:Welcome_Message,
+  fallback_message:Fallback_Message,
+  is_chatbot_enabled:Is_Chatbot_Enabled,
+  updated_by:Updated_By,
+  updated_at:Updated_At
+`;
+
+const chatbotFaqSelect = `
+  faq_id:FAQ_ID,
+  question:Question,
+  answer:Answer,
+  category:Category,
+  priority_order:Priority_Order,
+  is_active:Is_Active,
+  created_by:Created_By,
+  created_at:Created_At,
+  updated_at:Updated_At
+`;
+
+const chatbotConversationSelect = `
+  conversation_id:Conversation_ID,
+  user_id:User_ID,
+  title:Title,
+  status:Status,
+  created_at:Created_At,
+  updated_at:Updated_At
+`;
+
+const chatbotMessageSelect = `
+  message_id:Message_ID,
+  conversation_id:Conversation_ID,
+  sender_type:Sender_Type,
+  message_text:Message_Text,
+  created_at:Created_At
+`;
+
+const logChatbotQuery = (source, extras = {}) => {
+  logAppEvent('chatbot.query', 'Chatbot query started.', {
+    source,
+    ...extras,
+  });
+};
 
 const resolveChatUserId = async (userId) => {
   const result = await resolveDatabaseUserId(userId, { ensure: false });
@@ -36,20 +87,31 @@ const normalizeMessage = (row) => ({
 });
 
 export const fetchChatbotSettings = async () => (
+  (logChatbotQuery('fetchChatbotSettings', {
+    table: chatbotSettingsTable,
+    phase: 'bootstrap',
+    columns: ['Chatbot_Settings_ID', 'Welcome_Message', 'Fallback_Message', 'Is_Chatbot_Enabled', 'Updated_By', 'Updated_At'],
+  }),
   await supabase
-    .from('chatbot_settings')
-    .select('*')
+    .from(chatbotSettingsTable)
+    .select(chatbotSettingsSelect)
     .limit(1)
-    .maybeSingle()
+    .maybeSingle())
 );
 
 export const fetchChatbotFaqs = async () => (
+  (logChatbotQuery('fetchChatbotFaqs', {
+    table: chatbotFaqsTable,
+    phase: 'bootstrap',
+    filters: { Is_Active: true },
+    columns: ['FAQ_ID', 'Question', 'Answer', 'Category', 'Priority_Order', 'Is_Active'],
+  }),
   await supabase
-    .from('chatbot_faqs')
-    .select('*')
-    .eq('is_active', true)
-    .order('priority_order', { ascending: true })
-    .limit(30)
+    .from(chatbotFaqsTable)
+    .select(chatbotFaqSelect)
+    .eq('Is_Active', true)
+    .order('Priority_Order', { ascending: true })
+    .limit(30))
 );
 
 export const fetchLatestChatbotConversation = async ({ userId }) => {
@@ -58,11 +120,18 @@ export const fetchLatestChatbotConversation = async ({ userId }) => {
     return { data: null, error: resolvedUser.error };
   }
 
+  logChatbotQuery('fetchLatestChatbotConversation', {
+    table: chatbotConversationsTable,
+    phase: 'bootstrap',
+    filters: { User_ID: resolvedUser.userId },
+    columns: ['Conversation_ID', 'User_ID', 'Title', 'Status', 'Created_At', 'Updated_At'],
+  });
+
   const result = await supabase
-    .from('chatbot_conversations')
-    .select('*')
-    .eq('user_id', resolvedUser.userId)
-    .order('updated_at', { ascending: false })
+    .from(chatbotConversationsTable)
+    .select(chatbotConversationSelect)
+    .eq('User_ID', resolvedUser.userId)
+    .order('Updated_At', { ascending: false })
     .limit(1)
     .maybeSingle();
 
@@ -78,15 +147,22 @@ export const createChatbotConversation = async (payload) => {
     return { data: null, error: resolvedUser.error };
   }
 
+  logChatbotQuery('createChatbotConversation', {
+    table: chatbotConversationsTable,
+    phase: 'create',
+    filters: { User_ID: resolvedUser.userId },
+    columns: ['User_ID', 'Title', 'Status', 'Updated_At'],
+  });
+
   const result = await supabase
-    .from('chatbot_conversations')
+    .from(chatbotConversationsTable)
     .insert([{
-      user_id: resolvedUser.userId,
-      title: payload?.title || 'Support conversation',
-      status: payload?.status || 'Active',
-      updated_at: payload?.updated_at || new Date().toISOString(),
+      User_ID: resolvedUser.userId,
+      Title: payload?.title || 'Support conversation',
+      Status: payload?.status || 'Active',
+      Updated_At: payload?.updated_at || new Date().toISOString(),
     }])
-    .select('*')
+    .select(chatbotConversationSelect)
     .single();
 
   return {
@@ -96,15 +172,22 @@ export const createChatbotConversation = async (payload) => {
 };
 
 export const updateChatbotConversation = async (conversationId, updates) => {
+  logChatbotQuery('updateChatbotConversation', {
+    table: chatbotConversationsTable,
+    phase: 'update',
+    filters: { Conversation_ID: conversationId },
+    columns: ['Title', 'Status', 'Updated_At'],
+  });
+
   const result = await supabase
-    .from('chatbot_conversations')
+    .from(chatbotConversationsTable)
     .update({
-      title: updates?.title ?? undefined,
-      status: updates?.status ?? undefined,
-      updated_at: updates?.updated_at || new Date().toISOString(),
+      Title: updates?.title ?? undefined,
+      Status: updates?.status ?? undefined,
+      Updated_At: updates?.updated_at || new Date().toISOString(),
     })
-    .eq('conversation_id', conversationId)
-    .select('*')
+    .eq('Conversation_ID', conversationId)
+    .select(chatbotConversationSelect)
     .maybeSingle();
 
   return {
@@ -114,11 +197,18 @@ export const updateChatbotConversation = async (conversationId, updates) => {
 };
 
 export const fetchChatbotMessages = async (conversationId) => {
+  logChatbotQuery('fetchChatbotMessages', {
+    table: chatbotMessagesTable,
+    phase: 'bootstrap',
+    filters: { Conversation_ID: conversationId },
+    columns: ['Message_ID', 'Conversation_ID', 'Sender_Type', 'Message_Text', 'Created_At'],
+  });
+
   const result = await supabase
-    .from('chatbot_messages')
-    .select('*')
-    .eq('conversation_id', conversationId)
-    .order('created_at', { ascending: true })
+    .from(chatbotMessagesTable)
+    .select(chatbotMessageSelect)
+    .eq('Conversation_ID', conversationId)
+    .order('Created_At', { ascending: true })
     .limit(80);
 
   return {
@@ -128,10 +218,31 @@ export const fetchChatbotMessages = async (conversationId) => {
 };
 
 export const createChatbotMessages = async (rows) => {
+  const insertRows = rows.map((row) => ({
+    Conversation_ID: row?.conversation_id || null,
+    Sender_Type: row?.sender_type || null,
+    Message_Text: row?.message_text || null,
+  }));
+
+  logChatbotQuery('createChatbotMessages', {
+    table: chatbotMessagesTable,
+    phase: 'create',
+    rowCount: insertRows.length,
+    columns: ['Conversation_ID', 'Sender_Type', 'Message_Text'],
+  });
+
   const result = await supabase
-    .from('chatbot_messages')
-    .insert(rows)
-    .select('*');
+    .from(chatbotMessagesTable)
+    .insert(insertRows)
+    .select(chatbotMessageSelect);
+
+  if (result.error) {
+    logAppError('chatbot.query.createChatbotMessages', result.error, {
+      table: chatbotMessagesTable,
+      phase: 'create',
+      rowCount: insertRows.length,
+    });
+  }
 
   return {
     data: (result.data || []).map(normalizeMessage),

@@ -1,6 +1,125 @@
 import { supabase } from '../api/supabase/client';
 import { hairSubmissionStorageBucket } from './hairSubmission.constants';
 import { resolveDatabaseUserId } from './profile/api/profile.api';
+import { logAppError, logAppEvent } from '../utils/appErrors';
+
+const hairSubmissionsTable = 'Hair_Submissions';
+const hairSubmissionDetailsTable = 'Hair_Submission_Details';
+const hairSubmissionImagesTable = 'Hair_Submission_Images';
+const hairSubmissionLogisticsTable = 'Hair_Submission_Logistics';
+const hairBundleTrackingHistoryTable = 'Hair_Bundle_Tracking_History';
+const qaAssessmentsTable = 'QA_Assessments';
+const aiScreeningsTable = 'AI_Screenings';
+const donorRecommendationsTable = 'Donor_Recommendations';
+
+const hairSubmissionSelect = `
+  submission_id:Submission_ID,
+  user_id:User_ID,
+  donation_drive_id:Donation_Drive_ID,
+  organization_id:Organization_ID,
+  delivery_method:Delivery_Method,
+  pickup_request:Pickup_Request,
+  submission_code:Submission_Code,
+  donation_source:Donation_Source,
+  bundle_quantity:Bundle_Quantity,
+  donor_notes:Donor_Notes,
+  status:Status,
+  created_at:Created_At,
+  updated_at:Updated_At
+`;
+
+const hairSubmissionDetailSelect = `
+  submission_detail_id:Submission_Detail_ID,
+  submission_id:Submission_ID,
+  bundle_number:Bundle_Number,
+  declared_length:Declared_Length,
+  declared_color:Declared_Color,
+  declared_texture:Declared_Texture,
+  declared_density:Declared_Density,
+  declared_condition:Declared_Condition,
+  is_chemically_treated:Is_Chemically_Treated,
+  is_colored:Is_Colored,
+  is_bleached:Is_Bleached,
+  is_rebonded:Is_Rebonded,
+  detail_notes:Detail_Notes,
+  status:Status,
+  created_at:Created_At,
+  updated_at:Updated_At
+`;
+
+const hairSubmissionImageSelect = `
+  image_id:Image_ID,
+  submission_detail_id:Submission_Detail_ID,
+  file_path:File_Path,
+  image_type:Image_Type,
+  uploaded_at:Uploaded_At
+`;
+
+const aiScreeningSelect = `
+  ai_screening_id:AI_Screening_ID,
+  submission_id:Submission_ID,
+  estimated_length:Estimated_Length,
+  detected_texture:Detected_Texture,
+  detected_density:Detected_Density,
+  detected_condition:Detected_Condition,
+  visible_damage_notes:Visible_Damage_Notes,
+  confidence_score:Confidence_Score,
+  decision:Decision,
+  summary:Summary,
+  created_at:Created_At
+`;
+
+const donorRecommendationSelect = `
+  recommendation_id:Recommendation_ID,
+  submission_id:Submission_ID,
+  title:Title,
+  recommendation_text:Recommendation_Text,
+  priority_order:Priority_Order,
+  created_at:Created_At
+`;
+
+const hairSubmissionLogisticsSelect = `
+  submission_logistics_id:Submission_Logistics_ID,
+  submission_id:Submission_ID,
+  logistics_type:Logistics_Type,
+  courier_name:Courier_Name,
+  tracking_number:Tracking_Number,
+  shipment_status:Shipment_Status,
+  pickup_scheduled_at:Pickup_Scheduled_At,
+  pickup_schedule_date:Pickup_Schedule_Date,
+  pickup_approved_at:Pickup_Approved_At,
+  received_by:Received_By,
+  received_at:Received_At,
+  notes:Notes,
+  created_at:Created_At
+`;
+
+const qaAssessmentSelect = `
+  qa_assessment_id:QA_Assessment_ID,
+  submission_detail_id:Submission_Detail_ID,
+  assessed_by:Assessed_By,
+  assessment_result:Assessment_Result,
+  remarks:Remarks,
+  assessed_at:Assessed_At
+`;
+
+const trackingEntrySelect = `
+  tracking_id:Tracking_ID,
+  submission_id:Submission_ID,
+  submission_detail_id:Submission_Detail_ID,
+  status:Status,
+  title:Title,
+  description:Description,
+  changed_by:Changed_By,
+  updated_at:Updated_At
+`;
+
+const logHairQuery = (source, extras = {}) => {
+  logAppEvent('hair_submission.query', 'Hair submission query started.', {
+    source,
+    ...extras,
+  });
+};
 
 const resolveSubmissionUserId = async (userId) => {
   const result = await resolveDatabaseUserId(userId, { ensure: false });
@@ -130,13 +249,28 @@ export const createHairSubmission = async (payload) => {
     return { data: null, error };
   }
 
+  logHairQuery('createHairSubmission', {
+    table: hairSubmissionsTable,
+    phase: 'create',
+    userId,
+    columns: ['User_ID', 'Submission_Code', 'Bundle_Quantity', 'Donation_Source', 'Status', 'Donor_Notes'],
+  });
+
   const result = await supabase
-    .from('hair_submissions')
+    .from(hairSubmissionsTable)
     .insert([{
-      ...payload,
-      user_id: userId,
+      User_ID: userId,
+      Donation_Drive_ID: payload?.donation_drive_id || null,
+      Organization_ID: payload?.organization_id || null,
+      Delivery_Method: payload?.delivery_method || null,
+      Pickup_Request: payload?.pickup_request ?? false,
+      Submission_Code: payload?.submission_code || null,
+      Donation_Source: payload?.donation_source || null,
+      Bundle_Quantity: payload?.bundle_quantity ?? null,
+      Donor_Notes: payload?.donor_notes || null,
+      Status: payload?.status || null,
     }])
-    .select()
+    .select(hairSubmissionSelect)
     .single();
 
   return {
@@ -146,10 +280,31 @@ export const createHairSubmission = async (payload) => {
 };
 
 export const createHairSubmissionDetail = async (payload) => {
+  logHairQuery('createHairSubmissionDetail', {
+    table: hairSubmissionDetailsTable,
+    phase: 'create',
+    filters: { Submission_ID: payload?.submission_id },
+    columns: ['Submission_ID', 'Bundle_Number', 'Declared_Length', 'Declared_Texture', 'Declared_Density', 'Declared_Condition', 'Detail_Notes', 'Status'],
+  });
+
   const result = await supabase
-    .from('hair_submission_details')
-    .insert([payload])
-    .select()
+    .from(hairSubmissionDetailsTable)
+    .insert([{
+      Submission_ID: payload?.submission_id || null,
+      Bundle_Number: payload?.bundle_number ?? null,
+      Declared_Length: payload?.declared_length ?? null,
+      Declared_Color: payload?.declared_color || null,
+      Declared_Texture: payload?.declared_texture || null,
+      Declared_Density: payload?.declared_density || null,
+      Declared_Condition: payload?.declared_condition || null,
+      Is_Chemically_Treated: payload?.is_chemically_treated ?? false,
+      Is_Colored: payload?.is_colored ?? false,
+      Is_Bleached: payload?.is_bleached ?? false,
+      Is_Rebonded: payload?.is_rebonded ?? false,
+      Detail_Notes: payload?.detail_notes || null,
+      Status: payload?.status || null,
+    }])
+    .select(hairSubmissionDetailSelect)
     .single();
 
   return {
@@ -158,18 +313,48 @@ export const createHairSubmissionDetail = async (payload) => {
   };
 };
 
-export const createHairSubmissionImages = async (rows) => (
-  await supabase
-    .from('hair_submission_images')
-    .insert(rows)
-    .select()
-);
+export const createHairSubmissionImages = async (rows) => {
+  const insertRows = rows.map((row) => ({
+    Submission_Detail_ID: row?.submission_detail_id || null,
+    File_Path: row?.file_path || null,
+    Image_Type: row?.image_type || null,
+  }));
+
+  logHairQuery('createHairSubmissionImages', {
+    table: hairSubmissionImagesTable,
+    phase: 'create',
+    rowCount: insertRows.length,
+    columns: ['Submission_Detail_ID', 'File_Path', 'Image_Type'],
+  });
+
+  return await supabase
+    .from(hairSubmissionImagesTable)
+    .insert(insertRows)
+    .select(hairSubmissionImageSelect);
+};
 
 export const createAiScreening = async (payload) => {
+  logHairQuery('createAiScreening', {
+    table: aiScreeningsTable,
+    phase: 'create',
+    filters: { Submission_ID: payload?.submission_id },
+    columns: ['Submission_ID', 'Estimated_Length', 'Detected_Texture', 'Detected_Density', 'Detected_Condition', 'Visible_Damage_Notes', 'Confidence_Score', 'Decision', 'Summary'],
+  });
+
   const result = await supabase
-    .from('ai_screenings')
-    .insert([payload])
-    .select()
+    .from(aiScreeningsTable)
+    .insert([{
+      Submission_ID: payload?.submission_id || null,
+      Estimated_Length: payload?.estimated_length ?? null,
+      Detected_Texture: payload?.detected_texture || null,
+      Detected_Density: payload?.detected_density || null,
+      Detected_Condition: payload?.detected_condition || null,
+      Visible_Damage_Notes: payload?.visible_damage_notes || null,
+      Confidence_Score: payload?.confidence_score ?? null,
+      Decision: payload?.decision || null,
+      Summary: payload?.summary || null,
+    }])
+    .select(aiScreeningSelect)
     .single();
 
   return {
@@ -179,10 +364,24 @@ export const createAiScreening = async (payload) => {
 };
 
 export const createDonorRecommendations = async (rows) => {
+  const insertRows = rows.map((row) => ({
+    Submission_ID: row?.submission_id || null,
+    Title: row?.title || null,
+    Recommendation_Text: row?.recommendation_text || null,
+    Priority_Order: row?.priority_order ?? null,
+  }));
+
+  logHairQuery('createDonorRecommendations', {
+    table: donorRecommendationsTable,
+    phase: 'create',
+    rowCount: insertRows.length,
+    columns: ['Submission_ID', 'Title', 'Recommendation_Text', 'Priority_Order'],
+  });
+
   const result = await supabase
-    .from('donor_recommendations')
-    .insert(rows)
-    .select();
+    .from(donorRecommendationsTable)
+    .insert(insertRows)
+    .select(donorRecommendationSelect);
 
   return {
     data: (result.data || []).map(normalizeDonorRecommendation),
@@ -191,18 +390,18 @@ export const createDonorRecommendations = async (rows) => {
 };
 
 export const fetchDonorRecommendationsBySubmissionId = async (submissionId, limit = 5) => {
+  logHairQuery('fetchDonorRecommendationsBySubmissionId', {
+    table: donorRecommendationsTable,
+    phase: 'read',
+    filters: { Submission_ID: submissionId },
+    columns: ['Recommendation_ID', 'Submission_ID', 'Title', 'Recommendation_Text', 'Priority_Order', 'Created_At'],
+  });
+
   const result = await supabase
-    .from('donor_recommendations')
-    .select(`
-      recommendation_id,
-      submission_id,
-      title,
-      recommendation_text,
-      priority_order,
-      created_at
-    `)
-    .eq('submission_id', submissionId)
-    .order('priority_order', { ascending: true })
+    .from(donorRecommendationsTable)
+    .select(donorRecommendationSelect)
+    .eq('Submission_ID', submissionId)
+    .order('Priority_Order', { ascending: true })
     .limit(limit);
 
   return {
@@ -217,32 +416,56 @@ export const fetchHairSubmissionsByUserId = async (userId, limit = 10) => {
     return { data: [], error: resolvedUserId.error };
   }
 
+  logHairQuery('fetchHairSubmissionsByUserId', {
+    table: hairSubmissionsTable,
+    phase: 'read',
+    filters: { User_ID: resolvedUserId.userId },
+    columns: ['Submission_ID', 'User_ID', 'Submission_Code', 'Bundle_Quantity', 'Status', 'Donor_Notes', 'Created_At', 'Updated_At'],
+  });
+
   const result = await supabase
-    .from('hair_submissions')
-    .select(`
-      submission_id,
-      user_id,
-      submission_code,
-      bundle_quantity,
-      status,
-      donor_notes,
-      created_at,
-      updated_at,
-      ai_screenings (
-        ai_screening_id,
-        submission_id,
-        decision,
-        summary,
-        confidence_score,
-        created_at
-      )
-    `)
-    .eq('user_id', resolvedUserId.userId)
-    .order('created_at', { ascending: false })
+    .from(hairSubmissionsTable)
+    .select(hairSubmissionSelect)
+    .eq('User_ID', resolvedUserId.userId)
+    .order('Created_At', { ascending: false })
     .limit(limit);
 
+  if (result.error || !(result.data || []).length) {
+    return {
+      data: (result.data || []).map(normalizeHairSubmission),
+      error: result.error,
+    };
+  }
+
+  const submissionIds = result.data.map((row) => row?.submission_id).filter(Boolean);
+
+  const screeningsResult = await supabase
+    .from(aiScreeningsTable)
+    .select(aiScreeningSelect)
+    .in('Submission_ID', submissionIds)
+    .order('Created_At', { ascending: false });
+
+  if (screeningsResult.error) {
+    logAppError('hair_submission.query.fetchHairSubmissionsByUserId.screenings', screeningsResult.error, {
+      table: aiScreeningsTable,
+      phase: 'read',
+      submissionIds,
+    });
+  }
+
+  const screeningsBySubmissionId = new Map();
+  (screeningsResult.data || []).forEach((row) => {
+    const screening = normalizeAiScreening(row);
+    const currentRows = screeningsBySubmissionId.get(screening.submission_id) || [];
+    currentRows.push(screening);
+    screeningsBySubmissionId.set(screening.submission_id, currentRows);
+  });
+
   return {
-    data: (result.data || []).map(normalizeHairSubmission),
+    data: (result.data || []).map((row) => normalizeHairSubmission({
+      ...row,
+      ai_screenings: screeningsBySubmissionId.get(row?.submission_id) || [],
+    })),
     error: result.error,
   };
 };
@@ -253,20 +476,18 @@ export const fetchLatestHairSubmissionByUserId = async (userId) => {
     return { data: null, error: resolvedUserId.error };
   }
 
+  logHairQuery('fetchLatestHairSubmissionByUserId', {
+    table: hairSubmissionsTable,
+    phase: 'read',
+    filters: { User_ID: resolvedUserId.userId },
+    columns: ['Submission_ID', 'User_ID', 'Submission_Code', 'Bundle_Quantity', 'Donor_Notes', 'Status', 'Created_At', 'Updated_At'],
+  });
+
   const result = await supabase
-    .from('hair_submissions')
-    .select(`
-      submission_id,
-      user_id,
-      submission_code,
-      bundle_quantity,
-      donor_notes,
-      status,
-      created_at,
-      updated_at
-    `)
-    .eq('user_id', resolvedUserId.userId)
-    .order('created_at', { ascending: false })
+    .from(hairSubmissionsTable)
+    .select(hairSubmissionSelect)
+    .eq('User_ID', resolvedUserId.userId)
+    .order('Created_At', { ascending: false })
     .limit(1)
     .maybeSingle();
 
@@ -277,23 +498,18 @@ export const fetchLatestHairSubmissionByUserId = async (userId) => {
 };
 
 export const fetchLatestHairSubmissionDetailBySubmissionId = async (submissionId) => {
+  logHairQuery('fetchLatestHairSubmissionDetailBySubmissionId', {
+    table: hairSubmissionDetailsTable,
+    phase: 'read',
+    filters: { Submission_ID: submissionId },
+    columns: ['Submission_Detail_ID', 'Submission_ID', 'Bundle_Number', 'Declared_Length', 'Declared_Texture', 'Declared_Density', 'Declared_Condition', 'Detail_Notes', 'Status', 'Created_At', 'Updated_At'],
+  });
+
   const result = await supabase
-    .from('hair_submission_details')
-    .select(`
-      submission_detail_id,
-      submission_id,
-      bundle_number,
-      declared_length,
-      declared_texture,
-      declared_density,
-      declared_condition,
-      detail_notes,
-      status,
-      created_at,
-      updated_at
-    `)
-    .eq('submission_id', submissionId)
-    .order('created_at', { ascending: false })
+    .from(hairSubmissionDetailsTable)
+    .select(hairSubmissionDetailSelect)
+    .eq('Submission_ID', submissionId)
+    .order('Created_At', { ascending: false })
     .limit(1)
     .maybeSingle();
 
@@ -304,25 +520,18 @@ export const fetchLatestHairSubmissionDetailBySubmissionId = async (submissionId
 };
 
 export const fetchHairSubmissionLogisticsBySubmissionId = async (submissionId) => {
+  logHairQuery('fetchHairSubmissionLogisticsBySubmissionId', {
+    table: hairSubmissionLogisticsTable,
+    phase: 'read',
+    filters: { Submission_ID: submissionId },
+    columns: ['Submission_Logistics_ID', 'Submission_ID', 'Logistics_Type', 'Courier_Name', 'Tracking_Number', 'Shipment_Status', 'Pickup_Scheduled_At', 'Pickup_Schedule_Date', 'Pickup_Approved_At', 'Received_By', 'Received_At', 'Notes', 'Created_At'],
+  });
+
   const result = await supabase
-    .from('hair_submission_logistics')
-    .select(`
-      submission_logistics_id,
-      submission_id,
-      logistics_type,
-      courier_name,
-      tracking_number,
-      shipment_status,
-      pickup_scheduled_at,
-      pickup_schedule_date,
-      pickup_approved_at,
-      received_by,
-      received_at,
-      notes,
-      created_at
-    `)
-    .eq('submission_id', submissionId)
-    .order('created_at', { ascending: false })
+    .from(hairSubmissionLogisticsTable)
+    .select(hairSubmissionLogisticsSelect)
+    .eq('Submission_ID', submissionId)
+    .order('Created_At', { ascending: false })
     .limit(1)
     .maybeSingle();
 
@@ -333,18 +542,18 @@ export const fetchHairSubmissionLogisticsBySubmissionId = async (submissionId) =
 };
 
 export const fetchLatestQaAssessmentBySubmissionDetailId = async (submissionDetailId) => {
+  logHairQuery('fetchLatestQaAssessmentBySubmissionDetailId', {
+    table: qaAssessmentsTable,
+    phase: 'read',
+    filters: { Submission_Detail_ID: submissionDetailId },
+    columns: ['QA_Assessment_ID', 'Submission_Detail_ID', 'Assessed_By', 'Assessment_Result', 'Remarks', 'Assessed_At'],
+  });
+
   const result = await supabase
-    .from('qa_assessments')
-    .select(`
-      qa_assessment_id,
-      submission_detail_id,
-      assessed_by,
-      assessment_result,
-      remarks,
-      assessed_at
-    `)
-    .eq('submission_detail_id', submissionDetailId)
-    .order('assessed_at', { ascending: false })
+    .from(qaAssessmentsTable)
+    .select(qaAssessmentSelect)
+    .eq('Submission_Detail_ID', submissionDetailId)
+    .order('Assessed_At', { ascending: false })
     .limit(1)
     .maybeSingle();
 
@@ -355,23 +564,21 @@ export const fetchLatestQaAssessmentBySubmissionDetailId = async (submissionDeta
 };
 
 export const fetchHairBundleTrackingHistory = async ({ submissionId, submissionDetailId, limit = 6 }) => {
+  logHairQuery('fetchHairBundleTrackingHistory', {
+    table: hairBundleTrackingHistoryTable,
+    phase: 'read',
+    filters: { Submission_ID: submissionId || null, Submission_Detail_ID: submissionDetailId || null },
+    columns: ['Tracking_ID', 'Submission_ID', 'Submission_Detail_ID', 'Status', 'Title', 'Description', 'Changed_By', 'Updated_At'],
+  });
+
   const query = supabase
-    .from('hair_bundle_tracking_history')
-    .select(`
-      tracking_id,
-      submission_id,
-      submission_detail_id,
-      status,
-      title,
-      description,
-      changed_by,
-      updated_at
-    `)
-    .order('updated_at', { ascending: false })
+    .from(hairBundleTrackingHistoryTable)
+    .select(trackingEntrySelect)
+    .order('Updated_At', { ascending: false })
     .limit(limit);
 
   if (submissionId && submissionDetailId) {
-    const result = await query.or(`submission_id.eq.${submissionId},submission_detail_id.eq.${submissionDetailId}`);
+    const result = await query.or(`Submission_ID.eq.${submissionId},Submission_Detail_ID.eq.${submissionDetailId}`);
     return {
       data: (result.data || []).map(normalizeTrackingEntry),
       error: result.error,
@@ -379,7 +586,7 @@ export const fetchHairBundleTrackingHistory = async ({ submissionId, submissionD
   }
 
   if (submissionId) {
-    const result = await query.eq('submission_id', submissionId);
+    const result = await query.eq('Submission_ID', submissionId);
     return {
       data: (result.data || []).map(normalizeTrackingEntry),
       error: result.error,
@@ -387,7 +594,7 @@ export const fetchHairBundleTrackingHistory = async ({ submissionId, submissionD
   }
 
   if (submissionDetailId) {
-    const result = await query.eq('submission_detail_id', submissionDetailId);
+    const result = await query.eq('Submission_Detail_ID', submissionDetailId);
     return {
       data: (result.data || []).map(normalizeTrackingEntry),
       error: result.error,

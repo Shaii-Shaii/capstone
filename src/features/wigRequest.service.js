@@ -10,7 +10,7 @@ import {
   updatePatientPictureByPatientId,
 } from './profile/api/profile.api';
 import { wigRequestStatuses } from './wigRequest.constants';
-import { writeAuditLog } from '../utils/appErrors';
+import { logAppEvent, writeAuditLog } from '../utils/appErrors';
 
 const getFileExtension = (mimeType = 'image/jpeg') => {
   if (mimeType.includes('png')) return 'png';
@@ -82,6 +82,10 @@ export const getPatientWigRequestContext = async (userId) => {
       throw new Error('Your session is not ready.');
     }
 
+    logAppEvent('wig_request.context', 'Loading wig request context.', {
+      userId,
+    });
+
     const patientDetails = await ensurePatientDetails(userId);
 
     const [{ data: latestWigRequest, error: wigRequestError }, { data: latestAllocation, error: allocationError }] =
@@ -133,6 +137,13 @@ export const savePatientWigRequestFlow = async ({
   try {
     if (!userId) throw new Error('Your session is not ready.');
 
+    logAppEvent('wig_request.save', 'Saving wig request flow.', {
+      userId,
+      hasReferenceImage: Boolean(referenceImage?.uri),
+      hasPreview: Boolean(preview),
+      previewKeys: preview ? Object.keys(preview) : [],
+    });
+
     const patientDetails = await ensurePatientDetails(userId);
 
     const referenceImageUrl = await buildReferenceImageUrl({ userId, referenceImage });
@@ -142,6 +153,11 @@ export const savePatientWigRequestFlow = async ({
     }
 
     if (referenceImageUrl && patientDetails.patient_id) {
+      logAppEvent('wig_request.save', 'Updating patient reference image before wig request save.', {
+        userId,
+        patientId: patientDetails.patient_id,
+      });
+
       const patientPictureResult = await updatePatientPictureByPatientId(patientDetails.patient_id, referenceImageUrl);
       if (patientPictureResult.error) {
         throw new Error(patientPictureResult.error.message || 'Unable to save the patient reference photo.');
@@ -159,6 +175,12 @@ export const savePatientWigRequestFlow = async ({
       throw new Error(wigRequestError.message || 'Unable to create the wig request.');
     }
 
+    logAppEvent('wig_request.save', 'Wig request row created.', {
+      userId,
+      reqId: wigRequest?.req_id || null,
+      patientId: patientDetails.patient_id,
+    });
+
     const { data: wigSpecification, error: wigSpecificationError } = await WigRequestAPI.createWigSpecification({
       wig_request_id: wigRequest.req_id,
       preferred_color: preferences.preferredColor,
@@ -173,6 +195,13 @@ export const savePatientWigRequestFlow = async ({
     if (wigSpecificationError) {
       throw new Error(wigSpecificationError.message || 'Unable to save the wig specifications.');
     }
+
+    logAppEvent('wig_request.save', 'Wig specification row saved.', {
+      userId,
+      reqId: wigRequest?.req_id || null,
+      reqSpecId: wigSpecification?.req_spec_id || null,
+      hasPreviewUrl: Boolean(wigSpecification?.ai_wig_preview_url),
+    });
 
     const notificationEvents = buildImmediateNotificationEvents({
       role: 'patient',

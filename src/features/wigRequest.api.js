@@ -2,7 +2,82 @@ import { supabase } from '../api/supabase/client';
 import { wigReferenceStorageBucket } from './wigRequest.constants';
 import { logAppError, logAppEvent } from '../utils/appErrors';
 
+const wigRequestsTable = 'Wig_Requests';
+const wigRequestSpecificationsTable = 'Wig_Request_Specifications';
+const wigAllocationsTable = 'Wig_Allocations';
+const wigsTable = 'Wigs';
+const wigPhysicalSpecificationsTable = 'Wig_Physical_Specifications';
+const patientsTable = 'Patients';
+
+const wigRequestSelect = `
+  req_id:Req_ID,
+  patient_id:Patient_ID,
+  status:Status,
+  request_date:Request_Date,
+  requested_by:Requested_By,
+  approved_by:Approved_By,
+  approved_at:Approved_At,
+  updated_at:Updated_At,
+  pdf_url:Pdf_Url,
+  status_reason:Status_Reason,
+  hospital_id:Hospital_ID
+`;
+
+const wigSpecificationSelect = `
+  req_spec_id:Req_Spec_ID,
+  req_id:Req_ID,
+  preferred_color:Preferred_Color,
+  preferred_length:Preferred_Length,
+  hair_texture:Hair_Texture,
+  cap_size:Cap_Size,
+  style_preference:Style_Preference,
+  special_notes:Special_Notes,
+  ai_wig_preview_url:AI_Wig_Preview_URL
+`;
+
+const wigAllocationSelect = `
+  allocation_id:Allocation_ID,
+  wig_id:Wig_ID,
+  patient_id:Patient_ID,
+  wig_request_id:Wig_Request_ID,
+  allocated_by:Allocated_By,
+  allocated_at:Allocated_At,
+  release_status:Release_Status,
+  released_at:Released_At,
+  notes:Notes
+`;
+
+const wigSelect = `
+  wig_id:Wig_ID,
+  wig_code:Wig_Code,
+  wig_name:Wig_Name,
+  wig_status:Wig_Status,
+  production_notes:Production_Notes,
+  completed_at:Completed_At,
+  updated_at:Updated_At
+`;
+
+const wigPhysicalSpecificationSelect = `
+  color:Color,
+  length:Length,
+  hair_texture:Hair_Texture,
+  cap_size:Cap_Size,
+  style:Style,
+  notes:Notes
+`;
+
+const patientPictureSelect = `
+  patient_picture:Patient_Picture
+`;
+
 const firstRelation = (value) => (Array.isArray(value) ? value[0] || null : value || null);
+
+const logWigQuery = (source, extras = {}) => {
+  logAppEvent('wig_request.query', 'Wig request query started.', {
+    source,
+    ...extras,
+  });
+};
 
 const normalizeWigRequest = (row) => {
   const specification = firstRelation(row?.wig_request_specifications);
@@ -100,31 +175,28 @@ const normalizeWigAllocation = (row) => {
 };
 
 export const createWigRequest = async (payload) => {
+  logWigQuery('createWigRequest', {
+    table: wigRequestsTable,
+    phase: 'create',
+    filters: { Patient_ID: payload?.patient_id || null },
+    columns: ['Patient_ID', 'Status', 'Request_Date', 'Requested_By', 'Approved_By', 'Approved_At', 'Updated_At', 'Pdf_Url', 'Status_Reason', 'Hospital_ID'],
+  });
+
   const result = await supabase
-    .from('wig_requests')
+    .from(wigRequestsTable)
     .insert([{
-      patient_id: payload?.patient_id || null,
-      status: payload?.status || null,
-      request_date: payload?.request_date || new Date().toISOString(),
-      requested_by: payload?.requested_by || null,
-      approved_by: payload?.approved_by || null,
-      approved_at: payload?.approved_at || null,
-      updated_at: new Date().toISOString(),
-      pdf_url: payload?.pdf_url || null,
-      status_reason: payload?.status_reason || null,
+      Patient_ID: payload?.patient_id || null,
+      Status: payload?.status || null,
+      Request_Date: payload?.request_date || new Date().toISOString(),
+      Requested_By: payload?.requested_by || null,
+      Approved_By: payload?.approved_by || null,
+      Approved_At: payload?.approved_at || null,
+      Updated_At: new Date().toISOString(),
+      Pdf_Url: payload?.pdf_url || null,
+      Status_Reason: payload?.status_reason || null,
+      Hospital_ID: payload?.hospital_id || null,
     }])
-    .select(`
-      req_id,
-      patient_id,
-      status,
-      request_date,
-      requested_by,
-      approved_by,
-      approved_at,
-      updated_at,
-      pdf_url,
-      status_reason
-    `)
+    .select(wigRequestSelect)
     .single();
 
   return {
@@ -134,31 +206,28 @@ export const createWigRequest = async (payload) => {
 };
 
 export const createWigSpecification = async (payload) => {
+  logWigQuery('createWigSpecification', {
+    table: wigRequestSpecificationsTable,
+    phase: 'create',
+    filters: { Req_ID: payload?.wig_request_id || payload?.req_id || null },
+    columns: ['Req_ID', 'Preferred_Color', 'Preferred_Length', 'Hair_Texture', 'Cap_Size', 'Style_Preference', 'Special_Notes', 'AI_Wig_Preview_URL'],
+  });
+
   const result = await supabase
-    .from('wig_request_specifications')
+    .from(wigRequestSpecificationsTable)
     .upsert([{
-      req_id: payload?.wig_request_id || payload?.req_id || null,
-      preferred_color: payload?.preferred_color || null,
-      preferred_length: payload?.preferred_length || null,
-      hair_texture: payload?.hair_texture || null,
-      cap_size: payload?.cap_size || null,
-      style_preference: payload?.style_preference || null,
-      special_notes: payload?.notes || payload?.special_notes || null,
-      ai_wig_preview_url: payload?.ai_wig_preview_url || null,
+      Req_ID: payload?.wig_request_id || payload?.req_id || null,
+      Preferred_Color: payload?.preferred_color || null,
+      Preferred_Length: payload?.preferred_length || null,
+      Hair_Texture: payload?.hair_texture || null,
+      Cap_Size: payload?.cap_size || null,
+      Style_Preference: payload?.style_preference || null,
+      Special_Notes: payload?.notes || payload?.special_notes || null,
+      AI_Wig_Preview_URL: payload?.ai_wig_preview_url || null,
     }], {
-      onConflict: 'req_id',
+      onConflict: 'Req_ID',
     })
-    .select(`
-      req_spec_id,
-      req_id,
-      preferred_color,
-      preferred_length,
-      hair_texture,
-      cap_size,
-      style_preference,
-      special_notes,
-      ai_wig_preview_url
-    `)
+    .select(wigSpecificationSelect)
     .single();
 
   return {
@@ -168,62 +237,116 @@ export const createWigSpecification = async (payload) => {
 };
 
 export const fetchLatestWigRequestByPatientDetailsId = async (patientId) => {
+  logWigQuery('fetchLatestWigRequestByPatientDetailsId', {
+    table: wigRequestsTable,
+    phase: 'read',
+    filters: { Patient_ID: patientId },
+    columns: ['Req_ID', 'Patient_ID', 'Status', 'Request_Date', 'Requested_By', 'Approved_By', 'Approved_At', 'Updated_At', 'Pdf_Url', 'Status_Reason'],
+  });
+
   const result = await supabase
-    .from('wig_requests')
-    .select(`
-      req_id,
-      patient_id,
-      status,
-      request_date,
-      requested_by,
-      approved_by,
-      approved_at,
-      updated_at,
-      pdf_url,
-      status_reason,
-      wig_request_specifications (
-        special_notes,
-        ai_wig_preview_url
-      )
-    `)
-    .eq('patient_id', patientId)
-    .order('updated_at', { ascending: false })
+    .from(wigRequestsTable)
+    .select(wigRequestSelect)
+    .eq('Patient_ID', patientId)
+    .order('Updated_At', { ascending: false })
     .limit(1)
     .maybeSingle();
 
+  if (result.error || !result.data?.req_id) {
+    return {
+      data: result.data ? normalizeWigRequest(result.data) : null,
+      error: result.error,
+    };
+  }
+
+  const specificationResult = await supabase
+    .from(wigRequestSpecificationsTable)
+    .select(wigSpecificationSelect)
+    .eq('Req_ID', result.data.req_id)
+    .maybeSingle();
+
+  if (specificationResult.error) {
+    logAppError('wig_request.query.fetchLatestWigRequestByPatientDetailsId.specification', specificationResult.error, {
+      table: wigRequestSpecificationsTable,
+      phase: 'read',
+      filters: { Req_ID: result.data.req_id },
+    });
+  }
+
   return {
-    data: result.data ? normalizeWigRequest(result.data) : null,
+    data: result.data ? normalizeWigRequest({
+      ...result.data,
+      wig_request_specifications: specificationResult.data ? [specificationResult.data] : [],
+    }) : null,
     error: result.error,
   };
 };
 
 export const fetchLatestWigSpecificationByRequestId = async (wigRequestId) => {
+  logWigQuery('fetchLatestWigSpecificationByRequestId', {
+    table: wigRequestSpecificationsTable,
+    phase: 'read',
+    filters: { Req_ID: wigRequestId },
+    columns: ['Req_Spec_ID', 'Req_ID', 'Preferred_Color', 'Preferred_Length', 'Hair_Texture', 'Cap_Size', 'Style_Preference', 'Special_Notes', 'AI_Wig_Preview_URL'],
+  });
+
   const result = await supabase
-    .from('wig_request_specifications')
-    .select(`
-      req_spec_id,
-      req_id,
-      preferred_color,
-      preferred_length,
-      hair_texture,
-      cap_size,
-      style_preference,
-      special_notes,
-      ai_wig_preview_url,
-      wig_requests (
-        req_id,
-        patient_id,
-        updated_at,
-        patients (
-          patient_picture
-        )
-      )
-    `)
-    .eq('req_id', wigRequestId)
+    .from(wigRequestSpecificationsTable)
+    .select(wigSpecificationSelect)
+    .eq('Req_ID', wigRequestId)
     .maybeSingle();
 
+  if (result.error || !result.data) {
+    return {
+      data: result.data ? normalizeWigSpecification(result.data) : null,
+      error: result.error,
+    };
+  }
+
+  const wigRequestResult = await supabase
+    .from(wigRequestsTable)
+    .select(`
+      req_id:Req_ID,
+      patient_id:Patient_ID,
+      updated_at:Updated_At
+    `)
+    .eq('Req_ID', wigRequestId)
+    .maybeSingle();
+
+  if (wigRequestResult.error) {
+    logAppError('wig_request.query.fetchLatestWigSpecificationByRequestId.request', wigRequestResult.error, {
+      table: wigRequestsTable,
+      phase: 'read',
+      filters: { Req_ID: wigRequestId },
+    });
+  }
+
+  const patientResult = wigRequestResult.data?.patient_id
+    ? await supabase
+      .from(patientsTable)
+      .select(patientPictureSelect)
+      .eq('Patient_ID', wigRequestResult.data.patient_id)
+      .maybeSingle()
+    : { data: null, error: null };
+
+  if (patientResult.error) {
+    logAppError('wig_request.query.fetchLatestWigSpecificationByRequestId.patient', patientResult.error, {
+      table: patientsTable,
+      phase: 'read',
+      filters: { Patient_ID: wigRequestResult.data?.patient_id || null },
+    });
+  }
+
   return {
-    data: result.data ? normalizeWigSpecification(result.data) : null,
+    data: result.data ? normalizeWigSpecification({
+      ...result.data,
+      wig_requests: wigRequestResult.data
+        ? [{
+            ...wigRequestResult.data,
+            patients: patientResult.data ? [patientResult.data] : [],
+          }]
+        : [],
+    }) : null,
     error: result.error,
   };
 };
@@ -272,53 +395,108 @@ export const getStoragePublicUrl = ({ path, bucket = wigReferenceStorageBucket }
 );
 
 export const fetchLatestWigAllocationByPatientDetailsId = async (patientId) => {
+  logWigQuery('fetchLatestWigAllocationByPatientDetailsId', {
+    table: wigAllocationsTable,
+    phase: 'read',
+    filters: { Patient_ID: patientId },
+    columns: ['Allocation_ID', 'Wig_ID', 'Patient_ID', 'Wig_Request_ID', 'Allocated_By', 'Allocated_At', 'Release_Status', 'Released_At', 'Notes'],
+  });
+
   const result = await supabase
-    .from('wig_allocations')
-    .select(`
-      allocation_id,
-      wig_id,
-      patient_id,
-      wig_request_id,
-      allocated_by,
-      allocated_at,
-      release_status,
-      released_at,
-      notes,
-      wigs (
-        wig_id,
-        wig_code,
-        wig_name,
-        wig_status,
-        production_notes,
-        completed_at,
-        updated_at,
-        wig_physical_specifications (
-          color,
-          length,
-          hair_texture,
-          cap_size,
-          style,
-          notes
-        )
-      ),
-      wig_requests!inner (
-        req_id,
-        patient_id,
-        status,
-        request_date,
-        wig_request_specifications (
-          special_notes,
-          ai_wig_preview_url
-        )
-      )
-    `)
-    .eq('patient_id', patientId)
-    .order('allocated_at', { ascending: false })
+    .from(wigAllocationsTable)
+    .select(wigAllocationSelect)
+    .eq('Patient_ID', patientId)
+    .order('Allocated_At', { ascending: false })
     .limit(1)
     .maybeSingle();
 
+  if (result.error || !result.data) {
+    return {
+      data: result.data ? normalizeWigAllocation(result.data) : null,
+      error: result.error,
+    };
+  }
+
+  const wigResult = result.data.wig_id
+    ? await supabase
+      .from(wigsTable)
+      .select(wigSelect)
+      .eq('Wig_ID', result.data.wig_id)
+      .maybeSingle()
+    : { data: null, error: null };
+
+  if (wigResult.error) {
+    logAppError('wig_request.query.fetchLatestWigAllocationByPatientDetailsId.wig', wigResult.error, {
+      table: wigsTable,
+      phase: 'read',
+      filters: { Wig_ID: result.data.wig_id || null },
+    });
+  }
+
+  const physicalSpecResult = wigResult.data?.wig_id
+    ? await supabase
+      .from(wigPhysicalSpecificationsTable)
+      .select(wigPhysicalSpecificationSelect)
+      .eq('Wig_ID', wigResult.data.wig_id)
+      .maybeSingle()
+    : { data: null, error: null };
+
+  if (physicalSpecResult.error) {
+    logAppError('wig_request.query.fetchLatestWigAllocationByPatientDetailsId.physical_spec', physicalSpecResult.error, {
+      table: wigPhysicalSpecificationsTable,
+      phase: 'read',
+      filters: { Wig_ID: wigResult.data?.wig_id || null },
+    });
+  }
+
+  const wigRequestResult = result.data.wig_request_id
+    ? await supabase
+      .from(wigRequestsTable)
+      .select(wigRequestSelect)
+      .eq('Req_ID', result.data.wig_request_id)
+      .maybeSingle()
+    : { data: null, error: null };
+
+  if (wigRequestResult.error) {
+    logAppError('wig_request.query.fetchLatestWigAllocationByPatientDetailsId.request', wigRequestResult.error, {
+      table: wigRequestsTable,
+      phase: 'read',
+      filters: { Req_ID: result.data.wig_request_id || null },
+    });
+  }
+
+  const requestSpecificationResult = wigRequestResult.data?.req_id
+    ? await supabase
+      .from(wigRequestSpecificationsTable)
+      .select(wigSpecificationSelect)
+      .eq('Req_ID', wigRequestResult.data.req_id)
+      .maybeSingle()
+    : { data: null, error: null };
+
+  if (requestSpecificationResult.error) {
+    logAppError('wig_request.query.fetchLatestWigAllocationByPatientDetailsId.specification', requestSpecificationResult.error, {
+      table: wigRequestSpecificationsTable,
+      phase: 'read',
+      filters: { Req_ID: wigRequestResult.data?.req_id || null },
+    });
+  }
+
   return {
-    data: result.data ? normalizeWigAllocation(result.data) : null,
+    data: result.data ? normalizeWigAllocation({
+      ...result.data,
+      wigs: wigResult.data
+        ? [{
+            ...wigResult.data,
+            wig_physical_specifications: physicalSpecResult.data ? [physicalSpecResult.data] : [],
+          }]
+        : [],
+      wig_requests: wigRequestResult.data
+        ? [{
+            ...wigRequestResult.data,
+            wig_request_specifications: requestSpecificationResult.data ? [requestSpecificationResult.data] : [],
+          }]
+        : [],
+    }) : null,
     error: result.error,
   };
 };

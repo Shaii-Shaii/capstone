@@ -1,6 +1,6 @@
 import { invokeEdgeFunction } from '../api/supabase/client';
 import { wigGenerationFunctionName } from './wigRequest.constants';
-import { getErrorMessage, logAppError } from '../utils/appErrors';
+import { getErrorMessage, logAppError, logAppEvent } from '../utils/appErrors';
 
 const normalizePreview = (data) => ({
   summary: data?.summary || '',
@@ -77,6 +77,13 @@ export const generatePatientWigPreview = async ({ preferences, referenceImage })
       reference_image: normalizedReferenceImage,
     };
 
+    logAppEvent('wigGeneration.invoke', 'Invoking wig preview edge function.', {
+      functionName: wigGenerationFunctionName,
+      hasReferenceImageDataUrl: Boolean(normalizedReferenceImage.dataUrl),
+      hasReferenceImageUrl: Boolean(normalizedReferenceImage.imageUrl),
+      payloadKeys: Object.keys(payload),
+    });
+
     const { data, error } = await invokeEdgeFunction(wigGenerationFunctionName, {
       body: payload,
     });
@@ -87,6 +94,13 @@ export const generatePatientWigPreview = async ({ preferences, referenceImage })
 
     const previewPayload = data?.preview ? data.preview : data;
     const preview = normalizePreview(previewPayload);
+
+    logAppEvent('wigGeneration.invoke', 'Wig preview edge function returned.', {
+      functionName: wigGenerationFunctionName,
+      responseKeys: data ? Object.keys(data) : [],
+      previewKeys: previewPayload ? Object.keys(previewPayload) : [],
+      optionCount: preview.options.length,
+    });
 
     if (!preview.summary && !preview.recommended_style_name && !preview.options.length) {
       throw new Error('The wig preview response was incomplete.');

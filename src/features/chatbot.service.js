@@ -12,7 +12,7 @@ import {
   fetchLatestWigRequestByPatientDetailsId,
 } from './wigRequest.api';
 import { getProfileBundle } from './profile/services/profile.service';
-import { logAppError, writeAuditLog } from '../utils/appErrors';
+import { logAppError, logAppEvent, writeAuditLog } from '../utils/appErrors';
 
 const getNormalizedErrorMessage = (error) => (
   error?.message
@@ -22,7 +22,13 @@ const getNormalizedErrorMessage = (error) => (
 );
 
 const isMissingChatTableError = (error) => (
-  getNormalizedErrorMessage(error).toLowerCase().includes("could not find the table 'public.chatbot_")
+  (() => {
+    const normalized = getNormalizedErrorMessage(error).toLowerCase();
+    return normalized.includes("could not find the table 'public.chatbot_")
+      || normalized.includes("could not find the table 'public.\"chatbot_")
+      || normalized.includes('relation "public.chatbot_')
+      || normalized.includes('relation "chatbot_');
+  })()
 );
 
 const extractFunctionErrorMessage = async (error) => {
@@ -294,6 +300,15 @@ const invokeChatbotAiReply = async ({
     })),
   ].slice(-8);
 
+  logAppEvent('chatbot.ai.invoke', 'Invoking chatbot edge function.', {
+    functionName: chatbotAiFunctionName,
+    role,
+    faqCount: faqs?.length || 0,
+    recentMessageCount: contextualRecentMessages.length,
+    hasFallbackMessage: Boolean(settings?.fallbackMessage),
+    hasSupportContext: Boolean(buildSupportContextText(supportContext)),
+  });
+
   const { data, error } = await invokeEdgeFunction(chatbotAiFunctionName, {
     body: {
       role,
@@ -316,6 +331,12 @@ const invokeChatbotAiReply = async ({
     throw error;
   }
 
+  logAppEvent('chatbot.ai.invoke', 'Chatbot edge function returned.', {
+    functionName: chatbotAiFunctionName,
+    responseKeys: data ? Object.keys(data) : [],
+    hasReply: Boolean(data?.reply),
+  });
+
   const reply = normalizeAiReply(data);
   if (!reply.text) {
     throw new Error('The chatbot AI response was incomplete.');
@@ -331,6 +352,13 @@ const persistConversationToBackend = async ({
   messages,
 }) => {
   try {
+    logAppEvent('chatbot.persist', 'Persisting chatbot messages.', {
+      role,
+      userId,
+      hasConversationId: Boolean(conversationId),
+      newMessageCount: messages?.length || 0,
+    });
+
     let resolvedConversationId = conversationId;
 
     if (!resolvedConversationId) {
@@ -409,6 +437,11 @@ export const loadChatbotBootstrap = async ({ userId, role }) => {
   const defaultSettings = normalizeSettings(null);
 
   try {
+    logAppEvent('chatbot.bootstrap', 'Loading chatbot bootstrap.', {
+      role,
+      userId,
+    });
+
     const [settingsResult, faqResult, conversationResult] = await Promise.all([
       ChatbotAPI.fetchChatbotSettings(),
       ChatbotAPI.fetchChatbotFaqs(),

@@ -1,6 +1,6 @@
 import { invokeEdgeFunction } from '../api/supabase/client';
 import { hairAnalysisFunctionName } from './hairSubmission.constants';
-import { getErrorMessage, logAppError } from '../utils/appErrors';
+import { getErrorMessage, logAppError, logAppEvent } from '../utils/appErrors';
 
 const normalizeRecommendations = (source = []) => (
   source
@@ -95,6 +95,12 @@ export const analyzeHairPhotos = async ({ images }) => {
       })),
     };
 
+    logAppEvent('hairAnalysis.invoke', 'Invoking hair analysis edge function.', {
+      functionName: hairAnalysisFunctionName,
+      imageCount: payload.images.length,
+      imageViews: payload.images.map((image) => image.viewLabel || image.viewKey).filter(Boolean),
+    });
+
     const functionResult = await invokeEdgeFunction(hairAnalysisFunctionName, {
       body: payload,
     });
@@ -104,6 +110,17 @@ export const analyzeHairPhotos = async ({ images }) => {
     }
 
     const analysisPayload = functionResult.data?.analysis ? functionResult.data.analysis : functionResult.data;
+    logAppEvent('hairAnalysis.invoke', 'Hair analysis edge function returned.', {
+      functionName: hairAnalysisFunctionName,
+      responseKeys: functionResult.data ? Object.keys(functionResult.data) : [],
+      analysisKeys: analysisPayload ? Object.keys(analysisPayload) : [],
+      recommendationCount: Array.isArray(analysisPayload?.recommendations)
+        ? analysisPayload.recommendations.length
+        : Array.isArray(functionResult.data?.recommendations)
+          ? functionResult.data.recommendations.length
+          : 0,
+    });
+
     if (!analysisPayload) {
       throw new Error('The AI analysis response was incomplete.');
     }

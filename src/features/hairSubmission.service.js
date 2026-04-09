@@ -8,7 +8,7 @@ import {
   hairSubmissionStatuses,
   hairSubmissionStorageBucket,
 } from './hairSubmission.constants';
-import { writeAuditLog } from '../utils/appErrors';
+import { logAppEvent, writeAuditLog } from '../utils/appErrors';
 
 const buildSubmissionCode = () => `HS-${Date.now().toString(36).toUpperCase()}`;
 
@@ -37,6 +37,15 @@ const uploadSelectedImages = async ({ userId, submissionId, detailId, photos }) 
     if (uploadResult.error) {
       throw new Error(uploadResult.error.message || 'Failed to upload one of the selected photos.');
     }
+
+    logAppEvent('hair_submission.save', 'Hair submission photo uploaded.', {
+      userId,
+      submissionId,
+      detailId,
+      index,
+      viewKey: photo.viewKey || null,
+      bucket: hairSubmissionStorageBucket,
+    });
 
     uploadedRows.push({
       submission_detail_id: detailId,
@@ -70,6 +79,13 @@ export const saveHairSubmissionFlow = async ({
     if (!photos?.length) throw new Error('Please upload at least one photo.');
     if (!aiAnalysis) throw new Error('Run the AI analysis before saving.');
 
+    logAppEvent('hair_submission.save', 'Saving analyzed hair submission.', {
+      userId,
+      photoCount: photos.length,
+      hasAnalysis: Boolean(aiAnalysis),
+      analysisKeys: aiAnalysis ? Object.keys(aiAnalysis) : [],
+    });
+
     const { data: submission, error: submissionError } = await HairSubmissionAPI.createHairSubmission({
       user_id: userId,
       submission_code: buildSubmissionCode(),
@@ -82,6 +98,11 @@ export const saveHairSubmissionFlow = async ({
     if (submissionError) {
       throw new Error(submissionError.message || 'Unable to create the hair submission.');
     }
+
+    logAppEvent('hair_submission.save', 'Hair submission row created.', {
+      userId,
+      submissionId: submission?.submission_id || null,
+    });
 
     const { data: detail, error: detailError } = await HairSubmissionAPI.createHairSubmissionDetail({
       submission_id: submission.submission_id,
@@ -98,6 +119,12 @@ export const saveHairSubmissionFlow = async ({
       throw new Error(detailError.message || 'Unable to save the donor-confirmed hair details.');
     }
 
+    logAppEvent('hair_submission.save', 'Hair submission detail row created.', {
+      userId,
+      submissionId: submission?.submission_id || null,
+      detailId: detail?.submission_detail_id || null,
+    });
+
     const imageRows = await uploadSelectedImages({
       userId,
       submissionId: submission.submission_id,
@@ -109,6 +136,13 @@ export const saveHairSubmissionFlow = async ({
     if (imageInsertError) {
       throw new Error(imageInsertError.message || 'Unable to save the uploaded image references.');
     }
+
+    logAppEvent('hair_submission.save', 'Hair submission image references saved.', {
+      userId,
+      submissionId: submission?.submission_id || null,
+      detailId: detail?.submission_detail_id || null,
+      imageRowCount: imageRows.length,
+    });
 
     const { data: screening, error: screeningError } = await HairSubmissionAPI.createAiScreening({
       submission_id: submission.submission_id,
@@ -126,6 +160,12 @@ export const saveHairSubmissionFlow = async ({
       throw new Error(screeningError.message || 'Unable to save the AI screening result.');
     }
 
+    logAppEvent('hair_submission.save', 'AI screening row created.', {
+      userId,
+      submissionId: submission?.submission_id || null,
+      screeningId: screening?.ai_screening_id || null,
+    });
+
     const recommendationRows = buildRecommendationRows({
       submissionId: submission.submission_id,
       recommendations: aiAnalysis.recommendations,
@@ -137,6 +177,12 @@ export const saveHairSubmissionFlow = async ({
       if (recommendationError) {
         throw new Error(recommendationError.message || 'Unable to save the donor guidance recommendations.');
       }
+
+      logAppEvent('hair_submission.save', 'Donor recommendations saved.', {
+        userId,
+        submissionId: submission?.submission_id || null,
+        recommendationCount: recommendationRows.length,
+      });
     }
 
     const notificationEvents = buildImmediateNotificationEvents({
