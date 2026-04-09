@@ -1038,8 +1038,28 @@ export const fetchPatientDetailsByUserId = async (userIdentifier) => {
     queryBuilder: supabase
       .from(patientsTable)
       .select('*')
-      .eq('user_id', systemUserResult.data.user_id)
-      .order('updated_at', { ascending: false }),
+      .eq('user_id', systemUserResult.data.user_id),
+  });
+
+  return {
+    data: result.data ? normalizePatient(result.data) : null,
+    error: result.error,
+  };
+};
+
+export const fetchPatientDetailsByPatientId = async (patientId) => {
+  if (!patientId) {
+    return { data: null, error: new Error('Patient ID is required.') };
+  }
+
+  const result = await runSingleRowSelect({
+    table: patientsTable,
+    filter: { patient_id: patientId },
+    patientId,
+    queryBuilder: supabase
+      .from(patientsTable)
+      .select('*')
+      .eq('patient_id', patientId),
   });
 
   return {
@@ -1062,8 +1082,7 @@ export const fetchHospitalStaffByUserId = async (userIdentifier) => {
     queryBuilder: supabase
       .from(hospitalRepresentativeTable)
       .select('*')
-      .eq('user_id', systemUserResult.data.user_id)
-      .order('assigned_date', { ascending: false }),
+      .eq('user_id', systemUserResult.data.user_id),
   });
 
   return {
@@ -1084,8 +1103,7 @@ export const fetchHospitalRepresentativeById = async (hospitalId) => {
     queryBuilder: supabase
       .from(hospitalsTable)
       .select('*')
-      .eq('hospital_id', hospitalId)
-      .order('updated_at', { ascending: false }),
+      .eq('hospital_id', hospitalId),
   });
 
   return {
@@ -1141,8 +1159,7 @@ export const fetchPatientDetailsByCode = async (patientCode) => {
     queryBuilder: supabase
       .from(patientsTable)
       .select('*')
-      .ilike('patient_code', normalizedCode)
-      .order('updated_at', { ascending: false }),
+      .ilike('patient_code', normalizedCode),
   });
 
   if (result.error || !result.data) {
@@ -1240,9 +1257,7 @@ export const createPatientDetails = async (payload) => {
       guardian_relationship: patientPayload.guardian_relationship,
       guardian_contact_number: patientPayload.guardian_contact_number,
       medical_document: patientPayload.medical_document,
-    }])
-    .select()
-    .maybeSingle();
+    }]);
 
   if (result.error) {
     logAppError('profile.query.insert_failed', result.error, buildQueryContext({
@@ -1261,21 +1276,14 @@ export const createPatientDetails = async (payload) => {
     };
   }
 
-  if (!result.data?.patient_id) {
-    logAppEvent('profile.query.insert_no_row', 'Insert succeeded without a returned patients row. Refetching.', {
-      table: patientsTable,
-      filter: { user_id: systemUserResult.data.user_id },
-      authUserId: systemUserResult.data.auth_user_id || '',
-      systemUserId: systemUserResult.data.user_id,
-    }, 'warn');
+  logAppEvent('profile.query.insert_succeeded', 'Patients insert succeeded. Refetching by direct patient filters.', {
+    table: patientsTable,
+    filter: { user_id: systemUserResult.data.user_id },
+    authUserId: systemUserResult.data.auth_user_id || '',
+    systemUserId: systemUserResult.data.user_id,
+  });
 
-    return await fetchPatientDetailsByUserId(systemUserResult.data.auth_user_id || systemUserResult.data.user_id);
-  }
-
-  return {
-    data: result.data ? normalizePatient(result.data) : null,
-    error: result.error,
-  };
+  return await fetchPatientDetailsByUserId(systemUserResult.data.auth_user_id || systemUserResult.data.user_id);
 };
 
 export const updatePatientPictureByPatientId = async (patientId, patientPicture) => {
@@ -1285,9 +1293,7 @@ export const updatePatientPictureByPatientId = async (patientId, patientPicture)
       patient_picture: patientPicture,
       updated_at: new Date().toISOString(),
     })
-    .eq('patient_id', patientId)
-    .select()
-    .maybeSingle();
+    .eq('patient_id', patientId);
 
   if (result.error) {
     logAppError('profile.query.update_failed', result.error, buildQueryContext({
@@ -1301,10 +1307,7 @@ export const updatePatientPictureByPatientId = async (patientId, patientPicture)
     };
   }
 
-  return {
-    data: result.data ? normalizePatient(result.data) : null,
-    error: result.error,
-  };
+  return await fetchPatientDetailsByPatientId(patientId);
 };
 
 export const updatePatientDetails = async (userIdentifier, updates) => {
@@ -1361,9 +1364,7 @@ export const updatePatientDetails = async (userIdentifier, updates) => {
   const result = await supabase
     .from(patientsTable)
     .update(patientPayload)
-    .eq('patient_id', refreshedPatient.data.patient_id)
-    .select()
-    .maybeSingle();
+    .eq('patient_id', refreshedPatient.data.patient_id);
 
   if (result.error) {
     logAppError('profile.query.update_failed', result.error, buildQueryContext({
@@ -1383,10 +1384,15 @@ export const updatePatientDetails = async (userIdentifier, updates) => {
     };
   }
 
-  return {
-    data: result.data ? normalizePatient(result.data) : null,
-    error: result.error,
-  };
+  logAppEvent('profile.query.update_succeeded', 'Patients update succeeded. Refetching by patient_id.', {
+    table: patientsTable,
+    filter: { patient_id: refreshedPatient.data.patient_id },
+    patientId: refreshedPatient.data.patient_id,
+    authUserId: isUuid(userIdentifier) ? userIdentifier : '',
+    systemUserId: refreshedPatient.data.user_id || null,
+  });
+
+  return await fetchPatientDetailsByPatientId(refreshedPatient.data.patient_id);
 };
 
 export const linkPatientDetailsToUserByCode = async ({
@@ -1462,9 +1468,7 @@ export const linkPatientDetailsToUserByCode = async ({
   const result = await supabase
     .from(patientsTable)
     .update(updates)
-    .eq('patient_id', patientResult.data.patient_id)
-    .select()
-    .maybeSingle();
+    .eq('patient_id', patientResult.data.patient_id);
 
   if (result.error) {
     logAppError('profile.query.update_failed', result.error, buildQueryContext({
@@ -1484,8 +1488,13 @@ export const linkPatientDetailsToUserByCode = async ({
     };
   }
 
-  return {
-    data: result.data ? normalizePatient(result.data) : null,
-    error: result.error,
-  };
+  logAppEvent('profile.query.update_succeeded', 'Patient link update succeeded. Refetching by patient_id.', {
+    table: patientsTable,
+    filter: { patient_id: patientResult.data.patient_id },
+    patientId: patientResult.data.patient_id,
+    authUserId: systemUserResult.data.auth_user_id || '',
+    systemUserId: systemUserResult.data.user_id,
+  });
+
+  return await fetchPatientDetailsByPatientId(patientResult.data.patient_id);
 };
