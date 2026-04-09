@@ -153,6 +153,13 @@ Deno.serve(async (request) => {
       }, 422);
     }
 
+    console.info('[analyze-hair-submission] invoked', {
+      imageCount: images.length,
+      validImageCount: validImages.length,
+      providedViews: Array.from(providedViews),
+      missingProvidedViews,
+    });
+
     const userContent = [
       {
         type: 'input_text',
@@ -195,6 +202,13 @@ Deno.serve(async (request) => {
     });
 
     const analysis = result?.analysis;
+
+    console.info('[analyze-hair-submission] openai result ready', {
+      hasAnalysis: Boolean(analysis),
+      isHairDetected: analysis?.is_hair_detected ?? null,
+      missingViews: Array.isArray(analysis?.missing_views) ? analysis.missing_views : [],
+      responseKeys: result && typeof result === 'object' ? Object.keys(result) : [],
+    });
 
     if (!analysis?.is_hair_detected) {
       return createJsonResponse({

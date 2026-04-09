@@ -34,11 +34,7 @@ const extractOutputText = (payload: any) => {
 };
 
 export const readOpenAiKey = () => {
-  const openAiKey = (
-    Deno.env.get('OPEN_API_KEY')
-    || Deno.env.get('OPENAI_API_KEY')
-    || ''
-  ).trim();
+  const openAiKey = (Deno.env.get('OPENAI_API_KEY') || '').trim();
 
   if (!openAiKey) {
     throw new Error('OpenAI API key is not configured in Edge Function Secrets.');
@@ -60,6 +56,14 @@ export const createStructuredResponse = async ({
   maxOutputTokens = 1200,
   model = getDefaultOpenAiModel(),
 }: StructuredResponseOptions) => {
+  console.info('[openai] preparing structured response request', {
+    schemaName,
+    model,
+    hasInstructions: Boolean(instructions),
+    inputMessageCount: Array.isArray(input) ? input.length : 0,
+    hasOpenAiKey: Boolean(Deno.env.get('OPENAI_API_KEY')),
+  });
+
   const openAiKey = readOpenAiKey();
   const requestBody = {
     model,
@@ -98,6 +102,13 @@ export const createStructuredResponse = async ({
   });
 
   const payload = await response.json().catch(() => ({}));
+
+  console.info('[openai] response received', {
+    schemaName,
+    ok: response.ok,
+    status: response.status,
+    payloadKeys: payload && typeof payload === 'object' ? Object.keys(payload) : [],
+  });
 
   if (!response.ok) {
     throw new Error(extractErrorMessage(payload));

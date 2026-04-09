@@ -552,17 +552,15 @@ export const resolveChatbotReply = async ({
       });
     }
 
-    return {
-      text: errorMessage.includes('requested function was not found') || errorMessage.includes('not_found')
-        ? [
-          'Chat support is still being connected on the server.',
-          supportContext.mapLinks?.length ? 'You can still open a suggested location below.' : '',
-        ].filter(Boolean).join('\n\n')
-        : settings?.fallbackMessage || 'I could not answer that right now. Please try again in a moment.',
-      source: 'fallback',
-      attachments: [],
-      actions: buildMapActions(supportContext.mapLinks || []),
-    };
+    const userMessage = errorMessage.includes('requested function was not found') || errorMessage.includes('not_found')
+      ? 'We could not generate a reply right now.'
+      : errorMessage.includes('openai api key is not configured')
+        ? 'We could not generate a reply right now.'
+        : 'We could not generate a reply right now.';
+
+    const surfacedError = new Error(userMessage);
+    surfacedError.actions = buildMapActions(supportContext.mapLinks || []);
+    throw surfacedError;
   }
 };
 

@@ -45,6 +45,10 @@ export const useChatbot = ({ role, userId }) => {
       return 'Please enter a message first.';
     }
 
+    if (type === 'send' && message.includes('generate a reply')) {
+      return 'We could not generate a reply right now.';
+    }
+
     if (type === 'save') {
       return 'Your message was sent, but chat history may not update right away.';
     }

@@ -81,6 +81,14 @@ Deno.serve(async (request) => {
       : '';
     const referenceImage = referenceImageDataUrl || referenceImageUrl;
 
+    console.info('[generate-wig-preview] invoked', {
+      hasPreferredColor: Boolean(preferredColor),
+      hasPreferredLength: Boolean(preferredLength),
+      hasNotes: Boolean(notes),
+      hasReferenceImageDataUrl: Boolean(referenceImageDataUrl),
+      hasReferenceImageUrl: Boolean(referenceImageUrl),
+    });
+
     const userContent: Record<string, unknown>[] = [
       {
         type: 'input_text',
@@ -119,6 +127,12 @@ Deno.serve(async (request) => {
           content: userContent,
         },
       ],
+    });
+
+    console.info('[generate-wig-preview] openai result ready', {
+      hasPreview: Boolean(result?.preview),
+      optionCount: Array.isArray(result?.preview?.options) ? result.preview.options.length : 0,
+      responseKeys: result && typeof result === 'object' ? Object.keys(result) : [],
     });
 
     return createJsonResponse(result);

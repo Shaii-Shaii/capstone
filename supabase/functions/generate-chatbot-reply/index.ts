@@ -48,6 +48,14 @@ Deno.serve(async (request) => {
       return createJsonResponse({ error: 'A message is required.' }, 400);
     }
 
+    console.info('[generate-chatbot-reply] invoked', {
+      role,
+      hasMessage: Boolean(message),
+      faqCount: faqs.length,
+      recentMessageCount: recentMessages.length,
+      hasFallbackMessage: Boolean(settings?.fallbackMessage),
+    });
+
     const result = await createStructuredResponse({
       instructions,
       schemaName: 'chatbot_reply',
@@ -82,6 +90,11 @@ Deno.serve(async (request) => {
           ],
         },
       ],
+    });
+
+    console.info('[generate-chatbot-reply] openai result ready', {
+      hasReply: Boolean(result?.reply?.text),
+      responseKeys: result && typeof result === 'object' ? Object.keys(result) : [],
     });
 
     return createJsonResponse(result);
