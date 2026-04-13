@@ -2,14 +2,15 @@ import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { DashboardLayout } from './DashboardLayout';
-import { DashboardHeader } from '../ui/DashboardHeader';
 import { DashboardSectionHeader } from '../ui/DashboardSectionHeader';
 import { AppCard } from '../ui/AppCard';
 import { AppButton } from '../ui/AppButton';
 import { AppIcon } from '../ui/AppIcon';
+import { DonorTopBar } from '../donor/DonorTopBar';
 import { ProcessStatusTracker } from '../tracking/ProcessStatusTracker';
 import { useNotifications } from '../../hooks/useNotifications';
 import { useAuth } from '../../providers/AuthProvider';
+import { useAuthActions } from '../../features/auth/hooks/useAuthActions';
 import { useProcessTracking } from '../../hooks/useProcessTracking';
 import { donorDashboardNavItems } from '../../constants/dashboard';
 import { theme } from '../../design-system/theme';
@@ -17,6 +18,7 @@ import { theme } from '../../design-system/theme';
 export function DonorDonationStatusScreen() {
   const router = useRouter();
   const { user, profile } = useAuth();
+  const { logout, isLoading: isLoggingOut } = useAuthActions();
   const { unreadCount } = useNotifications({ role: 'donor', userId: user?.id, databaseUserId: profile?.user_id });
   const {
     tracker,
@@ -43,29 +45,16 @@ export function DonorDonationStatusScreen() {
       navVariant="donor"
       onNavPress={handleNavPress}
       header={(
-        <DashboardHeader
-          title="Donation Status"
+        <DonorTopBar
+          title="Donations"
           subtitle={tracker?.summary?.helperText || 'Latest donation update'}
-          summary=""
           avatarInitials={avatarInitials}
-          avatarUri={profile?.avatar_url}
-          variant="donor"
-          quickTools={[
-            {
-              key: 'submission',
-              label: 'New Upload',
-              icon: 'camera',
-              onPress: () => router.navigate('/donor/donations'),
-            },
-          ]}
-          utilityActions={[
-            {
-              key: 'notifications',
-              icon: 'notifications',
-              badge: unreadCount ? String(Math.min(unreadCount, 99)) : undefined,
-              onPress: () => router.navigate('/donor/notifications'),
-            },
-          ]}
+          avatarUri={profile?.avatar_url || profile?.photo_path || ''}
+          unreadCount={unreadCount}
+          onNotificationsPress={() => router.navigate('/donor/notifications')}
+          onProfilePress={() => router.navigate('/profile')}
+          onLogoutPress={logout}
+          isLoggingOut={isLoggingOut}
         />
       )}
     >

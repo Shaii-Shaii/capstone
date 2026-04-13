@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Platform } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { analyzeHairPhotos } from '../features/hairAnalysis.service';
 import { getHairDonationModuleContext, saveHairSubmissionFlow } from '../features/hairSubmission.service';
 import { hairAnalysisRequiredViews } from '../features/hairSubmission.constants';
@@ -10,6 +11,8 @@ const MAX_PHOTO_COUNT = hairAnalysisRequiredViews.length;
 const IMAGE_MEDIA_TYPES = ['images'];
 const WEB_SLOT_IMAGE_MAX_SIZE = 1200;
 const WEB_SLOT_IMAGE_QUALITY = 0.68;
+const NATIVE_SLOT_IMAGE_MAX_SIZE = 1280;
+const NATIVE_SLOT_IMAGE_QUALITY = 0.72;
 
 const createErrorState = (title, message) => ({
   title,
@@ -47,6 +50,23 @@ const buildDataUrlFromAsset = (asset) => {
   }
 
   return '';
+};
+
+const buildResizeAction = ({ width, height, maxSize }) => {
+  const resolvedWidth = Number(width || 0);
+  const resolvedHeight = Number(height || 0);
+
+  if (!resolvedWidth || !resolvedHeight) return [];
+
+  const scale = Math.min(1, maxSize / Math.max(resolvedWidth, resolvedHeight));
+  if (scale >= 1) return [];
+
+  return [{
+    resize: {
+      width: Math.max(1, Math.round(resolvedWidth * scale)),
+      height: Math.max(1, Math.round(resolvedHeight * scale)),
+    },
+  }];
 };
 
 const normalizeWebAssetForHairAnalysis = async (asset) => {
@@ -107,6 +127,47 @@ const normalizeWebAssetForHairAnalysis = async (asset) => {
     previewImage.src = sourceDataUrl;
   });
 };
+
+const normalizeNativeAssetForHairAnalysis = async (asset) => {
+  if (Platform.OS === 'web') return asset;
+  if (!asset?.uri) return asset;
+
+  const normalizedAsset = await manipulateAsync(
+    asset.uri,
+    buildResizeAction({
+      width: asset?.width,
+      height: asset?.height,
+      maxSize: NATIVE_SLOT_IMAGE_MAX_SIZE,
+    }),
+    {
+      compress: NATIVE_SLOT_IMAGE_QUALITY,
+      format: SaveFormat.JPEG,
+      base64: true,
+    }
+  );
+
+  if (!normalizedAsset?.uri || !normalizedAsset?.base64) {
+    throw new Error('The selected hair photo could not be processed for AI analysis.');
+  }
+
+  return {
+    ...asset,
+    uri: normalizedAsset.uri,
+    base64: normalizedAsset.base64,
+    dataUrl: `data:image/jpeg;base64,${normalizedAsset.base64}`,
+    mimeType: 'image/jpeg',
+    file: null,
+    width: normalizedAsset.width || asset?.width,
+    height: normalizedAsset.height || asset?.height,
+    fileName: asset?.fileName || '',
+  };
+};
+
+const normalizeAssetForHairAnalysis = async (asset) => (
+  Platform.OS === 'web'
+    ? await normalizeWebAssetForHairAnalysis(asset)
+    : await normalizeNativeAssetForHairAnalysis(asset)
+);
 
 const pickWebImageAsset = async ({ capture = false } = {}) => {
   if (typeof document === 'undefined') {
@@ -217,6 +278,10 @@ const mapAnalysisError = (message = '') => {
 
   if (normalized.includes('does not represent a valid image')) {
     return createErrorState('Photos Could Not Be Processed', 'One of the uploaded hair photos was saved in an unsupported image format. Please retake or upload that view again.');
+  }
+
+  if (normalized.includes('unsupported image') || normalized.includes('invalid image')) {
+    return createErrorState('Photos Could Not Be Processed', 'One of the uploaded hair photos uses an unsupported image format. Please retake or upload that view again.');
   }
 
   if (normalized.includes('too large for analysis')) {
@@ -389,7 +454,7 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
   };
 
   const savePhotoAssetForSlot = async (slotIndex, asset, sourceType = 'upload') => {
-    const preparedAsset = await normalizeWebAssetForHairAnalysis(asset);
+    const preparedAsset = await normalizeAssetForHairAnalysis(asset);
     const normalizedPhoto = buildPhotoRecord(preparedAsset, slotIndex, sourceType);
 
     if (!normalizedPhoto) {
@@ -575,6 +640,17 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
           declared_condition: analyzerContext.latestSubmissionDetail?.declared_condition || '',
         }
       : null;
+
+    logAppEvent('donor_hair_submission.analysis', 'Normalized image payload built for donor hair analysis.', {
+      userId,
+      imageCount: readyPhotos.length,
+      imageViews: readyPhotos.map((photo) => photo?.viewLabel || photo?.viewKey || null).filter(Boolean),
+      mimeTypes: readyPhotos.map((photo) => photo?.mimeType || '').filter(Boolean),
+      sourceTypes: readyPhotos.map((photo) => photo?.sourceType || '').filter(Boolean),
+      hasSubmissionContext: Boolean(submissionContext?.submission_id),
+      hasDonationRequirementContext: Boolean(analyzerContext.donationRequirement?.donation_requirement_id),
+      complianceAcknowledged: Boolean(complianceContext?.acknowledged),
+    });
 
     const result = await analyzeHairPhotos({
       images: readyPhotos,

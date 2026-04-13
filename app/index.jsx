@@ -7,7 +7,6 @@ import { Controller, useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { ScreenContainer } from '../src/components/ui/ScreenContainer';
 import { AppButton } from '../src/components/ui/AppButton';
-import { AppIcon } from '../src/components/ui/AppIcon';
 import { AppInput } from '../src/components/ui/AppInput';
 import { AppCard } from '../src/components/ui/AppCard';
 import { AppTextLink } from '../src/components/ui/AppTextLink';
@@ -21,7 +20,7 @@ import {
 } from '../src/features/profile/services/profile.service';
 import { patientOnboardingSchema } from '../src/features/profile/profile.schema';
 import { guardianRelationshipOptions, profileGenderOptions } from '../src/constants/profile';
-import { theme } from '../src/design-system/theme';
+import { resolveBrandLogoSource, theme } from '../src/design-system/theme';
 
 const normalizePatientCode = (value) => value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
 const IMAGE_MEDIA_TYPES = ['images'];
@@ -131,6 +130,25 @@ const getPickedMediaPayload = async (asset, fallbackPrefix) => {
   throw new Error('Unable to read the selected image.');
 };
 
+function BrandLogo({ resolvedTheme, plain = false }) {
+  const [imageFailed, setImageFailed] = useState(false);
+  const logoSource = resolveBrandLogoSource(resolvedTheme, imageFailed);
+
+  useEffect(() => {
+    setImageFailed(false);
+  }, [resolvedTheme?.logoIcon]);
+
+  return (
+    plain ? (
+      <Image source={logoSource} style={styles.logoPlain} resizeMode="contain" onError={() => setImageFailed(true)} />
+    ) : (
+      <View style={styles.logoWrap}>
+        <Image source={logoSource} style={styles.logo} resizeMode="contain" onError={() => setImageFailed(true)} />
+      </View>
+    )
+  );
+}
+
 function LoadingState() {
   const { resolvedTheme } = useAuth();
   return (
@@ -141,13 +159,7 @@ function LoadingState() {
       contentStyle={styles.screenContent}
     >
       <View style={styles.centeredContainer}>
-        <View style={styles.logoWrap}>
-          {resolvedTheme?.logoIcon ? (
-            <Image source={{ uri: resolvedTheme.logoIcon }} style={styles.logo} resizeMode="contain" />
-          ) : (
-            <AppIcon name="profile" size="xl" state="active" />
-          )}
-        </View>
+        <BrandLogo resolvedTheme={resolvedTheme} />
         {resolvedTheme?.brandName ? (
           <Text
             style={[
@@ -167,6 +179,8 @@ function LoadingState() {
 function PublicLanding() {
   const router = useRouter();
   const { resolvedTheme } = useAuth();
+  const heroTitle = 'Welcome';
+  const heroSubtitle = 'Where Hair Becomes Hope';
 
   const navigateWithHaptic = async (path) => {
     await Haptics.selectionAsync();
@@ -178,65 +192,45 @@ function PublicLanding() {
       scrollable={false}
       safeArea
       variant="auth"
-      heroColors={[theme.colors.dashboardDonorFrom, theme.colors.heroTo]}
       contentStyle={styles.screenContent}
     >
       <View style={styles.centeredContainer}>
-        <View style={styles.content}>
-          <View style={styles.logoWrap}>
-            {resolvedTheme?.logoIcon ? (
-              <Image source={{ uri: resolvedTheme.logoIcon }} style={styles.logo} resizeMode="contain" />
-            ) : (
-              <AppIcon name="profile" size="xl" state="active" />
-            )}
-          </View>
+        <View style={styles.landingCard}>
+          <BrandLogo resolvedTheme={resolvedTheme} plain={true} />
 
-          {resolvedTheme?.brandName ? (
+          <View style={styles.landingCopyBlock}>
             <Text
               style={[
-                styles.brandName,
+                styles.landingTitle,
                 resolvedTheme?.primaryTextColor ? { color: resolvedTheme.primaryTextColor } : null,
                 resolvedTheme?.secondaryFontFamily ? { fontFamily: resolvedTheme.secondaryFontFamily } : null,
               ]}
             >
-              {resolvedTheme.brandName}
-            </Text>
-          ) : null}
-
-          <View style={styles.copyBlock}>
-            <Text
-              style={[
-                styles.heroTitle,
-                resolvedTheme?.primaryTextColor ? { color: resolvedTheme.primaryTextColor } : null,
-              ]}
-            >
-              Welcome
+              {heroTitle}
             </Text>
             <Text
               style={[
-                styles.heroSubtitle,
+                styles.landingSubtitle,
                 resolvedTheme?.secondaryTextColor ? { color: resolvedTheme.secondaryTextColor } : null,
               ]}
             >
-              {resolvedTheme?.brandTagline || 'Sign up or log in to continue.'}
+              {heroSubtitle}
             </Text>
           </View>
 
-          <View style={styles.actionStack}>
+          <View style={styles.landingActionStack}>
             <AppButton
-              title="Sign Up"
+              title="Login"
               variant="primary"
               size="lg"
-              leading={<AppIcon name="profile" state="inverse" />}
-              onPress={() => navigateWithHaptic('/auth/signup')}
+              onPress={() => navigateWithHaptic('/auth/access')}
               enableHaptics={true}
             />
             <AppButton
-              title="Log In"
+              title="Register"
               variant="secondary"
               size="lg"
-              leading={<AppIcon name="profile" state="default" />}
-              onPress={() => navigateWithHaptic('/auth/access')}
+              onPress={() => navigateWithHaptic('/auth/signup')}
               enableHaptics={true}
             />
           </View>
@@ -1052,13 +1046,7 @@ function FirstTimeOnboarding() {
     >
       <View style={styles.centeredContainer}>
         <View style={styles.content}>
-          <View style={styles.logoWrap}>
-            {resolvedTheme?.logoIcon ? (
-              <Image source={{ uri: resolvedTheme.logoIcon }} style={styles.logo} resizeMode="contain" />
-            ) : (
-              <AppIcon name="profile" size="xl" state="active" />
-            )}
-          </View>
+          <BrandLogo resolvedTheme={resolvedTheme} />
 
           <Animated.Text style={[styles.heroTitle, { opacity: welcomeOpacity }]}>
             {resolvedTheme?.brandName ? `Welcome to ${resolvedTheme.brandName}` : 'Welcome'}
@@ -1109,6 +1097,39 @@ const styles = StyleSheet.create({
     paddingHorizontal: theme.spacing.xl,
     paddingVertical: theme.spacing.xl,
   },
+  landingCard: {
+    flex: 1,
+    width: '100%',
+    maxWidth: 360,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: theme.spacing.xl,
+  },
+  landingCopyBlock: {
+    width: '100%',
+    alignItems: 'center',
+    gap: theme.spacing.xs,
+  },
+  landingTitle: {
+    textAlign: 'center',
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.title,
+    lineHeight: theme.typography.semantic.title * theme.typography.lineHeights.tight,
+    color: theme.colors.textPrimary,
+  },
+  landingSubtitle: {
+    textAlign: 'center',
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textSecondary,
+    maxWidth: 220,
+  },
+  landingActionStack: {
+    width: '100%',
+    gap: theme.spacing.sm,
+    marginTop: theme.spacing.md,
+  },
   content: {
     width: '100%',
     maxWidth: 380,
@@ -1129,10 +1150,14 @@ const styles = StyleSheet.create({
     width: 68,
     height: 68,
   },
+  logoPlain: {
+    width: 114,
+    height: 114,
+  },
   brandName: {
     fontFamily: theme.typography.fontFamilyDisplay,
-    fontSize: theme.typography.semantic.titleMd,
-    lineHeight: theme.typography.semantic.titleMd * theme.typography.lineHeights.tight,
+    fontSize: theme.typography.compact.titleSm,
+    lineHeight: theme.typography.compact.titleSm * theme.typography.lineHeights.tight,
     color: theme.colors.textPrimary,
     textAlign: 'center',
   },

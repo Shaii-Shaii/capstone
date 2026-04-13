@@ -7,7 +7,7 @@ import Animated, {
   withSequence,
   withTiming,
 } from 'react-native-reanimated';
-import { theme } from '../../design-system/theme';
+import { resolveThemeRoles, theme } from '../../design-system/theme';
 import { useAuth } from '../../providers/AuthProvider';
 
 const AnimatedView = Animated.createAnimatedComponent(View);
@@ -37,6 +37,7 @@ export const AppInput = ({
   const { resolvedTheme } = useAuth();
   const [isFocused, setIsFocused] = useState(false);
   const config = INPUT_VARIANTS[variant] || INPUT_VARIANTS.default;
+  const roles = resolveThemeRoles(resolvedTheme);
   const focusProgress = useSharedValue(0);
   const statusProgress = useSharedValue(error ? 1 : 0);
   const shakeX = useSharedValue(0);
@@ -46,13 +47,16 @@ export const AppInput = ({
   const secondaryTextColor = resolvedTheme?.secondaryTextColor || theme.colors.textSecondary;
   const mutedTextColor = resolvedTheme?.secondaryTextColor || theme.colors.textMuted;
   const backgroundColor = variant === 'filled'
-    ? theme.colors.surfaceSoft
-    : resolvedTheme?.backgroundColor || config.backgroundColor;
+    ? roles.supportCardBackground
+    : roles.defaultCardBackground || config.backgroundColor;
+  const restingBorderColor = variant === 'filled'
+    ? roles.supportCardBorder
+    : roles.defaultCardBorder || config.borderColor;
 
   const shellStyle = useAnimatedStyle(() => ({
     borderColor: error
       ? interpolateColor(statusProgress.value, [0, 1], [focusColor, errorColor])
-      : interpolateColor(focusProgress.value, [0, 1], [config.borderColor, focusColor]),
+      : interpolateColor(focusProgress.value, [0, 1], [restingBorderColor, focusColor]),
     shadowOpacity: focusProgress.value * 0.18,
     transform: [{ translateX: shakeX.value }, { scale: 1 - focusProgress.value * 0.002 }],
   }));
@@ -67,7 +71,7 @@ export const AppInput = ({
   React.useEffect(() => {
     focusProgress.value = withTiming(isFocused ? 1 : 0, { duration: theme.motion.focus });
     statusProgress.value = withTiming(error ? 1 : 0, { duration: theme.motion.focus });
-  }, [config.borderColor, error, focusProgress, isFocused, statusProgress]);
+  }, [error, focusProgress, isFocused, restingBorderColor, statusProgress]);
 
   React.useEffect(() => {
     if (!error) return;
@@ -155,6 +159,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderRadius: theme.radius.xl,
     justifyContent: 'center',
+    shadowColor: theme.colors.shadow,
+    shadowOffset: { width: 0, height: 6 },
+    shadowRadius: 14,
+    elevation: 2,
   },
   focusedShell: {
     ...theme.shadows.soft,

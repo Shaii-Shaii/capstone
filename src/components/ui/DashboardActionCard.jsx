@@ -1,45 +1,10 @@
 import React from 'react';
 import { Pressable, Text, StyleSheet, View } from 'react-native';
 import * as Haptics from 'expo-haptics';
-import { theme } from '../../design-system/theme';
+import { theme, resolveThemeRoles } from '../../design-system/theme';
 import { AppCard } from './AppCard';
 import { AppIcon } from './AppIcon';
 import { useAuth } from '../../providers/AuthProvider';
-
-const CARD_VARIANTS = {
-  donor: {
-    cardVariant: 'donorTint',
-    titleColor: theme.colors.textPrimary,
-    descriptionColor: theme.colors.textSecondary,
-    badgeBackground: theme.colors.brandPrimaryMuted,
-    badgeText: theme.colors.brandPrimary,
-    accent: theme.colors.dashboardDonorSoft,
-  },
-  patient: {
-    cardVariant: 'patientTint',
-    titleColor: theme.colors.textPrimary,
-    descriptionColor: theme.colors.textSecondary,
-    badgeBackground: theme.colors.backgroundPrimary,
-    badgeText: theme.colors.textSecondary,
-    accent: theme.colors.dashboardPatientSoft,
-  },
-  neutral: {
-    cardVariant: 'elevated',
-    titleColor: theme.colors.textPrimary,
-    descriptionColor: theme.colors.textSecondary,
-    badgeBackground: theme.colors.surfaceSoft,
-    badgeText: theme.colors.textSecondary,
-    accent: theme.colors.accentSoft,
-  },
-  disabled: {
-    cardVariant: 'outline',
-    titleColor: theme.colors.textDisabled,
-    descriptionColor: theme.colors.textMuted,
-    badgeBackground: theme.colors.surfaceDisabled,
-    badgeText: theme.colors.textDisabled,
-    accent: theme.colors.surfaceDisabled,
-  },
-};
 
 export const DashboardActionCard = ({
   title,
@@ -54,10 +19,54 @@ export const DashboardActionCard = ({
   compact = false,
 }) => {
   const { resolvedTheme } = useAuth();
-  const config = disabled ? CARD_VARIANTS.disabled : (CARD_VARIANTS[variant] || CARD_VARIANTS.neutral);
-  const accentColor = resolvedTheme?.primaryColor || config.accent;
-  const badgeBackgroundColor = resolvedTheme?.secondaryColor || config.badgeBackground;
-  const badgeTextColor = resolvedTheme?.primaryColor || config.badgeText;
+  const roles = resolveThemeRoles(resolvedTheme);
+  const paletteMap = {
+    donor: {
+      cardVariant: 'donorTint',
+      titleColor: roles.headingText,
+      descriptionColor: roles.bodyText,
+      metaColor: roles.metaText,
+      accent: roles.primaryActionBackground,
+      iconBackground: roles.iconPrimarySurface,
+      iconColor: roles.iconPrimaryColor,
+      badgeBackground: roles.badgeStrongBackground,
+      badgeText: roles.badgeStrongText,
+    },
+    patient: {
+      cardVariant: 'patientTint',
+      titleColor: roles.headingText,
+      descriptionColor: roles.bodyText,
+      metaColor: roles.metaText,
+      accent: resolvedTheme?.secondaryColor || roles.supportCardBorder,
+      iconBackground: roles.iconSupportSurface,
+      iconColor: roles.iconSupportColor,
+      badgeBackground: roles.badgeBackground,
+      badgeText: roles.badgeText,
+    },
+    neutral: {
+      cardVariant: 'elevated',
+      titleColor: roles.headingText,
+      descriptionColor: roles.bodyText,
+      metaColor: roles.metaText,
+      accent: roles.accentCardBorder,
+      iconBackground: roles.iconAccentSurface,
+      iconColor: roles.iconAccentColor,
+      badgeBackground: roles.badgeBackground,
+      badgeText: roles.badgeText,
+    },
+    disabled: {
+      cardVariant: 'outline',
+      titleColor: theme.colors.textDisabled,
+      descriptionColor: roles.metaText,
+      metaColor: roles.metaText,
+      accent: roles.defaultCardBorder,
+      iconBackground: roles.defaultCardBackground,
+      iconColor: theme.colors.textDisabled,
+      badgeBackground: roles.defaultCardBackground,
+      badgeText: theme.colors.textDisabled,
+    },
+  };
+  const config = disabled ? paletteMap.disabled : (paletteMap[variant] || paletteMap.neutral);
 
   const handlePress = async () => {
     if (disabled || !onPress) return;
@@ -75,42 +84,43 @@ export const DashboardActionCard = ({
       >
         {compact ? (
           <View style={styles.shortcutCard}>
-            <View style={[styles.shortcutIconWrap, { backgroundColor: accentColor }]}>
+            <View style={[styles.shortcutIconWrap, { backgroundColor: config.iconBackground }]}>
               {icon ? (
                 <AppIcon
                   name={icon}
-                  state={disabled ? 'disabled' : variant === 'patient' ? 'muted' : 'active'}
+                  state={disabled ? 'disabled' : 'default'}
+                  color={config.iconColor}
                 />
               ) : null}
               {badgeText ? (
-                <View style={[styles.shortcutBadge, { backgroundColor: badgeBackgroundColor }]}>
-                  <Text style={[styles.shortcutBadgeText, { color: badgeTextColor }]}>{badgeText}</Text>
+                <View style={[styles.shortcutBadge, { backgroundColor: config.badgeBackground }]}>
+                  <Text style={[styles.shortcutBadgeText, { color: config.badgeText }]}>{badgeText}</Text>
                 </View>
               ) : null}
             </View>
             <Text numberOfLines={2} style={[styles.shortcutTitle, { color: config.titleColor }]}>
               {title}
             </Text>
-            {meta ? <Text numberOfLines={1} style={styles.shortcutMeta}>{meta}</Text> : null}
+            {meta ? <Text numberOfLines={1} style={[styles.shortcutMeta, { color: config.metaColor }]}>{meta}</Text> : null}
           </View>
         ) : (
           <>
-            <View style={[styles.accent, { backgroundColor: accentColor }]} />
+            <View style={[styles.accent, { backgroundColor: config.accent }]} />
             {icon ? (
-              <View style={styles.iconWrap}>
-                <AppIcon name={icon} state={disabled ? 'disabled' : variant === 'patient' ? 'muted' : 'active'} />
+              <View style={[styles.iconWrap, { backgroundColor: config.iconBackground }]}>
+                <AppIcon name={icon} state={disabled ? 'disabled' : 'default'} color={config.iconColor} />
               </View>
             ) : null}
             <View style={styles.header}>
               <Text style={[styles.title, { color: config.titleColor }]}>{title}</Text>
               {badgeText ? (
-                <View style={[styles.badge, { backgroundColor: badgeBackgroundColor }]}>
-                  <Text style={[styles.badgeText, { color: badgeTextColor }]}>{badgeText}</Text>
+                <View style={[styles.badge, { backgroundColor: config.badgeBackground }]}>
+                  <Text style={[styles.badgeText, { color: config.badgeText }]}>{badgeText}</Text>
                 </View>
               ) : null}
             </View>
             <Text style={[styles.description, { color: config.descriptionColor }]}>{description}</Text>
-            {meta ? <Text style={styles.meta}>{meta}</Text> : null}
+            {meta ? <Text style={[styles.meta, { color: config.metaColor }]}>{meta}</Text> : null}
           </>
         )}
       </AppCard>
@@ -138,7 +148,6 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.full,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: theme.colors.whiteOverlay,
     marginBottom: theme.spacing.sm,
   },
   header: {
@@ -163,7 +172,6 @@ const styles = StyleSheet.create({
     marginTop: theme.spacing.xs,
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.caption,
-    color: theme.colors.textMuted,
   },
   badge: {
     paddingHorizontal: theme.spacing.sm,
@@ -216,6 +224,5 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     fontFamily: theme.typography.fontFamily,
     fontSize: 10,
-    color: theme.colors.textMuted,
   },
 });

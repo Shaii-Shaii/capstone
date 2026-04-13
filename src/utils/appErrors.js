@@ -32,6 +32,17 @@ export const logAppError = (scope, error, extras) => {
   writeConsoleLog('error', scope, technicalMessage, extras, error);
 };
 
+const isAuditPermissionError = (error) => {
+  const normalizedMessage = String(error?.message || '').toLowerCase();
+  const normalizedCode = String(error?.code || '').trim();
+
+  return (
+    normalizedCode === '42501'
+    || normalizedMessage.includes('row-level security')
+    || normalizedMessage.includes('violates row-level security policy')
+  );
+};
+
 const resolveAuditUserId = async ({ databaseUserId = null, authUserId = '', userEmail = '' } = {}) => {
   if (databaseUserId) {
     return databaseUserId;
@@ -104,14 +115,23 @@ export const writeAuditLog = async ({
       error: null,
     };
   } catch (error) {
-    logAppError('audit.writeAuditLog', error, {
+    const auditExtras = {
       action,
       resource,
       status,
       userEmail,
       authUserId,
       databaseUserId,
-    });
+    };
+
+    if (isAuditPermissionError(error)) {
+      logAppEvent('audit.writeAuditLog.permission_denied', 'Audit log insert was blocked by database permissions. Continuing without blocking the user flow.', {
+        ...auditExtras,
+        errorCode: error?.code || null,
+      }, 'warn');
+    } else {
+      logAppError('audit.writeAuditLog', error, auditExtras);
+    }
 
     return {
       success: false,

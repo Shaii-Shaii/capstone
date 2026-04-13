@@ -10,10 +10,28 @@ This is an [Expo](https://expo.dev) project created with [`create-expo-app`](htt
    npm install
    ```
 
-2. Start the app
+2. Start the native mobile app with Expo CLI
 
    ```bash
    npx expo start
+   ```
+
+   If Expo Go cannot reach Metro from your phone, use tunnel mode instead:
+
+   ```bash
+   npm run start:tunnel
+   ```
+
+3. Start the browser app only when you want the web target
+
+   ```bash
+   npm run web
+   ```
+
+4. Build the static web export for Vercel
+
+   ```bash
+   npm run build
    ```
 
 In the output, you'll find options to open the app in a
@@ -24,6 +42,18 @@ In the output, you'll find options to open the app in a
 - [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
 
 You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
+
+## Mobile vs Vercel
+
+- Expo Go connects to the local Expo development server started by `expo start`.
+- Vercel serves the static web export from `dist`; it does not replace Metro for native mobile testing.
+- Use Vercel for `npm run build` web hosting, and use `npx expo start` or `npm run start:tunnel` for Android and iPhone testing in Expo Go.
+
+## Health checks
+
+```bash
+npm run doctor
+```
 
 ## Get a fresh project
 

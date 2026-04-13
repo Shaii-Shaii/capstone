@@ -9,15 +9,14 @@ import { useRoleAuthFlow } from '../../src/hooks/useRoleAuthFlow';
 
 export default function AccessScreen() {
   const router = useRouter();
-  const { config, handleLogin, isLoading, loginError, clearLoginError, resolvedTheme } = useRoleAuthFlow('access');
+  const { handleLogin, isLoading, loginError, clearLoginError, resolvedTheme } = useRoleAuthFlow('access');
 
   return (
-    <AuthScreenLayout role="donor" resolvedTheme={resolvedTheme}>
+    <AuthScreenLayout role="access" resolvedTheme={resolvedTheme}>
       <AuthHeader
-        title={config.login.title}
-        subtitle={resolvedTheme?.brandTagline || ''}
-        role="access"
-        backLabel="Back to home"
+        title={"Let's sign you in."}
+        subtitle={"Welcome back. You've been missed."}
+        backLabel="Back"
         onBackPress={() => router.replace('/')}
         minimal={true}
         resolvedTheme={resolvedTheme}
@@ -28,7 +27,7 @@ export default function AccessScreen() {
           onSubmit={handleLogin}
           isLoading={isLoading}
           onForgotPassword={() => router.push('/auth/forgot-password')}
-          buttonText={config.login.buttonText}
+          buttonText="Login"
           submitError={loginError}
           onFieldEdit={clearLoginError}
           resolvedTheme={resolvedTheme}
@@ -36,8 +35,8 @@ export default function AccessScreen() {
       </View>
 
       <AuthFormFooter
-        questionText={config.login.footerQuestion}
-        linkText={config.login.footerLink}
+        questionText={"Don't have an account?"}
+        linkText="Register"
         onLinkPress={() => router.replace('/auth/signup')}
       />
     </AuthScreenLayout>

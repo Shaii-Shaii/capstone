@@ -1,22 +1,25 @@
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Image, StyleSheet, Text, View } from 'react-native';
+import { Image, StyleSheet, Text, View } from 'react-native';
 import { Slot } from 'expo-router';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { StatusBar } from 'expo-status-bar';
 import { AuthProvider, useAuth } from '../src/providers/AuthProvider';
 import { useRoleRedirect } from '../src/hooks/useRoleRedirect';
-import { theme } from '../src/design-system/theme';
+import { resolveBrandLogoSource, theme } from '../src/design-system/theme';
 
 const SPLASH_DURATION_MS = 1000;
 
 function LaunchSplash({ resolvedTheme }) {
+  const [imageFailed, setImageFailed] = useState(false);
+  const logoSource = resolveBrandLogoSource(resolvedTheme, imageFailed);
+
+  useEffect(() => {
+    setImageFailed(false);
+  }, [resolvedTheme?.logoIcon]);
+
   return (
     <View style={[styles.splashScreen, resolvedTheme?.backgroundColor ? { backgroundColor: resolvedTheme.backgroundColor } : null]}>
-      {resolvedTheme?.logoIcon ? (
-        <Image source={{ uri: resolvedTheme.logoIcon }} style={styles.splashLogo} resizeMode="contain" />
-      ) : (
-        <ActivityIndicator size="large" color={resolvedTheme?.primaryColor || theme.colors.actionPrimary} />
-      )}
+      <Image source={logoSource} style={styles.splashLogo} resizeMode="contain" onError={() => setImageFailed(true)} />
       {resolvedTheme?.brandName ? (
         <Text
           style={[

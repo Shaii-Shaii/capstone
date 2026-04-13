@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, StyleSheet } from 'react-native';
-import { theme } from '../../design-system/theme';
+import { theme, resolveThemeRoles } from '../../design-system/theme';
 import { useAuth } from '../../providers/AuthProvider';
 
 const CARD_VARIANTS = {
@@ -58,14 +58,45 @@ export const AppCard = ({
   enteringDelay = 0,
 }) => {
   const { resolvedTheme } = useAuth();
-  const config = CARD_VARIANTS[variant] || CARD_VARIANTS.default;
-  const tintedBackgroundColor = resolvedTheme?.secondaryColor || resolvedTheme?.backgroundColor || config.backgroundColor;
-  const backgroundColor = variant === 'soft'
-    ? theme.colors.surfaceSoft
-    : variant === 'hero' || variant === 'donorTint' || variant === 'patientTint'
-      ? tintedBackgroundColor
-      : resolvedTheme?.backgroundColor || config.backgroundColor;
-  const borderColor = resolvedTheme?.secondaryColor || config.borderColor;
+  const roles = resolveThemeRoles(resolvedTheme);
+  const variantConfig = {
+    default: {
+      backgroundColor: roles.defaultCardBackground,
+      borderColor: roles.defaultCardBorder,
+      shadow: CARD_VARIANTS.default.shadow,
+    },
+    elevated: {
+      backgroundColor: roles.defaultCardBackground,
+      borderColor: roles.supportCardBorder,
+      shadow: CARD_VARIANTS.elevated.shadow,
+    },
+    soft: {
+      backgroundColor: roles.supportCardBackground,
+      borderColor: roles.supportCardBorder,
+      shadow: CARD_VARIANTS.soft.shadow,
+    },
+    outline: {
+      backgroundColor: roles.pageBackground,
+      borderColor: roles.defaultCardBorder,
+      shadow: CARD_VARIANTS.outline.shadow,
+    },
+    hero: {
+      backgroundColor: roles.heroBackground,
+      borderColor: roles.heroBorder,
+      shadow: CARD_VARIANTS.hero.shadow,
+    },
+    donorTint: {
+      backgroundColor: roles.supportCardBackground,
+      borderColor: roles.supportCardBorder,
+      shadow: CARD_VARIANTS.donorTint.shadow,
+    },
+    patientTint: {
+      backgroundColor: roles.accentCardBackground,
+      borderColor: roles.accentCardBorder,
+      shadow: CARD_VARIANTS.patientTint.shadow,
+    },
+  };
+  const config = variantConfig[variant] || variantConfig.default;
   const resolvedPadding =
     padding === 'none'
       ? 0
@@ -81,8 +112,8 @@ export const AppCard = ({
     {
       borderRadius: theme.radius[radius] || theme.radius.lg,
       padding: resolvedPadding,
-      backgroundColor,
-      borderColor,
+      backgroundColor: config.backgroundColor,
+      borderColor: config.borderColor,
     },
     config.shadow,
     style,

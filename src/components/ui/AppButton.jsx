@@ -8,7 +8,7 @@ import Animated, {
   withSpring,
   withTiming,
 } from 'react-native-reanimated';
-import { theme } from '../../design-system/theme';
+import { theme, resolveThemeRoles } from '../../design-system/theme';
 import { useAuth } from '../../providers/AuthProvider';
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
@@ -86,6 +86,7 @@ export const AppButton = ({
   borderColorOverride,
 }) => {
   const { resolvedTheme } = useAuth();
+  const roles = resolveThemeRoles(resolvedTheme);
   const palette = VARIANTS[variant] || VARIANTS.primary;
   const metrics = SIZES[size] || SIZES.md;
   const isInactive = disabled || loading;
@@ -166,8 +167,34 @@ export const AppButton = ({
       width: fullWidth ? '100%' : undefined,
       backgroundColor: isInactive
         ? theme.colors.actionDisabled
-        : (backgroundColorOverride || (variant === 'primary' ? resolvedTheme?.primaryColor : undefined) || palette.backgroundColor),
-      borderColor: isInactive ? theme.colors.borderDisabled : (borderColorOverride || (variant === 'primary' ? resolvedTheme?.primaryColor : undefined) || palette.borderColor),
+        : (
+          backgroundColorOverride
+          || (
+            variant === 'primary'
+              ? roles.primaryActionBackground
+              : variant === 'secondary'
+                ? roles.secondaryActionBackground
+                : variant === 'outline'
+                  ? roles.pageBackground
+                  : undefined
+          )
+          || palette.backgroundColor
+        ),
+      borderColor: isInactive
+        ? theme.colors.borderDisabled
+        : (
+          borderColorOverride
+          || (
+            variant === 'primary'
+              ? roles.primaryActionBackground
+              : variant === 'secondary'
+                ? roles.secondaryActionBorder
+                : variant === 'outline'
+                  ? roles.defaultCardBorder
+                  : undefined
+          )
+          || palette.borderColor
+        ),
     },
     palette.shadow,
     variant === 'ghost' ? styles.ghostButton : null,
@@ -184,7 +211,17 @@ export const AppButton = ({
             {
               color: isInactive
                 ? theme.colors.textDisabled
-                : (textColorOverride || (variant === 'primary' ? theme.colors.textOnBrand : resolvedTheme?.primaryTextColor) || palette.textColor),
+                : (
+                  textColorOverride
+                  || (
+                    variant === 'primary'
+                      ? roles.primaryActionText
+                      : variant === 'secondary' || variant === 'outline'
+                        ? roles.secondaryActionText
+                        : resolvedTheme?.primaryTextColor
+                  )
+                  || palette.textColor
+                ),
               fontSize: metrics.fontSize,
             },
             textStyle,
@@ -196,7 +233,7 @@ export const AppButton = ({
       </Animated.View>
 
       <Animated.View pointerEvents="none" style={[styles.loaderWrap, styles.loaderOverlay, loaderStyle]}>
-        <ActivityIndicator color={variant === 'secondary' || variant === 'outline' ? theme.colors.textPrimary : palette.textColor} />
+        <ActivityIndicator color={variant === 'secondary' || variant === 'outline' ? roles.secondaryActionText : roles.primaryActionText} />
       </Animated.View>
     </View>
   );
@@ -252,7 +289,7 @@ const styles = StyleSheet.create({
   successGlow: {
     ...StyleSheet.absoluteFillObject,
     borderRadius: theme.radius.pill,
-    backgroundColor: theme.colors.brandPrimaryMuted,
+    backgroundColor: theme.colors.surfacePressed,
   },
   adornment: {
     alignItems: 'center',

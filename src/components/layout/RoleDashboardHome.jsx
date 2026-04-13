@@ -16,7 +16,7 @@ import { AppTextLink } from '../ui/AppTextLink';
 import { useNotifications } from '../../hooks/useNotifications';
 import { useProcessTracking } from '../../hooks/useProcessTracking';
 import { useAuth } from '../../providers/AuthProvider';
-import { theme } from '../../design-system/theme';
+import { theme, resolveThemeRoles } from '../../design-system/theme';
 import { needsPersonalDetailsCompletion } from '../../features/profile/services/profile.service';
 import { logAppEvent } from '../../utils/appErrors';
 
@@ -141,7 +141,8 @@ function renderDashboardSection({ section, content, role, onItemPress, onActionP
 export function RoleDashboardHome({ role, profile, navItems, content }) {
   const router = useRouter();
   const pathname = usePathname();
-  const { user, patientProfile, staffProfile } = useAuth();
+  const { user, patientProfile, staffProfile, resolvedTheme } = useAuth();
+  const roles = resolveThemeRoles(resolvedTheme);
   const [showCompleteProfilePrompt, setShowCompleteProfilePrompt] = useState(false);
   const { unreadCount } = useNotifications({ role, userId: user?.id, databaseUserId: profile?.user_id });
   const { tracker } = useProcessTracking({ role, userId: user?.id, databaseUserId: profile?.user_id });
@@ -290,8 +291,8 @@ export function RoleDashboardHome({ role, profile, navItems, content }) {
         {needsAccountSetup ? (
           <AppCard variant="donorTint" radius="xl" padding="md" style={styles.setupCard}>
             <View style={styles.setupCopy}>
-              <Text style={styles.setupTitle}>Complete Account Setup</Text>
-              <Text style={styles.setupBody}>Finish your profile.</Text>
+              <Text style={[styles.setupTitle, { color: roles.headingText }]}>Complete Account Setup</Text>
+              <Text style={[styles.setupBody, { color: roles.bodyText }]}>Finish your profile.</Text>
             </View>
             <AppButton
               title="Open Profile"
@@ -305,22 +306,43 @@ export function RoleDashboardHome({ role, profile, navItems, content }) {
         {hasSummaryCard ? (
           <AppCard variant={role === 'donor' ? 'donorTint' : 'patientTint'} radius="xl" padding="xs">
             {summaryCard.eyebrow ? (
-              <Text style={[styles.summaryEyebrow, role === 'donor' ? styles.summaryEyebrowDonor : null]}>
+              <Text style={[styles.summaryEyebrow, { color: role === 'donor' ? (resolvedTheme?.primaryColor || roles.metaText) : roles.metaText }]}>
                 {summaryCard.eyebrow}
               </Text>
             ) : null}
-            {summaryCard.title ? <Text style={styles.summaryTitle}>{summaryCard.title}</Text> : null}
-            {summaryCard.body ? <Text style={styles.summaryBody}>{summaryCard.body}</Text> : null}
+            {summaryCard.title ? <Text style={[styles.summaryTitle, { color: roles.headingText }]}>{summaryCard.title}</Text> : null}
+            {summaryCard.body ? <Text style={[styles.summaryBody, { color: roles.bodyText }]}>{summaryCard.body}</Text> : null}
             {snapshotItems.length ? (
               <View style={styles.snapshotRow}>
                 {snapshotItems.map((item) => (
-                  <View key={item.key} style={styles.snapshotPill}>
-                    <View style={[styles.snapshotIconWrap, role === 'donor' ? styles.snapshotIconWrapDonor : null]}>
-                      <AppIcon name={item.icon} size="sm" state={role === 'donor' ? 'active' : 'muted'} />
+                  <View
+                    key={item.key}
+                    style={[
+                      styles.snapshotPill,
+                      {
+                        backgroundColor: roles.defaultCardBackground,
+                        borderColor: roles.defaultCardBorder,
+                      },
+                    ]}
+                  >
+                    <View
+                      style={[
+                        styles.snapshotIconWrap,
+                        {
+                          backgroundColor: role === 'donor' ? roles.iconPrimarySurface : roles.iconSupportSurface,
+                        },
+                      ]}
+                    >
+                      <AppIcon
+                        name={item.icon}
+                        size="sm"
+                        state="default"
+                        color={role === 'donor' ? roles.iconPrimaryColor : roles.iconSupportColor}
+                      />
                     </View>
                     <View style={styles.snapshotCopy}>
-                      <Text style={styles.snapshotLabel}>{item.label}</Text>
-                      <Text style={styles.snapshotValue}>{item.value}</Text>
+                      <Text style={[styles.snapshotLabel, { color: roles.metaText }]}>{item.label}</Text>
+                      <Text style={[styles.snapshotValue, { color: roles.headingText }]}>{item.value}</Text>
                     </View>
                   </View>
                 ))}
@@ -348,8 +370,8 @@ export function RoleDashboardHome({ role, profile, navItems, content }) {
           <Pressable style={styles.modalBackdrop} onPress={() => setShowCompleteProfilePrompt(false)} />
           <AppCard variant="elevated" radius="xl" padding="lg" style={styles.modalCard}>
             <View style={styles.modalCopy}>
-              <Text style={styles.modalTitle}>Complete Your Details</Text>
-              <Text style={styles.modalBody}>
+              <Text style={[styles.modalTitle, { color: roles.headingText }]}>Complete Your Details</Text>
+              <Text style={[styles.modalBody, { color: roles.bodyText }]}>
                 Add your personal details.
               </Text>
             </View>
@@ -393,24 +415,18 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamily,
     fontSize: 10,
     fontWeight: theme.typography.weights.semibold,
-    color: theme.colors.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 0.6,
     marginBottom: theme.spacing.xs,
   },
-  summaryEyebrowDonor: {
-    color: theme.colors.brandPrimary,
-  },
   summaryTitle: {
     fontFamily: theme.typography.fontFamilyDisplay,
     fontSize: theme.typography.compact.bodyLg,
-    color: theme.colors.textPrimary,
     marginBottom: 2,
   },
   summaryBody: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.caption,
-    color: theme.colors.textSecondary,
     lineHeight: theme.typography.compact.caption * theme.typography.lineHeights.relaxed,
   },
   snapshotRow: {
@@ -427,9 +443,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: theme.spacing.xs,
     paddingVertical: 5,
     borderRadius: 16,
-    backgroundColor: theme.colors.backgroundPrimary,
     borderWidth: 1,
-    borderColor: theme.colors.borderSubtle,
   },
   snapshotIconWrap: {
     width: 24,
@@ -437,10 +451,6 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.full,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: theme.colors.surfaceSoft,
-  },
-  snapshotIconWrapDonor: {
-    backgroundColor: theme.colors.brandPrimaryMuted,
   },
   snapshotCopy: {
     gap: 1,
@@ -448,14 +458,12 @@ const styles = StyleSheet.create({
   snapshotLabel: {
     fontFamily: theme.typography.fontFamily,
     fontSize: 10,
-    color: theme.colors.textMuted,
     textTransform: 'uppercase',
     letterSpacing: 0.4,
   },
   snapshotValue: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.caption,
-    color: theme.colors.textPrimary,
     fontWeight: theme.typography.weights.semibold,
   },
   setupCard: {
@@ -472,12 +480,10 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.body,
     fontWeight: theme.typography.weights.semibold,
-    color: theme.colors.textPrimary,
   },
   setupBody: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.bodySm,
-    color: theme.colors.textSecondary,
   },
   modalOverlay: {
     flex: 1,
@@ -500,14 +506,12 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     fontFamily: theme.typography.fontFamilyDisplay,
     fontSize: theme.typography.semantic.titleSm,
-    color: theme.colors.textPrimary,
   },
   modalBody: {
     textAlign: 'center',
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.bodySm,
     lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
-    color: theme.colors.textSecondary,
   },
   modalActions: {
     marginTop: theme.spacing.md,

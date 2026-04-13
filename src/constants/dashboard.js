@@ -253,21 +253,21 @@ export const donorDashboardNavItems = [
     role: 'donor',
   },
   {
+    key: 'checkhair',
+    label: 'CheckHair',
+    icon: 'checkHair',
+    activeIcon: 'checkHairActive',
+    route: '/donor/donations',
+    accessibilityLabel: 'CheckHair tab',
+    role: 'donor',
+  },
+  {
     key: 'donations',
     label: 'Donations',
     icon: 'donations',
     activeIcon: 'donationsActive',
-    route: '/donor/donations',
+    route: '/donor/status',
     accessibilityLabel: 'Donations tab',
-    role: 'donor',
-  },
-  {
-    key: 'appointment',
-    label: 'Appointment',
-    icon: 'appointment',
-    activeIcon: 'appointmentActive',
-    route: '/donor/appointment',
-    accessibilityLabel: 'Appointment tab',
     role: 'donor',
   },
   {
@@ -280,7 +280,6 @@ export const donorDashboardNavItems = [
     role: 'donor',
   },
 ];
-
 export const patientDashboardNavItems = [
   {
     key: 'home',

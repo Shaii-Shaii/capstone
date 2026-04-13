@@ -10,29 +10,18 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import { AppIcon } from './AppIcon';
-import { theme } from '../../design-system/theme';
+import { theme, resolveThemeRoles } from '../../design-system/theme';
 import { useAuth } from '../../providers/AuthProvider';
 
 export const DASHBOARD_TAB_BAR_HEIGHT = 72;
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
-const TAB_VARIANTS = {
-  donor: {
-    pill: theme.colors.brandPrimary,
-    pillText: theme.colors.textInverse,
-  },
-  patient: {
-    pill: theme.colors.backgroundDark,
-    pillText: theme.colors.textInverse,
-  },
-};
-
-function DashboardTabItem({ item, isActive, onPress, variant }) {
+function DashboardTabItem({ item, isActive, onPress }) {
   const { resolvedTheme } = useAuth();
-  const config = TAB_VARIANTS[variant] || TAB_VARIANTS.donor;
-  const activePillTextColor = resolvedTheme?.backgroundColor || config.pillText;
-  const inactiveTextColor = resolvedTheme?.secondaryTextColor || theme.colors.textSecondary;
+  const roles = resolveThemeRoles(resolvedTheme);
+  const activePillTextColor = roles.navActiveText;
+  const inactiveTextColor = roles.navInactiveText;
   const scale = useSharedValue(1);
   const progress = useSharedValue(isActive ? 1 : 0);
 
@@ -75,13 +64,13 @@ function DashboardTabItem({ item, isActive, onPress, variant }) {
         <View style={styles.iconWrap}>
           <AppIcon
             name={isActive ? (item.activeIcon || item.icon) : item.icon}
-            state={isActive ? 'inverse' : 'muted'}
-            color={isActive ? activePillTextColor : undefined}
+            state="default"
+            color={isActive ? activePillTextColor : inactiveTextColor}
             size="md"
           />
           {item.badge ? (
-            <View style={styles.badge}>
-              <Text style={styles.badgeText}>{item.badge}</Text>
+            <View style={[styles.badge, { backgroundColor: roles.primaryActionBackground, borderColor: roles.pageBackground }]}>
+              <Text style={[styles.badgeText, { color: roles.primaryActionText }]}>{item.badge}</Text>
             </View>
           ) : null}
         </View>
@@ -95,6 +84,7 @@ function DashboardTabItem({ item, isActive, onPress, variant }) {
 
 export function DashboardTabBar({ items, activeKey, onPress, variant = 'donor' }) {
   const { resolvedTheme } = useAuth();
+  const roles = resolveThemeRoles(resolvedTheme);
   const { width } = useWindowDimensions();
   const isCompact = width < 390;
   const horizontalInset = isCompact ? theme.spacing.md : theme.spacing.lg;
@@ -102,8 +92,7 @@ export function DashboardTabBar({ items, activeKey, onPress, variant = 'donor' }
   const activeIndex = Math.max(items.findIndex((item) => item.key === activeKey), 0);
   const slotProgress = useSharedValue(activeIndex);
   const [surfaceWidth, setSurfaceWidth] = React.useState(0);
-  const variantConfig = TAB_VARIANTS[variant] || TAB_VARIANTS.donor;
-  const activePillColor = resolvedTheme?.primaryColor || variantConfig.pill;
+  const activePillColor = roles.navActiveBackground;
 
   React.useEffect(() => {
     slotProgress.value = withSpring(activeIndex, {
@@ -146,7 +135,14 @@ export function DashboardTabBar({ items, activeKey, onPress, variant = 'donor' }
       ]}
     >
       <View
-        style={[styles.surface, { maxWidth: theme.layout.dashboardNavMaxWidth }]}
+        style={[
+          styles.surface,
+          {
+            maxWidth: theme.layout.dashboardNavMaxWidth,
+            backgroundColor: roles.navSurface,
+            borderColor: roles.navBorder,
+          },
+        ]}
         onLayout={(event) => setSurfaceWidth(event.nativeEvent.layout.width)}
       >
         <Animated.View
@@ -163,7 +159,6 @@ export function DashboardTabBar({ items, activeKey, onPress, variant = 'donor' }
             item={item}
             isActive={item.key === activeKey}
             onPress={onPress}
-            variant={variant}
           />
         ))}
       </View>
@@ -187,9 +182,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: theme.spacing.xs,
     paddingVertical: 6,
     borderRadius: 28,
-    backgroundColor: 'rgba(255,255,255,0.98)',
     borderWidth: 1,
-    borderColor: theme.colors.borderSubtle,
     ...theme.shadows.hero,
   },
   activePill: {
@@ -227,7 +220,6 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamily,
     fontSize: 10,
     fontWeight: theme.typography.weights.semibold,
-    color: theme.colors.textSecondary,
   },
   badge: {
     position: 'absolute',
@@ -239,14 +231,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 3,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: theme.colors.actionPrimary,
     borderWidth: 1,
-    borderColor: theme.colors.surfaceCard,
   },
   badgeText: {
     fontFamily: theme.typography.fontFamily,
     fontSize: 9,
     fontWeight: theme.typography.weights.bold,
-    color: theme.colors.textInverse,
   },
 });

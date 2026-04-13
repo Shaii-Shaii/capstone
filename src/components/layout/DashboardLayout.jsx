@@ -10,6 +10,8 @@ import {
   KeyboardAvoidingView,
   Platform,
   Image,
+  Animated as RNAnimated,
+  PanResponder,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ScreenContainer } from '../ui/ScreenContainer';
@@ -30,9 +32,12 @@ export const DashboardLayout = ({
   onNavPress,
   navVariant = 'donor',
   showSupportChat = true,
+  screenVariant = 'dashboard',
+  chatModalPresentation = 'sheet',
+  draggableChat = false,
 }) => {
   const insets = useSafeAreaInsets();
-  const { height } = useWindowDimensions();
+  const { height, width } = useWindowDimensions();
   const { user, resolvedTheme } = useAuth();
   const [isChatOpen, setIsChatOpen] = useState(false);
   const hasNav = navItems.length > 0;
@@ -61,10 +66,33 @@ export const DashboardLayout = ({
   const chatLauncherBottom = hasNav
     ? insets.bottom + navVisualOffset + (isCompactScreen ? 52 : 60)
     : insets.bottom + (isCompactScreen ? theme.spacing.lg : theme.spacing.xl);
+  const chatLauncherRight = theme.spacing.md;
+  const isCenteredChatModal = chatModalPresentation === 'centered';
+  const chatBubblePosition = React.useRef(new RNAnimated.ValueXY({ x: 0, y: 0 })).current;
+  const chatBubbleResponder = React.useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_event, gestureState) => (
+        draggableChat && (Math.abs(gestureState.dx) > 4 || Math.abs(gestureState.dy) > 4)
+      ),
+      onPanResponderGrant: () => {
+        chatBubblePosition.extractOffset();
+      },
+      onPanResponderMove: RNAnimated.event(
+        [null, { dx: chatBubblePosition.x, dy: chatBubblePosition.y }],
+        { useNativeDriver: false }
+      ),
+      onPanResponderRelease: () => {
+        chatBubblePosition.flattenOffset();
+      },
+      onPanResponderTerminate: () => {
+        chatBubblePosition.flattenOffset();
+      },
+    })
+  ).current;
 
   return (
     <ScreenContainer
-      variant="dashboard"
+      variant={screenVariant}
       scrollable={false}
       safeArea
       contentStyle={[
@@ -114,18 +142,30 @@ export const DashboardLayout = ({
       {isSupportChatAvailable ? (
         <>
           {!isChatOpen ? (
-            <Pressable
-              accessibilityLabel="Open quick inquiry chat"
-              onPress={() => setIsChatOpen(true)}
-              style={({ pressed }) => [
-                styles.chatLauncher,
-                resolvedTheme?.primaryColor ? { backgroundColor: resolvedTheme.primaryColor } : null,
-                { bottom: chatLauncherBottom },
-                pressed ? styles.chatLauncherPressed : null,
+            <RNAnimated.View
+              style={[
+                styles.chatLauncherWrap,
+                {
+                  bottom: chatLauncherBottom,
+                  right: chatLauncherRight,
+                  maxWidth: width - theme.spacing.xl * 2,
+                },
+                { transform: chatBubblePosition.getTranslateTransform() },
               ]}
+              {...(draggableChat ? chatBubbleResponder.panHandlers : {})}
             >
-              <Image source={chatbotIcon} style={styles.chatLauncherImage} resizeMode="contain" />
-            </Pressable>
+              <Pressable
+                accessibilityLabel="Open quick inquiry chat"
+                onPress={() => setIsChatOpen(true)}
+                style={({ pressed }) => [
+                  styles.chatLauncher,
+                  resolvedTheme?.primaryColor ? { backgroundColor: resolvedTheme.primaryColor } : null,
+                  pressed ? styles.chatLauncherPressed : null,
+                ]}
+              >
+                <Image source={chatbotIcon} style={styles.chatLauncherImage} resizeMode="contain" />
+              </Pressable>
+            </RNAnimated.View>
           ) : null}
 
           <Modal
@@ -143,7 +183,8 @@ export const DashboardLayout = ({
               <View
                 style={[
                   styles.chatModalOverlay,
-                  { paddingBottom: 0 },
+                  isCenteredChatModal ? styles.chatModalOverlayCentered : null,
+                  { paddingBottom: isCenteredChatModal ? theme.spacing.lg : 0 },
                 ]}
               >
                 <Pressable style={styles.chatModalBackdrop} onPress={() => setIsChatOpen(false)} />
@@ -155,12 +196,14 @@ export const DashboardLayout = ({
                   contentStyle={styles.chatModalCardContent}
                   style={[
                     styles.chatModalCard,
-                    { height: chatModalHeight },
+                    isCenteredChatModal
+                      ? [styles.chatModalCardCentered, { height: Math.min(chatModalHeight, 620) }]
+                      : { height: chatModalHeight },
                     isCompactScreen ? styles.chatModalCardCompact : null,
                     isShortScreen ? styles.chatModalCardShort : null,
                   ]}
                 >
-                  <View style={styles.chatModalHandle} />
+                  {!isCenteredChatModal ? <View style={styles.chatModalHandle} /> : null}
 
                   <View style={styles.chatModalHeader}>
                     <View style={styles.chatModalTitleWrap}>
@@ -247,9 +290,11 @@ const styles = StyleSheet.create({
     marginTop: theme.spacing.sm,
     paddingBottom: theme.layout.dashboardShellBottomGapCompact,
   },
-  chatLauncher: {
+  chatLauncherWrap: {
     position: 'absolute',
-    right: theme.spacing.md,
+    zIndex: 24,
+  },
+  chatLauncher: {
     alignItems: 'center',
     justifyContent: 'center',
     width: 46,
@@ -275,6 +320,11 @@ const styles = StyleSheet.create({
     paddingBottom: theme.spacing.sm,
     backgroundColor: theme.colors.overlay,
   },
+  chatModalOverlayCentered: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: theme.spacing.lg,
+  },
   chatModalBackdrop: {
     ...StyleSheet.absoluteFillObject,
   },
@@ -286,6 +336,13 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     borderTopLeftRadius: theme.radius.xxl,
     borderTopRightRadius: theme.radius.xxl,
+  },
+  chatModalCardCentered: {
+    width: '100%',
+    maxWidth: 420,
+    minHeight: 420,
+    maxHeight: 620,
+    borderRadius: theme.radius.xxl,
   },
   chatModalCardContent: {
     flex: 1,

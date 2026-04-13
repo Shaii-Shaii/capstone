@@ -27,7 +27,7 @@ export default function SignupScreen() {
         eyebrow={config.signup.eyebrow}
         role="access"
         minimal={true}
-        backLabel="Back to home"
+        backLabel="Back"
         onBackPress={() => router.replace('/')}
         resolvedTheme={resolvedTheme}
       />
@@ -41,6 +41,7 @@ export default function SignupScreen() {
           submitError={signupError}
           onFieldEdit={clearSignupError}
           resolvedTheme={resolvedTheme}
+          onGooglePress={undefined}
         />
       </View>
 

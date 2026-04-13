@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet, Image, useWindowDimensions } from 'react-native';
-import { theme } from '../../design-system/theme';
+import { theme, resolveBrandLogoSource, resolveThemeRoles } from '../../design-system/theme';
 import { useAuth } from '../../providers/AuthProvider';
 
 export const AppLogoHeader = ({
@@ -13,28 +13,37 @@ export const AppLogoHeader = ({
   style,
 }) => {
   const { resolvedTheme } = useAuth();
+  const roles = resolveThemeRoles(resolvedTheme);
   const { width, height } = useWindowDimensions();
   const isCompactScreen = height < theme.layout.compactScreenHeight;
   const isCompact = variant === 'compact';
   const isAuthCard = variant === 'authCard';
   const isNarrow = width < 390;
+  const [imageFailed, setImageFailed] = React.useState(false);
   const titleColor = isCompact || isAuthCard
-    ? (resolvedTheme?.primaryTextColor || theme.colors.textPrimary)
-    : theme.colors.textInverse;
+    ? roles.headingText
+    : roles.heroHeadingText;
   const subtitleColor = isCompact || isAuthCard
-    ? (resolvedTheme?.secondaryTextColor || theme.colors.textSecondary)
-    : theme.colors.textHeroMuted;
-  const logoUri = resolvedTheme?.logoIcon || '';
+    ? roles.bodyText
+    : roles.heroBodyText;
+  const logoSource = resolveBrandLogoSource(resolvedTheme, imageFailed);
   const eyebrowLabel = eyebrow || resolvedTheme?.brandName || '';
-  const cardBackground = resolvedTheme?.primaryColor || (isCompact || isAuthCard ? theme.colors.surfaceCard : theme.colors.heroFrom);
+  const cardBackground = isCompact || isAuthCard ? roles.defaultCardBackground : roles.heroBackground;
+  const cardBorder = isCompact || isAuthCard ? roles.defaultCardBorder : roles.heroBorder;
+  const pillBackground = isCompact || isAuthCard ? roles.badgeBackground : roles.headerUtilityBackground;
+  const pillTextColor = isCompact || isAuthCard ? roles.badgeText : roles.headerUtilityText;
+
+  React.useEffect(() => {
+    setImageFailed(false);
+  }, [resolvedTheme?.logoIcon]);
 
   return (
     <View style={[styles.container, align === 'left' ? styles.leftAligned : null, style]}>
-      {showLogo && (logoUri || eyebrowLabel) ? (
+      {showLogo && (logoSource || eyebrowLabel) ? (
         <View
           style={[
             styles.logoWrap,
-            { backgroundColor: cardBackground },
+            { backgroundColor: cardBackground, borderColor: cardBorder },
             isCompact ? styles.logoWrapCompact : null,
             isAuthCard ? styles.logoWrapAuthCard : null,
             isAuthCard && isCompactScreen ? styles.logoWrapAuthCardCompact : null,
@@ -42,23 +51,24 @@ export const AppLogoHeader = ({
           ]}
         >
           {eyebrowLabel ? (
-            <View style={styles.logoPill}>
-              <Text style={styles.logoPillText}>{eyebrowLabel}</Text>
+            <View style={[styles.logoPill, { backgroundColor: pillBackground, borderColor: cardBorder }]}>
+              <Text style={[styles.logoPillText, { color: pillTextColor }]}>{eyebrowLabel}</Text>
             </View>
           ) : null}
-          {logoUri ? (
+          {logoSource ? (
             <View
               style={[
                 styles.logoFrame,
+                { borderColor: cardBorder, backgroundColor: roles.pageBackground },
                 isCompact ? styles.logoFrameCompact : null,
                 isAuthCard ? styles.logoFrameAuthCard : null,
                 isAuthCard && isCompactScreen ? styles.logoFrameAuthCardCompact : null,
               ]}
             >
-              <Image source={{ uri: logoUri }} style={styles.logoImage} resizeMode="contain" />
+              <Image source={logoSource} style={styles.logoImage} resizeMode="contain" onError={() => setImageFailed(true)} />
             </View>
           ) : null}
-          {!isCompact && logoUri ? <View style={styles.logoGlow} /> : null}
+          {!isCompact && logoSource ? <View style={[styles.logoGlow, { backgroundColor: roles.primaryActionBackground }]} /> : null}
         </View>
       ) : null}
 
@@ -109,6 +119,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: theme.spacing.xl,
     paddingVertical: theme.spacing.lg,
     borderRadius: theme.radius.xl,
+    borderWidth: 1,
     marginBottom: theme.spacing.xl,
     alignItems: 'center',
     ...theme.shadows.hero,
@@ -141,16 +152,13 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     paddingHorizontal: theme.spacing.md,
     paddingVertical: theme.spacing.xs,
-    backgroundColor: theme.colors.whiteOverlay,
     borderRadius: theme.radius.pill,
     borderWidth: 1,
-    borderColor: theme.colors.whiteOverlay,
   },
   logoPillText: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.label,
     fontWeight: theme.typography.weights.semibold,
-    color: theme.colors.textInverse,
     letterSpacing: 0.4,
   },
   logoFrame: {
@@ -160,8 +168,6 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.xl,
     overflow: 'hidden',
     borderWidth: 2,
-    borderColor: theme.colors.whiteOverlay,
-    backgroundColor: theme.colors.backgroundCanvas,
   },
   logoFrameCompact: {
     width: 84,
@@ -186,7 +192,6 @@ const styles = StyleSheet.create({
     width: 54,
     height: 4,
     borderRadius: theme.radius.full,
-    backgroundColor: theme.colors.accentStrong,
   },
   title: {
     fontFamily: theme.typography.fontFamilyDisplay,

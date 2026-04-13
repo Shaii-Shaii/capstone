@@ -1,7 +1,7 @@
 import React from 'react';
-import { View, StyleSheet, Platform, ScrollView, KeyboardAvoidingView, useWindowDimensions, ImageBackground } from 'react-native';
+import { View, StyleSheet, Platform, ScrollView, KeyboardAvoidingView, useWindowDimensions } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { theme } from '../../design-system/theme';
+import { theme, resolveThemeRoles } from '../../design-system/theme';
 import { useAuth } from '../../providers/AuthProvider';
 
 export const ScreenContainer = ({
@@ -15,6 +15,7 @@ export const ScreenContainer = ({
   authHeroImageUri = '',
 }) => {
   const { resolvedTheme } = useAuth();
+  const roles = resolveThemeRoles(resolvedTheme);
   const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
   const isAuth = variant === 'auth';
@@ -33,15 +34,12 @@ export const ScreenContainer = ({
       isCompactScreen ? theme.spacing.lg : isShortScreen ? theme.spacing.xl : theme.spacing.sectionLg,
       insets.bottom + (isDashboard ? theme.spacing.md : theme.spacing.lg)
     );
-  const authHeroHeight = isShortScreen ? theme.layout.authHeroMinHeightCompact : theme.layout.authHeroMinHeight;
   const dashboardHeroHeight = isShortScreen
     ? theme.layout.dashboardHeroMinHeightCompact
     : theme.layout.dashboardHeroMinHeight;
   const backgroundCanvas = resolvedTheme?.backgroundColor || theme.colors.backgroundCanvas;
-  const authBaseBackground = resolvedTheme?.backgroundColor || theme.colors.backgroundCanvas;
   const dashboardBaseBackground = resolvedTheme?.backgroundColor || theme.colors.backgroundSecondary;
-  const authHeroBackground = resolvedTheme?.primaryColor || heroColors?.[0] || theme.colors.heroFrom;
-  const dashboardHeroBackground = resolvedTheme?.primaryColor || heroColors?.[0] || theme.colors.dashboardShellFrom;
+  const dashboardHeroBackground = roles.heroBackground || heroColors?.[0] || theme.colors.dashboardShellFrom;
 
   const content = (
     <View
@@ -100,17 +98,7 @@ export const ScreenContainer = ({
       ]}
     >
       {isAuth ? (
-        <>
-          <View style={[styles.authHero, { height: authHeroHeight, backgroundColor: authHeroBackground }]}>
-            {authHeroImageUri ? (
-              <ImageBackground source={{ uri: authHeroImageUri }} resizeMode="cover" style={styles.authHeroImage}>
-                <View style={styles.authHeroImageOverlay} />
-              </ImageBackground>
-            ) : null}
-          </View>
-          <View style={[styles.authBase, { top: authHeroHeight - theme.spacing.giant, backgroundColor: authBaseBackground }]} />
-          {keyboardWrapper}
-        </>
+        keyboardWrapper
       ) : (
         <>
           {isDashboard ? (
@@ -151,26 +139,6 @@ const styles = StyleSheet.create({
   },
   dashboardContainer: {
     backgroundColor: theme.colors.backgroundSecondary,
-  },
-  authHero: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    overflow: 'hidden',
-  },
-  authHeroImage: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  authHeroImageOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(8, 8, 8, 0.24)',
-  },
-  authBase: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: theme.colors.backgroundCanvas,
-    borderTopLeftRadius: theme.radius.giant,
-    borderTopRightRadius: theme.radius.giant,
   },
   dashboardBase: {
     ...StyleSheet.absoluteFillObject,

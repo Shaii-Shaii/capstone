@@ -9,7 +9,7 @@ import Animated, {
   withSpring,
   withTiming,
 } from 'react-native-reanimated';
-import { theme } from '../../design-system/theme';
+import { resolveThemeRoles, theme } from '../../design-system/theme';
 import { AppIcon } from './AppIcon';
 import { useAuth } from '../../providers/AuthProvider';
 
@@ -29,6 +29,7 @@ export const PasswordInput = ({
   const [isFocused, setIsFocused] = useState(false);
   const [isSecure, setIsSecure] = useState(true);
   const isFilled = variant === 'filled';
+  const roles = resolveThemeRoles(resolvedTheme);
   const focusProgress = useSharedValue(0);
   const statusProgress = useSharedValue(error ? 1 : 0);
   const toggleScale = useSharedValue(1);
@@ -38,8 +39,9 @@ export const PasswordInput = ({
   const primaryTextColor = resolvedTheme?.primaryTextColor || theme.colors.textPrimary;
   const secondaryTextColor = resolvedTheme?.secondaryTextColor || theme.colors.textSecondary;
   const mutedTextColor = resolvedTheme?.secondaryTextColor || theme.colors.textMuted;
-  const filledBackgroundColor = resolvedTheme?.backgroundColor || theme.colors.surfaceSoft;
-  const defaultBackgroundColor = resolvedTheme?.backgroundColor || theme.colors.surfaceCard;
+  const filledBackgroundColor = roles.supportCardBackground;
+  const defaultBackgroundColor = roles.defaultCardBackground;
+  const restingBorderColor = isFilled ? roles.supportCardBorder : roles.defaultCardBorder;
 
   const shellStyle = useAnimatedStyle(() => ({
     borderColor: error
@@ -47,7 +49,7 @@ export const PasswordInput = ({
       : interpolateColor(
           focusProgress.value,
           [0, 1],
-          [isFilled ? theme.colors.transparent : theme.colors.borderSubtle, focusColor]
+          [restingBorderColor, focusColor]
         ),
     shadowOpacity: focusProgress.value * 0.18,
     transform: [{ translateX: shakeX.value }],
@@ -165,6 +167,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderWidth: 1,
     borderRadius: theme.radius.xl,
+    shadowColor: theme.colors.shadow,
+    shadowOffset: { width: 0, height: 6 },
+    shadowRadius: 14,
+    elevation: 2,
   },
   inputFocused: {
     ...theme.shadows.soft,
@@ -183,6 +189,7 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.full,
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: theme.colors.transparent,
   },
   helperText: {
     marginTop: theme.spacing.xs,

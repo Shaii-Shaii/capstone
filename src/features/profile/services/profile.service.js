@@ -565,6 +565,13 @@ export const getCurrentAccountBundle = async (userId) => {
       ProfileAPI.fetchHospitalStaffByUserId(userId),
     ]);
 
+    if (!staffError && !staffProfile) {
+      logAppEvent('profile.redirect.no_hospital_representative', 'No Hospital_Representative row found for the current user during redirect check.', {
+        authUserId: userId,
+        databaseUserId: profile?.user_id || null,
+      }, 'info');
+    }
+
     const linkedHospitalId = patientError
       ? (staffError ? null : staffProfile?.hospital_id || null)
       : (patientProfile?.hospital_id || staffProfile?.hospital_id || null);

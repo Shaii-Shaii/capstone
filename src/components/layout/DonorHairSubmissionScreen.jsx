@@ -1,21 +1,27 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Image, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Image, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Controller, useForm, useWatch } from 'react-hook-form';
 import { useRouter } from 'expo-router';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { DashboardLayout } from './DashboardLayout';
-import { DashboardHeader } from '../ui/DashboardHeader';
 import { AppCard } from '../ui/AppCard';
 import { AppButton } from '../ui/AppButton';
 import { AppIcon } from '../ui/AppIcon';
 import { AppInput } from '../ui/AppInput';
+import { AppTextLink } from '../ui/AppTextLink';
 import { StatusBanner } from '../ui/StatusBanner';
-import { resolveBrandLogoSource, theme } from '../../design-system/theme';
+import { DonorTopBar } from '../donor/DonorTopBar';
+import { theme } from '../../design-system/theme';
 import { donorDashboardNavItems } from '../../constants/dashboard';
 import { useAuth } from '../../providers/AuthProvider';
 import { useNotifications } from '../../hooks/useNotifications';
 import { useDonorHairSubmission } from '../../hooks/useDonorHairSubmission';
+import { useAuthActions } from '../../features/auth/hooks/useAuthActions';
+import {
+  fetchDonorRecommendationsBySubmissionId,
+  fetchHairSubmissionsByUserId,
+} from '../../features/hairSubmission.api';
 import {
   hairAnalyzerComplianceDefaultValues,
   hairAnalyzerComplianceSchema,
@@ -390,10 +396,197 @@ const QUESTION_STEPS = [
   },
 ];
 
+const weekdayLabels = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
+
+const formatCalendarMonthLabel = (value) => (
+  new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric' }).format(value)
+);
+
+const formatCalendarDayLabel = (value) => (
+  new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(new Date(value))
+);
+
+const buildCalendarDays = (visibleMonth) => {
+  const firstDay = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth(), 1);
+  const firstWeekday = firstDay.getDay();
+  const firstCalendarDay = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth(), 1 - firstWeekday);
+
+  return Array.from({ length: 35 }, (_, index) => {
+    const day = new Date(firstCalendarDay);
+    day.setDate(firstCalendarDay.getDate() + index);
+    return day;
+  });
+};
+
+const normalizeConditionTone = (condition = '') => {
+  const normalized = String(condition || '').trim().toLowerCase();
+
+  if (normalized.includes('healthy') || normalized.includes('good')) {
+    return { dotColor: '#54b86f', label: 'Healthy' };
+  }
+
+  if (normalized.includes('dry') || normalized.includes('damaged')) {
+    return { dotColor: '#f0a856', label: 'Needs care' };
+  }
+
+  if (normalized.includes('treated') || normalized.includes('rebonded') || normalized.includes('colored')) {
+    return { dotColor: '#7a8ae6', label: 'Treated' };
+  }
+
+  return {
+    dotColor: theme.colors.brandPrimary,
+    label: condition || 'Checked',
+  };
+};
+
+const buildHairConditionHistory = (submissions = []) => {
+  const screenings = submissions
+    .flatMap((submission) => submission?.ai_screenings || [])
+    .filter((screening) => screening?.created_at);
+
+  const markers = new Map();
+
+  screenings.forEach((screening) => {
+    const key = new Date(screening.created_at).toISOString().slice(0, 10);
+    const current = markers.get(key);
+
+    if (!current || new Date(screening.created_at).getTime() > new Date(current.created_at).getTime()) {
+      markers.set(key, screening);
+    }
+  });
+
+  const latestScreening = screenings.sort((left, right) => (
+    new Date(right.created_at).getTime() - new Date(left.created_at).getTime()
+  ))[0] || null;
+
+  return {
+    markers,
+    latestScreening,
+  };
+};
+
+function InsightModal({ visible, title, body, rows = [], onClose }) {
+  if (!visible) return null;
+
+  return (
+    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
+      <View style={styles.insightModalOverlay}>
+        <Pressable style={styles.insightModalBackdrop} onPress={onClose} />
+        <AppCard variant="elevated" radius="xl" padding="lg" style={styles.insightModalCard}>
+          <View style={styles.insightModalHeader}>
+            <Text style={styles.insightModalTitle}>{title}</Text>
+            <Pressable onPress={onClose} style={styles.insightModalClose}>
+              <AppIcon name="close" state="muted" />
+            </Pressable>
+          </View>
+
+          {body ? <Text style={styles.insightModalBody}>{body}</Text> : null}
+
+          <View style={styles.insightList}>
+            {rows.filter((row) => row?.value).map((row) => (
+              <View key={row.label} style={styles.insightRow}>
+                <Text style={styles.insightLabel}>{row.label}</Text>
+                <Text style={styles.insightValue}>{row.value}</Text>
+              </View>
+            ))}
+          </View>
+        </AppCard>
+      </View>
+    </Modal>
+  );
+}
+
+function HairConditionLogCard({ submissions, onOpenAnalyzer }) {
+  const visibleMonth = useMemo(() => new Date(), []);
+  const calendarDays = useMemo(() => buildCalendarDays(visibleMonth), [visibleMonth]);
+  const history = useMemo(() => buildHairConditionHistory(submissions), [submissions]);
+  const hasHistory = history.markers.size > 0;
+  const latestTone = normalizeConditionTone(history.latestScreening?.detected_condition);
+
+  if (!hasHistory) {
+    return (
+      <AppCard variant="default" radius="xl" padding="md">
+        <View style={styles.emptyCalendarState}>
+          <View style={styles.emptyCalendarIcon}>
+            <AppIcon name="checkHair" size="md" state="active" />
+          </View>
+          <View style={styles.emptyCalendarCopy}>
+            <Text style={styles.emptyCalendarTitle}>No hair check yet</Text>
+            <Text style={styles.emptyCalendarBody}>
+              Try CheckHair to start tracking your hair condition.
+            </Text>
+          </View>
+          <AppButton
+            title="Start hair check"
+            size="md"
+            fullWidth={false}
+            onPress={onOpenAnalyzer}
+          />
+        </View>
+      </AppCard>
+    );
+  }
+
+  return (
+    <AppCard variant="default" radius="xl" padding="md">
+      <View style={styles.calendarHeaderRow}>
+        <View>
+          <Text style={styles.calendarMonthLabel}>{formatCalendarMonthLabel(visibleMonth)}</Text>
+          <Text style={styles.calendarSummaryText}>Latest: {latestTone.label}</Text>
+        </View>
+
+        <View style={styles.latestConditionChip}>
+          <View style={[styles.conditionDot, { backgroundColor: latestTone.dotColor }]} />
+          <Text style={styles.latestConditionText}>
+            {formatCalendarDayLabel(history.latestScreening?.created_at)}
+          </Text>
+        </View>
+      </View>
+
+      <View style={styles.weekdayRow}>
+        {weekdayLabels.map((label) => (
+          <Text key={label} style={styles.weekdayLabel}>
+            {label}
+          </Text>
+        ))}
+      </View>
+
+      <View style={styles.calendarGrid}>
+        {calendarDays.map((day) => {
+          const key = day.toISOString().slice(0, 10);
+          const screening = history.markers.get(key);
+          const tone = normalizeConditionTone(screening?.detected_condition);
+          const isCurrentMonth = day.getMonth() === visibleMonth.getMonth();
+
+          return (
+            <View
+              key={key}
+              style={[
+                styles.calendarCell,
+                screening ? styles.calendarCellActive : null,
+                !isCurrentMonth ? styles.calendarCellMuted : null,
+              ]}
+            >
+              <Text style={styles.calendarCellLabel}>{day.getDate()}</Text>
+              <View
+                style={[
+                  styles.conditionDot,
+                  { backgroundColor: screening ? tone.dotColor : theme.colors.transparent },
+                ]}
+              />
+            </View>
+          );
+        })}
+      </View>
+    </AppCard>
+  );
+}
+
 export function DonorHairSubmissionScreen() {
   const router = useRouter();
   const cameraRef = useRef(null);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const [isAnalyzerActive, setIsAnalyzerActive] = useState(false);
   const [stepIndex, setStepIndex] = useState(0);
   const [questionIndex, setQuestionIndex] = useState(0);
   const [photoIndex, setPhotoIndex] = useState(0);
@@ -402,8 +595,13 @@ export function DonorHairSubmissionScreen() {
   const [activeCaptureSlotIndex, setActiveCaptureSlotIndex] = useState(null);
   const [isCapturingPhoto, setIsCapturingPhoto] = useState(false);
   const [cameraModalError, setCameraModalError] = useState('');
-  const [brandLogoFailed, setBrandLogoFailed] = useState(false);
+  const [analysisHistory, setAnalysisHistory] = useState([]);
+  const [latestRecommendations, setLatestRecommendations] = useState([]);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(true);
+  const [historyError, setHistoryError] = useState('');
+  const [activeInsight, setActiveInsight] = useState('');
   const { user, profile, resolvedTheme } = useAuth();
+  const { logout, isLoading: isLoggingOut } = useAuthActions();
   const { unreadCount } = useNotifications({ role: 'donor', userId: user?.id, databaseUserId: profile?.user_id });
   const {
     photos,
@@ -459,11 +657,6 @@ export function DonorHairSubmissionScreen() {
   const currentPhoto = photos[photoIndex];
   const activeCaptureView = activeCaptureSlotIndex != null ? requiredViews[activeCaptureSlotIndex] : null;
   const hasCameraPermission = Boolean(cameraPermission?.granted);
-  const brandLogoSource = resolveBrandLogoSource(resolvedTheme, brandLogoFailed);
-
-  useEffect(() => {
-    setBrandLogoFailed(false);
-  }, [resolvedTheme?.logoIcon]);
 
   const eligibility = useMemo(
     () => buildEligibilitySummary({
@@ -485,6 +678,57 @@ export function DonorHairSubmissionScreen() {
   const visibleStepNumber = stepIndex + 1;
   const visibleStepTotal = stepTitles.length;
   const visibleStepTitle = stepTitles[stepIndex];
+  const latestAnalyzedSubmission = useMemo(
+    () => analysisHistory.find((submission) => Array.isArray(submission?.ai_screenings) && submission.ai_screenings.length) || null,
+    [analysisHistory]
+  );
+  const latestSavedScreening = latestAnalyzedSubmission?.ai_screenings?.[0] || null;
+  const latestSavedRecommendation = latestRecommendations[0] || null;
+  const hasSavedAnalysis = Boolean(latestAnalyzedSubmission && latestSavedScreening);
+  const hasDraftFlow = Boolean(analysis || photos.some(Boolean));
+
+  const loadAnalysisHistory = React.useCallback(async () => {
+    if (!user?.id) return;
+
+    setIsLoadingHistory(true);
+    setHistoryError('');
+
+    const submissionsResult = await fetchHairSubmissionsByUserId(user.id, 12);
+    const submissions = submissionsResult.data || [];
+    setAnalysisHistory(submissions);
+
+    const latestSubmissionWithScreening = submissions.find((submission) => (
+      Array.isArray(submission?.ai_screenings) && submission.ai_screenings.length
+    ));
+
+    if (latestSubmissionWithScreening?.submission_id) {
+      const recommendationsResult = await fetchDonorRecommendationsBySubmissionId(latestSubmissionWithScreening.submission_id, 3);
+      setLatestRecommendations(recommendationsResult.data || []);
+
+      if (recommendationsResult.error) {
+        setHistoryError('Some hair insights could not be loaded right now.');
+      }
+    } else {
+      setLatestRecommendations([]);
+    }
+
+    if (submissionsResult.error) {
+      setHistoryError('Hair history could not be loaded right now.');
+    }
+
+    setIsLoadingHistory(false);
+  }, [user?.id]);
+
+  useEffect(() => {
+    loadAnalysisHistory();
+  }, [loadAnalysisHistory]);
+
+  useEffect(() => {
+    if (successMessage) {
+      setIsAnalyzerActive(false);
+      loadAnalysisHistory();
+    }
+  }, [loadAnalysisHistory, successMessage]);
 
   useEffect(() => {
     logAppEvent('donor_hair_submission.flow', 'Donor screening flow initialized without intro wizard steps.', {
@@ -857,6 +1101,7 @@ export function DonorHairSubmissionScreen() {
         setQuestionIndex(0);
         setPhotoIndex(0);
         setStepIndex(0);
+        setIsAnalyzerActive(false);
       }
     }
   };
@@ -1015,66 +1260,177 @@ export function DonorHairSubmissionScreen() {
     }
   };
 
+  const startButtonTitle = hasDraftFlow
+    ? 'Continue hair check'
+    : hasSavedAnalysis
+      ? 'Start new hair check'
+      : 'Start hair check';
+  const latestSavedTone = normalizeConditionTone(latestSavedScreening?.detected_condition);
+  const latestLengthLabel = latestSavedScreening?.estimated_length
+    ? formatLengthLabel(latestSavedScreening.estimated_length)
+    : '';
+  const checkHairSubtitle = isAnalyzerActive
+    ? `Step ${visibleStepNumber} of ${visibleStepTotal}`
+    : hasSavedAnalysis
+      ? 'Latest result ready'
+      : 'Start your self-check';
+
   return (
     <DashboardLayout
       showSupportChat={false}
       navItems={donorDashboardNavItems}
-      activeNavKey="donations"
+      activeNavKey="checkhair"
       navVariant="donor"
       onNavPress={(item) => {
         if (!item.route || item.route === '/donor/donations') return;
         router.navigate(item.route);
       }}
       header={(
-        <DashboardHeader
-          title="Hair Donation"
-          subtitle={visibleStepTitle}
-          summary=""
+        <DonorTopBar
+          title="CheckHair"
+          subtitle={checkHairSubtitle}
           avatarInitials={avatarInitials}
-          avatarUri={profile?.avatar_url}
-          variant="donor"
-          utilityActions={[{ key: 'notifications', icon: 'notifications', badge: unreadCount ? String(Math.min(unreadCount, 99)) : undefined, onPress: () => router.navigate('/donor/notifications') }]}
+          avatarUri={profile?.avatar_url || profile?.photo_path || ''}
+          unreadCount={unreadCount}
+          onNotificationsPress={() => router.navigate('/donor/notifications')}
+          onProfilePress={() => router.navigate('/profile')}
+          onLogoutPress={logout}
+          isLoggingOut={isLoggingOut}
         />
       )}
     >
-      {successMessage ? <StatusBanner message={successMessage} variant="success" title="Submission saved" style={styles.bannerGap} /> : null}
-      {isLoadingContext ? <StatusBanner title="Loading donation context" message="The module is loading the current donation requirement, logistics settings, and donor support data." variant="info" style={styles.bannerGap} /> : null}
+      {successMessage ? <StatusBanner message={successMessage} variant="success" title="Hair check saved" style={styles.bannerGap} /> : null}
+      {historyError ? <StatusBanner message={historyError} variant="info" style={styles.bannerGap} /> : null}
+      {isLoadingContext ? <StatusBanner title="Loading CheckHair" message="Preparing your analyzer context." variant="info" style={styles.bannerGap} /> : null}
       {error ? <StatusBanner title={error.title} message={error.message} variant="error" style={styles.bannerGap} /> : null}
 
-      <View style={styles.wizardStage}>
-        <View style={styles.brandMarkWrap}>
-          <View style={styles.brandMarkFrame}>
-            <Image
-              source={brandLogoSource}
-              style={styles.brandMarkImage}
-              resizeMode="contain"
-              onError={() => setBrandLogoFailed(true)}
-            />
+      {!isAnalyzerActive ? (
+        <View style={styles.summaryStage}>
+          <AppCard variant="default" radius="xl" padding="lg">
+            <View style={styles.summaryHeroRow}>
+              <View style={styles.summaryIconWrap}>
+                <AppIcon name="checkHair" size="lg" state="active" />
+              </View>
+              <View style={styles.summaryHeroCopy}>
+                <Text style={styles.summaryHeroTitle}>Start hair check</Text>
+                <Text style={styles.summaryHeroBody}>
+                  Run a quick AI hair check and track your condition over time.
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.summaryHeroActions}>
+              <AppButton
+                title={startButtonTitle}
+                fullWidth={false}
+                onPress={() => setIsAnalyzerActive(true)}
+              />
+              {hasSavedAnalysis ? (
+                <Text style={styles.summaryHeroMeta}>
+                  Latest: {latestSavedTone.label}
+                </Text>
+              ) : null}
+            </View>
+          </AppCard>
+
+          {!isLoadingHistory && hasSavedAnalysis ? (
+            <AppCard variant="default" radius="xl" padding="lg">
+              <View style={styles.latestResultHeader}>
+                <View style={styles.summaryIconWrapSmall}>
+                  <AppIcon name="success" size="sm" state="active" />
+                </View>
+                <View style={styles.latestResultCopy}>
+                  <Text style={styles.latestResultTitle}>Your latest result</Text>
+                  <Text style={styles.latestResultBody}>
+                    {latestSavedRecommendation?.recommendation_text || latestSavedScreening?.summary || 'Your latest hair check is ready.'}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.latestResultMetrics}>
+                <View style={styles.latestMetricChip}>
+                  <Text style={styles.latestMetricLabel}>Condition</Text>
+                  <Text style={styles.latestMetricValue}>{latestSavedTone.label}</Text>
+                </View>
+                {latestLengthLabel ? (
+                  <View style={styles.latestMetricChip}>
+                    <Text style={styles.latestMetricLabel}>Length</Text>
+                    <Text style={styles.latestMetricValue}>{latestLengthLabel}</Text>
+                  </View>
+                ) : null}
+                {latestSavedScreening?.decision ? (
+                  <View style={styles.latestMetricChip}>
+                    <Text style={styles.latestMetricLabel}>Status</Text>
+                    <Text style={styles.latestMetricValue}>{latestSavedScreening.decision}</Text>
+                  </View>
+                ) : null}
+              </View>
+            </AppCard>
+          ) : null}
+
+          <View style={styles.sectionGroup}>
+            <Text style={styles.sectionTitleCompact}>Hair log</Text>
+            {isLoadingHistory ? (
+              <AppCard variant="default" radius="xl" padding="md">
+                <View style={styles.loadingState}>
+                  <ActivityIndicator color={resolvedTheme?.primaryColor || theme.colors.brandPrimary} />
+                  <Text style={styles.loadingStateText}>Loading hair log</Text>
+                </View>
+              </AppCard>
+            ) : (
+              <HairConditionLogCard
+                submissions={analysisHistory}
+                onOpenAnalyzer={() => setIsAnalyzerActive(true)}
+              />
+            )}
           </View>
-        </View>
 
-        <View style={styles.progressHeader}>
-          <Text style={styles.progressText}>Step {visibleStepNumber} of {visibleStepTotal}</Text>
-          <Text style={styles.progressHelper}>{progressLabel}</Text>
-        </View>
-
-        <View style={styles.stepContentWrap}>
-          {renderStepContent()}
-        </View>
-
-        <View style={styles.footerNav}>
-          <AppButton title="Previous" variant="outline" fullWidth={false} onPress={goPrevious} disabled={stepIndex === 0 && questionIndex === 0 && photoIndex === 0} />
-          {!isAutoAdvanceQuestion ? (
-            <AppButton
-              title={nextButtonTitle}
-              fullWidth={false}
-              onPress={handleNext}
-              loading={(stepIndex === 2 || stepIndex === 3) && isAnalyzing}
-              disabled={isNextDisabled}
-            />
+          {hasSavedAnalysis ? (
+            <View style={styles.postAnalysisActions}>
+              <AppButton
+                title="Check hair eligibility"
+                variant="secondary"
+                fullWidth={false}
+                leading={<AppIcon name="shield" state="default" />}
+                onPress={() => setActiveInsight('eligibility')}
+              />
+              <AppButton
+                title="Check hair condition"
+                fullWidth={false}
+                leading={<AppIcon name="checkHair" state="inverse" />}
+                onPress={() => setActiveInsight('condition')}
+              />
+            </View>
           ) : null}
         </View>
-      </View>
+      ) : (
+        <View style={styles.wizardStage}>
+          <View style={styles.progressHeader}>
+            <View>
+              <Text style={styles.progressText}>Step {visibleStepNumber} of {visibleStepTotal}</Text>
+              <Text style={styles.progressHelper}>{progressLabel}</Text>
+            </View>
+            <AppTextLink title="Close check" variant="muted" onPress={() => setIsAnalyzerActive(false)} />
+          </View>
+
+          <View style={styles.stepContentWrap}>
+            {renderStepContent()}
+          </View>
+
+          <View style={styles.footerNav}>
+            <AppButton title="Previous" variant="outline" fullWidth={false} onPress={goPrevious} disabled={stepIndex === 0 && questionIndex === 0 && photoIndex === 0} />
+            {!isAutoAdvanceQuestion ? (
+              <AppButton
+                title={nextButtonTitle}
+                fullWidth={false}
+                onPress={handleNext}
+                loading={(stepIndex === 2 || stepIndex === 3) && isAnalyzing}
+                disabled={isNextDisabled}
+              />
+            ) : null}
+          </View>
+        </View>
+      )}
 
       <PhotoCaptureModal
         visible={isPhotoCaptureOpen}
@@ -1104,6 +1460,32 @@ export function DonorHairSubmissionScreen() {
           }
         }}
       />
+
+      <InsightModal
+        visible={activeInsight === 'eligibility'}
+        title="Hair eligibility"
+        body={latestSavedScreening?.decision || 'Your latest eligibility result is ready.'}
+        rows={[
+          { label: 'Result', value: latestSavedScreening?.decision || '' },
+          { label: 'Minimum length', value: donationRequirement?.minimum_hair_length ? `${donationRequirement.minimum_hair_length} cm` : '' },
+          { label: 'Detected length', value: latestLengthLabel },
+          { label: 'Top guidance', value: latestSavedRecommendation?.title || latestSavedRecommendation?.recommendation_text || '' },
+        ]}
+        onClose={() => setActiveInsight('')}
+      />
+
+      <InsightModal
+        visible={activeInsight === 'condition'}
+        title="Hair condition"
+        body={latestSavedScreening?.summary || 'Your latest hair condition overview is ready.'}
+        rows={[
+          { label: 'Condition', value: latestSavedTone.label },
+          { label: 'Texture', value: latestSavedScreening?.detected_texture || '' },
+          { label: 'Density', value: latestSavedScreening?.detected_density || '' },
+          { label: 'Notes', value: latestSavedScreening?.visible_damage_notes || latestSavedRecommendation?.recommendation_text || '' },
+        ]}
+        onClose={() => setActiveInsight('')}
+      />
     </DashboardLayout>
   );
 }
@@ -1114,24 +1496,296 @@ const styles = StyleSheet.create({
     maxWidth: theme.layout.contentMaxWidth,
     alignSelf: 'center',
   },
-  brandMarkWrap: {
+  summaryStage: {
+    gap: theme.spacing.md,
+    width: '100%',
+    maxWidth: theme.layout.contentMaxWidth,
+    alignSelf: 'center',
+  },
+  summaryHeroRow: {
+    flexDirection: 'row',
     alignItems: 'center',
+    gap: theme.spacing.md,
     marginBottom: theme.spacing.md,
   },
-  brandMarkFrame: {
-    width: 72,
-    height: 72,
-    borderRadius: theme.radius.xl,
+  summaryIconWrap: {
+    width: 52,
+    height: 52,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: theme.colors.backgroundPrimary,
+    backgroundColor: theme.colors.brandPrimaryMuted,
+  },
+  summaryHeroCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  summaryHeroTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.titleSm,
+    color: theme.colors.textPrimary,
+  },
+  summaryHeroBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textSecondary,
+  },
+  summaryHeroActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+  },
+  summaryHeroMeta: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    color: theme.colors.textMuted,
+  },
+  latestResultHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.spacing.sm,
+    marginBottom: theme.spacing.md,
+  },
+  summaryIconWrapSmall: {
+    width: 36,
+    height: 36,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.brandPrimaryMuted,
+  },
+  latestResultCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  latestResultTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    color: theme.colors.textPrimary,
+  },
+  latestResultBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textSecondary,
+  },
+  latestResultMetrics: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.spacing.sm,
+  },
+  latestMetricChip: {
+    minWidth: '30%',
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.surfaceSoft,
+  },
+  latestMetricLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    color: theme.colors.textMuted,
+    textTransform: 'uppercase',
+    marginBottom: 2,
+  },
+  latestMetricValue: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textPrimary,
+  },
+  sectionGroup: {
+    gap: theme.spacing.sm,
+  },
+  sectionTitleCompact: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    color: theme.colors.textPrimary,
+  },
+  loadingState: {
+    minHeight: 140,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: theme.spacing.sm,
+  },
+  loadingStateText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    color: theme.colors.textSecondary,
+  },
+  postAnalysisActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.spacing.sm,
+  },
+  emptyCalendarState: {
+    gap: theme.spacing.md,
+    alignItems: 'flex-start',
+  },
+  emptyCalendarIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.brandPrimaryMuted,
+  },
+  emptyCalendarCopy: {
+    gap: 4,
+  },
+  emptyCalendarTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    color: theme.colors.textPrimary,
+  },
+  emptyCalendarBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textSecondary,
+  },
+  calendarHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+    marginBottom: theme.spacing.sm,
+  },
+  calendarMonthLabel: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    color: theme.colors.textPrimary,
+  },
+  calendarSummaryText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    color: theme.colors.textSecondary,
+  },
+  latestConditionChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: 6,
+    borderRadius: theme.radius.pill,
     borderWidth: 1,
     borderColor: theme.colors.borderSubtle,
-    ...theme.shadows.soft,
+    backgroundColor: theme.colors.surfaceSoft,
   },
-  brandMarkImage: {
-    width: 46,
-    height: 46,
+  latestConditionText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textPrimary,
+  },
+  weekdayRow: {
+    flexDirection: 'row',
+    marginBottom: theme.spacing.xs,
+  },
+  weekdayLabel: {
+    flex: 1,
+    textAlign: 'center',
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 11,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textMuted,
+  },
+  calendarGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    rowGap: theme.spacing.xs,
+  },
+  calendarCell: {
+    width: '13.5%',
+    aspectRatio: 1,
+    borderRadius: 14,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    borderColor: theme.colors.borderSubtle,
+    backgroundColor: theme.colors.backgroundPrimary,
+  },
+  calendarCellActive: {
+    backgroundColor: theme.colors.surfaceSoft,
+  },
+  calendarCellMuted: {
+    opacity: 0.42,
+  },
+  calendarCellLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 12,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textPrimary,
+  },
+  conditionDot: {
+    width: 7,
+    height: 7,
+    borderRadius: theme.radius.full,
+  },
+  insightModalOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    padding: theme.spacing.lg,
+    backgroundColor: theme.colors.overlay,
+  },
+  insightModalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  insightModalCard: {
+    width: '100%',
+    maxWidth: 420,
+    alignSelf: 'center',
+  },
+  insightModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+    marginBottom: theme.spacing.sm,
+  },
+  insightModalTitle: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.titleSm,
+    color: theme.colors.textPrimary,
+  },
+  insightModalClose: {
+    width: 34,
+    height: 34,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.surfaceSoft,
+  },
+  insightModalBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textSecondary,
+    marginBottom: theme.spacing.md,
+  },
+  insightList: {
+    gap: theme.spacing.sm,
+  },
+  insightRow: {
+    paddingVertical: theme.spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.borderSubtle,
+  },
+  insightLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    color: theme.colors.textMuted,
+    marginBottom: 2,
+  },
+  insightValue: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    color: theme.colors.textPrimary,
   },
   stepContentWrap: {
     width: '100%',

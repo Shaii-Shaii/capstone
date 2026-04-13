@@ -1,6 +1,9 @@
 export const appIconMap = {
+  arrowLeft: 'arrow-left',
   home: 'home-variant-outline',
   homeActive: 'home-variant',
+  checkHair: 'line-scan',
+  checkHairActive: 'line-scan',
   updates: 'bell-outline',
   updatesActive: 'bell',
   profile: 'account-circle-outline',
@@ -42,4 +45,6 @@ export const appIconMap = {
   sparkle: 'star-four-points-outline',
   quickActions: 'dots-grid',
   services: 'apps',
+  organization: 'domain',
+  google: 'google',
 };

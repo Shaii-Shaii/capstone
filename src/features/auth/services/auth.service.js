@@ -527,26 +527,43 @@ export const logout = async () => {
   try {
     const sessionResult = await AuthAPI.getCurrentSession();
     const currentUser = sessionResult.data?.session?.user || null;
-    const { error } = await AuthAPI.logoutUser();
-    if (error) throw new Error(error.message);
-
-    await writeAuditLog({
+    const auditPayload = {
       authUserId: currentUser?.id,
       userEmail: currentUser?.email || '',
       action: 'auth.logout',
       description: 'User logged out.',
       resource: 'auth',
       status: 'success',
-    });
+    };
+
+    const auditResult = await writeAuditLog(auditPayload);
+    if (!auditResult.success) {
+      logAppEvent('auth.logout.audit_skipped', 'Logout audit log could not be written before session teardown. Continuing logout.', {
+        authUserId: currentUser?.id || null,
+        userEmail: currentUser?.email || '',
+        auditError: auditResult.error || null,
+      }, 'warn');
+    }
+
+    const { error } = await AuthAPI.logoutUser();
+    if (error) throw new Error(error.message);
 
     return { success: true, error: null };
   } catch (error) {
-    await writeAuditLog({
+    const auditResult = await writeAuditLog({
       action: 'auth.logout',
       description: error.message || 'Logout failed.',
       resource: 'auth',
       status: 'failed',
     });
+
+    if (!auditResult.success) {
+      logAppEvent('auth.logout.audit_failed', 'Logout failure audit log could not be written.', {
+        auditError: auditResult.error || null,
+        logoutError: error.message || null,
+      }, 'warn');
+    }
+
     return { success: false, error: error.message };
   }
 };

@@ -156,23 +156,43 @@ const ensureMutationAuthContext = async ({
   };
 };
 
-const resolveQueryRows = ({ table, filter, rows, authUserId = '', systemUserId = null, patientId = null, hospitalId = null }) => {
+const resolveQueryRows = ({
+  table,
+  filter,
+  rows,
+  authUserId = '',
+  systemUserId = null,
+  patientId = null,
+  hospitalId = null,
+  logZeroRows = true,
+  zeroRowsLevel = 'warn',
+  duplicateRowsLevel = 'warn',
+  duplicateResolution = 'first_row',
+}) => {
   const context = buildQueryContext({ table, filter, authUserId, systemUserId, patientId, hospitalId });
   const safeRows = Array.isArray(rows) ? rows : [];
 
   if (safeRows.length === 0) {
-    logAppEvent('profile.query.zero_rows', 'No rows returned for single-row lookup.', {
-      ...context,
-      rowCount: 0,
-    }, 'warn');
+    if (logZeroRows) {
+      logAppEvent('profile.query.zero_rows', 'No rows returned for single-row lookup.', {
+        ...context,
+        rowCount: 0,
+      }, zeroRowsLevel);
+    }
     return { data: null, error: null };
   }
 
   if (safeRows.length > 1) {
-    logAppError('profile.query.multiple_rows', new Error('Multiple rows returned for single-row lookup.'), {
+    logAppEvent('profile.query.multiple_rows', 'Multiple rows returned for single-row lookup. Using deterministic fallback selection.', {
       ...context,
       rowCount: safeRows.length,
-    });
+      duplicateResolution,
+      selectedRowId:
+        safeRows[0]?.user_details_id
+        || safeRows[0]?.user_id
+        || safeRows[0]?.id
+        || null,
+    }, duplicateRowsLevel);
   }
 
   return {
@@ -189,6 +209,10 @@ const runSingleRowSelect = async ({
   patientId = null,
   hospitalId = null,
   queryBuilder,
+  logZeroRows = true,
+  zeroRowsLevel = 'warn',
+  duplicateRowsLevel = 'warn',
+  duplicateResolution = 'first_row',
 }) => {
   const result = await queryBuilder.limit(2);
   if (result.error) {
@@ -215,6 +239,10 @@ const runSingleRowSelect = async ({
     systemUserId,
     patientId,
     hospitalId,
+    logZeroRows,
+    zeroRowsLevel,
+    duplicateRowsLevel,
+    duplicateResolution,
   });
 };
 
@@ -658,11 +686,15 @@ export const fetchUserDetailsBySystemUserId = async (systemUserId) => {
     table: 'user_details',
     filter: { user_id: systemUserId },
     systemUserId,
+    duplicateRowsLevel: 'warn',
+    duplicateResolution: 'latest_updated_user_details',
     queryBuilder: supabase
       .from('user_details')
       .select('*')
       .eq('user_id', systemUserId)
-      .order('updated_at', { ascending: false }),
+      .order('updated_at', { ascending: false })
+      .order('created_at', { ascending: false })
+      .order('user_details_id', { ascending: false }),
   });
 };
 
@@ -1166,6 +1198,7 @@ export const fetchHospitalStaffByUserId = async (userIdentifier) => {
     filter: { User_ID: systemUserResult.data.user_id },
     authUserId: isUuid(userIdentifier) ? userIdentifier : '',
     systemUserId: systemUserResult.data.user_id,
+    logZeroRows: false,
     queryBuilder: supabase
       .from(hospitalRepresentativeTable)
       .select(hospitalStaffSelectColumns)
