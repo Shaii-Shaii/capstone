@@ -1,7 +1,8 @@
 import React from 'react';
-import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Image, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { DashboardLayout } from '../../src/components/layout/DashboardLayout';
+import { AppButton } from '../../src/components/ui/AppButton';
 import { AppCard } from '../../src/components/ui/AppCard';
 import { AppIcon } from '../../src/components/ui/AppIcon';
 import { StatusBanner } from '../../src/components/ui/StatusBanner';
@@ -37,76 +38,107 @@ function OrganizationsPageHeader({
   const { resolvedTheme } = useAuth();
   const roles = resolveThemeRoles(resolvedTheme);
   const [imageFailed, setImageFailed] = React.useState(false);
+  const [isLogoutModalOpen, setIsLogoutModalOpen] = React.useState(false);
 
   React.useEffect(() => {
     setImageFailed(false);
   }, [avatarUri]);
 
+  const openLogoutModal = React.useCallback(() => {
+    if (isLoggingOut) return;
+    setIsLogoutModalOpen(true);
+  }, [isLoggingOut]);
+
+  const closeLogoutModal = React.useCallback(() => {
+    if (isLoggingOut) return;
+    setIsLogoutModalOpen(false);
+  }, [isLoggingOut]);
+
+  const confirmLogout = React.useCallback(() => {
+    setIsLogoutModalOpen(false);
+    onLogoutPress?.();
+  }, [onLogoutPress]);
+
   return (
-    <View
-      style={[
-        styles.topBarContainer,
-        {
-          backgroundColor: roles.defaultCardBackground,
-          borderColor: roles.defaultCardBorder,
-        },
-      ]}
-    >
-      <View style={styles.topBar}>
-        <View style={styles.topBarSide}>
-          <Pressable
-            onPress={onBackPress}
-            style={[styles.topBarIconButton, { backgroundColor: roles.supportCardBackground, borderColor: roles.supportCardBorder }]}
-          >
-            <AppIcon name="arrowLeft" size="md" state="default" color={roles.headingText} />
-          </Pressable>
-        </View>
+    <>
+      <View
+        style={[
+          styles.topBarContainer,
+          {
+            backgroundColor: roles.defaultCardBackground,
+            borderColor: roles.defaultCardBorder,
+          },
+        ]}
+      >
+        <View style={styles.topBar}>
+          <View style={styles.topBarSide}>
+            <Pressable
+              onPress={onBackPress}
+              style={[styles.topBarIconButton, { backgroundColor: roles.supportCardBackground, borderColor: roles.supportCardBorder }]}
+            >
+              <AppIcon name="arrowLeft" size="md" state="default" color={roles.headingText} />
+            </Pressable>
+          </View>
 
-        <View style={styles.topBarCenter}>
-          <Text style={[styles.topBarTitle, { color: roles.headingText }]}>Organizations</Text>
-        </View>
+          <View style={styles.topBarCenter}>
+            <Text style={[styles.topBarTitle, { color: roles.headingText }]}>Organizations</Text>
+          </View>
 
-        <View style={[styles.topBarSide, styles.topBarActions]}>
-          <Pressable
-            onPress={onProfilePress}
-            style={[styles.topBarAvatarButton, { backgroundColor: roles.supportCardBackground, borderColor: roles.supportCardBorder }]}
-          >
-            {avatarUri && !imageFailed ? (
-              <Image
-                source={{ uri: avatarUri }}
-                style={styles.topBarAvatarImage}
-                resizeMode="cover"
-                onError={() => setImageFailed(true)}
-              />
-            ) : (
-              <AppIcon name="profile" size="md" state="default" color={roles.headingText} />
-            )}
-          </Pressable>
+          <View style={[styles.topBarSide, styles.topBarActions]}>
+            <Pressable
+              onPress={onProfilePress}
+              style={[styles.topBarAvatarButton, { backgroundColor: roles.supportCardBackground, borderColor: roles.supportCardBorder }]}
+            >
+              {avatarUri && !imageFailed ? (
+                <Image
+                  source={{ uri: avatarUri }}
+                  style={styles.topBarAvatarImage}
+                  resizeMode="cover"
+                  onError={() => setImageFailed(true)}
+                />
+              ) : (
+                <AppIcon name="profile" size="md" state="default" color={roles.headingText} />
+              )}
+            </Pressable>
 
-          <Pressable
-            onPress={onNotificationsPress}
-            style={[styles.topBarIconButton, { backgroundColor: roles.supportCardBackground, borderColor: roles.supportCardBorder }]}
-          >
-            <AppIcon name="notifications" size="md" state="default" color={roles.headingText} />
-            {unreadCount ? (
-              <View style={[styles.topBarBadge, { backgroundColor: roles.primaryActionBackground }]}>
-                <Text style={[styles.topBarBadgeText, { color: roles.primaryActionText }]}>
-                  {Math.min(unreadCount, 99)}
-                </Text>
-              </View>
-            ) : null}
-          </Pressable>
+            <Pressable
+              onPress={onNotificationsPress}
+              style={[styles.topBarIconButton, { backgroundColor: roles.supportCardBackground, borderColor: roles.supportCardBorder }]}
+            >
+              <AppIcon name="notifications" size="md" state="default" color={roles.headingText} />
+              {unreadCount ? (
+                <View style={[styles.topBarBadge, { backgroundColor: roles.primaryActionBackground }]}>
+                  <Text style={[styles.topBarBadgeText, { color: roles.primaryActionText }]}>
+                    {Math.min(unreadCount, 99)}
+                  </Text>
+                </View>
+              ) : null}
+            </Pressable>
 
-          <Pressable
-            onPress={onLogoutPress}
-            disabled={isLoggingOut}
-            style={[styles.topBarIconButton, { backgroundColor: roles.supportCardBackground, borderColor: roles.supportCardBorder }]}
-          >
-            <AppIcon name="signOut" size="md" state="default" color={roles.headingText} />
-          </Pressable>
+            <Pressable
+              onPress={openLogoutModal}
+              disabled={isLoggingOut}
+              style={[styles.topBarIconButton, { backgroundColor: roles.supportCardBackground, borderColor: roles.supportCardBorder }]}
+            >
+              <AppIcon name="signOut" size="md" state="default" color={roles.headingText} />
+            </Pressable>
+          </View>
         </View>
       </View>
-    </View>
+      <Modal transparent visible={isLogoutModalOpen} animationType="fade" onRequestClose={closeLogoutModal}>
+        <View style={styles.logoutModalOverlay}>
+          <Pressable style={styles.logoutModalBackdrop} onPress={closeLogoutModal} />
+          <AppCard variant="elevated" radius="xl" padding="lg" style={styles.logoutModalCard}>
+            <Text style={styles.logoutModalTitle}>Log out?</Text>
+            <Text style={styles.logoutModalBody}>Are you sure you want to log out?</Text>
+            <View style={styles.logoutModalActions}>
+              <AppButton title="Cancel" variant="outline" fullWidth={false} onPress={closeLogoutModal} />
+              <AppButton title="Log out" fullWidth={false} onPress={confirmLogout} loading={isLoggingOut} />
+            </View>
+          </AppCard>
+        </View>
+      </Modal>
+    </>
   );
 }
 
@@ -348,6 +380,38 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamily,
     fontSize: 9,
     fontWeight: theme.typography.weights.bold,
+  },
+  logoutModalOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    padding: theme.spacing.lg,
+    backgroundColor: theme.colors.overlay,
+  },
+  logoutModalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  logoutModalCard: {
+    width: '100%',
+    maxWidth: 360,
+    alignSelf: 'center',
+  },
+  logoutModalTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.titleSm,
+    color: theme.colors.textPrimary,
+    marginBottom: theme.spacing.xs,
+  },
+  logoutModalBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textSecondary,
+  },
+  logoutModalActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+    marginTop: theme.spacing.lg,
   },
   bannerGap: {
     marginBottom: theme.spacing.sm,

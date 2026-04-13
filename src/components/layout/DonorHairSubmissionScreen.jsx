@@ -1273,7 +1273,7 @@ export function DonorHairSubmissionScreen() {
     ? `Step ${visibleStepNumber} of ${visibleStepTotal}`
     : hasSavedAnalysis
       ? 'Latest result ready'
-      : 'Start your self-check';
+      : '';
 
   return (
     <DashboardLayout
@@ -1281,6 +1281,7 @@ export function DonorHairSubmissionScreen() {
       navItems={donorDashboardNavItems}
       activeNavKey="checkhair"
       navVariant="donor"
+      screenVariant="default"
       onNavPress={(item) => {
         if (!item.route || item.route === '/donor/donations') return;
         router.navigate(item.route);
@@ -1368,22 +1369,24 @@ export function DonorHairSubmissionScreen() {
             </AppCard>
           ) : null}
 
-          <View style={styles.sectionGroup}>
-            <Text style={styles.sectionTitleCompact}>Hair log</Text>
-            {isLoadingHistory ? (
-              <AppCard variant="default" radius="xl" padding="md">
-                <View style={styles.loadingState}>
-                  <ActivityIndicator color={resolvedTheme?.primaryColor || theme.colors.brandPrimary} />
-                  <Text style={styles.loadingStateText}>Loading hair log</Text>
-                </View>
-              </AppCard>
-            ) : (
-              <HairConditionLogCard
-                submissions={analysisHistory}
-                onOpenAnalyzer={() => setIsAnalyzerActive(true)}
-              />
-            )}
-          </View>
+          {isLoadingHistory || hasSavedAnalysis ? (
+            <View style={styles.sectionGroup}>
+              <Text style={styles.sectionTitleCompact}>Hair log</Text>
+              {isLoadingHistory ? (
+                <AppCard variant="default" radius="xl" padding="md">
+                  <View style={styles.loadingState}>
+                    <ActivityIndicator color={resolvedTheme?.primaryColor || theme.colors.brandPrimary} />
+                    <Text style={styles.loadingStateText}>Loading hair log</Text>
+                  </View>
+                </AppCard>
+              ) : (
+                <HairConditionLogCard
+                  submissions={analysisHistory}
+                  onOpenAnalyzer={() => setIsAnalyzerActive(true)}
+                />
+              )}
+            </View>
+          ) : null}
 
           {hasSavedAnalysis ? (
             <View style={styles.postAnalysisActions}>

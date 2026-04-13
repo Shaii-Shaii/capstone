@@ -25,7 +25,7 @@ export const useRoleRedirect = () => {
     // 2. Guard unauthenticated users
     if (!user) {
       if (!isPublicAuthRoute) {
-        router.replace('/');
+        router.replace('/auth/access');
       }
       return;
     }
