@@ -256,7 +256,7 @@ const mapAnalysisError = (message = '') => {
     return createErrorState('Upload Photos First', 'Add the required hair photos before running the analysis.');
   }
 
-  if (normalized.includes('guided donation questions')) {
+  if (normalized.includes('guided donation questions') || normalized.includes('guided hair questions')) {
     return createErrorState('Questions Needed', 'Complete the screening questions first before analysis.');
   }
 
@@ -266,6 +266,30 @@ const mapAnalysisError = (message = '') => {
 
   if (normalized.includes('response was incomplete')) {
     return createErrorState('Analysis Was Incomplete', 'The scan did not finish properly. Please try analyzing the photos again.');
+  }
+
+  if (normalized.includes('cannot analyze hair, please try again in')) {
+    return createErrorState('Please Wait', message);
+  }
+
+  if (normalized.includes('cannot analyze hair right now')) {
+    return createErrorState('Analysis Busy', 'Cannot analyze hair right now. Please try again later.');
+  }
+
+  if (
+    normalized.includes('quota exceeded')
+    || normalized.includes('free tier request limit')
+    || normalized.includes('retry in')
+    || normalized.includes('rate limit')
+  ) {
+    const retryMatch = String(message || '').match(/retry\s+in\s+(\d+(?:\.\d+)?)s/i);
+    const retryAfterSeconds = retryMatch?.[1] ? Math.max(1, Math.ceil(Number(retryMatch[1]))) : null;
+    return createErrorState(
+      retryAfterSeconds ? 'Please Wait' : 'Analysis Busy',
+      retryAfterSeconds
+        ? `Cannot analyze hair, please try again in ${retryAfterSeconds} seconds.`
+        : 'Cannot analyze hair right now. Please try again later.'
+    );
   }
 
   if (normalized.includes('session has expired') || normalized.includes('sign in again')) {
@@ -292,12 +316,22 @@ const mapAnalysisError = (message = '') => {
     return createErrorState('Photos Could Not Be Processed', 'One of the uploaded hair photos could not be processed for AI analysis. Please retake or upload that view again.');
   }
 
-  if (normalized.includes('front view photo') || normalized.includes('back view photo') || normalized.includes('hair ends close-up') || normalized.includes('side view photo')) {
+  if (
+    normalized.includes('front view photo')
+    || normalized.includes('side profile photo')
+    || normalized.includes('side view photo')
+    || normalized.includes('back view photo')
+    || normalized.includes('hair ends close-up')
+  ) {
     return createErrorState('More Hair Views Needed', message);
   }
 
   if (normalized.includes('not clear enough for a reliable hair analysis')) {
     return createErrorState('Photos Need Better Clarity', 'The uploaded hair photos were too unclear for a reliable result. Please retake them in brighter light and keep the hair centered.');
+  }
+
+  if (normalized.includes('invalid json') || normalized.includes('could not be parsed')) {
+    return createErrorState('Analysis Could Not Be Read', 'The AI response could not be read properly. Please try the hair analysis again in a moment.');
   }
 
   return createErrorState('Analysis Unavailable', 'We could not analyze the uploaded hair photos right now. Please try again in a moment.');
@@ -307,11 +341,11 @@ const mapSaveError = (message = '') => {
   const normalized = message.toLowerCase();
 
   if (normalized.includes('session is not ready')) {
-    return createErrorState('Session Not Ready', 'Please reopen the donation screen and try again.');
+    return createErrorState('Session Not Ready', 'Please reopen CheckHair and try again.');
   }
 
   if (normalized.includes('upload at least one photo')) {
-    return createErrorState('Photos Are Required', 'Upload the required hair photos first before saving the donation.');
+    return createErrorState('Photos Are Required', 'Upload the required hair photos first before saving this hair check.');
   }
 
   if (normalized.includes('run the ai analysis')) {
@@ -319,11 +353,11 @@ const mapSaveError = (message = '') => {
   }
 
   if (normalized.includes('create the hair submission')) {
-    return createErrorState('Submission Could Not Start', 'The donation submission record could not be created right now. Please try again.');
+    return createErrorState('Hair Log Could Not Start', 'The hair check record could not be created right now. Please try again.');
   }
 
   if (normalized.includes('save the donor-confirmed hair details')) {
-    return createErrorState('Details Could Not Be Saved', 'Your confirmed hair details could not be saved right now. Please review them and try again.');
+    return createErrorState('Details Could Not Be Saved', 'The analyzed hair details could not be saved right now. Please try again.');
   }
 
   if (normalized.includes('failed to upload one of the selected photos')
@@ -333,15 +367,19 @@ const mapSaveError = (message = '') => {
     return createErrorState('Photo Save Failed', 'One of the required hair photos could not be attached to the submission. Please retake or upload that image again and try saving.');
   }
 
+  if (normalized.includes('storage bucket') || normalized.includes('bucket not found')) {
+    return createErrorState('Photo Storage Unavailable', 'Hair photo storage is not ready right now. Please try again in a moment.');
+  }
+
   if (normalized.includes('selected donation logistics path')) {
-    return createErrorState('Donation Path Could Not Be Saved', 'The selected donation path could not be saved right now. Please try again.');
+    return createErrorState('Hair Check Saved Partially', 'The hair log was saved without donation routing details. You can review donation options later.');
   }
 
   if (normalized.includes('ai screening result')) {
-    return createErrorState('Screening Result Could Not Be Saved', 'The AI screening result could not be linked to the donation right now. Please try again.');
+    return createErrorState('Screening Result Could Not Be Saved', 'The AI screening result could not be linked to your hair log right now. Please try again.');
   }
 
-  return createErrorState('Unable To Save Donation', 'Your donation details were not saved yet. Please review the form and try again.');
+  return createErrorState('Unable To Save Hair Check', 'Your hair check was not saved yet. Please try again.');
 };
 
 const buildPhotoRecord = (asset, slotIndex, sourceType = 'upload') => {
@@ -361,6 +399,24 @@ const buildPhotoRecord = (asset, slotIndex, sourceType = 'upload') => {
     file: asset.file || null,
     fileName: asset.fileName || asset.file?.name || '',
     sourceType,
+  };
+};
+
+const normalizeCorrectedDetailsForAnalysis = (correctedDetails = null) => {
+  if (!correctedDetails) return null;
+
+  const lengthValue = Number(correctedDetails.correctedLengthValue);
+  const lengthUnit = String(correctedDetails.correctedLengthUnit || 'cm').trim().toLowerCase();
+  const normalizedLengthCm = Number.isFinite(lengthValue)
+    ? (lengthUnit === 'in' ? lengthValue * 2.54 : lengthValue)
+    : null;
+
+  return {
+    length_value: Number.isFinite(lengthValue) ? lengthValue : null,
+    length_unit: lengthUnit === 'in' ? 'in' : 'cm',
+    normalized_length_cm: Number.isFinite(normalizedLengthCm) ? Number(normalizedLengthCm.toFixed(2)) : null,
+    texture: correctedDetails.correctedTexture || '',
+    density: correctedDetails.correctedDensity || '',
   };
 };
 
@@ -392,7 +448,7 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
   const canAnalyze = hasCompletePhotoSet && !isAnalyzing;
 
   const progressLabel = useMemo(() => {
-    if (isSaving) return 'Saving your submission';
+    if (isSaving) return 'Saving your hair log';
     if (isAnalyzing) return 'Running AI analysis';
     if (analysis) return 'Review AI result';
     if (hasCompletePhotoSet) return 'Ready for AI analysis';
@@ -607,7 +663,7 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
     setSuccessMessage('');
   };
 
-  const analyzePhotos = async ({ questionnaireAnswers, complianceContext } = {}) => {
+  const analyzePhotos = async ({ questionnaireAnswers, complianceContext, historyContext = null, correctedDetails = null } = {}) => {
     const readyPhotos = photos.filter(Boolean);
 
     if (readyPhotos.length < MAX_PHOTO_COUNT) {
@@ -628,18 +684,10 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
     setError(null);
     setSuccessMessage('');
 
-    const submissionContext = analyzerContext.latestSubmission
-      ? {
-          submission_id: analyzerContext.latestSubmission.submission_id || null,
-          donation_drive_id: analyzerContext.latestSubmission.donation_drive_id || null,
-          organization_id: analyzerContext.latestSubmission.organization_id || null,
-          submission_detail_id: analyzerContext.latestSubmissionDetail?.submission_detail_id || null,
-          declared_length: analyzerContext.latestSubmissionDetail?.declared_length ?? null,
-          declared_texture: analyzerContext.latestSubmissionDetail?.declared_texture || '',
-          declared_density: analyzerContext.latestSubmissionDetail?.declared_density || '',
-          declared_condition: analyzerContext.latestSubmissionDetail?.declared_condition || '',
-        }
+    const normalizedHistoryContext = questionnaireAnswers?.questionnaireMode === 'returning_follow_up'
+      ? historyContext
       : null;
+    const normalizedCorrectedDetails = normalizeCorrectedDetailsForAnalysis(correctedDetails);
 
     logAppEvent('donor_hair_submission.analysis', 'Normalized image payload built for donor hair analysis.', {
       userId,
@@ -647,8 +695,9 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
       imageViews: readyPhotos.map((photo) => photo?.viewLabel || photo?.viewKey || null).filter(Boolean),
       mimeTypes: readyPhotos.map((photo) => photo?.mimeType || '').filter(Boolean),
       sourceTypes: readyPhotos.map((photo) => photo?.sourceType || '').filter(Boolean),
-      hasSubmissionContext: Boolean(submissionContext?.submission_id),
       hasDonationRequirementContext: Boolean(analyzerContext.donationRequirement?.donation_requirement_id),
+      hasHistoryContext: Boolean(normalizedHistoryContext?.entries?.length),
+      hasCorrectedDetails: Boolean(normalizedCorrectedDetails),
       complianceAcknowledged: Boolean(complianceContext?.acknowledged),
     });
 
@@ -657,7 +706,9 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
       questionnaireAnswers,
       complianceContext,
       donationRequirementContext: analyzerContext.donationRequirement,
-      submissionContext,
+      submissionContext: null,
+      historyContext: normalizedHistoryContext,
+      correctedDetails: normalizedCorrectedDetails,
     });
 
     setIsAnalyzing(false);
@@ -676,6 +727,7 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
       analysisKeys: result.analysis ? Object.keys(result.analysis) : [],
       renderKeys: [
         'estimated_length',
+        'length_assessment',
         'detected_texture',
         'detected_density',
         'detected_condition',
@@ -695,7 +747,7 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
     setError(null);
     setSuccessMessage('');
 
-    logAppEvent('donor_hair_submission.save', 'Hair donation save started from final wizard step.', {
+    logAppEvent('donor_hair_submission.save', 'Hair check save started from AI result step.', {
       userId,
       databaseUserId,
       photoCount: photos.filter(Boolean).length,
@@ -718,7 +770,7 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
     setIsSaving(false);
 
     if (result.error) {
-      logAppEvent('donor_hair_submission.save', 'Hair donation save failed in hook.', {
+      logAppEvent('donor_hair_submission.save', 'Hair check save failed in hook.', {
         userId,
         message: result.error,
       }, 'error');
@@ -728,12 +780,12 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
       return { success: false, error: mappedError.message };
     }
 
-    logAppEvent('donor_hair_submission.save', 'Hair donation save completed in hook.', {
+    logAppEvent('donor_hair_submission.save', 'Hair check save completed in hook.', {
       userId,
       submissionId: result.submission?.submission_id || null,
     });
 
-    setSuccessMessage('Hair submission saved successfully. Your AI result, donor-confirmed details, and guidance recommendations are now linked to the submission.');
+    setSuccessMessage('Hair check saved successfully. Your AI result is now added to your hair log.');
     setPhotos(createEmptyPhotoSlots());
     setAnalysis(null);
     return { success: true, submission: result.submission };

@@ -1,8 +1,6 @@
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
-import { fetchHairSubmissionsByUserId } from './hairSubmission.api';
-
-const QUALIFIED_DECISION_KEYWORDS = ['eligible', 'qualified', 'approved', 'accepted'];
+import { fetchHairSubmissionsByUserId, fetchLatestDonationCertificateByUserId } from './hairSubmission.api';
 
 const escapeHtml = (value = '') => String(value)
   .replaceAll('&', '&amp;')
@@ -23,11 +21,6 @@ const formatCertificateDate = (value) => {
   } catch {
     return value;
   }
-};
-
-export const isQualifiedDonationDecision = (decision = '') => {
-  const normalizedDecision = decision.trim().toLowerCase();
-  return QUALIFIED_DECISION_KEYWORDS.some((keyword) => normalizedDecision.includes(keyword));
 };
 
 const normalizeCertificateRecord = ({ profile, submission, screening }) => {
@@ -53,34 +46,42 @@ export const getLatestQualifiedDonationCertificate = async ({ userId, profile })
       throw new Error('Your session is not ready yet.');
     }
 
-    const { data, error } = await fetchHairSubmissionsByUserId(userId, 12);
-    if (error) {
-      throw new Error(error.message || 'Unable to load donor certificates right now.');
+    const [certificateResult, submissionsResult] = await Promise.all([
+      fetchLatestDonationCertificateByUserId(userId),
+      fetchHairSubmissionsByUserId(userId, 12),
+    ]);
+
+    if (certificateResult.error) {
+      throw new Error(certificateResult.error.message || 'Unable to load donor certificates right now.');
+    }
+    if (submissionsResult.error) {
+      throw new Error(submissionsResult.error.message || 'Unable to load donor certificates right now.');
     }
 
-    const qualifiedSubmission = (data || []).find((submission) => {
-      const screening = Array.isArray(submission.ai_screenings)
-        ? submission.ai_screenings[0]
-        : submission.ai_screenings;
-
-      return screening && isQualifiedDonationDecision(screening.decision);
-    });
-
-    if (!qualifiedSubmission) {
+    if (!certificateResult.data) {
       return {
         certificate: null,
         error: null,
       };
     }
 
-    const screening = Array.isArray(qualifiedSubmission.ai_screenings)
-      ? qualifiedSubmission.ai_screenings[0]
-      : qualifiedSubmission.ai_screenings;
+    const linkedSubmission = (submissionsResult.data || []).find((submission) => (
+      submission?.submission_id === certificateResult.data?.submission_id
+    )) || null;
+    const screening = Array.isArray(linkedSubmission?.ai_screenings)
+      ? linkedSubmission.ai_screenings[0]
+      : linkedSubmission?.ai_screenings;
 
     return {
       certificate: normalizeCertificateRecord({
         profile,
-        submission: qualifiedSubmission,
+        submission: linkedSubmission || {
+          submission_id: certificateResult.data.submission_id,
+          submission_code: certificateResult.data.certificate_number || 'Issued certificate',
+          created_at: certificateResult.data.issued_at,
+          bundle_quantity: 0,
+          status: 'Certificate issued',
+        },
         screening,
       }),
       error: null,

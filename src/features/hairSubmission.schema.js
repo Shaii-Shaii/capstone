@@ -1,12 +1,6 @@
 import { z } from 'zod';
 import { hairAnalyzerConcernTypes } from './hairSubmission.constants';
 
-const buildChoiceSchema = (choices, message) => (
-  z.string().trim().min(1, message).refine((value) => choices.includes(value), {
-    message,
-  })
-);
-
 const normalizeOptionalValue = (value) => {
   if (value === null || value === undefined) return '';
   return String(value).trim();
@@ -19,75 +13,128 @@ const normalizeOptionalArray = (value) => (
 );
 
 const yesNoChoices = ['yes', 'no'];
+const questionnaireModeChoices = ['first_time', 'returning_follow_up'];
 const screeningIntentChoices = ['initial_donation_screening', 'checking_eligibility_first'];
-const treatmentChoices = ['rebonded', 'permed', 'relaxed', 'keratin_treated', 'hair_botox', 'others', 'none'];
-const colorStatusChoices = ['no', 'colored', 'bleached', 'both'];
-const hairConditionChoices = ['healthy', 'slightly_dry', 'dry', 'damaged'];
-const washFrequencyWeeklyChoices = ['1_2_times', '3_4_times', '5_6_times', 'daily'];
-const heatStylingChoices = ['never', 'rarely', 'sometimes', 'often'];
+const washFrequencyChoices = ['daily', 'every_2_3_days', '1_2_times_weekly', 'less_often'];
+const itchFrequencyChoices = ['never', 'sometimes', 'often'];
+const dandruffChoices = ['no', 'a_little', 'a_lot'];
+const quickOilinessChoices = ['no', 'sometimes', 'yes'];
+const drynessChoices = ['no', 'sometimes', 'yes'];
+const hairFallChoices = ['no', 'not_sure', 'yes'];
+const heatUseChoices = ['never', 'sometimes', 'often'];
+const recommendationFollowThroughChoices = ['yes_consistently', 'sometimes', 'not_yet'];
+const hairProgressChoices = ['better', 'same', 'worse', 'not_sure'];
+const followUpChangesChoices = [
+  'less_dryness',
+  'less_oiliness',
+  'less_hair_fall',
+  'less_dandruff',
+  'softer_hair',
+  'no_major_change',
+  'got_worse',
+];
+const healthyNowChoices = ['yes', 'no', 'not_sure'];
+const routineChangeFocusChoices = [
+  'washing_routine',
+  'hair_products',
+  'reduced_heat_styling',
+  'stopped_chemical_treatment',
+  'started_scalp_care',
+  'other',
+];
 
 export const hairAnalyzerQuestionSchema = z.object({
-  screeningIntent: buildChoiceSchema(screeningIntentChoices, 'Please choose the screening purpose.'),
-  estimatedHairLengthInches: z.string().trim().min(1, 'Please enter your estimated hair length.').refine((value) => {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) && parsed > 0;
-  }, {
-    message: 'Please enter a valid hair length in inches.',
-  }),
-  chemicalTreatments: z.array(z.string()).min(1, 'Please choose at least one treatment option.').refine((values) => (
-    values.every((item) => treatmentChoices.includes(item))
+  questionnaireMode: z.string().trim().optional().default('first_time').refine((value) => (
+    !value || questionnaireModeChoices.includes(value)
   ), {
-    message: 'Please use the available treatment options only.',
+    message: 'Questionnaire mode is invalid.',
   }),
-  treatmentTiming: z.string().trim().optional().or(z.literal('')),
-  colorStatus: buildChoiceSchema(colorStatusChoices, 'Please choose whether your hair was colored or bleached.'),
-  colorTiming: z.string().trim().optional().or(z.literal('')),
-  hairCondition: buildChoiceSchema(hairConditionChoices, 'Please describe your current hair condition.'),
-  splitEnds: buildChoiceSchema(yesNoChoices, 'Please answer the split ends question.'),
-  shedding: buildChoiceSchema(yesNoChoices, 'Please answer the shedding question.'),
-  washFrequencyWeekly: buildChoiceSchema(washFrequencyWeeklyChoices, 'Please choose how often you wash your hair in a week.'),
-  heatStylingFrequency: buildChoiceSchema(heatStylingChoices, 'Please choose how often you use heat styling tools.'),
+  screeningIntent: z.string().trim().optional().default('checking_eligibility_first').refine((value) => (
+    !value || screeningIntentChoices.includes(value)
+  ), {
+    message: 'Please choose the screening purpose.',
+  }),
+  washFrequency: z.string().trim().optional().default(''),
+  scalpItch: z.string().trim().optional().default(''),
+  dandruffOrFlakes: z.string().trim().optional().default(''),
+  oilyAfterWash: z.string().trim().optional().default(''),
+  dryOrRough: z.string().trim().optional().default(''),
+  hairFall: z.string().trim().optional().default(''),
+  chemicalProcessHistory: z.string().trim().optional().default(''),
+  heatUse: z.string().trim().optional().default(''),
+  followedPreviousAdvice: z.string().trim().optional().default(''),
+  hairConditionProgress: z.string().trim().optional().default(''),
+  noticedChanges: z.array(z.string().trim().refine((value) => followUpChangesChoices.includes(value), {
+    message: 'Please choose a valid follow-up change.',
+  })).optional().default([]),
+  heatUseSinceLastCheck: z.string().trim().optional().default(''),
+  chemicalTreatmentSinceLastCheck: z.string().trim().optional().default(''),
+  routineChangedSinceLastCheck: z.string().trim().optional().default(''),
+  routineChangeFocus: z.string().trim().optional().default(''),
+  healthierNow: z.string().trim().optional().default(''),
 }).superRefine((values, context) => {
-  const normalizedTreatments = normalizeOptionalArray(values.chemicalTreatments);
-  const hasTreatmentHistory = normalizedTreatments.some((item) => item !== 'none');
+  const isReturning = values.questionnaireMode === 'returning_follow_up';
 
-  if (normalizedTreatments.includes('none') && normalizedTreatments.length > 1) {
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['chemicalTreatments'],
-      message: 'Choose either "None" or the treatment types that apply.',
-    });
+  const requireChoice = (fieldName, choices, message) => {
+    const value = normalizeOptionalValue(values[fieldName]);
+    if (!value || !choices.includes(value)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [fieldName],
+        message,
+      });
+    }
+  };
+
+  if (isReturning) {
+    requireChoice('followedPreviousAdvice', recommendationFollowThroughChoices, 'Please answer whether you followed the previous advice.');
+    requireChoice('hairConditionProgress', hairProgressChoices, 'Please answer how your hair feels since the last check.');
+    if (!normalizeOptionalArray(values.noticedChanges).length) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['noticedChanges'],
+        message: 'Please choose at least one change you noticed since the last check.',
+      });
+    }
+    requireChoice('heatUseSinceLastCheck', heatUseChoices, 'Please answer the heat styling question.');
+    requireChoice('chemicalTreatmentSinceLastCheck', yesNoChoices, 'Please answer the chemical treatment question.');
+    requireChoice('routineChangedSinceLastCheck', yesNoChoices, 'Please answer whether your routine changed.');
+    if (normalizeOptionalValue(values.routineChangedSinceLastCheck) === 'yes') {
+      requireChoice('routineChangeFocus', routineChangeFocusChoices, 'Please choose what changed most in your routine.');
+    }
+    requireChoice('healthierNow', healthyNowChoices, 'Please answer whether your hair feels healthier now.');
+    return;
   }
 
-  if (hasTreatmentHistory && !normalizeOptionalValue(values.treatmentTiming)) {
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['treatmentTiming'],
-      message: 'Please tell us when the treatment was done.',
-    });
-  }
-
-  if (values.colorStatus !== 'no' && !normalizeOptionalValue(values.colorTiming)) {
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['colorTiming'],
-      message: 'Please tell us when the hair was last colored or bleached.',
-    });
-  }
+  requireChoice('washFrequency', washFrequencyChoices, 'Please choose how often you wash your hair.');
+  requireChoice('scalpItch', itchFrequencyChoices, 'Please answer the scalp itch question.');
+  requireChoice('dandruffOrFlakes', dandruffChoices, 'Please answer the dandruff question.');
+  requireChoice('oilyAfterWash', quickOilinessChoices, 'Please answer the scalp oiliness question.');
+  requireChoice('dryOrRough', drynessChoices, 'Please answer the dry or rough hair question.');
+  requireChoice('hairFall', hairFallChoices, 'Please answer the hair fall question.');
+  requireChoice('chemicalProcessHistory', yesNoChoices, 'Please answer the chemical treatment question.');
+  requireChoice('heatUse', heatUseChoices, 'Please answer the heat use question.');
 });
 
 export const hairAnalyzerQuestionDefaultValues = {
-  screeningIntent: '',
-  estimatedHairLengthInches: '',
-  chemicalTreatments: [],
-  treatmentTiming: '',
-  colorStatus: '',
-  colorTiming: '',
-  hairCondition: '',
-  splitEnds: '',
-  shedding: '',
-  washFrequencyWeekly: '',
-  heatStylingFrequency: '',
+  questionnaireMode: 'first_time',
+  screeningIntent: 'checking_eligibility_first',
+  washFrequency: '',
+  scalpItch: '',
+  dandruffOrFlakes: '',
+  oilyAfterWash: '',
+  dryOrRough: '',
+  hairFall: '',
+  chemicalProcessHistory: '',
+  heatUse: '',
+  followedPreviousAdvice: '',
+  hairConditionProgress: '',
+  noticedChanges: [],
+  heatUseSinceLastCheck: '',
+  chemicalTreatmentSinceLastCheck: '',
+  routineChangedSinceLastCheck: '',
+  routineChangeFocus: '',
+  healthierNow: '',
 };
 
 export const hairAnalyzerComplianceSchema = z.object({
@@ -105,33 +152,43 @@ export const resolveHairAnalyzerConcernType = () => (
 );
 
 export const normalizeHairAnalyzerAnswers = (answers = {}) => {
-  const normalizedTreatments = normalizeOptionalArray(answers?.chemicalTreatments);
-  const hasTreatmentHistory = normalizedTreatments.some((item) => item !== 'none');
-  const estimatedHairLengthInches = Number(answers?.estimatedHairLengthInches);
+  const questionnaireMode = normalizeOptionalValue(answers?.questionnaireMode) || 'first_time';
+  const isReturning = questionnaireMode === 'returning_follow_up';
+  const chemicalProcessHistory = normalizeOptionalValue(
+    isReturning ? answers?.chemicalTreatmentSinceLastCheck : answers?.chemicalProcessHistory
+  );
+  const routineChangedSinceLastCheck = normalizeOptionalValue(answers?.routineChangedSinceLastCheck);
 
   return {
     concern_type: resolveHairAnalyzerConcernType(answers),
     questionnaire_answers: {
-      screening_intent: normalizeOptionalValue(answers?.screeningIntent),
-      estimated_hair_length_inches: Number.isFinite(estimatedHairLengthInches) ? estimatedHairLengthInches : null,
-      chemical_treatments: normalizedTreatments,
-      has_treatment_history: hasTreatmentHistory ? 'yes' : 'no',
-      treatment_timing: hasTreatmentHistory ? normalizeOptionalValue(answers?.treatmentTiming) : '',
-      color_status: normalizeOptionalValue(answers?.colorStatus),
-      color_timing: normalizeOptionalValue(answers?.colorStatus) !== 'no'
-        ? normalizeOptionalValue(answers?.colorTiming)
+      questionnaire_mode: questionnaireMode,
+      screening_intent: normalizeOptionalValue(answers?.screeningIntent) || 'checking_eligibility_first',
+      wash_frequency: normalizeOptionalValue(answers?.washFrequency),
+      scalp_itch: normalizeOptionalValue(answers?.scalpItch),
+      dandruff_or_flakes: normalizeOptionalValue(answers?.dandruffOrFlakes),
+      oily_after_wash: normalizeOptionalValue(answers?.oilyAfterWash),
+      dry_or_rough: normalizeOptionalValue(answers?.dryOrRough),
+      hair_fall: normalizeOptionalValue(answers?.hairFall),
+      chemical_process_history: chemicalProcessHistory,
+      heat_use_frequency: normalizeOptionalValue(answers?.heatUse),
+      followed_previous_advice: normalizeOptionalValue(answers?.followedPreviousAdvice),
+      hair_condition_progress: normalizeOptionalValue(answers?.hairConditionProgress),
+      noticed_changes: normalizeOptionalArray(answers?.noticedChanges).join(', '),
+      heat_use_since_last_check: normalizeOptionalValue(answers?.heatUseSinceLastCheck),
+      chemical_treatment_since_last_check: normalizeOptionalValue(answers?.chemicalTreatmentSinceLastCheck),
+      routine_changed_since_last_check: routineChangedSinceLastCheck,
+      routine_change_focus: routineChangedSinceLastCheck === 'yes'
+        ? normalizeOptionalValue(answers?.routineChangeFocus)
         : '',
-      hair_condition: normalizeOptionalValue(answers?.hairCondition),
-      split_ends: normalizeOptionalValue(answers?.splitEnds),
-      shedding: normalizeOptionalValue(answers?.shedding),
-      wash_frequency_weekly: normalizeOptionalValue(answers?.washFrequencyWeekly),
-      heat_styling_frequency: normalizeOptionalValue(answers?.heatStylingFrequency),
+      healthier_now: normalizeOptionalValue(answers?.healthierNow),
+      has_treatment_history: chemicalProcessHistory === 'yes' ? 'yes' : 'no',
     },
   };
 };
 
 export const hairReviewSchema = z.object({
-  declaredLength: z.string().trim().min(1, 'Confirmed length is required').refine((value) => !Number.isNaN(Number(value)), {
+  declaredLength: z.string().trim().min(1, 'Detected length is required').refine((value) => !Number.isNaN(Number(value)), {
     message: 'Length must be a number',
   }),
   declaredTexture: z.string().trim().min(2, 'Texture is required'),
@@ -143,9 +200,30 @@ export const hairReviewSchema = z.object({
 export const buildHairReviewDefaultValues = (analysis, answers = {}) => ({
   declaredLength: analysis?.estimated_length != null
     ? String(analysis.estimated_length)
-    : normalizeOptionalValue(answers?.estimatedHairLengthInches),
+    : '',
   declaredTexture: analysis?.detected_texture || '',
   declaredDensity: analysis?.detected_density || '',
-  declaredCondition: analysis?.detected_condition || normalizeOptionalValue(answers?.hairCondition),
+  declaredCondition: analysis?.detected_condition || '',
   detailNotes: analysis?.visible_damage_notes || '',
+});
+
+export const hairResultCorrectionSchema = z.object({
+  correctedLengthValue: z.string().trim().min(1, 'Hair length is required').refine((value) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0;
+  }, {
+    message: 'Length must be a valid number greater than zero',
+  }),
+  correctedLengthUnit: z.enum(['cm', 'in']),
+  correctedTexture: z.string().trim().min(2, 'Texture is required'),
+  correctedDensity: z.string().trim().min(2, 'Density is required'),
+});
+
+export const buildHairResultCorrectionDefaultValues = (analysis) => ({
+  correctedLengthValue: analysis?.estimated_length != null
+    ? String(Number(analysis.estimated_length).toFixed(1))
+    : '',
+  correctedLengthUnit: 'cm',
+  correctedTexture: analysis?.detected_texture || '',
+  correctedDensity: analysis?.detected_density || '',
 });

@@ -1,6 +1,7 @@
 import React from 'react';
 import {
   ActivityIndicator,
+  FlatList,
   Image,
   Modal,
   Pressable,
@@ -19,8 +20,11 @@ import { AppIcon } from '../../src/components/ui/AppIcon';
 import { AppTextLink } from '../../src/components/ui/AppTextLink';
 import { StatusBanner } from '../../src/components/ui/StatusBanner';
 import { DonorTopBar } from '../../src/components/donor/DonorTopBar';
+import { HairLogDetailModal as SharedHairLogDetailModal } from '../../src/components/hair/HairLogDetailModal';
 import { donorDashboardNavItems } from '../../src/constants/dashboard';
-import { fetchHairSubmissionsByUserId } from '../../src/features/hairSubmission.api';
+import {
+  fetchHairSubmissionsByUserId,
+} from '../../src/features/hairSubmission.api';
 import {
   createDonationDriveRsvp,
   fetchDonationDrivePreview,
@@ -98,30 +102,66 @@ const normalizeConditionTone = (condition = '') => {
   };
 };
 
+// Converts any Date or ISO string to the user's LOCAL calendar date key (YYYY-MM-DD).
+// Using toISOString() on local-midnight Date objects shifts the day in UTC+N timezones,
+// causing a one-day mismatch between calendar cells and stored screening dates.
+const toLocalDateKey = (value) => {
+  const d = value instanceof Date ? value : new Date(value);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+
 const buildHairConditionHistory = (submissions = []) => {
-  const screenings = submissions
-    .flatMap((submission) => submission?.ai_screenings || [])
-    .filter((screening) => screening?.created_at);
+  const entries = submissions
+    .flatMap((submission) => (
+      (submission?.ai_screenings || [])
+        .filter((screening) => screening?.created_at)
+        .map((screening) => ({
+          submission,
+          screening,
+        }))
+    ))
+    .sort((left, right) => (
+      new Date(right.screening.created_at).getTime() - new Date(left.screening.created_at).getTime()
+    ));
 
   const markers = new Map();
 
-  screenings.forEach((screening) => {
-    const key = new Date(screening.created_at).toISOString().slice(0, 10);
-    const current = markers.get(key);
-
-    if (!current || new Date(screening.created_at).getTime() > new Date(current.created_at).getTime()) {
-      markers.set(key, screening);
-    }
+  entries.forEach((entry) => {
+    const key = toLocalDateKey(entry.screening.created_at);
+    const current = markers.get(key) || [];
+    current.push(entry);
+    markers.set(key, current);
   });
 
-  const latestScreening = screenings.sort((left, right) => (
-    new Date(right.created_at).getTime() - new Date(left.created_at).getTime()
-  ))[0] || null;
+  const latestScreening = entries[0]?.screening || null;
 
   return {
     markers,
     latestScreening,
   };
+};
+
+// Maps each logged calendar date to the submission that owns the latest AI screening on that date.
+const buildSubmissionByDate = (submissions = []) => {
+  const latest = new Map(); // dateKey → { submission, createdAt }
+
+  submissions.forEach((submission) => {
+    (submission?.ai_screenings || []).forEach((screening) => {
+      if (!screening?.created_at) return;
+      const key = toLocalDateKey(screening.created_at);
+      const current = latest.get(key);
+      if (!current || new Date(screening.created_at).getTime() > new Date(current.createdAt).getTime()) {
+        latest.set(key, { submission, createdAt: screening.created_at });
+      }
+    });
+  });
+
+  const result = new Map();
+  latest.forEach(({ submission }, key) => result.set(key, submission));
+  return result;
 };
 
 function DonationDriveCard({ drive }) {
@@ -450,7 +490,10 @@ function OrganizationPreviewModal({
   );
 }
 
-function HairCalendarCard({ submissions, onOpenAnalyzer }) {
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+function HairCalendarCard({ submissions, onOpenAnalyzer, onDayPress }) {
   const { resolvedTheme } = useAuth();
   const roles = resolveThemeRoles(resolvedTheme);
   const visibleMonth = React.useMemo(() => new Date(), []);
@@ -513,10 +556,35 @@ function HairCalendarCard({ submissions, onOpenAnalyzer }) {
 
       <View style={styles.calendarGrid}>
         {calendarDays.map((day) => {
-          const key = day.toISOString().slice(0, 10);
-          const screening = history.markers.get(key);
+          const key = toLocalDateKey(day); // local calendar date — avoids UTC midnight shift
+          const dateEntries = history.markers.get(key) || [];
+          const screening = dateEntries[0]?.screening || null;
           const tone = normalizeConditionTone(screening?.detected_condition);
           const isCurrentMonth = day.getMonth() === visibleMonth.getMonth();
+          const isLogged = dateEntries.length > 0;
+
+          if (isLogged) {
+            return (
+              <Pressable
+                key={key}
+                onPress={() => onDayPress?.(key, dateEntries)}
+                style={({ pressed }) => [
+                  styles.calendarCell,
+                  {
+                    backgroundColor: tone.dotColor + '1e',
+                    borderColor: tone.dotColor + '66',
+                    opacity: isCurrentMonth ? (pressed ? 0.7 : 1) : 0.45,
+                    transform: [{ scale: pressed ? 0.92 : 1 }],
+                  },
+                ]}
+              >
+                <Text style={[styles.calendarCellLabel, { color: tone.dotColor }]}>
+                  {day.getDate()}
+                </Text>
+                <View style={[styles.conditionDot, { backgroundColor: tone.dotColor }]} />
+              </Pressable>
+            );
+          }
 
           return (
             <View
@@ -524,8 +592,8 @@ function HairCalendarCard({ submissions, onOpenAnalyzer }) {
               style={[
                 styles.calendarCell,
                 {
-                  backgroundColor: screening ? roles.supportCardBackground : roles.defaultCardBackground,
-                  borderColor: screening ? roles.supportCardBorder : roles.defaultCardBorder,
+                  backgroundColor: roles.defaultCardBackground,
+                  borderColor: roles.defaultCardBorder,
                   opacity: isCurrentMonth ? 1 : 0.42,
                 },
               ]}
@@ -533,12 +601,7 @@ function HairCalendarCard({ submissions, onOpenAnalyzer }) {
               <Text style={[styles.calendarCellLabel, { color: roles.headingText }]}>
                 {day.getDate()}
               </Text>
-              <View
-                style={[
-                  styles.conditionDot,
-                  { backgroundColor: screening ? tone.dotColor : theme.colors.transparent },
-                ]}
-              />
+              <View style={[styles.conditionDot, { backgroundColor: theme.colors.transparent }]} />
             </View>
           );
         })}
@@ -569,6 +632,10 @@ export default function DonorHomeScreen() {
   const [drivePreviewError, setDrivePreviewError] = React.useState('');
   const [organizationPreviewError, setOrganizationPreviewError] = React.useState('');
   const [drivePreviewFeedback, setDrivePreviewFeedback] = React.useState({ message: '', variant: 'info' });
+  // Hair log detail modal
+  const [isHairLogModalOpen, setIsHairLogModalOpen] = React.useState(false);
+  const [selectedHairLogDate, setSelectedHairLogDate] = React.useState(null);
+  const [selectedHairLogEntries, setSelectedHairLogEntries] = React.useState([]);
 
   const firstName = String(profile?.first_name || '').trim();
   const lastName = String(profile?.last_name || '').trim();
@@ -699,6 +766,18 @@ export default function DonorHomeScreen() {
     router.navigate(`/donor/drives/${selectedDrivePreview.donation_drive_id}`);
   }, [router, selectedDrivePreview]);
 
+  const handleDayPress = React.useCallback((dateKey, entries = []) => {
+    setSelectedHairLogDate(dateKey || null);
+    setSelectedHairLogEntries(Array.isArray(entries) ? entries : []);
+    setIsHairLogModalOpen(true);
+  }, []);
+
+  const handleCloseHairLogModal = React.useCallback(() => {
+    setIsHairLogModalOpen(false);
+    setSelectedHairLogDate(null);
+    setSelectedHairLogEntries([]);
+  }, []);
+
   const handleViewAllOrganizations = React.useCallback(() => {
     const organizationId = selectedOrganizationPreview?.organization_id;
     setIsOrganizationPreviewOpen(false);
@@ -823,6 +902,7 @@ export default function DonorHomeScreen() {
           <HairCalendarCard
             submissions={hairSubmissions}
             onOpenAnalyzer={() => router.navigate('/donor/donations')}
+            onDayPress={handleDayPress}
           />
         )}
       </View>
@@ -854,6 +934,13 @@ export default function DonorHomeScreen() {
           setOrganizationPreviewError('');
         }}
         onJoinOrganization={handleViewAllOrganizations}
+      />
+
+      <SharedHairLogDetailModal
+        visible={isHairLogModalOpen}
+        dateKey={selectedHairLogDate}
+        entries={selectedHairLogEntries}
+        onClose={handleCloseHairLogModal}
       />
     </DashboardLayout>
   );
@@ -1210,5 +1297,136 @@ const styles = StyleSheet.create({
     width: 7,
     height: 7,
     borderRadius: theme.radius.full,
+  },
+
+  // ─── Hair Log Detail Modal ────────────────────────────────────────────────
+  hairLogModalCard: {
+    width: '100%',
+    maxWidth: 440,
+    alignSelf: 'center',
+    maxHeight: '85%',
+  },
+  hairLogScroll: {
+    flexGrow: 0,
+  },
+  hairLogScrollContent: {
+    gap: theme.spacing.sm,
+    paddingBottom: theme.spacing.sm,
+  },
+  hairLogConditionCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: theme.spacing.sm,
+    gap: theme.spacing.xs,
+  },
+  hairLogConditionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  hairLogConditionLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  hairLogConditionDetail: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+  },
+  hairLogSectionTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.compact.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+    marginTop: theme.spacing.xs,
+  },
+  hairLogPhotoLoading: {
+    height: 96,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  hairLogPhotoRow: {
+    gap: theme.spacing.sm,
+    paddingBottom: 2,
+  },
+  hairLogPhoto: {
+    width: 100,
+    height: 100,
+    borderRadius: 14,
+  },
+  hairLogEmptyText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+  },
+  hairLogAiBlock: {
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: theme.spacing.sm,
+    gap: theme.spacing.sm,
+  },
+  hairLogDecisionBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: 4,
+    borderRadius: theme.radius.pill,
+  },
+  hairLogDecisionText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    fontWeight: theme.typography.weights.semibold,
+    textTransform: 'capitalize',
+  },
+  hairLogAiSummary: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+  },
+  hairLogMetaGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.spacing.sm,
+  },
+  hairLogMetaItem: {
+    gap: 2,
+    minWidth: 72,
+  },
+  hairLogMetaKey: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 10,
+    fontWeight: theme.typography.weights.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  hairLogMetaValue: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  hairLogDamageNote: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    lineHeight: theme.typography.compact.caption * 1.5,
+    fontStyle: 'italic',
+  },
+  hairLogRecsLoader: {
+    alignSelf: 'flex-start',
+  },
+  hairLogRecsList: {
+    gap: 0,
+  },
+  hairLogRecItem: {
+    paddingVertical: theme.spacing.sm,
+    borderBottomWidth: 1,
+    gap: 2,
+  },
+  hairLogRecTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  hairLogRecText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
   },
 });

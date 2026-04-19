@@ -14,6 +14,10 @@ import { logAppEvent, writeAuditLog } from '../utils/appErrors';
 
 const buildSubmissionCode = () => `HS-${Date.now().toString(36).toUpperCase()}`;
 
+const buildStorageBucketMissingMessage = (bucketName = hairSubmissionStorageBucket) => (
+  `Hair photo storage is not ready yet. Storage bucket "${bucketName}" was not found.`
+);
+
 const decodeBase64ToArrayBuffer = (base64Value = '') => {
   const normalizedBase64 = String(base64Value || '').trim();
   if (!normalizedBase64) {
@@ -29,7 +33,38 @@ const decodeBase64ToArrayBuffer = (base64Value = '') => {
     return bytes.buffer;
   }
 
-  throw new Error('The app could not decode one of the required hair photos before upload.');
+  if (typeof Buffer !== 'undefined' && typeof Buffer.from === 'function') {
+    const bytes = Uint8Array.from(Buffer.from(normalizedBase64, 'base64'));
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  }
+
+  const base64Chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  const sanitizedBase64 = normalizedBase64.replace(/=+$/, '');
+  const outputLength = Math.floor((sanitizedBase64.length * 3) / 4);
+  const bytes = new Uint8Array(outputLength);
+  let buffer = 0;
+  let bitsCollected = 0;
+  let outputIndex = 0;
+
+  for (let index = 0; index < sanitizedBase64.length; index += 1) {
+    const character = sanitizedBase64[index];
+    const charIndex = base64Chars.indexOf(character);
+
+    if (charIndex === -1) {
+      throw new Error('The app could not decode one of the required hair photos before upload.');
+    }
+
+    buffer = (buffer << 6) | charIndex;
+    bitsCollected += 6;
+
+    if (bitsCollected >= 8) {
+      bitsCollected -= 8;
+      bytes[outputIndex] = (buffer >> bitsCollected) & 0xff;
+      outputIndex += 1;
+    }
+  }
+
+  return bytes.buffer.slice(0, outputIndex);
 };
 
 const getFileExtension = (mimeType = 'image/jpeg', fileName = '') => {
@@ -106,29 +141,16 @@ const uploadSelectedImages = async ({ userId, submissionId, detailId, photos }) 
     try {
       uploadPayload = await getPhotoUploadPayload(photo);
     } catch (payloadError) {
-      const fallbackFilePath = photo?.dataUrl || photo?.uri || '';
-
-      logAppEvent('hair_submission.save', 'Hair submission photo payload preparation failed; falling back to direct image reference.', {
+      logAppEvent('hair_submission.save', 'Hair submission photo payload preparation failed.', {
         userId,
         submissionId,
         detailId,
         index,
         viewKey: photo?.viewKey || null,
         message: payloadError?.message || 'Image payload could not be prepared.',
-        hasFallbackFilePath: Boolean(fallbackFilePath),
       }, 'warn');
 
-      if (!fallbackFilePath) {
-        throw payloadError;
-      }
-
-      uploadedRows.push({
-        submission_detail_id: detailId,
-        file_path: fallbackFilePath,
-        image_type: photo.viewKey || hairSubmissionImageTypes.donorUpload,
-      });
-
-      continue;
+      throw new Error(payloadError?.message || 'Failed to read one of the required hair photos before upload.');
     }
 
     const extension = getFileExtension(uploadPayload.contentType, uploadPayload.fileName);
@@ -141,9 +163,7 @@ const uploadSelectedImages = async ({ userId, submissionId, detailId, photos }) 
     });
 
     if (uploadResult.error) {
-      const fallbackFilePath = photo?.dataUrl || photo?.uri || '';
-
-      logAppEvent('hair_submission.save', 'Hair submission photo upload failed; falling back to direct image reference.', {
+      logAppEvent('hair_submission.save', 'Hair submission photo upload failed.', {
         userId,
         submissionId,
         detailId,
@@ -151,20 +171,14 @@ const uploadSelectedImages = async ({ userId, submissionId, detailId, photos }) 
         viewKey: photo?.viewKey || null,
         bucket: hairSubmissionStorageBucket,
         message: uploadResult.error.message || 'Storage upload failed.',
-        hasFallbackFilePath: Boolean(fallbackFilePath),
       }, 'warn');
 
-      if (!fallbackFilePath) {
-        throw new Error(uploadResult.error.message || 'Failed to upload one of the selected photos.');
+      const uploadMessage = uploadResult.error.message || 'Failed to upload one of the selected photos.';
+      if (uploadMessage.toLowerCase().includes('bucket not found')) {
+        throw new Error(buildStorageBucketMissingMessage());
       }
 
-      uploadedRows.push({
-        submission_detail_id: detailId,
-        file_path: fallbackFilePath,
-        image_type: photo.viewKey || hairSubmissionImageTypes.donorUpload,
-      });
-
-      continue;
+      throw new Error(uploadMessage);
     }
 
     logAppEvent('hair_submission.save', 'Hair submission photo uploaded.', {
@@ -184,6 +198,81 @@ const uploadSelectedImages = async ({ userId, submissionId, detailId, photos }) 
   }
 
   return uploadedRows;
+};
+
+const rollbackHairSubmissionSave = async ({
+  userId,
+  submissionId = null,
+  detailId = null,
+  uploadedPaths = [],
+  hasImageReferences = false,
+  hasLogistics = false,
+  hasScreening = false,
+  hasRecommendations = false,
+}) => {
+  if (!submissionId && !detailId && !uploadedPaths.length) return;
+
+  logAppEvent('hair_submission.save', 'Rolling back partial hair submission save.', {
+    userId,
+    submissionId,
+    detailId,
+    uploadedPathCount: uploadedPaths.length,
+    hasImageReferences,
+    hasLogistics,
+    hasScreening,
+    hasRecommendations,
+  }, 'warn');
+
+  const rollbackSteps = [
+    async () => {
+      if (!hasRecommendations || !submissionId) return;
+      const { error } = await HairSubmissionAPI.deleteDonorRecommendationsBySubmissionId(submissionId);
+      if (error) throw error;
+    },
+    async () => {
+      if (!hasScreening || !submissionId) return;
+      const { error } = await HairSubmissionAPI.deleteAiScreeningsBySubmissionId(submissionId);
+      if (error) throw error;
+    },
+    async () => {
+      if (!hasLogistics || !submissionId) return;
+      const { error } = await HairSubmissionAPI.deleteHairSubmissionLogisticsBySubmissionId(submissionId);
+      if (error) throw error;
+    },
+    async () => {
+      if (!hasImageReferences || !detailId) return;
+      const { error } = await HairSubmissionAPI.deleteHairSubmissionImagesByDetailId(detailId);
+      if (error) throw error;
+    },
+    async () => {
+      if (!uploadedPaths.length) return;
+      const { error } = await HairSubmissionAPI.removeHairSubmissionImagesFromStorage({ paths: uploadedPaths });
+      if (error) throw error;
+    },
+    async () => {
+      if (!detailId) return;
+      const { error } = await HairSubmissionAPI.deleteHairSubmissionDetailById(detailId);
+      if (error) throw error;
+    },
+    async () => {
+      if (!submissionId) return;
+      const { error } = await HairSubmissionAPI.deleteHairSubmissionById(submissionId);
+      if (error) throw error;
+    },
+  ];
+
+  for (const rollbackStep of rollbackSteps) {
+    try {
+      await rollbackStep();
+    } catch (rollbackError) {
+      logAppEvent('hair_submission.save', 'Rollback step failed after hair submission save error.', {
+        userId,
+        submissionId,
+        detailId,
+        message: rollbackError?.message || 'Rollback step failed.',
+      }, 'warn');
+    }
+  }
 };
 
 const buildRecommendationRows = ({ submissionId, recommendations = [] }) => (
@@ -233,6 +322,14 @@ export const saveHairSubmissionFlow = async ({
   donationModeValue = '',
   logisticsSettings = null,
 }) => {
+  let createdSubmission = null;
+  let createdDetail = null;
+  let uploadedImageRows = [];
+  let hasImageReferences = false;
+  let hasLogistics = false;
+  let hasScreening = false;
+  let hasRecommendations = false;
+
   try {
     if (!userId && !databaseUserId) throw new Error('Your session is not ready.');
     if (!photos?.length) throw new Error('Please upload at least one photo.');
@@ -256,8 +353,12 @@ export const saveHairSubmissionFlow = async ({
     const normalizedAnswers = normalizeHairAnalyzerAnswers(questionnaireAnswers);
     const normalizedQuestionnaire = normalizedAnswers.questionnaire_answers || {};
     const selectedDonationMode = resolveSelectedDonationMode(donationModeValue);
-    const hasTreatmentHistory = normalizedQuestionnaire.has_treatment_history === 'yes';
-    const colorStatus = normalizedQuestionnaire.color_status || '';
+    const hasTreatmentHistory = normalizedQuestionnaire.has_treatment_history === 'yes'
+      || normalizedQuestionnaire.chemical_process_history === 'yes';
+    const detailNotes = [
+      confirmedValues.detailNotes || '',
+      hasTreatmentHistory ? 'Questionnaire noted prior chemical processing.' : '',
+    ].filter(Boolean).join(' ');
     const submissionPayload = {
       user_id: userId,
       database_user_id: databaseUserId,
@@ -268,7 +369,7 @@ export const saveHairSubmissionFlow = async ({
         || (normalizedQuestionnaire.screening_intent === 'checking_eligibility_first' ? 'eligibility_check' : null),
       pickup_request: selectedDonationMode?.pickup_request ?? false,
       status: hairSubmissionStatuses.submission.submitted,
-      donor_notes: confirmedValues.detailNotes || null,
+      donor_notes: detailNotes || null,
     };
 
     logAppEvent('hair_submission.save', 'Hair submission payload built.', {
@@ -286,6 +387,7 @@ export const saveHairSubmissionFlow = async ({
     if (submissionError) {
       throw new Error(submissionError.message || 'Unable to create the hair submission.');
     }
+    createdSubmission = submission;
 
     logAppEvent('hair_submission.save', 'Hair submission row created.', {
       userId,
@@ -296,17 +398,15 @@ export const saveHairSubmissionFlow = async ({
       submission_id: submission.submission_id,
       bundle_number: 1,
       declared_length: Number(confirmedValues.declaredLength),
-      declared_color: colorStatus && colorStatus !== 'no' ? colorStatus : null,
+      declared_color: null,
       declared_texture: confirmedValues.declaredTexture,
       declared_density: confirmedValues.declaredDensity,
       declared_condition: confirmedValues.declaredCondition,
       is_chemically_treated: hasTreatmentHistory,
-      is_colored: ['colored', 'both'].includes(colorStatus),
-      is_bleached: ['bleached', 'both'].includes(colorStatus),
-      is_rebonded: Array.isArray(normalizedQuestionnaire.chemical_treatments)
-        ? normalizedQuestionnaire.chemical_treatments.includes('rebonded')
-        : false,
-      detail_notes: confirmedValues.detailNotes || null,
+      is_colored: false,
+      is_bleached: false,
+      is_rebonded: false,
+      detail_notes: detailNotes || null,
       status: hairSubmissionStatuses.detail.pending,
     };
 
@@ -327,6 +427,7 @@ export const saveHairSubmissionFlow = async ({
     if (detailError) {
       throw new Error(detailError.message || 'Unable to save the donor-confirmed hair details.');
     }
+    createdDetail = detail;
 
     logAppEvent('hair_submission.save', 'Hair submission detail row created.', {
       userId,
@@ -340,11 +441,13 @@ export const saveHairSubmissionFlow = async ({
       detailId: detail.submission_detail_id,
       photos,
     });
+    uploadedImageRows = imageRows;
 
     const { error: imageInsertError } = await HairSubmissionAPI.createHairSubmissionImages(imageRows);
     if (imageInsertError) {
       throw new Error(imageInsertError.message || 'Unable to save the uploaded image references.');
     }
+    hasImageReferences = true;
 
     logAppEvent('hair_submission.save', 'Hair submission image references saved.', {
       userId,
@@ -372,6 +475,7 @@ export const saveHairSubmissionFlow = async ({
       if (logisticsError) {
         throw new Error(logisticsError.message || 'Unable to save the selected donation logistics path.');
       }
+      hasLogistics = true;
 
       logAppEvent('hair_submission.save', 'Hair submission logistics row created.', {
         userId,
@@ -412,6 +516,7 @@ export const saveHairSubmissionFlow = async ({
     if (screeningError) {
       throw new Error(screeningError.message || 'Unable to save the AI screening result.');
     }
+    hasScreening = true;
 
     logAppEvent('hair_submission.save', 'AI screening row created.', {
       userId,
@@ -430,6 +535,7 @@ export const saveHairSubmissionFlow = async ({
       if (recommendationError) {
         throw new Error(recommendationError.message || 'Unable to save the donor guidance recommendations.');
       }
+      hasRecommendations = true;
 
       logAppEvent('hair_submission.save', 'Donor recommendations saved.', {
         userId,
@@ -479,6 +585,17 @@ export const saveHairSubmissionFlow = async ({
       error: null,
     };
   } catch (error) {
+    await rollbackHairSubmissionSave({
+      userId,
+      submissionId: createdSubmission?.submission_id || null,
+      detailId: createdDetail?.submission_detail_id || null,
+      uploadedPaths: uploadedImageRows.map((row) => row?.file_path).filter(Boolean),
+      hasImageReferences,
+      hasLogistics,
+      hasScreening,
+      hasRecommendations,
+    });
+
     logAppEvent('hair_submission.save', 'Hair submission save failed.', {
       userId,
       message: error.message || 'Unable to save your hair submission.',

@@ -274,6 +274,12 @@ const normalizeHairSubmission = (row) => ({
     : row?.ai_screenings
       ? normalizeAiScreening(row.ai_screenings)
       : [],
+  donor_recommendations: Array.isArray(row?.donor_recommendations)
+    ? row.donor_recommendations.map(normalizeDonorRecommendation)
+    : [],
+  submission_details: Array.isArray(row?.submission_details)
+    ? row.submission_details.map(normalizeHairSubmissionDetail)
+    : [],
 });
 
 const normalizeHairSubmissionDetail = (row) => ({
@@ -294,6 +300,16 @@ const normalizeHairSubmissionDetail = (row) => ({
   status: row?.status || '',
   created_at: row?.created_at || null,
   updated_at: row?.updated_at || null,
+  images: Array.isArray(row?.images) ? row.images.map(normalizeHairSubmissionImage) : [],
+});
+
+const normalizeHairSubmissionImage = (row) => ({
+  id: row?.image_id || null,
+  image_id: row?.image_id || null,
+  submission_detail_id: row?.submission_detail_id || null,
+  file_path: row?.file_path || '',
+  image_type: row?.image_type || '',
+  uploaded_at: row?.uploaded_at || null,
 });
 
 const normalizeHairSubmissionLogistics = (row) => ({
@@ -770,11 +786,102 @@ export const fetchHairSubmissionsByUserId = async (userId, limit = 10) => {
     screeningsBySubmissionId.set(screening.submission_id, currentRows);
   });
 
+  const detailsResult = await supabase
+    .from(hairSubmissionDetailsTable)
+    .select(hairSubmissionDetailSelect)
+    .in('Submission_ID', submissionIds)
+    .order('Created_At', { ascending: false });
+
+  if (detailsResult.error) {
+    logAppError('hair_submission.query.fetchHairSubmissionsByUserId.details', detailsResult.error, {
+      table: hairSubmissionDetailsTable,
+      phase: 'read',
+      submissionIds,
+    });
+  }
+
+  const normalizedDetails = (detailsResult.data || []).map(normalizeHairSubmissionDetail);
+  const detailIds = normalizedDetails.map((detail) => detail.submission_detail_id).filter(Boolean);
+
+  const imagesResult = detailIds.length
+    ? await supabase
+        .from(hairSubmissionImagesTable)
+        .select(hairSubmissionImageSelect)
+        .in('Submission_Detail_ID', detailIds)
+        .order('Uploaded_At', { ascending: false })
+    : { data: [], error: null };
+
+  if (imagesResult.error) {
+    logAppError('hair_submission.query.fetchHairSubmissionsByUserId.images', imagesResult.error, {
+      table: hairSubmissionImagesTable,
+      phase: 'read',
+      detailIds,
+    });
+  }
+
+  const imagesByDetailId = new Map();
+  (imagesResult.data || []).forEach((row) => {
+    const image = normalizeHairSubmissionImage(row);
+    const currentRows = imagesByDetailId.get(image.submission_detail_id) || [];
+    currentRows.push(image);
+    imagesByDetailId.set(image.submission_detail_id, currentRows);
+  });
+
+  const detailsBySubmissionId = new Map();
+  normalizedDetails.forEach((detail) => {
+    const detailWithImages = {
+      ...detail,
+      images: imagesByDetailId.get(detail.submission_detail_id) || [],
+    };
+    const currentRows = detailsBySubmissionId.get(detail.submission_id) || [];
+    currentRows.push(detailWithImages);
+    detailsBySubmissionId.set(detail.submission_id, currentRows);
+  });
+
+  const recommendationsResult = await supabase
+    .from(donorRecommendationsTable)
+    .select(donorRecommendationSelect)
+    .in('Submission_ID', submissionIds)
+    .order('Priority_Order', { ascending: true });
+
+  if (recommendationsResult.error) {
+    logAppError('hair_submission.query.fetchHairSubmissionsByUserId.recommendations', recommendationsResult.error, {
+      table: donorRecommendationsTable,
+      phase: 'read',
+      submissionIds,
+    });
+  }
+
+  const recommendationsBySubmissionId = new Map();
+  (recommendationsResult.data || []).forEach((row) => {
+    const recommendation = normalizeDonorRecommendation(row);
+    const currentRows = recommendationsBySubmissionId.get(recommendation.submission_id) || [];
+    currentRows.push(recommendation);
+    recommendationsBySubmissionId.set(recommendation.submission_id, currentRows);
+  });
+
   return {
     data: (result.data || []).map((row) => normalizeHairSubmission({
       ...row,
       ai_screenings: screeningsBySubmissionId.get(row?.submission_id) || [],
+      donor_recommendations: recommendationsBySubmissionId.get(row?.submission_id) || [],
+      submission_details: detailsBySubmissionId.get(row?.submission_id) || [],
     })),
+    error: result.error,
+  };
+};
+
+export const getHairSubmissionImageSignedUrl = async (path, expiresIn = 3600) => {
+  if (!path) {
+    return { data: '', error: new Error('Image path is required.') };
+  }
+
+  const result = await supabase.storage
+    .from(hairSubmissionStorageBucket)
+    .createSignedUrl(path, expiresIn);
+
+  return {
+    data: result.data?.signedUrl || '',
     error: result.error,
   };
 };
@@ -849,6 +956,42 @@ export const createHairSubmissionLogistics = async (payload) => {
     }])
     .select(hairSubmissionLogisticsSelect)
     .single();
+
+  return {
+    data: result.data ? normalizeHairSubmissionLogistics(result.data) : null,
+    error: result.error,
+  };
+};
+
+export const updateHairSubmissionLogisticsById = async (submissionLogisticsId, payload) => {
+  if (!submissionLogisticsId) {
+    return { data: null, error: new Error('Submission logistics ID is required.') };
+  }
+
+  logHairQuery('updateHairSubmissionLogisticsById', {
+    table: hairSubmissionLogisticsTable,
+    phase: 'update',
+    filters: { Submission_Logistics_ID: submissionLogisticsId },
+    columns: ['Logistics_Type', 'Courier_Name', 'Tracking_Number', 'Shipment_Status', 'Pickup_Schedule_Date', 'Notes'],
+  });
+
+  const result = await supabase
+    .from(hairSubmissionLogisticsTable)
+    .update({
+      Logistics_Type: payload?.logistics_type || null,
+      Courier_Name: payload?.courier_name || null,
+      Tracking_Number: payload?.tracking_number || null,
+      Shipment_Status: payload?.shipment_status || null,
+      Pickup_Schedule_Date: payload?.pickup_schedule_date || null,
+      Pickup_Scheduled_At: payload?.pickup_scheduled_at || null,
+      Pickup_Approved_At: payload?.pickup_approved_at || null,
+      Received_By: payload?.received_by || null,
+      Received_At: payload?.received_at || null,
+      Notes: payload?.notes || null,
+    })
+    .eq('Submission_Logistics_ID', submissionLogisticsId)
+    .select(hairSubmissionLogisticsSelect)
+    .maybeSingle();
 
   return {
     data: result.data ? normalizeHairSubmissionLogistics(result.data) : null,
@@ -941,6 +1084,36 @@ export const fetchHairBundleTrackingHistory = async ({ submissionId, submissionD
   return { data: [], error: null };
 };
 
+export const createHairBundleTrackingEntry = async (payload) => {
+  logHairQuery('createHairBundleTrackingEntry', {
+    table: hairBundleTrackingHistoryTable,
+    phase: 'create',
+    filters: {
+      Submission_ID: payload?.submission_id || null,
+      Submission_Detail_ID: payload?.submission_detail_id || null,
+    },
+    columns: ['Submission_ID', 'Submission_Detail_ID', 'Status', 'Title', 'Description', 'Changed_By'],
+  });
+
+  const result = await supabase
+    .from(hairBundleTrackingHistoryTable)
+    .insert([{
+      Submission_ID: payload?.submission_id || null,
+      Submission_Detail_ID: payload?.submission_detail_id || null,
+      Status: payload?.status || null,
+      Title: payload?.title || null,
+      Description: payload?.description || null,
+      Changed_By: payload?.changed_by || null,
+    }])
+    .select(trackingEntrySelect)
+    .maybeSingle();
+
+  return {
+    data: result.data ? normalizeTrackingEntry(result.data) : null,
+    error: result.error,
+  };
+};
+
 export const uploadHairSubmissionImage = async ({ path, fileBody, contentType, bucket = hairSubmissionStorageBucket }) => (
   await supabase.storage
     .from(bucket)
@@ -948,4 +1121,52 @@ export const uploadHairSubmissionImage = async ({ path, fileBody, contentType, b
       contentType,
       upsert: false,
     })
+);
+
+export const removeHairSubmissionImagesFromStorage = async ({ paths = [], bucket = hairSubmissionStorageBucket }) => (
+  await supabase.storage
+    .from(bucket)
+    .remove(paths.filter(Boolean))
+);
+
+export const deleteHairSubmissionImagesByDetailId = async (submissionDetailId) => (
+  await supabase
+    .from(hairSubmissionImagesTable)
+    .delete()
+    .eq('Submission_Detail_ID', submissionDetailId)
+);
+
+export const deleteDonorRecommendationsBySubmissionId = async (submissionId) => (
+  await supabase
+    .from(donorRecommendationsTable)
+    .delete()
+    .eq('Submission_ID', submissionId)
+);
+
+export const deleteAiScreeningsBySubmissionId = async (submissionId) => (
+  await supabase
+    .from(aiScreeningsTable)
+    .delete()
+    .eq('Submission_ID', submissionId)
+);
+
+export const deleteHairSubmissionLogisticsBySubmissionId = async (submissionId) => (
+  await supabase
+    .from(hairSubmissionLogisticsTable)
+    .delete()
+    .eq('Submission_ID', submissionId)
+);
+
+export const deleteHairSubmissionDetailById = async (submissionDetailId) => (
+  await supabase
+    .from(hairSubmissionDetailsTable)
+    .delete()
+    .eq('Submission_Detail_ID', submissionDetailId)
+);
+
+export const deleteHairSubmissionById = async (submissionId) => (
+  await supabase
+    .from(hairSubmissionsTable)
+    .delete()
+    .eq('Submission_ID', submissionId)
 );

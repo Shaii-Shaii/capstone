@@ -12,6 +12,7 @@ import { AppInput } from '../ui/AppInput';
 import { AppTextLink } from '../ui/AppTextLink';
 import { StatusBanner } from '../ui/StatusBanner';
 import { DonorTopBar } from '../donor/DonorTopBar';
+import { HairLogDetailModal } from '../hair/HairLogDetailModal';
 import { theme } from '../../design-system/theme';
 import { donorDashboardNavItems } from '../../constants/dashboard';
 import { useAuth } from '../../providers/AuthProvider';
@@ -19,7 +20,6 @@ import { useNotifications } from '../../hooks/useNotifications';
 import { useDonorHairSubmission } from '../../hooks/useDonorHairSubmission';
 import { useAuthActions } from '../../features/auth/hooks/useAuthActions';
 import {
-  fetchDonorRecommendationsBySubmissionId,
   fetchHairSubmissionsByUserId,
 } from '../../features/hairSubmission.api';
 import {
@@ -28,26 +28,23 @@ import {
   hairAnalyzerQuestionDefaultValues,
   hairAnalyzerQuestionSchema,
   buildHairReviewDefaultValues,
-  hairReviewSchema,
+  hairResultCorrectionSchema,
+  buildHairResultCorrectionDefaultValues,
 } from '../../features/hairSubmission.schema';
-import {
-  hairAnalyzerQuestionChoices,
-  hairDonationModeOptions,
-} from '../../features/hairSubmission.constants';
+import { hairAnalyzerQuestionChoices } from '../../features/hairSubmission.constants';
 import { logAppEvent } from '../../utils/appErrors';
+const PHOTO_GUIDELINE_ITEMS = [
+  'Use proper lighting.',
+  'Keep other people and objects out of the background.',
+  'Remove clips, caps, and other hair accessories.',
+  'Make sure the hair is fully visible and not hidden at the back.',
+  'Keep your face visible clearly.',
+];
 
-const DONATION_DROP_OFF_ADDRESS = 'Unit 133 G/F Makati Shangri-La Hotel, Ayala Ave, Makati City, Metro Manila';
-const PHOTO_COMPLIANCE_ITEMS = [
-  'My hair is not covered by accessories.',
-  'My hair is not tied in a ponytail, braid, or bun.',
-  'Only one person appears in the photo.',
-  'My photo has a plain or clean background.',
-  'My photo is clear and taken in good lighting.',
-  'My full hair length is visible.',
-  'My hair ends are visible.',
-  'My photo is recent and unedited.',
-  'I understand that image-based screening is only an initial assessment.',
-  'I understand that final acceptance is still subject to manual review by Hair for Hope.',
+const PHOTO_CAPTURE_TARGETS = [
+  'Front view photo',
+  'Side profile photo',
+  'Hair ends close-up',
 ];
 
 const getChoiceLabel = (choices = [], value = '') => (
@@ -119,48 +116,47 @@ const buildEligibilitySummary = ({ analysis, confirmedValues, questionnaireAnswe
   const reasons = [];
   const source = normalizeAnalysisText(analysis);
   const confirmedLength = Number(confirmedValues?.declaredLength || analysis?.estimated_length);
-  const selectedTreatments = Array.isArray(questionnaireAnswers?.chemicalTreatments) ? questionnaireAnswers.chemicalTreatments : [];
-  const colorStatus = questionnaireAnswers?.colorStatus || '';
+  const hasChemicalProcessHistory = questionnaireAnswers?.chemicalProcessHistory === 'yes';
+  const minimumDonationLength = Math.max(
+    35.56,
+    donationRequirement?.minimum_hair_length != null ? Number(donationRequirement.minimum_hair_length) : 0
+  );
 
   if (!analysis.is_hair_detected) reasons.push('Hair must be clearly visible in the uploaded photo set.');
   if (analysis?.missing_views?.length) reasons.push(`Required views are incomplete: ${analysis.missing_views.join(', ')}.`);
-  if (donationRequirement?.minimum_hair_length != null && Number.isFinite(confirmedLength) && confirmedLength < Number(donationRequirement.minimum_hair_length)) {
-    reasons.push(`Current donation rules require at least ${donationRequirement.minimum_hair_length} of visible hair.`);
+  if (Number.isFinite(confirmedLength) && confirmedLength < minimumDonationLength) {
+    reasons.push(`Donation readiness usually needs at least ${(minimumDonationLength / 2.54).toFixed(1)} inches of visible hair.`);
   }
-  if (donationRequirement?.chemical_treatment_status === false && selectedTreatments.some((item) => item && item !== 'none')) {
-    reasons.push('Current donation rules do not allow chemically treated hair.');
-  }
-  if (donationRequirement?.colored_hair_status === false && ['colored', 'both'].includes(colorStatus)) {
-    reasons.push('Current donation rules do not allow colored hair.');
-  }
-  if (donationRequirement?.bleached_hair_status === false && ['bleached', 'both'].includes(colorStatus)) {
-    reasons.push('Current donation rules do not allow bleached hair.');
-  }
-  if (donationRequirement?.rebonded_hair_status === false && selectedTreatments.includes('rebonded')) {
-    reasons.push('Current donation rules do not allow rebonded or straightened hair.');
+  if (
+    hasChemicalProcessHistory
+    && (
+      donationRequirement?.chemical_treatment_status === false
+      || donationRequirement?.colored_hair_status === false
+      || donationRequirement?.bleached_hair_status === false
+      || donationRequirement?.rebonded_hair_status === false
+    )
+  ) {
+    reasons.push('Recent chemical processing may affect donation eligibility under the current requirement.');
   }
   if (hasDetectedConcern(source, ['clip', 'accessory', 'obstruction', 'blocked'], ['no clip', 'no accessory', 'not blocked'])) {
     reasons.push('Hair accessories or other objects should not block the hair during screening.');
   }
 
-  const status = reasons.length
-    ? (analysis.decision === 'Retake Photos' ? 'Retake Photos' : analysis.decision || 'Needs Review')
-    : analysis.decision || 'Eligible';
-  const tone = status === 'Eligible' ? 'success' : status === 'Retake Photos' || status === 'Not Yet Eligible' ? 'error' : 'info';
+  const aiStatus = analysis.decision === 'Eligible for hair donation'
+    ? 'Eligible for hair donation'
+    : 'Improve hair condition';
+  const status = aiStatus;
+  const tone = aiStatus === 'Eligible for hair donation' && !reasons.length ? 'success' : 'info';
 
   return {
     status,
     tone,
     reasons,
     contextNote: donationRequirement?.donation_requirement_id
-      ? 'This screening compares your answers and uploaded photos with the latest donation requirement record.'
-      : 'Donation requirement data was not available, so this screening used your answers and uploaded photos only.',
+      ? 'This check compares your answers and photos with the latest donation requirement.'
+      : 'Donation requirement data was not available, so this check used your answers and uploaded photos only.',
   };
 };
-
-const getVisibleQuestions = (answers = {}) => (
-  QUESTION_STEPS.filter((item) => !item.showWhen || item.showWhen(answers))
-);
 
 function ChoiceList({ value, options, onChange, multi = false }) {
   const values = Array.isArray(value) ? value : [];
@@ -198,7 +194,7 @@ function PhotoSlotCard({ view, photo, onCapture, onUpload, onRemove, isCapturing
   return (
     <AppCard variant="elevated" radius="xl" padding="lg">
       <Text style={styles.slotTitle}>{view.label}</Text>
-      <Text style={styles.slotDescription}>Add a clear photo for this required view. You can capture a new photo or upload one instead.</Text>
+      <Text style={styles.slotDescription}>{view.helperText || 'Add a clear photo for this required view. You can capture a new photo or upload one instead.'}</Text>
 
       {photo ? (
         <View style={styles.slotPreviewWrap}>
@@ -247,7 +243,7 @@ function PhotoCaptureModal({
           <View style={styles.captureModalHeader}>
             <View>
               <Text style={styles.stepTitle}>{view.label}</Text>
-              <Text style={styles.stepDescription}>Use the live camera to capture this required donation view.</Text>
+              <Text style={styles.stepDescription}>Use the live camera to capture this required hair-check photo.</Text>
             </View>
             <Pressable onPress={onClose} style={styles.captureModalClose}>
               <AppIcon name="close" state="muted" />
@@ -309,92 +305,140 @@ function RecommendationCard({ recommendation, isTopPriority }) {
   );
 }
 
-function DonationModeCard({ option, selected, disabled, helperText, onSelect }) {
+function CorrectionChoiceField({ value, options, onChange }) {
   return (
-    <Pressable onPress={() => !disabled && onSelect(option.value)} style={[styles.modeCard, selected ? styles.modeCardActive : null, disabled ? styles.modeCardDisabled : null]}>
-      <View style={styles.modeHeader}>
-        <Text style={styles.modeTitle}>{option.label}</Text>
-        <View style={[styles.modeIndicator, selected ? styles.modeIndicatorActive : null]}>
-          {selected ? <AppIcon name="check" state="inverse" size="sm" /> : null}
-        </View>
-      </View>
-      <Text style={styles.modeBody}>{option.description}</Text>
-      {helperText ? <Text style={styles.modeHelper}>{helperText}</Text> : null}
-    </Pressable>
+    <View style={styles.choiceList}>
+      {options.map((option) => {
+        const isActive = value === option.value;
+
+        return (
+          <Pressable
+            key={option.value}
+            onPress={() => onChange(option.value)}
+            style={[styles.choiceCard, isActive ? styles.choiceCardActive : null]}
+          >
+            <Text style={[styles.choiceLabel, isActive ? styles.choiceLabelActive : null]}>{option.label}</Text>
+          </Pressable>
+        );
+      })}
+    </View>
   );
 }
 
-const QUESTION_STEPS = [
+const FIRST_TIME_QUESTION_STEPS = [
   {
-    key: 'screeningIntent',
-    title: 'Are you submitting for initial donation screening or just checking eligibility first?',
+    key: 'washFrequency',
+    title: 'How often do you wash your hair?',
     type: 'choice',
-    optionsKey: 'screeningIntent',
+    optionsKey: 'washFrequency',
   },
   {
-    key: 'estimatedHairLengthInches',
-    title: 'What is your estimated hair length?',
-    type: 'number',
-    helperText: 'Enter your estimate in inches.',
-  },
-  {
-    key: 'chemicalTreatments',
-    title: 'Has your hair been chemically treated?',
-    type: 'multi',
-    optionsKey: 'chemicalTreatments',
-    helperText: 'Choose all that apply.',
-  },
-  {
-    key: 'treatmentTiming',
-    title: 'When was the treatment done?',
+    key: 'scalpItch',
+    title: 'Does your scalp itch?',
     type: 'choice',
-    optionsKey: 'treatmentTiming',
-    showWhen: (answers) => Array.isArray(answers.chemicalTreatments) && answers.chemicalTreatments.some((item) => item && item !== 'none'),
+    optionsKey: 'itchFrequency',
   },
   {
-    key: 'colorStatus',
-    title: 'Has your hair been colored or bleached?',
+    key: 'dandruffOrFlakes',
+    title: 'Do you notice dandruff or flakes?',
     type: 'choice',
-    optionsKey: 'colorStatus',
+    optionsKey: 'dandruffLevel',
   },
   {
-    key: 'colorTiming',
-    title: 'When was it last colored?',
+    key: 'oilyAfterWash',
+    title: 'Does your scalp get oily quickly after washing?',
     type: 'choice',
-    optionsKey: 'colorTiming',
-    showWhen: (answers) => answers.colorStatus && answers.colorStatus !== 'no',
+    optionsKey: 'quickOiliness',
   },
   {
-    key: 'hairCondition',
-    title: 'How would you describe your hair condition?',
+    key: 'dryOrRough',
+    title: 'Does your hair feel dry or rough?',
     type: 'choice',
-    optionsKey: 'hairCondition',
+    optionsKey: 'drynessLevel',
   },
   {
-    key: 'splitEnds',
-    title: 'Have you noticed split ends or brittle ends on your hair?',
+    key: 'hairFall',
+    title: 'Do you notice more hair fall than usual?',
     type: 'choice',
-    optionsKey: 'yesNo',
+    optionsKey: 'hairFallLevel',
   },
   {
-    key: 'shedding',
-    title: 'Is your hair currently shedding or falling out more than usual?',
+    key: 'chemicalProcessHistory',
+    title: 'Have you used bleach, hair color, rebond, relax, or perm?',
     type: 'choice',
-    optionsKey: 'yesNo',
+    optionsKey: 'chemicalProcessHistory',
   },
   {
-    key: 'washFrequencyWeekly',
-    title: 'How often do you wash your hair in a week?',
+    key: 'heatUse',
+    title: 'Do you often use heat on your hair?',
     type: 'choice',
-    optionsKey: 'washFrequencyWeekly',
-  },
-  {
-    key: 'heatStylingFrequency',
-    title: 'Do you often use heat styling tools?',
-    type: 'choice',
-    optionsKey: 'heatStylingFrequency',
+    optionsKey: 'heatUseFrequency',
   },
 ];
+
+const RETURNING_QUESTION_STEPS = [
+  {
+    key: 'followedPreviousAdvice',
+    title: 'Since your last hair check, did you follow the recommended hair-care advice?',
+    helperText: 'This helps compare your current result with your last saved recommendations.',
+    type: 'choice',
+    optionsKey: 'recommendationFollowThrough',
+  },
+  {
+    key: 'hairConditionProgress',
+    title: 'Since your last check, how would you describe your hair now?',
+    type: 'choice',
+    optionsKey: 'hairProgress',
+  },
+  {
+    key: 'noticedChanges',
+    title: 'What changes have you noticed since your last check?',
+    helperText: 'Choose all that apply.',
+    type: 'multi',
+    optionsKey: 'followUpChanges',
+  },
+  {
+    key: 'heatUseSinceLastCheck',
+    title: 'Have you used heat styling since your last hair check?',
+    type: 'choice',
+    optionsKey: 'heatUseFrequency',
+  },
+  {
+    key: 'chemicalTreatmentSinceLastCheck',
+    title: 'Have you used bleach, color, rebond, relax, or perm since your last check?',
+    type: 'choice',
+    optionsKey: 'chemicalProcessHistory',
+  },
+  {
+    key: 'routineChangedSinceLastCheck',
+    title: 'Have you changed your hair-care routine since your last check?',
+    type: 'choice',
+    optionsKey: 'yesNo',
+  },
+  {
+    key: 'routineChangeFocus',
+    title: 'If yes, what changed most?',
+    type: 'choice',
+    optionsKey: 'routineChangeFocus',
+    showWhen: (answers = {}) => answers?.routineChangedSinceLastCheck === 'yes',
+  },
+  {
+    key: 'healthierNow',
+    title: 'Do you feel your hair is healthier now than before?',
+    type: 'choice',
+    optionsKey: 'healthyNow',
+  },
+];
+
+const getQuestionStepsForMode = (questionnaireMode = 'first_time') => (
+  questionnaireMode === 'returning_follow_up'
+    ? RETURNING_QUESTION_STEPS
+    : FIRST_TIME_QUESTION_STEPS
+);
+
+const getVisibleQuestions = (answers = {}, questionnaireMode = 'first_time') => (
+  getQuestionStepsForMode(questionnaireMode).filter((item) => !item.showWhen || item.showWhen(answers))
+);
 
 const weekdayLabels = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
 
@@ -439,69 +483,175 @@ const normalizeConditionTone = (condition = '') => {
   };
 };
 
+// Converts a Date object or ISO string to the user's LOCAL calendar date key (YYYY-MM-DD).
+// Using toISOString() on local-midnight Date objects shifts the day in UTC+N timezones,
+// causing a one-day mismatch between calendar cells and stored screening dates.
+const toLocalDateKey = (value) => {
+  const d = value instanceof Date ? value : new Date(value);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+
 const buildHairConditionHistory = (submissions = []) => {
-  const screenings = submissions
-    .flatMap((submission) => submission?.ai_screenings || [])
-    .filter((screening) => screening?.created_at);
+  const entries = submissions
+    .flatMap((submission) => {
+      const latestDetail = [...(submission?.submission_details || [])]
+        .sort((left, right) => new Date(right.created_at || 0).getTime() - new Date(left.created_at || 0).getTime())[0] || null;
+
+      return (submission?.ai_screenings || [])
+        .filter((screening) => screening?.created_at)
+        .map((screening) => ({
+          screening,
+          submission,
+          detail: latestDetail,
+          images: latestDetail?.images || [],
+          recommendations: submission?.donor_recommendations || [],
+        }));
+    });
 
   const markers = new Map();
 
-  screenings.forEach((screening) => {
-    const key = new Date(screening.created_at).toISOString().slice(0, 10);
-    const current = markers.get(key);
-
-    if (!current || new Date(screening.created_at).getTime() > new Date(current.created_at).getTime()) {
-      markers.set(key, screening);
-    }
+  entries.forEach((entry) => {
+    const key = toLocalDateKey(entry.screening.created_at);
+    const current = markers.get(key) || [];
+    current.push(entry);
+    current.sort((left, right) => new Date(right.screening.created_at).getTime() - new Date(left.screening.created_at).getTime());
+    markers.set(key, current);
   });
 
-  const latestScreening = screenings.sort((left, right) => (
-    new Date(right.created_at).getTime() - new Date(left.created_at).getTime()
+  const latestEntry = [...entries].sort((left, right) => (
+    new Date(right.screening.created_at).getTime() - new Date(left.screening.created_at).getTime()
   ))[0] || null;
 
   return {
     markers,
-    latestScreening,
+    latestEntry,
+    latestScreening: latestEntry?.screening || null,
+    screenings: entries.map((entry) => entry.screening),
+    entries,
   };
 };
 
-function InsightModal({ visible, title, body, rows = [], onClose }) {
-  if (!visible) return null;
+const buildAnalysisHistoryContext = (submissions = []) => {
+  const history = buildHairConditionHistory(submissions);
+  const sortedEntries = [...history.entries]
+    .sort((left, right) => new Date(right.screening.created_at).getTime() - new Date(left.screening.created_at).getTime());
+  const latestEntry = sortedEntries[0] || null;
+  const entries = sortedEntries
+    .slice(0, 6)
+    .map((entry) => ({
+      created_at: entry.screening?.created_at || '',
+      detected_condition: entry.screening?.detected_condition || '',
+      decision: entry.screening?.decision || '',
+      summary: entry.screening?.summary || '',
+      estimated_length: entry.screening?.estimated_length ?? null,
+      recommendations: Array.isArray(entry.recommendations)
+        ? entry.recommendations
+          .slice(0, 4)
+          .map((recommendation) => ({
+            title: recommendation?.title || '',
+            recommendation_text: recommendation?.recommendation_text || '',
+            priority_order: recommendation?.priority_order ?? null,
+          }))
+        : [],
+    }));
 
-  return (
-    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
-      <View style={styles.insightModalOverlay}>
-        <Pressable style={styles.insightModalBackdrop} onPress={onClose} />
-        <AppCard variant="elevated" radius="xl" padding="lg" style={styles.insightModalCard}>
-          <View style={styles.insightModalHeader}>
-            <Text style={styles.insightModalTitle}>{title}</Text>
-            <Pressable onPress={onClose} style={styles.insightModalClose}>
-              <AppIcon name="close" state="muted" />
-            </Pressable>
-          </View>
+  return {
+    total_checks: history.screenings.length,
+    latest_condition: history.latestScreening?.detected_condition || '',
+    latest_check_at: history.latestScreening?.created_at || '',
+    latest_result: latestEntry?.screening
+      ? {
+          created_at: latestEntry.screening.created_at || '',
+          detected_condition: latestEntry.screening.detected_condition || '',
+          decision: latestEntry.screening.decision || '',
+          summary: latestEntry.screening.summary || '',
+          estimated_length: latestEntry.screening.estimated_length ?? null,
+        }
+      : null,
+    latest_recommendations: Array.isArray(latestEntry?.recommendations)
+      ? latestEntry.recommendations
+        .slice(0, 4)
+        .map((recommendation) => ({
+          title: recommendation?.title || '',
+          recommendation_text: recommendation?.recommendation_text || '',
+          priority_order: recommendation?.priority_order ?? null,
+        }))
+      : [],
+    entries,
+  };
+};
 
-          {body ? <Text style={styles.insightModalBody}>{body}</Text> : null}
+const buildHistoryTrendLabel = (submissions = []) => {
+  const screenings = submissions
+    .flatMap((submission) => submission?.ai_screenings || [])
+    .filter((screening) => screening?.created_at && screening?.detected_condition)
+    .sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime())
+    .slice(0, 2);
 
-          <View style={styles.insightList}>
-            {rows.filter((row) => row?.value).map((row) => (
-              <View key={row.label} style={styles.insightRow}>
-                <Text style={styles.insightLabel}>{row.label}</Text>
-                <Text style={styles.insightValue}>{row.value}</Text>
-              </View>
-            ))}
-          </View>
-        </AppCard>
-      </View>
-    </Modal>
+  if (screenings.length < 2) return '';
+
+  const scoreCondition = (condition = '') => {
+    const normalized = String(condition || '').toLowerCase();
+    if (normalized.includes('healthy') || normalized.includes('good')) return 3;
+    if (normalized.includes('dry') || normalized.includes('frizz')) return 2;
+    if (normalized.includes('damaged') || normalized.includes('treated')) return 1;
+    return 2;
+  };
+
+  const latestScore = scoreCondition(screenings[0]?.detected_condition);
+  const previousScore = scoreCondition(screenings[1]?.detected_condition);
+
+  if (latestScore > previousScore) return 'Trend looks better than your last check.';
+  if (latestScore < previousScore) return 'Trend suggests your hair may need more care than last time.';
+  return 'Trend looks similar to your last hair check.';
+};
+
+const buildDonationReadinessLabel = ({ screening, donationRequirement }) => {
+  if (!screening) return '';
+  if (screening?.donation_readiness_note) return screening.donation_readiness_note;
+
+  const estimatedLength = Number(screening.estimated_length);
+  const minimumDonationLength = Math.max(
+    35.56,
+    donationRequirement?.minimum_hair_length != null ? Number(donationRequirement.minimum_hair_length) : 0
   );
-}
 
-function HairConditionLogCard({ submissions, onOpenAnalyzer }) {
-  const visibleMonth = useMemo(() => new Date(), []);
-  const calendarDays = useMemo(() => buildCalendarDays(visibleMonth), [visibleMonth]);
+  if (!Number.isFinite(estimatedLength)) return '';
+  if (estimatedLength < minimumDonationLength) return 'Hair is not yet long enough for donation guidance.';
+
+  const condition = String(screening.detected_condition || '').toLowerCase();
+  if (condition.includes('healthy') || condition.includes('good')) {
+    return 'Hair may be ready for donation review if you want to continue.';
+  }
+
+  return 'Hair may be long enough, but this check suggests improving the condition first.';
+};
+
+function HairConditionLogCard({ submissions, onOpenAnalyzer, onSelectDate, trendLabel = '' }) {
   const history = useMemo(() => buildHairConditionHistory(submissions), [submissions]);
+  const [visibleMonth, setVisibleMonth] = useState(() => new Date());
+  const calendarDays = useMemo(() => buildCalendarDays(visibleMonth), [visibleMonth]);
   const hasHistory = history.markers.size > 0;
   const latestTone = normalizeConditionTone(history.latestScreening?.detected_condition);
+  const latestLengthLabel = history.latestScreening?.estimated_length
+    ? formatLengthLabel(history.latestScreening.estimated_length)
+    : '';
+  const latestSummary = history.latestScreening?.summary || 'Your saved hair check will appear here for long-term tracking.';
+  const latestDateKey = history.latestScreening?.created_at
+    ? toLocalDateKey(history.latestScreening.created_at)
+    : '';
+
+  useEffect(() => {
+    if (!history.latestScreening?.created_at) return;
+
+    const latestMonth = new Date(history.latestScreening.created_at);
+    if (Number.isNaN(latestMonth.getTime())) return;
+
+    setVisibleMonth(new Date(latestMonth.getFullYear(), latestMonth.getMonth(), 1));
+  }, [history.latestScreening?.created_at]);
 
   if (!hasHistory) {
     return (
@@ -529,17 +679,42 @@ function HairConditionLogCard({ submissions, onOpenAnalyzer }) {
 
   return (
     <AppCard variant="default" radius="xl" padding="md">
+      <View style={styles.calendarLeadCard}>
+        <View style={styles.calendarLeadIconWrap}>
+          <AppIcon name="checkHair" size="md" state="active" />
+        </View>
+        <View style={styles.calendarLeadCopy}>
+          <Text style={styles.calendarLeadEyebrow}>Latest hair check</Text>
+          <Text style={styles.calendarLeadTitle}>{latestTone.label}</Text>
+          <Text style={styles.calendarLeadBody} numberOfLines={2}>
+            {latestSummary}
+          </Text>
+        </View>
+        <View style={styles.calendarLeadMeta}>
+          <Text style={styles.calendarLeadMetaLabel}>Saved</Text>
+          <Text style={styles.calendarLeadMetaValue}>{formatCalendarDayLabel(history.latestScreening?.created_at)}</Text>
+        </View>
+      </View>
+
       <View style={styles.calendarHeaderRow}>
-        <View>
+        <View style={styles.calendarHeaderCopy}>
           <Text style={styles.calendarMonthLabel}>{formatCalendarMonthLabel(visibleMonth)}</Text>
-          <Text style={styles.calendarSummaryText}>Latest: {latestTone.label}</Text>
+          <Text style={styles.calendarSummaryText}>Tracked dates from your saved hair checks</Text>
         </View>
 
-        <View style={styles.latestConditionChip}>
-          <View style={[styles.conditionDot, { backgroundColor: latestTone.dotColor }]} />
-          <Text style={styles.latestConditionText}>
-            {formatCalendarDayLabel(history.latestScreening?.created_at)}
-          </Text>
+        <View style={styles.calendarMonthControls}>
+          <Pressable
+            onPress={() => setVisibleMonth((current) => new Date(current.getFullYear(), current.getMonth() - 1, 1))}
+            style={styles.calendarMonthButton}
+          >
+            <AppIcon name="chevron-left" size="sm" state="muted" />
+          </Pressable>
+          <Pressable
+            onPress={() => setVisibleMonth((current) => new Date(current.getFullYear(), current.getMonth() + 1, 1))}
+            style={styles.calendarMonthButton}
+          >
+            <AppIcon name="chevron-right" size="sm" state="muted" />
+          </Pressable>
         </View>
       </View>
 
@@ -553,31 +728,57 @@ function HairConditionLogCard({ submissions, onOpenAnalyzer }) {
 
       <View style={styles.calendarGrid}>
         {calendarDays.map((day) => {
-          const key = day.toISOString().slice(0, 10);
-          const screening = history.markers.get(key);
+          const key = toLocalDateKey(day); // local calendar date — avoids UTC midnight shift
+          const dateEntries = history.markers.get(key) || [];
+          const screening = dateEntries[0]?.screening || null;
           const tone = normalizeConditionTone(screening?.detected_condition);
           const isCurrentMonth = day.getMonth() === visibleMonth.getMonth();
 
           return (
-            <View
+            <Pressable
               key={key}
+              disabled={!dateEntries.length}
+              onPress={() => {
+                if (dateEntries.length) onSelectDate?.(key, dateEntries);
+              }}
               style={[
                 styles.calendarCell,
                 screening ? styles.calendarCellActive : null,
+                key === latestDateKey ? styles.calendarCellLatest : null,
                 !isCurrentMonth ? styles.calendarCellMuted : null,
               ]}
             >
               <Text style={styles.calendarCellLabel}>{day.getDate()}</Text>
+              {dateEntries.length > 1 ? <Text style={styles.calendarCellCount}>{dateEntries.length}</Text> : null}
               <View
                 style={[
                   styles.conditionDot,
                   { backgroundColor: screening ? tone.dotColor : theme.colors.transparent },
                 ]}
               />
-            </View>
+            </Pressable>
           );
         })}
       </View>
+
+      <View style={styles.calendarSupportRow}>
+        <View style={styles.calendarSupportCard}>
+          <Text style={styles.calendarSupportLabel}>Checks logged</Text>
+          <Text style={styles.calendarSupportValue}>{history.screenings.length}</Text>
+        </View>
+        <View style={styles.calendarSupportCard}>
+          <Text style={styles.calendarSupportLabel}>Current status</Text>
+          <Text style={styles.calendarSupportValue}>{latestTone.label}</Text>
+        </View>
+        {latestLengthLabel ? (
+          <View style={styles.calendarSupportCard}>
+            <Text style={styles.calendarSupportLabel}>Latest length</Text>
+            <Text style={styles.calendarSupportValue}>{latestLengthLabel}</Text>
+          </View>
+        ) : null}
+      </View>
+
+      {trendLabel ? <Text style={styles.calendarTrendText}>{trendLabel}</Text> : null}
     </AppCard>
   );
 }
@@ -590,16 +791,16 @@ export function DonorHairSubmissionScreen() {
   const [stepIndex, setStepIndex] = useState(0);
   const [questionIndex, setQuestionIndex] = useState(0);
   const [photoIndex, setPhotoIndex] = useState(0);
-  const [selectedDonationMode, setSelectedDonationMode] = useState('');
   const [isPhotoCaptureOpen, setIsPhotoCaptureOpen] = useState(false);
   const [activeCaptureSlotIndex, setActiveCaptureSlotIndex] = useState(null);
   const [isCapturingPhoto, setIsCapturingPhoto] = useState(false);
   const [cameraModalError, setCameraModalError] = useState('');
   const [analysisHistory, setAnalysisHistory] = useState([]);
-  const [latestRecommendations, setLatestRecommendations] = useState([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [historyError, setHistoryError] = useState('');
-  const [activeInsight, setActiveInsight] = useState('');
+  const [selectedHistoryDate, setSelectedHistoryDate] = useState('');
+  const [selectedHistoryEntries, setSelectedHistoryEntries] = useState([]);
+  const [resultConfirmationMode, setResultConfirmationMode] = useState('pending');
   const { user, profile, resolvedTheme } = useAuth();
   const { logout, isLoading: isLoggingOut } = useAuthActions();
   const { unreadCount } = useNotifications({ role: 'donor', userId: user?.id, databaseUserId: profile?.user_id });
@@ -608,8 +809,6 @@ export function DonorHairSubmissionScreen() {
     requiredViews,
     analysis,
     donationRequirement,
-    logisticsSettings,
-    upcomingHaircutSchedules,
     error,
     successMessage,
     isLoadingContext,
@@ -638,19 +837,31 @@ export function DonorHairSubmissionScreen() {
     mode: 'onChange',
     defaultValues: hairAnalyzerComplianceDefaultValues,
   });
-  const reviewForm = useForm({
-    resolver: zodResolver(hairReviewSchema),
+  const correctionForm = useForm({
+    resolver: zodResolver(hairResultCorrectionSchema),
     mode: 'onChange',
-    defaultValues: buildHairReviewDefaultValues(analysis),
+    defaultValues: buildHairResultCorrectionDefaultValues(null),
   });
-
   const questionnaireValues = useWatch({ control: questionForm.control });
   const complianceAcknowledged = useWatch({ control: complianceForm.control, name: 'acknowledged' });
-  const reviewValues = useWatch({ control: reviewForm.control });
+  const savedHistory = useMemo(() => buildHairConditionHistory(analysisHistory), [analysisHistory]);
+  const isReturningUser = savedHistory.entries.length > 0;
+  const questionnaireMode = isReturningUser ? 'returning_follow_up' : 'first_time';
+
+  useEffect(() => {
+    questionForm.setValue('questionnaireMode', questionnaireMode, {
+      shouldDirty: false,
+      shouldTouch: false,
+      shouldValidate: false,
+    });
+  }, [questionForm, questionnaireMode]);
 
   const visibleQuestions = useMemo(
-    () => getVisibleQuestions(questionnaireValues || {}),
-    [questionnaireValues]
+    () => getVisibleQuestions({
+      ...(questionnaireValues || {}),
+      questionnaireMode,
+    }, questionnaireMode),
+    [questionnaireMode, questionnaireValues]
   );
   const currentQuestion = visibleQuestions[questionIndex] || visibleQuestions[0];
   const currentView = requiredViews[photoIndex];
@@ -661,31 +872,33 @@ export function DonorHairSubmissionScreen() {
   const eligibility = useMemo(
     () => buildEligibilitySummary({
       analysis,
-      confirmedValues: reviewValues,
+      confirmedValues: null,
       questionnaireAnswers: questionnaireValues,
       donationRequirement,
     }),
-    [analysis, reviewValues, questionnaireValues, donationRequirement]
+    [analysis, questionnaireValues, donationRequirement]
   );
 
   const stepTitles = useMemo(() => ([
-    'Questionnaire',
-    'Compliance checklist',
-    'Required photo capture and upload',
+    'Questions',
+    'Photo guide',
+    'Capture or upload',
     'AI result',
-    'Next-step donation path',
   ]), []);
   const visibleStepNumber = stepIndex + 1;
   const visibleStepTotal = stepTitles.length;
-  const visibleStepTitle = stepTitles[stepIndex];
   const latestAnalyzedSubmission = useMemo(
     () => analysisHistory.find((submission) => Array.isArray(submission?.ai_screenings) && submission.ai_screenings.length) || null,
     [analysisHistory]
   );
   const latestSavedScreening = latestAnalyzedSubmission?.ai_screenings?.[0] || null;
-  const latestSavedRecommendation = latestRecommendations[0] || null;
   const hasSavedAnalysis = Boolean(latestAnalyzedSubmission && latestSavedScreening);
   const hasDraftFlow = Boolean(analysis || photos.some(Boolean));
+  const latestTrendLabel = useMemo(() => buildHistoryTrendLabel(analysisHistory), [analysisHistory]);
+  const latestSavedRecommendations = useMemo(
+    () => (latestAnalyzedSubmission?.donor_recommendations || []).slice(0, 2),
+    [latestAnalyzedSubmission]
+  );
 
   const loadAnalysisHistory = React.useCallback(async () => {
     if (!user?.id) return;
@@ -696,21 +909,6 @@ export function DonorHairSubmissionScreen() {
     const submissionsResult = await fetchHairSubmissionsByUserId(user.id, 12);
     const submissions = submissionsResult.data || [];
     setAnalysisHistory(submissions);
-
-    const latestSubmissionWithScreening = submissions.find((submission) => (
-      Array.isArray(submission?.ai_screenings) && submission.ai_screenings.length
-    ));
-
-    if (latestSubmissionWithScreening?.submission_id) {
-      const recommendationsResult = await fetchDonorRecommendationsBySubmissionId(latestSubmissionWithScreening.submission_id, 3);
-      setLatestRecommendations(recommendationsResult.data || []);
-
-      if (recommendationsResult.error) {
-        setHistoryError('Some hair insights could not be loaded right now.');
-      }
-    } else {
-      setLatestRecommendations([]);
-    }
 
     if (submissionsResult.error) {
       setHistoryError('Hair history could not be loaded right now.');
@@ -731,6 +929,16 @@ export function DonorHairSubmissionScreen() {
   }, [loadAnalysisHistory, successMessage]);
 
   useEffect(() => {
+    correctionForm.reset(buildHairResultCorrectionDefaultValues(analysis));
+    setResultConfirmationMode('pending');
+  }, [analysis, correctionForm]);
+
+  const openHistoryDate = React.useCallback((dateKey, entries) => {
+    setSelectedHistoryDate(dateKey);
+    setSelectedHistoryEntries(entries || []);
+  }, []);
+
+  useEffect(() => {
     logAppEvent('donor_hair_submission.flow', 'Donor screening flow initialized without intro wizard steps.', {
       userId: user?.id || null,
       databaseUserId: profile?.user_id || null,
@@ -741,35 +949,81 @@ export function DonorHairSubmissionScreen() {
   const canMovePastQuestion = isAnswered(currentQuestion, questionnaireValues);
   const isAutoAdvanceQuestion = stepIndex === 0 && currentQuestion?.type === 'choice';
   const isCurrentPhotoComplete = Boolean(photos[photoIndex]);
-  const canProceedToDonationMode = eligibility.status !== 'Retake Photos' && eligibility.status !== 'Not Yet Eligible';
-  const isReviewStepFilled = Boolean(
-    reviewValues?.declaredLength?.trim()
-    && reviewValues?.declaredTexture?.trim()
-    && reviewValues?.declaredDensity?.trim()
-    && reviewValues?.declaredCondition?.trim()
-  );
-  const isFinishStepComplete = analysis
-    && isReviewStepFilled
-    && (!canProceedToDonationMode || Boolean(selectedDonationMode));
-
+  const showFooterPrimaryAction = !(stepIndex === 3 && Boolean(analysis));
   const isNextDisabled = (
     (stepIndex === 0 && !canMovePastQuestion)
     || (stepIndex === 1 && !Boolean(complianceAcknowledged))
     || (stepIndex === 2 && !isCurrentPhotoComplete)
-    || (stepIndex === 3 && isAnalyzing)
-    || (stepIndex === 4 && (!analysis || !isFinishStepComplete || isSaving))
+    || (stepIndex === 3 && (!analysis || isAnalyzing || isSaving))
   );
 
   const nextButtonTitle = useMemo(() => {
     if (stepIndex === 0) return questionIndex === visibleQuestions.length - 1 ? 'Continue' : 'Next';
     if (stepIndex === 1) return 'Continue';
     if (stepIndex === 2) return photoIndex === requiredViews.length - 1 ? 'Analyze' : 'Next';
-    if (stepIndex === 3) return analysis ? 'Next' : 'Retry analysis';
-    return isSaving ? 'Saving...' : 'Finish';
+    return analysis ? (isSaving ? 'Saving...' : 'Save to hair log') : 'Retry analysis';
   }, [analysis, isSaving, photoIndex, questionIndex, requiredViews.length, stepIndex, visibleQuestions.length]);
 
+  const saveConfirmedAnalysis = async () => {
+    if (!analysis) return;
+
+    logAppEvent('donor_hair_submission.confirmation', 'User confirmed AI result for saving.', {
+      userId: user?.id || null,
+      analysisKeys: Object.keys(analysis || {}),
+    });
+
+    const result = await submitSubmission(buildHairReviewDefaultValues(analysis, questionForm.getValues()), {
+      questionnaireAnswers: {
+        ...questionForm.getValues(),
+        questionnaireMode,
+      },
+      donationModeValue: '',
+    });
+
+    if (result?.success) {
+      questionForm.reset({
+        ...hairAnalyzerQuestionDefaultValues,
+        questionnaireMode,
+      });
+      complianceForm.reset(hairAnalyzerComplianceDefaultValues);
+      correctionForm.reset(buildHairResultCorrectionDefaultValues(null));
+      setQuestionIndex(0);
+      setPhotoIndex(0);
+      setStepIndex(0);
+      setResultConfirmationMode('pending');
+      setIsAnalyzerActive(false);
+    }
+  };
+
+  const handleCorrectionSubmit = correctionForm.handleSubmit(async (values) => {
+    logAppEvent('donor_hair_submission.confirmation', 'User requested AI reassessment with corrected details.', {
+      userId: user?.id || null,
+      correctedLengthUnit: values.correctedLengthUnit,
+      hasCorrectedLength: Boolean(values.correctedLengthValue),
+      correctedTexture: values.correctedTexture || '',
+      correctedDensity: values.correctedDensity || '',
+    });
+
+    const result = await analyzePhotos({
+      questionnaireAnswers: {
+        ...questionForm.getValues(),
+        questionnaireMode,
+      },
+      complianceContext: { acknowledged: Boolean(complianceAcknowledged) },
+      historyContext: buildAnalysisHistoryContext(analysisHistory),
+      correctedDetails: values,
+    });
+
+    if (result?.success) {
+      setResultConfirmationMode('pending');
+    }
+  });
+
   const goToNextQuestionStep = (answersSnapshot = questionForm.getValues(), currentQuestionKey = currentQuestion?.key) => {
-    const nextVisibleQuestions = getVisibleQuestions(answersSnapshot);
+    const nextVisibleQuestions = getVisibleQuestions({
+      ...answersSnapshot,
+      questionnaireMode,
+    }, questionnaireMode);
     const activeQuestionIndex = nextVisibleQuestions.findIndex((item) => item.key === currentQuestionKey);
 
     if (activeQuestionIndex >= 0 && activeQuestionIndex < nextVisibleQuestions.length - 1) {
@@ -808,7 +1062,14 @@ export function DonorHairSubmissionScreen() {
     logAppEvent('donor_hair_submission.questionnaire', 'Question choice auto-advance triggered.', {
       userId: user?.id || null,
       questionKey: fieldName,
-      isFinalVisibleQuestion: getVisibleQuestions(nextAnswers).findIndex((item) => item.key === fieldName) === getVisibleQuestions(nextAnswers).length - 1,
+      questionnaireMode,
+      isFinalVisibleQuestion: getVisibleQuestions({
+        ...nextAnswers,
+        questionnaireMode,
+      }, questionnaireMode).findIndex((item) => item.key === fieldName) === getVisibleQuestions({
+        ...nextAnswers,
+        questionnaireMode,
+      }, questionnaireMode).length - 1,
     });
 
     goToNextQuestionStep(nextAnswers, fieldName);
@@ -833,21 +1094,6 @@ export function DonorHairSubmissionScreen() {
       setQuestionIndex(Math.max(visibleQuestions.length - 1, 0));
     }
   }, [questionIndex, visibleQuestions.length]);
-
-  useEffect(() => {
-    const treatments = Array.isArray(questionnaireValues?.chemicalTreatments)
-      ? questionnaireValues.chemicalTreatments
-      : [];
-    const hasTreatmentHistory = treatments.some((item) => item && item !== 'none');
-
-    if (!hasTreatmentHistory && questionForm.getValues('treatmentTiming')) {
-      questionForm.setValue('treatmentTiming', '', { shouldDirty: true, shouldValidate: false });
-    }
-
-    if ((questionnaireValues?.colorStatus || '') === 'no' && questionForm.getValues('colorTiming')) {
-      questionForm.setValue('colorTiming', '', { shouldDirty: true, shouldValidate: false });
-    }
-  }, [questionForm, questionnaireValues?.chemicalTreatments, questionnaireValues?.colorStatus]);
 
   const renderQuestionInput = () => {
     if (!currentQuestion) return null;
@@ -907,10 +1153,6 @@ export function DonorHairSubmissionScreen() {
       </View>
     );
   };
-
-  useEffect(() => {
-    reviewForm.reset(buildHairReviewDefaultValues(analysis, questionnaireValues));
-  }, [analysis, questionnaireValues, reviewForm]);
 
   const closePhotoCaptureModal = () => {
     setIsPhotoCaptureOpen(false);
@@ -1060,8 +1302,12 @@ export function DonorHairSubmissionScreen() {
       setStepIndex(3);
       if (!analysis) {
         await analyzePhotos({
-          questionnaireAnswers: questionForm.getValues(),
+          questionnaireAnswers: {
+            ...questionForm.getValues(),
+            questionnaireMode,
+          },
           complianceContext: { acknowledged: Boolean(complianceAcknowledged) },
+          historyContext: buildAnalysisHistoryContext(analysisHistory),
         });
       }
       return;
@@ -1070,47 +1316,40 @@ export function DonorHairSubmissionScreen() {
     if (stepIndex === 3) {
       if (!analysis) {
         await analyzePhotos({
-          questionnaireAnswers: questionForm.getValues(),
+          questionnaireAnswers: {
+            ...questionForm.getValues(),
+            questionnaireMode,
+          },
           complianceContext: { acknowledged: Boolean(complianceAcknowledged) },
+          historyContext: buildAnalysisHistoryContext(analysisHistory),
         });
         return;
       }
-      setStepIndex(4);
       return;
-    }
-
-    if (stepIndex === 4) {
-      if (!analysis) return;
-
-      const canProceedToDonationMode = eligibility.status !== 'Retake Photos' && eligibility.status !== 'Not Yet Eligible';
-      if (canProceedToDonationMode && !selectedDonationMode) return;
-
-      const isReviewValid = await reviewForm.trigger();
-      if (!isReviewValid) return;
-
-      const result = await submitSubmission(reviewForm.getValues(), {
-        questionnaireAnswers: questionForm.getValues(),
-        donationModeValue: canProceedToDonationMode ? selectedDonationMode : '',
-      });
-
-      if (result?.success) {
-        questionForm.reset(hairAnalyzerQuestionDefaultValues);
-        complianceForm.reset(hairAnalyzerComplianceDefaultValues);
-        reviewForm.reset(buildHairReviewDefaultValues(null));
-        setSelectedDonationMode('');
-        setQuestionIndex(0);
-        setPhotoIndex(0);
-        setStepIndex(0);
-        setIsAnalyzerActive(false);
-      }
     }
   };
 
   const renderStepContent = () => {
     switch (stepIndex) {
       case 0:
+        if (isLoadingHistory) {
+          return (
+            <AppCard variant="elevated" radius="xl" padding="lg">
+              <View style={styles.loadingState}>
+                <ActivityIndicator color={resolvedTheme?.primaryColor || theme.colors.brandPrimary} />
+                <Text style={styles.loadingStateText}>Loading saved hair log before questions</Text>
+              </View>
+            </AppCard>
+          );
+        }
+
         return (
           <AppCard variant="elevated" radius="xl" padding="lg">
+            <Text style={styles.stepDescription}>
+              {isReturningUser
+                ? 'Follow-up check: answer a shorter set of progress questions so the AI can compare your current photos with your saved hair log.'
+                : 'First-time check: answer the full baseline hair-condition questions before the photo review.'}
+            </Text>
             <Text style={styles.progressText}>Question {questionIndex + 1} of {visibleQuestions.length}</Text>
             {renderQuestionInput()}
           </AppCard>
@@ -1118,15 +1357,31 @@ export function DonorHairSubmissionScreen() {
       case 1:
         return (
           <AppCard variant="elevated" radius="xl" padding="lg">
-            <Text style={styles.stepTitle}>Compliance checklist</Text>
-            <Text style={styles.stepDescription}>Confirm that your photos follow the screening instructions before you add them.</Text>
-            <View style={styles.bulletList}>
-              {PHOTO_COMPLIANCE_ITEMS.map((item) => (
-                <View key={item} style={styles.bulletRow}>
-                  <View style={styles.bulletDot} />
-                  <Text style={styles.bulletText}>{item}</Text>
-                </View>
-              ))}
+            <Text style={styles.stepTitle}>Before you take photos</Text>
+            <Text style={styles.stepDescription}>Follow these quick photo rules first, then continue to camera or upload.</Text>
+            <View style={styles.guidelineSection}>
+              <Text style={styles.guidelineTitle}>Photo rules</Text>
+              <View style={styles.bulletList}>
+                {PHOTO_GUIDELINE_ITEMS.map((item) => (
+                  <View key={item} style={styles.bulletRow}>
+                    <View style={styles.bulletDot} />
+                    <Text style={styles.bulletText}>{item}</Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+            <View style={styles.guidelineSection}>
+              <Text style={styles.guidelineTitle}>You will need to capture</Text>
+              <View style={styles.captureTargetList}>
+                {PHOTO_CAPTURE_TARGETS.map((item, index) => (
+                  <View key={item} style={styles.captureTargetCard}>
+                    <View style={styles.captureTargetBadge}>
+                      <Text style={styles.captureTargetBadgeText}>{index + 1}</Text>
+                    </View>
+                    <Text style={styles.captureTargetText}>{item}</Text>
+                  </View>
+                ))}
+              </View>
             </View>
             <Pressable
               onPress={() => complianceForm.setValue('acknowledged', !complianceAcknowledged, { shouldDirty: true, shouldTouch: true, shouldValidate: true })}
@@ -1135,7 +1390,7 @@ export function DonorHairSubmissionScreen() {
               <View style={[styles.checkBox, complianceAcknowledged ? styles.checkBoxActive : null]}>
                 <AppIcon name={complianceAcknowledged ? 'checkbox-marked' : 'checkbox-blank-outline'} state={complianceAcknowledged ? 'inverse' : 'muted'} />
               </View>
-              <Text style={styles.checkLabel}>I have read and understood all of the above.</Text>
+              <Text style={styles.checkLabel}>I understand the photo guide and I am ready to continue.</Text>
             </Pressable>
             {complianceForm.formState.errors.acknowledged?.message ? <Text style={styles.questionError}>{complianceForm.formState.errors.acknowledged.message}</Text> : null}
           </AppCard>
@@ -1144,7 +1399,7 @@ export function DonorHairSubmissionScreen() {
         return (
           <View style={styles.stepStack}>
             <AppCard variant="soft" radius="xl" padding="lg">
-              <Text style={styles.progressText}>Photo slot {photoIndex + 1} of {requiredViews.length}</Text>
+              <Text style={styles.progressText}>Photo {photoIndex + 1} of {requiredViews.length}</Text>
               <Text style={styles.stepDescription}>Completed: {completedPhotoCount} of {requiredViews.length}</Text>
               <View style={styles.slotRail}>
                 {requiredViews.map((view, index) => (
@@ -1173,87 +1428,205 @@ export function DonorHairSubmissionScreen() {
           </View>
         );
       case 3:
-        return (
+        return analysis ? (
           <AppCard variant="elevated" radius="xl" padding="lg">
-            <Text style={styles.stepTitle}>AI-assisted screening result</Text>
-            {analysis ? (
-              <>
+            <Text style={styles.stepTitle}>AI hair result</Text>
+            <>
                 <StatusBanner title={eligibility.status} message={eligibility.reasons[0] || eligibility.contextNote || 'The AI screening result is ready for review.'} variant={eligibility.tone} style={styles.bannerGap} />
                 <View style={styles.metricsGrid}>
                   <ResultMetricCard label="Estimated length" value={formatLengthLabel(analysis.estimated_length)} />
                   <ResultMetricCard label="Texture" value={analysis.detected_texture} />
                   <ResultMetricCard label="Density" value={analysis.detected_density} />
-                  <ResultMetricCard label="Condition" value={analysis.detected_condition} />
-                  <ResultMetricCard label="Decision" value={analysis.decision} />
-                  <ResultMetricCard label="Image visibility" value={analysis.is_hair_detected ? 'Clear' : 'Needs review'} />
+                  <ResultMetricCard label="Hair condition" value={analysis.detected_condition} />
+                  <ResultMetricCard label="Status" value={analysis.decision} />
+                  <ResultMetricCard label="Confidence" value={analysis.confidence_score != null ? `${Math.round(Number(analysis.confidence_score) * 100)}%` : 'Needs review'} />
                 </View>
+                {analysis.length_assessment ? (
+                  <AppCard variant="soft" radius="xl" padding="lg" style={styles.bannerGap}>
+                    <Text style={styles.summaryLabel}>Visible length analysis</Text>
+                    <Text style={styles.stepDescription}>{analysis.length_assessment}</Text>
+                  </AppCard>
+                ) : null}
                 <AppCard variant="soft" radius="xl" padding="lg" style={styles.bannerGap}>
-                  <Text style={styles.summaryLabel}>AI summary</Text>
+                  <Text style={styles.summaryLabel}>Hair assessment</Text>
                   <Text style={styles.stepDescription}>{analysis.summary || 'No summary was returned for this analysis.'}</Text>
                 </AppCard>
+
+                {(analysis?.recommendations || []).length ? (
+                  <AppCard variant="soft" radius="xl" padding="lg" style={styles.bannerGap}>
+                    <Text style={styles.summaryLabel}>Improvement advice</Text>
+                    <View style={styles.recommendationList}>
+                      {(analysis.recommendations || []).map((recommendation, index) => (
+                        <RecommendationCard key={`${recommendation.priority_order}-${recommendation.title || recommendation.recommendation_text.slice(0, 20)}`} recommendation={recommendation} isTopPriority={index === 0} />
+                      ))}
+                    </View>
+                  </AppCard>
+                ) : null}
+
+                {analysis.history_assessment ? (
+                  <AppCard variant="soft" radius="xl" padding="lg" style={styles.bannerGap}>
+                    <Text style={styles.summaryLabel}>Trend context</Text>
+                    <Text style={styles.stepDescription}>{analysis.history_assessment}</Text>
+                  </AppCard>
+                ) : null}
+                {analysis.donation_readiness_note ? (
+                  <AppCard variant="soft" radius="xl" padding="lg" style={styles.bannerGap}>
+                    <Text style={styles.summaryLabel}>Donation suitability note</Text>
+                    <Text style={styles.stepDescription}>
+                      {analysis.donation_readiness_note}
+                    </Text>
+                  </AppCard>
+                ) : null}
                 <AppCard variant="soft" radius="xl" padding="lg">
-                  <Text style={styles.summaryLabel}>Answer snapshot</Text>
-                  <View style={styles.answerSummaryList}>
-                    <Text style={styles.answerSummaryItem}>Purpose: {getChoiceLabel(hairAnalyzerQuestionChoices.screeningIntent, questionnaireValues?.screeningIntent)}</Text>
-                    <Text style={styles.answerSummaryItem}>Estimated length: {questionnaireValues?.estimatedHairLengthInches || 'Not set'} in</Text>
-                    <Text style={styles.answerSummaryItem}>Chemical treatments: {getChoiceLabels(hairAnalyzerQuestionChoices.chemicalTreatments, questionnaireValues?.chemicalTreatments) || 'Not set'}</Text>
-                    <Text style={styles.answerSummaryItem}>Color or bleach history: {getChoiceLabel(hairAnalyzerQuestionChoices.colorStatus, questionnaireValues?.colorStatus)}</Text>
-                    <Text style={styles.answerSummaryItem}>Current condition: {getChoiceLabel(hairAnalyzerQuestionChoices.hairCondition, questionnaireValues?.hairCondition)}</Text>
+                  <Text style={styles.summaryLabel}>Confirm result</Text>
+                  <Text style={styles.stepDescription}>
+                    Is this result accurate? You can continue if it looks right, or edit only hair length, texture, and density before the AI reassesses the final result.
+                  </Text>
+                  <View style={styles.postAnalysisActions}>
+                    <AppButton
+                      title={isSaving ? 'Saving...' : 'Yes, continue'}
+                      fullWidth={false}
+                      onPress={saveConfirmedAnalysis}
+                      loading={isSaving}
+                      disabled={isSaving || isAnalyzing}
+                    />
+                    <AppButton
+                      title="No, edit details"
+                      variant="outline"
+                      fullWidth={false}
+                      onPress={() => setResultConfirmationMode('editing')}
+                      disabled={isSaving || isAnalyzing}
+                    />
                   </View>
                 </AppCard>
-              </>
-            ) : (
-              <StatusBanner title="Analysis not ready" message={error?.message || 'The photo set is ready. Retry the analysis to load the screening result.'} variant="info" />
-            )}
-          </AppCard>
-        );
-      case 4:
-        return (
-          <ScrollView contentContainerStyle={styles.stepStack}>
-            <AppCard variant="elevated" radius="xl" padding="lg">
-              <Text style={styles.stepTitle}>Next-step donation path</Text>
-              <Text style={styles.stepDescription}>Confirm the detected details, then choose the donation path that should be saved with this submission.</Text>
+                {resultConfirmationMode === 'editing' ? (
+                  <AppCard variant="soft" radius="xl" padding="lg" style={styles.bannerGap}>
+                    <Text style={styles.summaryLabel}>Refine detected details</Text>
+                    <Text style={styles.stepDescription}>
+                      Update only the details that look inaccurate. The AI will reassess the final result using these corrected inputs together with your uploaded photos.
+                    </Text>
 
-              <Controller control={reviewForm.control} name="declaredLength" render={({ field }) => <AppInput label="Confirm detected length" placeholder="35.6" keyboardType="decimal-pad" variant="filled" helperText={`AI result: ${formatLengthLabel(analysis?.estimated_length)} | Your estimate: ${questionnaireValues?.estimatedHairLengthInches || 'Not set'} in`} value={field.value} onChangeText={field.onChange} onBlur={field.onBlur} error={reviewForm.formState.errors.declaredLength?.message} />} />
-              <Controller control={reviewForm.control} name="declaredTexture" render={({ field }) => <AppInput label="Confirm texture" placeholder="Straight" variant="filled" helperText={`AI result: ${analysis?.detected_texture || 'No value'}`} value={field.value} onChangeText={field.onChange} onBlur={field.onBlur} error={reviewForm.formState.errors.declaredTexture?.message} />} />
-              <Controller control={reviewForm.control} name="declaredDensity" render={({ field }) => <AppInput label="Confirm density" placeholder="Medium" variant="filled" helperText={`AI result: ${analysis?.detected_density || 'No value'}`} value={field.value} onChangeText={field.onChange} onBlur={field.onBlur} error={reviewForm.formState.errors.declaredDensity?.message} />} />
-              <Controller control={reviewForm.control} name="declaredCondition" render={({ field }) => <AppInput label="Confirm condition" placeholder="Healthy" variant="filled" helperText={`AI result: ${analysis?.detected_condition || 'No value'}`} value={field.value} onChangeText={field.onChange} onBlur={field.onBlur} error={reviewForm.formState.errors.declaredCondition?.message} />} />
-              <Controller control={reviewForm.control} name="detailNotes" render={({ field }) => <AppInput label="Correction notes" placeholder="Add corrections if the AI missed something" variant="filled" multiline={true} numberOfLines={4} helperText={`AI notes: ${analysis?.visible_damage_notes || 'No extra notes'}`} value={field.value} onChangeText={field.onChange} onBlur={field.onBlur} error={reviewForm.formState.errors.detailNotes?.message} inputStyle={styles.multilineInput} />} />
-
-              {eligibility.status !== 'Retake Photos' && eligibility.status !== 'Not Yet Eligible' ? (
-                <View style={styles.modeList}>
-                  {hairDonationModeOptions.map((option) => (
-                    <DonationModeCard
-                      key={option.value}
-                      option={option}
-                      selected={selectedDonationMode === option.value}
-                      disabled={option.value === 'pickup' && logisticsSettings?.is_pickup_enabled === false}
-                      helperText={option.value === 'shipping'
-                        ? `Current drop-off address: ${DONATION_DROP_OFF_ADDRESS}`
-                        : option.value === 'haircut_assessment'
-                          ? upcomingHaircutSchedules?.length
-                            ? `Upcoming slots: ${upcomingHaircutSchedules.slice(0, 2).map((item) => formatScheduleDateLabel(item.schedule_date, item.start_time, item.end_time)).join(' | ')}`
-                            : 'Upcoming haircut schedules are not available right now.'
-                          : option.value === 'pickup'
-                            ? logisticsSettings?.pickup_notes || 'Pickup depends on the latest logistics settings and final manual review.'
-                            : 'Use this if you can personally deliver the donation after the screening.'}
-                      onSelect={setSelectedDonationMode}
+                    <Controller
+                      control={correctionForm.control}
+                      name="correctedLengthValue"
+                      render={({ field: { onChange, onBlur, value } }) => (
+                        <View style={styles.correctionFieldGroup}>
+                          <Text style={styles.correctionFieldLabel}>Hair length</Text>
+                          <View style={styles.correctionLengthRow}>
+                            <View style={styles.correctionLengthInputWrap}>
+                              <AppInput
+                                value={value}
+                                onChangeText={onChange}
+                                onBlur={onBlur}
+                                keyboardType="decimal-pad"
+                                placeholder="Enter length"
+                              />
+                            </View>
+                            <View style={styles.correctionUnitWrap}>
+                              <Controller
+                                control={correctionForm.control}
+                                name="correctedLengthUnit"
+                                render={({ field: { onChange: onUnitChange, value: unitValue } }) => (
+                                  <CorrectionChoiceField
+                                    value={unitValue}
+                                    options={hairAnalyzerQuestionChoices.correctionLengthUnit}
+                                    onChange={onUnitChange}
+                                  />
+                                )}
+                              />
+                            </View>
+                          </View>
+                          {correctionForm.formState.errors.correctedLengthValue?.message ? (
+                            <Text style={styles.questionError}>{correctionForm.formState.errors.correctedLengthValue.message}</Text>
+                          ) : null}
+                        </View>
+                      )}
                     />
-                  ))}
-                </View>
-              ) : (
-                <StatusBanner title="Not yet ready for donation submission" message="This screening suggests that you should follow the recommendations first. You can still save this screening result and try again later." variant="info" style={styles.bannerGap} />
-              )}
 
-              {(analysis?.recommendations || []).length ? (
-                <View style={styles.recommendationList}>
-                  {(analysis.recommendations || []).map((recommendation, index) => (
-                    <RecommendationCard key={`${recommendation.priority_order}-${recommendation.title || recommendation.recommendation_text.slice(0, 20)}`} recommendation={recommendation} isTopPriority={index === 0} />
-                  ))}
-                </View>
-              ) : null}
-            </AppCard>
-          </ScrollView>
+                    <Controller
+                      control={correctionForm.control}
+                      name="correctedTexture"
+                      render={({ field: { onChange, value } }) => (
+                        <View style={styles.correctionFieldGroup}>
+                          <Text style={styles.correctionFieldLabel}>Hair texture</Text>
+                          <CorrectionChoiceField
+                            value={value}
+                            options={hairAnalyzerQuestionChoices.hairTexture}
+                            onChange={onChange}
+                          />
+                          {correctionForm.formState.errors.correctedTexture?.message ? (
+                            <Text style={styles.questionError}>{correctionForm.formState.errors.correctedTexture.message}</Text>
+                          ) : null}
+                        </View>
+                      )}
+                    />
+
+                    <Controller
+                      control={correctionForm.control}
+                      name="correctedDensity"
+                      render={({ field: { onChange, value } }) => (
+                        <View style={styles.correctionFieldGroup}>
+                          <Text style={styles.correctionFieldLabel}>Hair density</Text>
+                          <CorrectionChoiceField
+                            value={value}
+                            options={hairAnalyzerQuestionChoices.hairDensity}
+                            onChange={onChange}
+                          />
+                          {correctionForm.formState.errors.correctedDensity?.message ? (
+                            <Text style={styles.questionError}>{correctionForm.formState.errors.correctedDensity.message}</Text>
+                          ) : null}
+                        </View>
+                      )}
+                    />
+
+                    <View style={styles.postAnalysisActions}>
+                      <AppButton
+                        title={isAnalyzing ? 'Re-analyzing...' : 'Re-run AI analysis'}
+                        fullWidth={false}
+                        onPress={handleCorrectionSubmit}
+                        loading={isAnalyzing}
+                        disabled={isAnalyzing || isSaving}
+                      />
+                      <AppButton
+                        title="Cancel edits"
+                        variant="ghost"
+                        fullWidth={false}
+                        onPress={() => {
+                          correctionForm.reset(buildHairResultCorrectionDefaultValues(analysis));
+                          setResultConfirmationMode('pending');
+                        }}
+                        disabled={isAnalyzing || isSaving}
+                      />
+                    </View>
+                  </AppCard>
+                ) : null}
+              </>
+          </AppCard>
+        ) : (
+          <AppCard variant="elevated" radius="xl" padding="lg">
+            <Text style={styles.stepTitle}>Hair analysis unavailable</Text>
+            <Text style={styles.stepDescription}>
+              {error?.message || 'Cannot analyze hair right now. Please try again later.'}
+            </Text>
+            <View style={styles.postAnalysisActions}>
+              <AppButton
+                title={isAnalyzing ? 'Retrying...' : 'Try again'}
+                fullWidth={false}
+                onPress={async () => {
+                  await analyzePhotos({
+                    questionnaireAnswers: {
+                      ...questionForm.getValues(),
+                      questionnaireMode,
+                    },
+                    complianceContext: { acknowledged: Boolean(complianceAcknowledged) },
+                    historyContext: buildAnalysisHistoryContext(analysisHistory),
+                  });
+                }}
+                loading={isAnalyzing}
+                disabled={isAnalyzing || isSaving}
+              />
+            </View>
+          </AppCard>
         );
       default:
         return null;
@@ -1262,18 +1635,21 @@ export function DonorHairSubmissionScreen() {
 
   const startButtonTitle = hasDraftFlow
     ? 'Continue hair check'
+    : isLoadingHistory
+      ? 'Loading hair log...'
     : hasSavedAnalysis
       ? 'Start new hair check'
       : 'Start hair check';
   const latestSavedTone = normalizeConditionTone(latestSavedScreening?.detected_condition);
-  const latestLengthLabel = latestSavedScreening?.estimated_length
-    ? formatLengthLabel(latestSavedScreening.estimated_length)
-    : '';
   const checkHairSubtitle = isAnalyzerActive
     ? `Step ${visibleStepNumber} of ${visibleStepTotal}`
     : hasSavedAnalysis
-      ? 'Latest result ready'
+      ? 'Hair log ready'
       : '';
+  const summaryHeroTitle = isReturningUser ? 'Start follow-up hair check' : 'Start first hair check';
+  const summaryHeroBody = isReturningUser
+    ? 'Answer a shorter progress check, add fresh photos, and compare today’s hair condition with your previous result and recommendations.'
+    : 'Answer the full baseline hair questions, follow the photo guide, and get your first AI hair result to track over time.';
 
   return (
     <DashboardLayout
@@ -1307,71 +1683,14 @@ export function DonorHairSubmissionScreen() {
 
       {!isAnalyzerActive ? (
         <View style={styles.summaryStage}>
-          <AppCard variant="default" radius="xl" padding="lg">
-            <View style={styles.summaryHeroRow}>
-              <View style={styles.summaryIconWrap}>
-                <AppIcon name="checkHair" size="lg" state="active" />
-              </View>
-              <View style={styles.summaryHeroCopy}>
-                <Text style={styles.summaryHeroTitle}>Start hair check</Text>
-                <Text style={styles.summaryHeroBody}>
-                  Run a quick AI hair check and track your condition over time.
-                </Text>
-              </View>
-            </View>
-
-            <View style={styles.summaryHeroActions}>
-              <AppButton
-                title={startButtonTitle}
-                fullWidth={false}
-                onPress={() => setIsAnalyzerActive(true)}
-              />
-              {hasSavedAnalysis ? (
-                <Text style={styles.summaryHeroMeta}>
-                  Latest: {latestSavedTone.label}
-                </Text>
-              ) : null}
-            </View>
-          </AppCard>
-
-          {!isLoadingHistory && hasSavedAnalysis ? (
-            <AppCard variant="default" radius="xl" padding="lg">
-              <View style={styles.latestResultHeader}>
-                <View style={styles.summaryIconWrapSmall}>
-                  <AppIcon name="success" size="sm" state="active" />
-                </View>
-                <View style={styles.latestResultCopy}>
-                  <Text style={styles.latestResultTitle}>Your latest result</Text>
-                  <Text style={styles.latestResultBody}>
-                    {latestSavedRecommendation?.recommendation_text || latestSavedScreening?.summary || 'Your latest hair check is ready.'}
-                  </Text>
-                </View>
-              </View>
-
-              <View style={styles.latestResultMetrics}>
-                <View style={styles.latestMetricChip}>
-                  <Text style={styles.latestMetricLabel}>Condition</Text>
-                  <Text style={styles.latestMetricValue}>{latestSavedTone.label}</Text>
-                </View>
-                {latestLengthLabel ? (
-                  <View style={styles.latestMetricChip}>
-                    <Text style={styles.latestMetricLabel}>Length</Text>
-                    <Text style={styles.latestMetricValue}>{latestLengthLabel}</Text>
-                  </View>
-                ) : null}
-                {latestSavedScreening?.decision ? (
-                  <View style={styles.latestMetricChip}>
-                    <Text style={styles.latestMetricLabel}>Status</Text>
-                    <Text style={styles.latestMetricValue}>{latestSavedScreening.decision}</Text>
-                  </View>
-                ) : null}
-              </View>
-            </AppCard>
-          ) : null}
-
           {isLoadingHistory || hasSavedAnalysis ? (
             <View style={styles.sectionGroup}>
-              <Text style={styles.sectionTitleCompact}>Hair log</Text>
+              <View style={styles.sectionHeaderCompact}>
+                <Text style={styles.sectionTitleCompact}>Hair log</Text>
+                {latestTrendLabel ? (
+                  <Text style={styles.sectionMetaCompact}>{latestTrendLabel}</Text>
+                ) : null}
+              </View>
               {isLoadingHistory ? (
                 <AppCard variant="default" radius="xl" padding="md">
                   <View style={styles.loadingState}>
@@ -1383,28 +1702,40 @@ export function DonorHairSubmissionScreen() {
                 <HairConditionLogCard
                   submissions={analysisHistory}
                   onOpenAnalyzer={() => setIsAnalyzerActive(true)}
+                  onSelectDate={openHistoryDate}
+                  trendLabel={latestTrendLabel}
                 />
               )}
             </View>
           ) : null}
 
-          {hasSavedAnalysis ? (
-            <View style={styles.postAnalysisActions}>
+          <AppCard variant="default" radius="xl" padding="lg">
+            <View style={styles.summaryHeroCentered}>
+              <View style={styles.summaryIconWrap}>
+                <AppIcon name="checkHair" size="lg" state="active" />
+              </View>
+              <View style={styles.summaryHeroCopy}>
+                <Text style={styles.summaryHeroTitle}>{summaryHeroTitle}</Text>
+                <Text style={styles.summaryHeroBody}>{summaryHeroBody}</Text>
+              </View>
+              {isReturningUser && latestSavedRecommendations.length ? (
+                <Text style={styles.summaryHeroMeta}>
+                  Last recommendation focus: {latestSavedRecommendations.map((item) => item.title || item.recommendation_text).filter(Boolean).slice(0, 2).join(', ')}
+                </Text>
+              ) : null}
               <AppButton
-                title="Check hair eligibility"
-                variant="secondary"
+                title={startButtonTitle}
                 fullWidth={false}
-                leading={<AppIcon name="shield" state="default" />}
-                onPress={() => setActiveInsight('eligibility')}
+                onPress={() => setIsAnalyzerActive(true)}
+                disabled={isLoadingHistory}
               />
-              <AppButton
-                title="Check hair condition"
-                fullWidth={false}
-                leading={<AppIcon name="checkHair" state="inverse" />}
-                onPress={() => setActiveInsight('condition')}
-              />
+              {hasSavedAnalysis ? (
+                <Text style={styles.summaryHeroMeta}>
+                  Latest: {latestSavedTone.label}
+                </Text>
+              ) : null}
             </View>
-          ) : null}
+          </AppCard>
         </View>
       ) : (
         <View style={styles.wizardStage}>
@@ -1422,7 +1753,7 @@ export function DonorHairSubmissionScreen() {
 
           <View style={styles.footerNav}>
             <AppButton title="Previous" variant="outline" fullWidth={false} onPress={goPrevious} disabled={stepIndex === 0 && questionIndex === 0 && photoIndex === 0} />
-            {!isAutoAdvanceQuestion ? (
+            {!isAutoAdvanceQuestion && showFooterPrimaryAction ? (
               <AppButton
                 title={nextButtonTitle}
                 fullWidth={false}
@@ -1464,30 +1795,14 @@ export function DonorHairSubmissionScreen() {
         }}
       />
 
-      <InsightModal
-        visible={activeInsight === 'eligibility'}
-        title="Hair eligibility"
-        body={latestSavedScreening?.decision || 'Your latest eligibility result is ready.'}
-        rows={[
-          { label: 'Result', value: latestSavedScreening?.decision || '' },
-          { label: 'Minimum length', value: donationRequirement?.minimum_hair_length ? `${donationRequirement.minimum_hair_length} cm` : '' },
-          { label: 'Detected length', value: latestLengthLabel },
-          { label: 'Top guidance', value: latestSavedRecommendation?.title || latestSavedRecommendation?.recommendation_text || '' },
-        ]}
-        onClose={() => setActiveInsight('')}
-      />
-
-      <InsightModal
-        visible={activeInsight === 'condition'}
-        title="Hair condition"
-        body={latestSavedScreening?.summary || 'Your latest hair condition overview is ready.'}
-        rows={[
-          { label: 'Condition', value: latestSavedTone.label },
-          { label: 'Texture', value: latestSavedScreening?.detected_texture || '' },
-          { label: 'Density', value: latestSavedScreening?.detected_density || '' },
-          { label: 'Notes', value: latestSavedScreening?.visible_damage_notes || latestSavedRecommendation?.recommendation_text || '' },
-        ]}
-        onClose={() => setActiveInsight('')}
+      <HairLogDetailModal
+        visible={Boolean(selectedHistoryDate)}
+        dateKey={selectedHistoryDate}
+        entries={selectedHistoryEntries}
+        onClose={() => {
+          setSelectedHistoryDate('');
+          setSelectedHistoryEntries([]);
+        }}
       />
     </DashboardLayout>
   );
@@ -1505,11 +1820,10 @@ const styles = StyleSheet.create({
     maxWidth: theme.layout.contentMaxWidth,
     alignSelf: 'center',
   },
-  summaryHeroRow: {
-    flexDirection: 'row',
+  summaryHeroCentered: {
     alignItems: 'center',
+    justifyContent: 'center',
     gap: theme.spacing.md,
-    marginBottom: theme.spacing.md,
   },
   summaryIconWrap: {
     width: 52,
@@ -1520,92 +1834,60 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.brandPrimaryMuted,
   },
   summaryHeroCopy: {
-    flex: 1,
     gap: 4,
+    alignItems: 'center',
   },
   summaryHeroTitle: {
     fontFamily: theme.typography.fontFamilyDisplay,
     fontSize: theme.typography.semantic.titleSm,
     color: theme.colors.textPrimary,
+    textAlign: 'center',
   },
   summaryHeroBody: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.bodySm,
     lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
     color: theme.colors.textSecondary,
-  },
-  summaryHeroActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: theme.spacing.sm,
+    textAlign: 'center',
   },
   summaryHeroMeta: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.caption,
     color: theme.colors.textMuted,
+    textAlign: 'center',
   },
-  latestResultHeader: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
+  sectionGroup: {
     gap: theme.spacing.sm,
-    marginBottom: theme.spacing.md,
   },
-  summaryIconWrapSmall: {
-    width: 36,
-    height: 36,
-    borderRadius: theme.radius.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: theme.colors.brandPrimaryMuted,
+  actionGroups: {
+    gap: theme.spacing.md,
   },
-  latestResultCopy: {
-    flex: 1,
-    gap: 4,
+  actionSection: {
+    gap: theme.spacing.sm,
   },
-  latestResultTitle: {
+  actionSectionTitle: {
     fontFamily: theme.typography.fontFamilyDisplay,
     fontSize: theme.typography.semantic.bodyLg,
     color: theme.colors.textPrimary,
   },
-  latestResultBody: {
+  actionSectionBody: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.bodySm,
     lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
     color: theme.colors.textSecondary,
   },
-  latestResultMetrics: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: theme.spacing.sm,
-  },
-  latestMetricChip: {
-    minWidth: '30%',
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.sm,
-    borderRadius: theme.radius.lg,
-    backgroundColor: theme.colors.surfaceSoft,
-  },
-  latestMetricLabel: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.caption,
-    color: theme.colors.textMuted,
-    textTransform: 'uppercase',
-    marginBottom: 2,
-  },
-  latestMetricValue: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.compact.bodySm,
-    fontWeight: theme.typography.weights.semibold,
-    color: theme.colors.textPrimary,
-  },
-  sectionGroup: {
-    gap: theme.spacing.sm,
-  },
   sectionTitleCompact: {
     fontFamily: theme.typography.fontFamilyDisplay,
     fontSize: theme.typography.semantic.bodyLg,
     color: theme.colors.textPrimary,
+  },
+  sectionHeaderCompact: {
+    gap: 4,
+  },
+  sectionMetaCompact: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    color: theme.colors.textSecondary,
   },
   loadingState: {
     minHeight: 140,
@@ -1622,6 +1904,24 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: theme.spacing.sm,
+  },
+  correctionFieldGroup: {
+    gap: theme.spacing.sm,
+    marginBottom: theme.spacing.md,
+  },
+  correctionFieldLabel: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    color: theme.colors.textPrimary,
+  },
+  correctionLengthRow: {
+    gap: theme.spacing.sm,
+  },
+  correctionLengthInputWrap: {
+    width: '100%',
+  },
+  correctionUnitWrap: {
+    width: '100%',
   },
   emptyCalendarState: {
     gap: theme.spacing.md,
@@ -1656,6 +1956,63 @@ const styles = StyleSheet.create({
     gap: theme.spacing.sm,
     marginBottom: theme.spacing.sm,
   },
+  calendarLeadCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+    marginBottom: theme.spacing.md,
+    padding: theme.spacing.md,
+    borderRadius: theme.radius.xl,
+    backgroundColor: theme.colors.surfaceSoft,
+  },
+  calendarLeadIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: theme.radius.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.brandPrimaryMuted,
+  },
+  calendarLeadCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  calendarLeadEyebrow: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    color: theme.colors.textMuted,
+    textTransform: 'uppercase',
+  },
+  calendarLeadTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    color: theme.colors.textPrimary,
+  },
+  calendarLeadBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textSecondary,
+  },
+  calendarLeadMeta: {
+    alignItems: 'flex-end',
+    gap: 2,
+  },
+  calendarLeadMetaLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    color: theme.colors.textMuted,
+    textTransform: 'uppercase',
+  },
+  calendarLeadMetaValue: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textPrimary,
+  },
+  calendarHeaderCopy: {
+    flex: 1,
+  },
   calendarMonthLabel: {
     fontFamily: theme.typography.fontFamilyDisplay,
     fontSize: theme.typography.semantic.bodyLg,
@@ -1666,22 +2023,20 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.compact.caption,
     color: theme.colors.textSecondary,
   },
-  latestConditionChip: {
+  calendarMonthControls: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    paddingHorizontal: theme.spacing.sm,
-    paddingVertical: 6,
+  },
+  calendarMonthButton: {
+    width: 34,
+    height: 34,
     borderRadius: theme.radius.pill,
     borderWidth: 1,
     borderColor: theme.colors.borderSubtle,
     backgroundColor: theme.colors.surfaceSoft,
-  },
-  latestConditionText: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.compact.caption,
-    fontWeight: theme.typography.weights.semibold,
-    color: theme.colors.textPrimary,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   weekdayRow: {
     flexDirection: 'row',
@@ -1700,6 +2055,7 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     justifyContent: 'space-between',
     rowGap: theme.spacing.xs,
+    marginBottom: theme.spacing.md,
   },
   calendarCell: {
     width: '13.5%',
@@ -1715,6 +2071,10 @@ const styles = StyleSheet.create({
   calendarCellActive: {
     backgroundColor: theme.colors.surfaceSoft,
   },
+  calendarCellLatest: {
+    borderColor: theme.colors.brandPrimary,
+    borderWidth: 1.5,
+  },
   calendarCellMuted: {
     opacity: 0.42,
   },
@@ -1729,66 +2089,46 @@ const styles = StyleSheet.create({
     height: 7,
     borderRadius: theme.radius.full,
   },
-  insightModalOverlay: {
-    flex: 1,
-    justifyContent: 'center',
-    padding: theme.spacing.lg,
-    backgroundColor: theme.colors.overlay,
+  calendarCellCount: {
+    position: 'absolute',
+    top: 6,
+    right: 6,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 10,
+    color: theme.colors.textMuted,
   },
-  insightModalBackdrop: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  insightModalCard: {
-    width: '100%',
-    maxWidth: 420,
-    alignSelf: 'center',
-  },
-  insightModalHeader: {
+  calendarSupportRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    flexWrap: 'wrap',
     gap: theme.spacing.sm,
-    marginBottom: theme.spacing.sm,
   },
-  insightModalTitle: {
-    flex: 1,
-    fontFamily: theme.typography.fontFamilyDisplay,
-    fontSize: theme.typography.semantic.titleSm,
-    color: theme.colors.textPrimary,
-  },
-  insightModalClose: {
-    width: 34,
-    height: 34,
-    borderRadius: theme.radius.full,
-    alignItems: 'center',
-    justifyContent: 'center',
+  calendarSupportCard: {
+    minWidth: '30%',
+    flexGrow: 1,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    borderRadius: theme.radius.lg,
     backgroundColor: theme.colors.surfaceSoft,
   },
-  insightModalBody: {
+  calendarSupportLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    color: theme.colors.textMuted,
+    textTransform: 'uppercase',
+    marginBottom: 2,
+  },
+  calendarSupportValue: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textPrimary,
+  },
+  calendarTrendText: {
+    marginTop: theme.spacing.sm,
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.bodySm,
     lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
     color: theme.colors.textSecondary,
-    marginBottom: theme.spacing.md,
-  },
-  insightList: {
-    gap: theme.spacing.sm,
-  },
-  insightRow: {
-    paddingVertical: theme.spacing.sm,
-    borderTopWidth: 1,
-    borderTopColor: theme.colors.borderSubtle,
-  },
-  insightLabel: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.caption,
-    color: theme.colors.textMuted,
-    marginBottom: 2,
-  },
-  insightValue: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.compact.bodySm,
-    color: theme.colors.textPrimary,
   },
   stepContentWrap: {
     width: '100%',
@@ -1820,6 +2160,15 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.semantic.caption,
     color: theme.colors.textMuted,
   },
+  guidelineSection: {
+    gap: theme.spacing.sm,
+    marginBottom: theme.spacing.md,
+  },
+  guidelineTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    color: theme.colors.textPrimary,
+  },
   bulletList: {
     gap: theme.spacing.sm,
   },
@@ -1841,6 +2190,38 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.semantic.bodySm,
     lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
     color: theme.colors.textSecondary,
+  },
+  captureTargetList: {
+    gap: theme.spacing.sm,
+  },
+  captureTargetCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.md,
+    borderRadius: theme.radius.xl,
+    backgroundColor: theme.colors.surfaceSoft,
+  },
+  captureTargetBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.brandPrimary,
+  },
+  captureTargetBadgeText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.bold,
+    color: theme.colors.textOnBrand,
+  },
+  captureTargetText: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    color: theme.colors.textPrimary,
   },
   choiceList: {
     gap: theme.spacing.sm,

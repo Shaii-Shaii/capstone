@@ -3,8 +3,8 @@ import { hairAnalysisFunctionName } from './hairSubmission.constants';
 import { normalizeHairAnalyzerAnswers } from './hairSubmission.schema';
 import { getErrorMessage, logAppError, logAppEvent } from '../utils/appErrors';
 
-const WEB_ANALYSIS_IMAGE_MAX_SIZE = 1024;
-const WEB_ANALYSIS_IMAGE_QUALITY = 0.62;
+const WEB_ANALYSIS_IMAGE_MAX_SIZE = 1400;
+const WEB_ANALYSIS_IMAGE_QUALITY = 0.8;
 
 const normalizeRecommendations = (source = []) => (
   source
@@ -45,6 +45,9 @@ const normalizeAnalysis = (data) => ({
   confidence_score: data?.confidence_score ?? null,
   decision: data?.decision || '',
   summary: data?.summary || '',
+  length_assessment: data?.length_assessment || '',
+  donation_readiness_note: data?.donation_readiness_note || '',
+  history_assessment: data?.history_assessment || '',
   recommendations: normalizeRecommendations(data?.recommendations || []),
 });
 
@@ -56,6 +59,11 @@ const hasStructuredAnalysisContent = (analysis) => Boolean(
   || analysis?.detected_condition
   || (Array.isArray(analysis?.recommendations) && analysis.recommendations.length)
 );
+
+const isGeminiProviderMarker = (value) => {
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized === 'gemini' || normalized === 'google-gemini';
+};
 
 const optimizeWebImageForAnalysis = async (image) => {
   if (typeof window === 'undefined' || typeof document === 'undefined') {
@@ -123,6 +131,29 @@ const estimateImagePayloadBytes = (images = []) => (
   (images || []).reduce((total, image) => total + (image?.base64 ? image.base64.length : 0), 0)
 );
 
+const parseRetryAfterSecondsFromMessage = (message = '') => {
+  const retryMatch = String(message || '').match(/retry\s+in\s+(\d+(?:\.\d+)?)s/i);
+  if (!retryMatch?.[1]) return null;
+
+  const parsedSeconds = Number(retryMatch[1]);
+  if (!Number.isFinite(parsedSeconds) || parsedSeconds <= 0) return null;
+
+  return Math.max(1, Math.ceil(parsedSeconds));
+};
+
+const extractErrorPayloadFromResponse = async (response) => {
+  if (!response || typeof response.clone !== 'function') {
+    return null;
+  }
+
+  try {
+    const payload = await response.clone().json();
+    return payload && typeof payload === 'object' ? payload : null;
+  } catch (_jsonError) {
+    return null;
+  }
+};
+
 const resolveFunctionErrorMessage = async (error) => {
   const response = error?.context;
 
@@ -154,12 +185,33 @@ const resolveFunctionErrorMessage = async (error) => {
   return getErrorMessage(error);
 };
 
+const buildStructuredAnalysisError = (message, extras = {}) => {
+  const error = new Error(message || 'Hair analysis could not be completed right now.');
+  Object.assign(error, extras);
+  return error;
+};
+
+const isQuotaLikeError = (message = '', errorType = '') => {
+  const normalizedMessage = String(message || '').toLowerCase();
+  const normalizedType = String(errorType || '').trim().toLowerCase();
+
+  return (
+    normalizedType === 'quota_exceeded'
+    || normalizedMessage.includes('quota exceeded')
+    || normalizedMessage.includes('free tier request limit')
+    || normalizedMessage.includes('rate limit')
+    || normalizedMessage.includes('retry in')
+  );
+};
+
 export const analyzeHairPhotos = async ({
   images,
   questionnaireAnswers,
   complianceContext = null,
   donationRequirementContext = null,
   submissionContext = null,
+  historyContext = null,
+  correctedDetails = null,
 }) => {
   try {
     if (!images?.length) {
@@ -174,7 +226,7 @@ export const analyzeHairPhotos = async ({
 
     const normalizedAnswers = normalizeHairAnalyzerAnswers(questionnaireAnswers);
     if (!normalizedAnswers?.questionnaire_answers?.screening_intent) {
-      throw new Error('Please complete the guided donation questions before analysis.');
+      throw new Error('Please complete the guided hair questions before analysis.');
     }
 
     if (!complianceContext?.acknowledged) {
@@ -217,6 +269,54 @@ export const analyzeHairPhotos = async ({
             declared_condition: submissionContext.declared_condition || '',
           }
         : null,
+      history_context: historyContext
+        ? {
+            total_checks: Number(historyContext.total_checks) || 0,
+            latest_condition: historyContext.latest_condition || '',
+            latest_check_at: historyContext.latest_check_at || '',
+            latest_result: historyContext.latest_result
+              ? {
+                  created_at: historyContext.latest_result.created_at || '',
+                  detected_condition: historyContext.latest_result.detected_condition || '',
+                  decision: historyContext.latest_result.decision || '',
+                  summary: historyContext.latest_result.summary || '',
+                  estimated_length: historyContext.latest_result.estimated_length ?? null,
+                }
+              : null,
+            latest_recommendations: Array.isArray(historyContext.latest_recommendations)
+              ? historyContext.latest_recommendations.map((recommendation, index) => ({
+                  title: recommendation?.title || '',
+                  recommendation_text: recommendation?.recommendation_text || '',
+                  priority_order: recommendation?.priority_order ?? index + 1,
+                }))
+              : [],
+            entries: Array.isArray(historyContext.entries)
+              ? historyContext.entries.map((entry) => ({
+                  created_at: entry.created_at || '',
+                  detected_condition: entry.detected_condition || '',
+                  decision: entry.decision || '',
+                  summary: entry.summary || '',
+                  estimated_length: entry.estimated_length ?? null,
+                  recommendations: Array.isArray(entry.recommendations)
+                    ? entry.recommendations.map((recommendation, index) => ({
+                        title: recommendation?.title || '',
+                        recommendation_text: recommendation?.recommendation_text || '',
+                        priority_order: recommendation?.priority_order ?? index + 1,
+                      }))
+                    : [],
+                }))
+              : [],
+          }
+        : null,
+      corrected_details: correctedDetails
+        ? {
+            length_value: correctedDetails.length_value ?? null,
+            length_unit: correctedDetails.length_unit || '',
+            normalized_length_cm: correctedDetails.normalized_length_cm ?? null,
+            texture: correctedDetails.texture || '',
+            density: correctedDetails.density || '',
+          }
+        : null,
     };
 
     logAppEvent('hairAnalysis.invoke', 'Invoking hair analysis edge function.', {
@@ -224,6 +324,8 @@ export const analyzeHairPhotos = async ({
       concernType: payload.concern_type,
       hasDonationRequirementContext: Boolean(payload.donation_requirement_context),
       hasSubmissionContext: Boolean(payload.submission_context?.submission_id),
+      hasHistoryContext: Boolean(payload.history_context?.entries?.length),
+      hasCorrectedDetails: Boolean(payload.corrected_details),
       questionKeys: Object.keys(payload.questionnaire_answers || {}),
       imageCount: payload.images.length,
       imageViews: payload.images.map((image) => image.viewLabel || image.viewKey).filter(Boolean),
@@ -236,15 +338,30 @@ export const analyzeHairPhotos = async ({
     });
 
     if (functionResult.error) {
-      throw new Error(await resolveFunctionErrorMessage(functionResult.error));
+      const errorPayload = await extractErrorPayloadFromResponse(functionResult.error?.context);
+      throw buildStructuredAnalysisError(
+        errorPayload?.error || await resolveFunctionErrorMessage(functionResult.error),
+        {
+          errorType: errorPayload?.error_type || null,
+          retryAfterSeconds: errorPayload?.retry_after_seconds ?? null,
+        }
+      );
     }
 
     const analysisPayload = functionResult.data?.analysis ? functionResult.data.analysis : functionResult.data;
     logAppEvent('hairAnalysis.invoke', 'Hair analysis edge function returned.', {
       functionName: hairAnalysisFunctionName,
       success: functionResult.data?.success ?? null,
+      provider: functionResult.data?.provider || '',
+      edgeFunctionInvoked: functionResult.data?.edge_function_invoked ?? null,
+      providerRequestAttempted: functionResult.data?.provider_request_attempted ?? null,
+      providerResponseStatus: functionResult.data?.provider_response_status ?? null,
+      providerParseSuccess: functionResult.data?.provider_parse_success ?? null,
       responseKeys: functionResult.data ? Object.keys(functionResult.data) : [],
       analysisKeys: analysisPayload ? Object.keys(analysisPayload) : [],
+      hasLengthAssessment: Boolean(analysisPayload?.length_assessment),
+      hasEstimatedLength: analysisPayload?.estimated_length != null,
+      usedCorrectedDetails: Boolean(payload.corrected_details),
       recommendationCount: Array.isArray(analysisPayload?.recommendations)
         ? analysisPayload.recommendations.length
         : Array.isArray(functionResult.data?.recommendations)
@@ -256,37 +373,105 @@ export const analyzeHairPhotos = async ({
       throw new Error('The AI analysis response was incomplete.');
     }
 
+    if (functionResult.data?.edge_function_invoked === false) {
+      throw new Error('Hair analysis did not reach the server function.');
+    }
+
+    if (functionResult.data?.provider_request_attempted === false) {
+      throw new Error('Hair analysis did not reach Gemini.');
+    }
+
+    if (functionResult.data?.provider_parse_success === false) {
+      throw new Error('Gemini returned a response that could not be parsed.');
+    }
+
     const normalizedAnalysis = normalizeAnalysis({
       ...analysisPayload,
       recommendations: analysisPayload?.recommendations || functionResult.data?.recommendations || [],
+    });
+
+    logAppEvent('hairAnalysis.invoke', 'Hair analysis fields preserved from Gemini response.', {
+      functionName: hairAnalysisFunctionName,
+      usedAiSummary: Boolean(normalizedAnalysis.summary),
+      usedAiLengthAssessment: Boolean(normalizedAnalysis.length_assessment),
+      usedAiEstimatedLength: normalizedAnalysis.estimated_length != null,
+      usedAiCondition: Boolean(normalizedAnalysis.detected_condition),
+      usedAiTexture: Boolean(normalizedAnalysis.detected_texture),
+      usedAiDensity: Boolean(normalizedAnalysis.detected_density),
+      usedAiRecommendations: Array.isArray(normalizedAnalysis.recommendations)
+        ? normalizedAnalysis.recommendations.length
+        : 0,
     });
 
     if (!hasStructuredAnalysisContent(normalizedAnalysis)) {
       throw new Error('The uploaded photos were not clear enough for a reliable hair analysis. Please retake the photos in better lighting and try again.');
     }
 
+    const providerMarker = functionResult.data?.provider || '';
+    logAppEvent('hairAnalysis.invoke', 'Hair analysis response validated.', {
+      functionName: hairAnalysisFunctionName,
+      providerMarker,
+      providerMarkerRecognized: isGeminiProviderMarker(providerMarker),
+      edgeFunctionInvoked: functionResult.data?.edge_function_invoked ?? null,
+      providerRequestAttempted: functionResult.data?.provider_request_attempted ?? null,
+      providerResponseStatus: functionResult.data?.provider_response_status ?? null,
+      providerParseSuccess: functionResult.data?.provider_parse_success ?? null,
+      usedStructuredAnalysisValidation: true,
+    });
+
     return {
       analysis: normalizedAnalysis,
+      provider: isGeminiProviderMarker(providerMarker) ? providerMarker : '',
       error: null,
     };
   } catch (error) {
     const resolvedMessage = await resolveFunctionErrorMessage(error);
     const technicalMessage = resolvedMessage.toLowerCase();
+    const retryAfterSeconds = Number.isFinite(Number(error?.retryAfterSeconds))
+      ? Number(error?.retryAfterSeconds)
+      : parseRetryAfterSecondsFromMessage(resolvedMessage);
+    const errorType = String(error?.errorType || '').trim().toLowerCase();
+    const isQuotaError = isQuotaLikeError(resolvedMessage, errorType);
 
     if (
       !technicalMessage.includes('requested function was not found')
       && !technicalMessage.includes('not_found')
       && !technicalMessage.includes('invalid jwt')
     ) {
-      logAppError('hairAnalysis.analyzeHairPhotos', error, {
+      const loggedError = isQuotaError
+        ? buildStructuredAnalysisError(
+            Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+              ? `Cannot analyze hair, please try again in ${retryAfterSeconds} seconds.`
+              : 'Cannot analyze hair right now. Please try again later.',
+            {
+              errorType: 'quota_exceeded',
+              retryAfterSeconds: Number.isFinite(retryAfterSeconds) ? retryAfterSeconds : null,
+            }
+          )
+        : error;
+
+      logAppError('hairAnalysis.analyzeHairPhotos', loggedError, {
         imageCount: images?.length || 0,
         functionName: hairAnalysisFunctionName,
+        errorType: isQuotaError ? 'quota_exceeded' : errorType || null,
+        retryAfterSeconds: Number.isFinite(retryAfterSeconds) ? retryAfterSeconds : null,
       });
     }
 
     const userMessage = technicalMessage.includes('at least one hair photo')
       ? 'Please upload at least one clear hair photo before running the analysis.'
-      : technicalMessage.includes('guided donation questions')
+      : isQuotaError
+        ? Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+          ? `Cannot analyze hair, please try again in ${retryAfterSeconds} seconds.`
+          : 'Cannot analyze hair right now. Please try again later.'
+      : technicalMessage.includes('high demand')
+        || technicalMessage.includes('temporarily busy')
+        || technicalMessage.includes('temporarily unavailable')
+        || technicalMessage.includes('retry later')
+        || technicalMessage.includes('service unavailable')
+        || technicalMessage.includes('resource exhausted')
+        ? 'Hair analysis is temporarily busy right now. Please try again in a moment.'
+      : technicalMessage.includes('guided donation questions') || technicalMessage.includes('guided hair questions')
         ? 'Please complete the guided questions before analysis.'
       : technicalMessage.includes('compliance checklist')
         ? 'Please confirm the photo checklist before analysis.'
@@ -304,12 +489,18 @@ export const analyzeHairPhotos = async ({
               ? resolvedMessage
             : technicalMessage.includes('could not be processed for ai analysis')
               ? resolvedMessage
-            : technicalMessage.includes('front view photo') || technicalMessage.includes('back view photo') || technicalMessage.includes('hair ends close-up') || technicalMessage.includes('side view photo')
+            : technicalMessage.includes('front view photo')
+              || technicalMessage.includes('side profile photo')
+              || technicalMessage.includes('side view photo')
+              || technicalMessage.includes('back view photo')
+              || technicalMessage.includes('hair ends close-up')
               ? resolvedMessage
             : technicalMessage.includes('does not clearly show hair') || technicalMessage.includes('not look like hair')
               ? resolvedMessage
             : technicalMessage.includes('not clear enough for a reliable hair analysis')
               ? resolvedMessage
+            : technicalMessage.includes('invalid json') || technicalMessage.includes('could not be parsed')
+              ? 'The AI response could not be read properly. Please try the hair analysis again.'
             : technicalMessage.includes('incomplete')
               ? 'Hair analysis could not be completed right now.'
               : 'Hair analysis could not be completed right now.';

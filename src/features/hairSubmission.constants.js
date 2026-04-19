@@ -12,10 +12,21 @@ export const hairSubmissionImageTypes = {
 };
 
 export const hairAnalysisRequiredViews = [
-  { key: 'front_view', label: 'Front View Photo' },
-  { key: 'back_view', label: 'Back View Photo' },
-  { key: 'hair_ends_close_up', label: 'Hair Ends Close-Up' },
-  { key: 'side_view', label: 'Side View Photo' },
+  {
+    key: 'front_view',
+    label: 'Front View Photo',
+    helperText: 'Capture the front view clearly with your hair and face visible.',
+  },
+  {
+    key: 'side_profile',
+    label: 'Side Profile Photo',
+    helperText: 'Capture one clear side profile view of your hair.',
+  },
+  {
+    key: 'hair_ends_close_up',
+    label: 'Hair Ends Close-Up',
+    helperText: 'Capture the hair ends closely so dryness and split ends can be checked.',
+  },
 ];
 
 export const hairAnalyzerConcernTypes = {
@@ -24,6 +35,27 @@ export const hairAnalyzerConcernTypes = {
 };
 
 export const hairAnalyzerQuestionChoices = {
+  correctionLengthUnit: [
+    { label: 'cm', value: 'cm' },
+    { label: 'in', value: 'in' },
+  ],
+  hairTexture: [
+    { label: 'Straight', value: 'Straight' },
+    { label: 'Wavy', value: 'Wavy' },
+    { label: 'Curly', value: 'Curly' },
+    { label: 'Coily', value: 'Coily' },
+    { label: 'Mixed', value: 'Mixed' },
+  ],
+  hairDensity: [
+    { label: 'Light', value: 'Light' },
+    { label: 'Medium', value: 'Medium' },
+    { label: 'Thick', value: 'Thick' },
+    { label: 'Dense', value: 'Dense' },
+  ],
+  questionnaireMode: [
+    { label: 'First-time hair check', value: 'first_time' },
+    { label: 'Follow-up hair check', value: 'returning_follow_up' },
+  ],
   yesNo: [
     { label: 'Yes', value: 'yes' },
     { label: 'No', value: 'no' },
@@ -32,50 +64,78 @@ export const hairAnalyzerQuestionChoices = {
     { label: 'Initial donation screening', value: 'initial_donation_screening' },
     { label: 'Checking eligibility first', value: 'checking_eligibility_first' },
   ],
-  chemicalTreatments: [
-    { label: 'Rebonded', value: 'rebonded' },
-    { label: 'Permed', value: 'permed' },
-    { label: 'Relaxed', value: 'relaxed' },
-    { label: 'Keratin-treated', value: 'keratin_treated' },
-    { label: 'Hair Botox', value: 'hair_botox' },
-    { label: 'Others', value: 'others' },
-    { label: 'None', value: 'none' },
-  ],
-  treatmentTiming: [
-    { label: 'Within the past 3 months', value: 'within_3_months' },
-    { label: '4 to 6 months ago', value: 'four_to_six_months' },
-    { label: '7 to 12 months ago', value: 'seven_to_twelve_months' },
-    { label: 'More than 1 year ago', value: 'more_than_1_year' },
-  ],
-  colorStatus: [
-    { label: 'No', value: 'no' },
-    { label: 'Colored', value: 'colored' },
-    { label: 'Bleached', value: 'bleached' },
-    { label: 'Both', value: 'both' },
-  ],
-  colorTiming: [
-    { label: 'Within the past 3 months', value: 'within_3_months' },
-    { label: '4 to 6 months ago', value: 'four_to_six_months' },
-    { label: '7 to 12 months ago', value: 'seven_to_twelve_months' },
-    { label: 'More than 1 year ago', value: 'more_than_1_year' },
-  ],
-  hairCondition: [
-    { label: 'Healthy', value: 'healthy' },
-    { label: 'Slightly dry', value: 'slightly_dry' },
-    { label: 'Dry', value: 'dry' },
-    { label: 'Damaged', value: 'damaged' },
-  ],
-  washFrequencyWeekly: [
-    { label: '1 to 2 times', value: '1_2_times' },
-    { label: '3 to 4 times', value: '3_4_times' },
-    { label: '5 to 6 times', value: '5_6_times' },
+  washFrequency: [
     { label: 'Daily', value: 'daily' },
+    { label: 'Every 2-3 days', value: 'every_2_3_days' },
+    { label: '1-2 times a week', value: '1_2_times_weekly' },
+    { label: 'Less often', value: 'less_often' },
   ],
-  heatStylingFrequency: [
+  itchFrequency: [
     { label: 'Never', value: 'never' },
-    { label: 'Rarely', value: 'rarely' },
     { label: 'Sometimes', value: 'sometimes' },
     { label: 'Often', value: 'often' },
+  ],
+  dandruffLevel: [
+    { label: 'No', value: 'no' },
+    { label: 'A little', value: 'a_little' },
+    { label: 'A lot', value: 'a_lot' },
+  ],
+  quickOiliness: [
+    { label: 'No', value: 'no' },
+    { label: 'Sometimes', value: 'sometimes' },
+    { label: 'Yes', value: 'yes' },
+  ],
+  drynessLevel: [
+    { label: 'No', value: 'no' },
+    { label: 'Sometimes', value: 'sometimes' },
+    { label: 'Yes', value: 'yes' },
+  ],
+  hairFallLevel: [
+    { label: 'No', value: 'no' },
+    { label: 'Not sure', value: 'not_sure' },
+    { label: 'Yes', value: 'yes' },
+  ],
+  chemicalProcessHistory: [
+    { label: 'No', value: 'no' },
+    { label: 'Yes', value: 'yes' },
+  ],
+  heatUseFrequency: [
+    { label: 'Never', value: 'never' },
+    { label: 'Sometimes', value: 'sometimes' },
+    { label: 'Often', value: 'often' },
+  ],
+  recommendationFollowThrough: [
+    { label: 'Yes, consistently', value: 'yes_consistently' },
+    { label: 'Sometimes', value: 'sometimes' },
+    { label: 'Not yet', value: 'not_yet' },
+  ],
+  hairProgress: [
+    { label: 'Better', value: 'better' },
+    { label: 'About the same', value: 'same' },
+    { label: 'Worse', value: 'worse' },
+    { label: 'Not sure', value: 'not_sure' },
+  ],
+  followUpChanges: [
+    { label: 'Less dryness', value: 'less_dryness' },
+    { label: 'Less oiliness', value: 'less_oiliness' },
+    { label: 'Less hair fall', value: 'less_hair_fall' },
+    { label: 'Less dandruff', value: 'less_dandruff' },
+    { label: 'Softer hair', value: 'softer_hair' },
+    { label: 'No major change', value: 'no_major_change' },
+    { label: 'It got worse', value: 'got_worse' },
+  ],
+  routineChangeFocus: [
+    { label: 'Washing routine', value: 'washing_routine' },
+    { label: 'Hair products', value: 'hair_products' },
+    { label: 'Reduced heat styling', value: 'reduced_heat_styling' },
+    { label: 'Stopped chemical treatment', value: 'stopped_chemical_treatment' },
+    { label: 'Started scalp care', value: 'started_scalp_care' },
+    { label: 'Other', value: 'other' },
+  ],
+  healthyNow: [
+    { label: 'Yes', value: 'yes' },
+    { label: 'No', value: 'no' },
+    { label: 'Not sure', value: 'not_sure' },
   ],
 };
 
