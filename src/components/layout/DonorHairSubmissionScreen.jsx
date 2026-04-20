@@ -630,6 +630,19 @@ const buildDonationReadinessLabel = ({ screening, donationRequirement }) => {
   return 'Hair may be long enough, but this check suggests improving the condition first.';
 };
 
+const buildRetryCountdownMessage = (errorState, secondsRemaining) => {
+  if (!errorState) return '';
+  if (!Number.isFinite(secondsRemaining) || secondsRemaining <= 0) {
+    const normalizedMessage = String(errorState.message || '');
+    if (/retry\s+in\s+\d+(?:\.\d+)?\s*seconds?/i.test(normalizedMessage)) {
+      return 'Cannot analyze hair right now. Please try again.';
+    }
+    return normalizedMessage || 'Cannot analyze hair right now. Please try again later.';
+  }
+
+  return `Cannot analyze hair, please try again in ${secondsRemaining} seconds.`;
+};
+
 function HairConditionLogCard({ submissions, onOpenAnalyzer, onSelectDate, trendLabel = '' }) {
   const history = useMemo(() => buildHairConditionHistory(submissions), [submissions]);
   const [visibleMonth, setVisibleMonth] = useState(() => new Date());
@@ -786,6 +799,7 @@ function HairConditionLogCard({ submissions, onOpenAnalyzer, onSelectDate, trend
 export function DonorHairSubmissionScreen() {
   const router = useRouter();
   const cameraRef = useRef(null);
+  const lastTransientErrorKeyRef = useRef('');
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [isAnalyzerActive, setIsAnalyzerActive] = useState(false);
   const [stepIndex, setStepIndex] = useState(0);
@@ -801,6 +815,8 @@ export function DonorHairSubmissionScreen() {
   const [selectedHistoryDate, setSelectedHistoryDate] = useState('');
   const [selectedHistoryEntries, setSelectedHistoryEntries] = useState([]);
   const [resultConfirmationMode, setResultConfirmationMode] = useState('pending');
+  const [retryCountdownSeconds, setRetryCountdownSeconds] = useState(0);
+  const [transientErrorNotice, setTransientErrorNotice] = useState(null);
   const { user, profile, resolvedTheme } = useAuth();
   const { logout, isLoading: isLoggingOut } = useAuthActions();
   const { unreadCount } = useNotifications({ role: 'donor', userId: user?.id, databaseUserId: profile?.user_id });
@@ -824,6 +840,7 @@ export function DonorHairSubmissionScreen() {
     removePhoto,
     analyzePhotos,
     submitSubmission,
+    clearAnalysisError,
   } = useDonorHairSubmission({ userId: user?.id, databaseUserId: profile?.user_id });
 
   const avatarInitials = `${profile?.first_name?.[0] || ''}${profile?.last_name?.[0] || ''}`.trim();
@@ -899,6 +916,57 @@ export function DonorHairSubmissionScreen() {
     () => (latestAnalyzedSubmission?.donor_recommendations || []).slice(0, 2),
     [latestAnalyzedSubmission]
   );
+  const isRetryCooldownActive = Boolean(error?.retryUntil && retryCountdownSeconds > 0);
+  const countdownErrorMessage = useMemo(
+    () => buildRetryCountdownMessage(error, retryCountdownSeconds),
+    [error, retryCountdownSeconds]
+  );
+  const pageErrorState = useMemo(
+    () => error ? {
+      ...error,
+      message: countdownErrorMessage || error.message,
+    } : null,
+    [countdownErrorMessage, error]
+  );
+
+  const runFreshAnalysisAttempt = React.useCallback(async (source, options = {}) => {
+    logAppEvent('donor_hair_submission.analysis_retry', 'Retry button tapped for a fresh donor hair analysis attempt.', {
+      userId: user?.id || null,
+      source,
+      previousErrorTitle: error?.title || null,
+      previousRetryUntil: error?.retryUntil ?? null,
+    });
+
+    clearAnalysisError();
+    setTransientErrorNotice(null);
+    setRetryCountdownSeconds(0);
+
+    logAppEvent('donor_hair_submission.analysis_retry', 'Stale donor hair analysis state cleared before retry.', {
+      userId: user?.id || null,
+      source,
+      clearedRetryState: true,
+    });
+
+    return await analyzePhotos({
+      questionnaireAnswers: {
+        ...questionForm.getValues(),
+        questionnaireMode,
+      },
+      complianceContext: { acknowledged: Boolean(complianceAcknowledged) },
+      historyContext: buildAnalysisHistoryContext(analysisHistory),
+      correctedDetails: options.correctedDetails || null,
+    });
+  }, [
+    analysisHistory,
+    analyzePhotos,
+    clearAnalysisError,
+    complianceAcknowledged,
+    error?.title,
+    questionForm,
+    questionnaireMode,
+    error?.retryUntil,
+    user?.id,
+  ]);
 
   const loadAnalysisHistory = React.useCallback(async () => {
     if (!user?.id) return;
@@ -932,6 +1000,67 @@ export function DonorHairSubmissionScreen() {
     correctionForm.reset(buildHairResultCorrectionDefaultValues(analysis));
     setResultConfirmationMode('pending');
   }, [analysis, correctionForm]);
+
+  useEffect(() => {
+    if (!error?.retryUntil) {
+      setRetryCountdownSeconds(0);
+      lastTransientErrorKeyRef.current = '';
+      return undefined;
+    }
+
+    const activeRetryUntil = Number(error.retryUntil);
+    let didClearExpiredState = false;
+
+    logAppEvent('donor_hair_submission.analysis_retry', 'Countdown started for provider retry wait.', {
+      userId: user?.id || null,
+      retryUntil: activeRetryUntil,
+      retryAfterSeconds: error?.retryAfterSeconds ?? null,
+    });
+
+    const updateCountdown = () => {
+      const remainingSeconds = Math.max(0, Math.ceil((activeRetryUntil - Date.now()) / 1000));
+      setRetryCountdownSeconds(remainingSeconds);
+
+      if (remainingSeconds === 0 && !didClearExpiredState) {
+        didClearExpiredState = true;
+        logAppEvent('donor_hair_submission.analysis_retry', 'Countdown ended. Clearing stale provider error state.', {
+          userId: user?.id || null,
+          retryUntil: activeRetryUntil,
+        });
+        clearAnalysisError();
+        setTransientErrorNotice(null);
+      }
+    };
+
+    updateCountdown();
+    const interval = setInterval(updateCountdown, 1000);
+    return () => clearInterval(interval);
+  }, [clearAnalysisError, error?.retryAfterSeconds, error?.retryUntil, user?.id]);
+
+  useEffect(() => {
+    if (!error) {
+      lastTransientErrorKeyRef.current = '';
+      setTransientErrorNotice(null);
+      return undefined;
+    }
+
+    const transientErrorKey = `${error.title || 'error'}:${error.message || ''}:${error.retryUntil || 'none'}`;
+    if (lastTransientErrorKeyRef.current === transientErrorKey) {
+      return undefined;
+    }
+
+    lastTransientErrorKeyRef.current = transientErrorKey;
+    logAppEvent('donor_hair_submission.analysis_retry', 'Transient provider error popup shown.', {
+      userId: user?.id || null,
+      title: error.title,
+      retryUntil: error?.retryUntil ?? null,
+    });
+    setTransientErrorNotice({
+      title: error.title,
+      message: error.message,
+    });
+    return undefined;
+  }, [error, user?.id]);
 
   const openHistoryDate = React.useCallback((dateKey, entries) => {
     setSelectedHistoryDate(dateKey);
@@ -1004,13 +1133,7 @@ export function DonorHairSubmissionScreen() {
       correctedDensity: values.correctedDensity || '',
     });
 
-    const result = await analyzePhotos({
-      questionnaireAnswers: {
-        ...questionForm.getValues(),
-        questionnaireMode,
-      },
-      complianceContext: { acknowledged: Boolean(complianceAcknowledged) },
-      historyContext: buildAnalysisHistoryContext(analysisHistory),
+    const result = await runFreshAnalysisAttempt('corrected_details_retry', {
       correctedDetails: values,
     });
 
@@ -1301,28 +1424,14 @@ export function DonorHairSubmissionScreen() {
       if (photos.filter(Boolean).length !== requiredViews.length) return;
       setStepIndex(3);
       if (!analysis) {
-        await analyzePhotos({
-          questionnaireAnswers: {
-            ...questionForm.getValues(),
-            questionnaireMode,
-          },
-          complianceContext: { acknowledged: Boolean(complianceAcknowledged) },
-          historyContext: buildAnalysisHistoryContext(analysisHistory),
-        });
+        await runFreshAnalysisAttempt('step_2_complete');
       }
       return;
     }
 
     if (stepIndex === 3) {
       if (!analysis) {
-        await analyzePhotos({
-          questionnaireAnswers: {
-            ...questionForm.getValues(),
-            questionnaireMode,
-          },
-          complianceContext: { acknowledged: Boolean(complianceAcknowledged) },
-          historyContext: buildAnalysisHistoryContext(analysisHistory),
-        });
+        await runFreshAnalysisAttempt('step_4_retry');
         return;
       }
       return;
@@ -1580,13 +1689,13 @@ export function DonorHairSubmissionScreen() {
                     />
 
                     <View style={styles.postAnalysisActions}>
-                      <AppButton
-                        title={isAnalyzing ? 'Re-analyzing...' : 'Re-run AI analysis'}
-                        fullWidth={false}
-                        onPress={handleCorrectionSubmit}
-                        loading={isAnalyzing}
-                        disabled={isAnalyzing || isSaving}
-                      />
+              <AppButton
+                title={isAnalyzing ? 'Re-analyzing...' : 'Re-run AI analysis'}
+                fullWidth={false}
+                onPress={handleCorrectionSubmit}
+                loading={isAnalyzing}
+                disabled={isAnalyzing || isSaving || isRetryCooldownActive}
+              />
                       <AppButton
                         title="Cancel edits"
                         variant="ghost"
@@ -1602,25 +1711,40 @@ export function DonorHairSubmissionScreen() {
                 ) : null}
               </>
           </AppCard>
-        ) : (
+        ) : pageErrorState ? (
           <AppCard variant="elevated" radius="xl" padding="lg">
             <Text style={styles.stepTitle}>Hair analysis unavailable</Text>
             <Text style={styles.stepDescription}>
-              {error?.message || 'Cannot analyze hair right now. Please try again later.'}
+              {countdownErrorMessage || error?.message || 'Cannot analyze hair right now. Please try again later.'}
             </Text>
             <View style={styles.postAnalysisActions}>
               <AppButton
-                title={isAnalyzing ? 'Retrying...' : 'Try again'}
+                title={isRetryCooldownActive
+                  ? `Try again in ${retryCountdownSeconds}s`
+                  : isAnalyzing
+                    ? 'Retrying...'
+                    : 'Try again'}
                 fullWidth={false}
                 onPress={async () => {
-                  await analyzePhotos({
-                    questionnaireAnswers: {
-                      ...questionForm.getValues(),
-                      questionnaireMode,
-                    },
-                    complianceContext: { acknowledged: Boolean(complianceAcknowledged) },
-                    historyContext: buildAnalysisHistoryContext(analysisHistory),
-                  });
+                  await runFreshAnalysisAttempt('error_card_retry');
+                }}
+                loading={isAnalyzing}
+                disabled={isAnalyzing || isSaving || isRetryCooldownActive}
+              />
+            </View>
+          </AppCard>
+        ) : (
+          <AppCard variant="elevated" radius="xl" padding="lg">
+            <Text style={styles.stepTitle}>Ready for AI analysis</Text>
+            <Text style={styles.stepDescription}>
+              Your answers and hair photos are ready. Run the analysis to continue.
+            </Text>
+            <View style={styles.postAnalysisActions}>
+              <AppButton
+                title={isAnalyzing ? 'Analyzing...' : 'Run analysis'}
+                fullWidth={false}
+                onPress={async () => {
+                  await runFreshAnalysisAttempt('ready_state_retry');
                 }}
                 loading={isAnalyzing}
                 disabled={isAnalyzing || isSaving}
@@ -1676,10 +1800,26 @@ export function DonorHairSubmissionScreen() {
         />
       )}
     >
+      {transientErrorNotice ? (
+        <StatusBanner
+          title={transientErrorNotice.title}
+          message={transientErrorNotice.message}
+          variant="error"
+          presentation="floating"
+          visible={Boolean(transientErrorNotice)}
+          autoDismissMs={3000}
+          onDismiss={() => {
+            logAppEvent('donor_hair_submission.analysis_retry', 'Transient provider error popup dismissed.', {
+              userId: user?.id || null,
+              title: transientErrorNotice?.title || null,
+            });
+            setTransientErrorNotice(null);
+          }}
+        />
+      ) : null}
       {successMessage ? <StatusBanner message={successMessage} variant="success" title="Hair check saved" style={styles.bannerGap} /> : null}
       {historyError ? <StatusBanner message={historyError} variant="info" style={styles.bannerGap} /> : null}
       {isLoadingContext ? <StatusBanner title="Loading CheckHair" message="Preparing your analyzer context." variant="info" style={styles.bannerGap} /> : null}
-      {error ? <StatusBanner title={error.title} message={error.message} variant="error" style={styles.bannerGap} /> : null}
 
       {!isAnalyzerActive ? (
         <View style={styles.summaryStage}>

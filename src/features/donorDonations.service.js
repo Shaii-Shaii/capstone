@@ -12,18 +12,27 @@ import {
   fetchHairSubmissionsByUserId,
   fetchLatestDonationCertificateByUserId,
   getHairSubmissionImageSignedUrl,
+  updateHairSubmissionById,
   updateHairSubmissionLogisticsById,
   uploadHairSubmissionImage,
 } from './hairSubmission.api';
-import { fetchUpcomingDonationDrives } from './donorHome.api';
+import { createDonationDriveRsvp, fetchDonationDrivePreview, fetchUpcomingDonationDrives } from './donorHome.api';
 import { hairSubmissionStorageBucket } from './hairSubmission.constants';
+import { buildImmediateNotificationEvents, recordNotifications } from './notification.service';
+import { notificationTypes } from './notification.constants';
 
 const ELIGIBLE_DECISION = 'eligible for hair donation';
 const MANUAL_DONATION_SOURCE = 'manual_donor_details';
+const INDEPENDENT_DONATION_SOURCE = 'independent_donation';
+const DRIVE_DONATION_SOURCE = 'drive_donation';
 const MANUAL_HAIR_PHOTO_IMAGE_TYPE = 'manual_donation_hair_photo';
+const MANUAL_DONATION_NOTE_MARKER = 'Manual donor details saved from the donor Donations module.';
 const MINIMUM_MANUAL_LENGTH_INCHES = 14;
 const PARCEL_IMAGE_TYPES = ['independent_parcel_photo', 'parcel_photo', 'parcel_log'];
 const QR_IMAGE_BASE_URL = 'https://api.qrserver.com/v1/create-qr-code/';
+const QR_META_START = '[DONIVRA_QR_META]';
+const QR_META_END = '[/DONIVRA_QR_META]';
+export const DONATION_QR_VALIDITY_MS = 15 * 60 * 1000;
 
 const escapeHtml = (value = '') => String(value)
   .replaceAll('&', '&amp;')
@@ -62,7 +71,12 @@ const formatDateShort = (value) => {
   }
 };
 
+const formatHistoryDateLabel = (value) => (
+  formatDateShort(value)
+);
+
 const normalizeDecision = (value = '') => String(value || '').trim().toLowerCase();
+const normalizeStatus = (value = '') => String(value || '').trim().toLowerCase();
 
 export const isEligibleHairAnalysisDecision = (decision = '') => (
   normalizeDecision(decision) === ELIGIBLE_DECISION
@@ -168,9 +182,353 @@ const createDonationSubmissionCode = (prefix = 'DON') => (
   `${prefix}-${Date.now().toString(36).toUpperCase()}`
 );
 
+export const createDonationQrReference = (prefix = 'QR') => (
+  `${prefix}-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
+);
+
+const stripQrMetadata = (value = '') => String(value || '')
+  .replace(new RegExp(`${QR_META_START}[\\s\\S]*?${QR_META_END}\\s*`, 'g'), '')
+  .trim();
+
+const parseQrMetadata = (value = '') => {
+  const normalized = String(value || '');
+  const match = normalized.match(new RegExp(`${QR_META_START}([\\s\\S]*?)${QR_META_END}`));
+  if (!match?.[1]) return null;
+
+  try {
+    const parsed = JSON.parse(match[1]);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+};
+
+const mergeQrMetadataIntoNotes = (notes = '', metadata = null) => {
+  const cleanNotes = stripQrMetadata(notes);
+  if (!metadata) return cleanNotes;
+
+  const serialized = `${QR_META_START}${JSON.stringify(metadata)}${QR_META_END}`;
+  return [serialized, cleanNotes].filter(Boolean).join(' ').trim();
+};
+
+const mergeDonationNotes = (notes = '', additions = [], metadata = null) => {
+  const baseText = stripQrMetadata(notes);
+  const fragments = [baseText, ...additions]
+    .map((item) => String(item || '').trim())
+    .filter(Boolean);
+  const uniqueFragments = [...new Set(fragments)];
+  return mergeQrMetadataIntoNotes(uniqueFragments.join(' '), metadata);
+};
+
+const buildDonationNotification = ({
+  dedupeKey,
+  type = notificationTypes.logisticsUpdated,
+  title,
+  message,
+  createdAt = new Date().toISOString(),
+  referenceType = 'hair_submission',
+  referenceId = null,
+}) => ({
+  dedupeKey,
+  type,
+  title,
+  message,
+  createdAt,
+  referenceType,
+  referenceId,
+  isRead: false,
+});
+
+const persistDonationNotifications = async ({
+  userId,
+  notifications = [],
+}) => {
+  if (!userId || !notifications.length) {
+    return;
+  }
+
+  try {
+    await recordNotifications({
+      userId,
+      role: 'donor',
+      notifications,
+    });
+  } catch {
+    // Keep the main donation flow moving even if notification persistence fails.
+  }
+};
+
+const resolveQrExpiryAt = (generatedAt = '') => {
+  const generatedTime = generatedAt ? new Date(generatedAt).getTime() : NaN;
+  if (!Number.isFinite(generatedTime)) return '';
+  return new Date(generatedTime + DONATION_QR_VALIDITY_MS).toISOString();
+};
+
+const getIndependentQrMetadata = (submission = null) => {
+  const metadata = parseQrMetadata(submission?.donor_notes || '');
+  if (!metadata || metadata.type !== 'independent' || !metadata.reference) {
+    return null;
+  }
+
+  const generatedAt = metadata.generated_at || metadata.confirmed_at || '';
+  const expiresAt = metadata.expires_at || resolveQrExpiryAt(generatedAt);
+  const activatedAt = metadata.activated_at || metadata.confirmed_at || '';
+  const isActivated = metadata.status === 'activated' || metadata.confirmed === true;
+  const isExpired = !isActivated && Boolean(expiresAt) && new Date(expiresAt).getTime() <= Date.now();
+
+  return {
+    reference: metadata.reference,
+    generated_at: generatedAt,
+    expires_at: expiresAt,
+    activated_at: activatedAt,
+    version: metadata.version ?? 1,
+    status: isActivated ? 'activated' : isExpired ? 'expired' : 'pending',
+    is_activated: isActivated,
+    is_expired: isExpired,
+    is_pending: !isActivated && !isExpired,
+    can_regenerate: !isActivated && isExpired,
+  };
+};
+
+const buildIndependentQrMetadata = ({
+  reference = '',
+  status = 'pending',
+  generatedAt = new Date().toISOString(),
+  activatedAt = '',
+  version = 1,
+  updatedBy = null,
+}) => ({
+  type: 'independent',
+  reference,
+  status,
+  generated_at: generatedAt,
+  expires_at: resolveQrExpiryAt(generatedAt),
+  activated_at: activatedAt || '',
+  version,
+  updated_by: updatedBy || null,
+});
+
+const buildIndependentQrMetadataFromState = ({
+  qrState = null,
+  fallbackMetadata = null,
+  updatedBy = null,
+}) => {
+  if (!qrState?.reference) {
+    return fallbackMetadata;
+  }
+
+  return buildIndependentQrMetadata({
+    reference: qrState.reference,
+    status: qrState.is_activated ? 'activated' : qrState.is_expired ? 'expired' : 'pending',
+    generatedAt: qrState.generated_at || fallbackMetadata?.generated_at || new Date().toISOString(),
+    activatedAt: qrState.activated_at || fallbackMetadata?.activated_at || '',
+    version: Number(fallbackMetadata?.version || 0) + 1,
+    updatedBy,
+  });
+};
+
+const getLatestSubmissionDetailSnapshot = (submission = null) => (
+  [...(submission?.submission_details || [])]
+    .sort((left, right) => new Date(right?.created_at || 0).getTime() - new Date(left?.created_at || 0).getTime())[0] || null
+);
+
+const isManualDonationSubmission = (submission = null) => {
+  const source = String(submission?.donation_source || '').trim().toLowerCase();
+  if (source === MANUAL_DONATION_SOURCE) {
+    return true;
+  }
+
+  if (String(submission?.donor_notes || '').includes(MANUAL_DONATION_NOTE_MARKER)) {
+    return true;
+  }
+
+  const latestDetail = getLatestSubmissionDetailSnapshot(submission);
+  return String(latestDetail?.detail_notes || '').includes(MANUAL_DONATION_NOTE_MARKER);
+};
+
+const upsertSubmissionLogistics = async ({
+  submissionId,
+  logisticsType,
+  shipmentStatus,
+  notes,
+  courierName = undefined,
+  trackingNumber = undefined,
+  pickupScheduleDate = undefined,
+  pickupScheduledAt = undefined,
+  pickupApprovedAt = undefined,
+  receivedBy = undefined,
+  receivedAt = undefined,
+}) => {
+  if (!submissionId) {
+    return { data: null, error: new Error('Submission ID is required for logistics updates.') };
+  }
+
+  const existingResult = await fetchHairSubmissionLogisticsBySubmissionId(submissionId);
+  const currentLogistics = existingResult.data || null;
+  const payload = {
+    submission_id: submissionId,
+    logistics_type: logisticsType || currentLogistics?.logistics_type || null,
+    courier_name: courierName ?? currentLogistics?.courier_name ?? null,
+    tracking_number: trackingNumber ?? currentLogistics?.tracking_number ?? null,
+    shipment_status: shipmentStatus || currentLogistics?.shipment_status || null,
+    pickup_schedule_date: pickupScheduleDate ?? currentLogistics?.pickup_schedule_date ?? null,
+    pickup_scheduled_at: pickupScheduledAt ?? currentLogistics?.pickup_scheduled_at ?? currentLogistics?.pickup_schedule_at ?? null,
+    pickup_approved_at: pickupApprovedAt ?? currentLogistics?.pickup_approved_at ?? null,
+    received_by: receivedBy ?? currentLogistics?.received_by ?? null,
+    received_at: receivedAt ?? currentLogistics?.received_at ?? null,
+    notes: notes || currentLogistics?.notes || null,
+  };
+
+  return currentLogistics?.submission_logistics_id
+    ? await updateHairSubmissionLogisticsById(currentLogistics.submission_logistics_id, {
+        ...currentLogistics,
+        ...payload,
+      })
+    : await createHairSubmissionLogistics(payload);
+};
+
+const syncIndependentDonationSubmission = async ({
+  userId,
+  databaseUserId,
+  submission,
+  qrMetadata = null,
+  status,
+  logisticsStatus,
+  logisticsNotes,
+  trackingTitle = '',
+  trackingDescription = '',
+  shouldTrack = false,
+  shouldNotify = false,
+}) => {
+  if (!submission?.submission_id) {
+    return { success: false, error: 'A valid donation submission is required.' };
+  }
+
+  const nextNotes = mergeDonationNotes(
+    submission?.donor_notes || '',
+    ['Donation path: independent donation.'],
+    qrMetadata,
+  );
+
+  const submissionResult = await updateHairSubmissionById(submission.submission_id, {
+    donation_source: INDEPENDENT_DONATION_SOURCE,
+    delivery_method: 'shipping',
+    pickup_request: false,
+    donor_notes: nextNotes,
+    status,
+  });
+
+  if (submissionResult.error || !submissionResult.data?.submission_id) {
+    return {
+      success: false,
+      error: submissionResult.error?.message || 'Unable to update the independent donation submission.',
+    };
+  }
+
+  const logisticsResult = await upsertSubmissionLogistics({
+    submissionId: submissionResult.data.submission_id,
+    logisticsType: 'shipping',
+    shipmentStatus: logisticsStatus,
+    notes: logisticsNotes,
+  });
+
+  if (logisticsResult.error) {
+    return {
+      success: false,
+      error: logisticsResult.error.message || 'Unable to save the donation logistics state.',
+    };
+  }
+
+  const latestDetail = getLatestSubmissionDetailSnapshot(submissionResult.data);
+  if (shouldTrack) {
+    const trackingResult = await createHairBundleTrackingEntry({
+      submission_id: submissionResult.data.submission_id,
+      submission_detail_id: latestDetail?.submission_detail_id || null,
+      status: logisticsStatus,
+      title: trackingTitle || logisticsStatus,
+      description: trackingDescription || logisticsNotes,
+      changed_by: databaseUserId || null,
+    });
+
+    if (trackingResult.error) {
+      return {
+        success: false,
+        error: trackingResult.error.message || 'Unable to save the donation tracking update.',
+      };
+    }
+  }
+
+  if (shouldNotify) {
+    await persistDonationNotifications({
+      userId,
+      notifications: [
+        buildDonationNotification({
+          dedupeKey: `${notificationTypes.logisticsUpdated}:${submissionResult.data.submission_id}:${status}`,
+          title: trackingTitle || 'Donation update',
+          message: trackingDescription || logisticsNotes,
+          createdAt: new Date().toISOString(),
+          referenceId: submissionResult.data.submission_id,
+        }),
+      ],
+    });
+  }
+
+  return {
+    success: true,
+    submission: submissionResult.data,
+    logistics: logisticsResult.data || null,
+  };
+};
+
+export const getIndependentDonationQrState = ({
+  submission = null,
+  logistics = null,
+  trackingEntries = [],
+} = {}) => {
+  const metadata = getIndependentQrMetadata(submission);
+  if (!metadata?.reference) {
+    return null;
+  }
+
+  const shipmentStatus = normalizeStatus(logistics?.shipment_status);
+  const hasActivationTracking = (trackingEntries || []).some((entry) => (
+    matchesAnyToken(entry?.status, ['qr activated', 'activated', 'ready for parcel upload', 'ready for shipment'])
+    || matchesAnyToken(entry?.title, ['qr activated', 'activated', 'ready for parcel upload', 'ready for shipment'])
+  ));
+  const isFlowActivated = (
+    metadata.is_activated
+    || ['qr activated', 'activated', 'ready for parcel upload', 'ready for shipment', 'in transit', 'received'].includes(shipmentStatus)
+    || hasActivationTracking
+  );
+
+  return {
+    ...metadata,
+    status: isFlowActivated ? 'activated' : metadata.status,
+    is_activated: isFlowActivated,
+    is_pending: !isFlowActivated && metadata.is_pending,
+    is_expired: !isFlowActivated && metadata.is_expired,
+    is_valid: isFlowActivated || metadata.is_pending,
+    show_my_qr: isFlowActivated || metadata.is_pending,
+    upload_unlocked: isFlowActivated,
+  };
+};
+
+export const formatQrCountdownLabel = (expiresAt = '', now = Date.now()) => {
+  const expiryTime = expiresAt ? new Date(expiresAt).getTime() : NaN;
+  if (!Number.isFinite(expiryTime)) return '';
+
+  const remainingMs = expiryTime - now;
+  if (remainingMs <= 0) return 'QR expired';
+
+  const totalSeconds = Math.max(0, Math.ceil(remainingMs / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `Expires in ${minutes}:${String(seconds).padStart(2, '0')}`;
+};
+
 const buildManualDonationNotes = ({ manualDetails = {}, evaluation = null }) => (
   [
-    'Manual donor details saved from the donor Donations module.',
+    MANUAL_DONATION_NOTE_MARKER,
     `Length entered: ${manualDetails?.length_value || '-'} ${normalizeLengthUnit(manualDetails?.length_unit)}`,
     `Treated: ${normalizeYesNoChoice(manualDetails?.treated) ? 'Yes' : 'No'}`,
     `Colored: ${normalizeYesNoChoice(manualDetails?.colored) ? 'Yes' : 'No'}`,
@@ -183,7 +541,7 @@ const buildManualDonationNotes = ({ manualDetails = {}, evaluation = null }) => 
 
 const resolveManualDonationRecord = ({ submissions = [], donationRequirement = null }) => {
   const latestManualSubmission = sortSubmissionsByCreatedAt(submissions)
-    .find((submission) => String(submission?.donation_source || '').trim().toLowerCase() === MANUAL_DONATION_SOURCE) || null;
+    .find((submission) => isManualDonationSubmission(submission)) || null;
   const latestManualDetail = getLatestSubmissionDetail(latestManualSubmission);
 
   if (!latestManualSubmission || !latestManualDetail) {
@@ -233,6 +591,38 @@ const resolveActiveDonationRecord = ({ aiRecord = null, manualRecord = null }) =
   [aiRecord, manualRecord]
     .filter((record) => record?.qualification?.isQualified)
     .sort((left, right) => new Date(right?.created_at || 0).getTime() - new Date(left?.created_at || 0).getTime())[0] || null
+);
+
+const buildCompletedDonationHistory = ({ submissions = [], activeSubmission = null }) => (
+  sortSubmissionsByCreatedAt(submissions)
+    .filter((submission) => submission?.submission_id && submission.submission_id !== activeSubmission?.submission_id)
+    .filter((submission) => normalizeStatus(submission?.status) === 'completed')
+    .map((submission) => ({
+      submission_id: submission.submission_id,
+      submission_code: submission.submission_code || '',
+      status: submission.status || '',
+      donation_source: submission.donation_source || '',
+      created_at: submission.created_at || '',
+      updated_at: submission.updated_at || '',
+      date_label: formatHistoryDateLabel(submission.updated_at || submission.created_at || ''),
+      bundle_quantity: submission.bundle_quantity || 0,
+    }))
+);
+
+const hasMeaningfulTrackingEntries = (trackingEntries = []) => (
+  (trackingEntries || []).some((entry) => {
+    const combinedText = [
+      entry?.title,
+      entry?.description,
+      entry?.status,
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+
+    if (!combinedText) return false;
+    return !combinedText.includes('manual donor details saved');
+  })
 );
 
 const findTimelineMatch = (items = [], matcher) => (
@@ -365,9 +755,29 @@ const buildTimelineEvents = ({ logistics, trackingEntries, parcelImages, certifi
       }]
     : [];
 
-  return [...certificateEvent, ...trackingEvents, ...logisticsEvent, ...parcelEvents]
+  const sortedEvents = [...certificateEvent, ...trackingEvents, ...logisticsEvent, ...parcelEvents]
     .filter(Boolean)
     .sort((left, right) => new Date(right.timestamp || 0).getTime() - new Date(left.timestamp || 0).getTime());
+
+  const seenEvents = new Set();
+  return sortedEvents.filter((event) => {
+    const dedupeKey = [
+      String(event?.title || '').trim().toLowerCase(),
+      String(event?.description || '').trim().toLowerCase(),
+      String(event?.badge || '').trim().toLowerCase(),
+    ].join('|');
+
+    if (!dedupeKey.replace(/\|/g, '')) {
+      return true;
+    }
+
+    if (seenEvents.has(dedupeKey)) {
+      return false;
+    }
+
+    seenEvents.add(dedupeKey);
+    return true;
+  });
 };
 
 const getParcelImagesWithUrls = async (detail) => {
@@ -389,12 +799,17 @@ const getParcelImagesWithUrls = async (detail) => {
 export const buildDriveInvitationQrPayload = ({ drive, registration, donor }) => (
   JSON.stringify({
     type: 'drive_invitation',
+    qr_reference: registration?.registration_id ? `DRV-${registration.registration_id}-${registration?.registered_at || ''}` : '',
     registration_id: registration?.registration_id || null,
     donation_drive_id: drive?.donation_drive_id || null,
     organization_id: drive?.organization_id || null,
-    donor_user_id: donor?.databaseUserId || null,
-    donor_name: donor?.name || '',
+    donor_user_id: donor?.databaseUserId || donor?.user_id || null,
+    donor_name: donor?.name || [donor?.first_name, donor?.last_name].filter(Boolean).join(' ').trim() || '',
     registered_at: registration?.registered_at || new Date().toISOString(),
+    generated_at: registration?.registered_at || new Date().toISOString(),
+    expires_at: registration?.qr?.expires_at || '',
+    activated_at: registration?.qr?.activated_at || '',
+    qr_status: registration?.qr?.status || 'pending',
   })
 );
 
@@ -404,9 +819,13 @@ export const buildIndependentDonationQrPayload = ({
   screening,
   donor,
   qualificationSource = '',
+  qrReference = '',
+  generatedAt = '',
+  confirmedAt = '',
 }) => (
   JSON.stringify({
     type: 'independent_parcel_tracking',
+    qr_reference: qrReference || '',
     submission_id: submission?.submission_id || null,
     submission_code: submission?.submission_code || '',
     submission_detail_id: detail?.submission_detail_id || null,
@@ -420,7 +839,9 @@ export const buildIndependentDonationQrPayload = ({
     declared_color: detail?.declared_color || '',
     declared_density: detail?.declared_density || '',
     declared_texture: detail?.declared_texture || '',
-    generated_at: new Date().toISOString(),
+    generated_at: generatedAt || new Date().toISOString(),
+    expires_at: resolveQrExpiryAt(generatedAt || new Date().toISOString()),
+    activated_at: confirmedAt || '',
   })
 );
 
@@ -506,6 +927,82 @@ export const generateDonationQrPdf = async ({
   `;
 
   return await Print.printToFileAsync({ html, base64: false });
+};
+
+export const printDonationQrPdf = async ({
+  title,
+  subtitle,
+  qrPayloadText,
+  helperText = '',
+}) => {
+  const qrImageUrl = buildQrImageUrl(qrPayloadText, 420);
+  const html = `
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <style>
+          body {
+            margin: 0;
+            padding: 28px;
+            font-family: Arial, sans-serif;
+            background: #f6f1ea;
+            color: #241a13;
+          }
+          .sheet {
+            background: #fffaf5;
+            border: 1px solid #e1d2c2;
+            border-radius: 20px;
+            padding: 28px;
+          }
+          .eyebrow {
+            text-transform: uppercase;
+            letter-spacing: 1.2px;
+            font-size: 11px;
+            color: #8a6546;
+            margin-bottom: 8px;
+          }
+          h1 {
+            margin: 0 0 8px;
+            font-size: 24px;
+            color: #59351d;
+          }
+          p {
+            margin: 0 0 16px;
+            color: #5a4940;
+            line-height: 1.5;
+          }
+          .qr {
+            width: 320px;
+            height: 320px;
+            display: block;
+            margin: 18px auto;
+            border: 10px solid white;
+            border-radius: 16px;
+          }
+          .payload {
+            margin-top: 18px;
+            padding: 12px;
+            border-radius: 12px;
+            background: #f2e7da;
+            font-size: 11px;
+            word-break: break-word;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="sheet">
+          <div class="eyebrow">Donivra donor QR</div>
+          <h1>${escapeHtml(title)}</h1>
+          <p>${escapeHtml(subtitle)}</p>
+          ${helperText ? `<p>${escapeHtml(helperText)}</p>` : ''}
+          <img class="qr" src="${qrImageUrl}" />
+          <div class="payload">${escapeHtml(qrPayloadText)}</div>
+        </div>
+      </body>
+    </html>
+  `;
+
+  await Print.printAsync({ html });
 };
 
 export const shareDonationQrPdf = async (uri) => {
@@ -596,12 +1093,57 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
   }
 
   const certificate = certificateResult.data || null;
+  const independentQrState = getIndependentDonationQrState({
+    submission: activeSubmission,
+    logistics,
+    trackingEntries,
+  });
+  const matchingDriveFromList = (drivesResult.data || [])
+    .find((drive) => drive?.donation_drive_id === activeSubmission?.donation_drive_id) || null;
+  let activeDrive = matchingDriveFromList;
+  let activeDriveError = null;
+
+  if (activeSubmission?.donation_drive_id && databaseUserId && !matchingDriveFromList?.registration) {
+    const activeDriveResult = await fetchDonationDrivePreview(activeSubmission.donation_drive_id, databaseUserId);
+    activeDrive = activeDriveResult.data || matchingDriveFromList || null;
+    activeDriveError = activeDriveResult.error || null;
+  }
+
   const timelineStages = activeSubmission
     ? resolveTimelineStages({ logistics, trackingEntries, parcelImages, certificate })
     : [];
   const timelineEvents = activeSubmission
     ? buildTimelineEvents({ logistics, trackingEntries, parcelImages, certificate })
     : [];
+  const latestStage = timelineStages[timelineStages.length - 1] || null;
+  const hasCompletedDonation = Boolean(
+    (certificate?.submission_id && certificate.submission_id === activeSubmission?.submission_id)
+    || latestStage?.key === 'received_by_patient' && latestStage?.state === 'completed'
+    || normalizeStatus(activeSubmission?.status) === 'completed'
+  );
+  const hasIndependentFlow = Boolean(
+    independentQrState?.reference
+    || logistics
+    || parcelImages.length
+    || hasMeaningfulTrackingEntries(trackingEntries)
+  );
+  const hasDriveFlow = Boolean(
+    activeSubmission?.donation_drive_id
+    || activeDrive?.registration?.registration_id
+  );
+  const activeFlowType = hasDriveFlow ? 'drive' : hasIndependentFlow ? 'independent' : '';
+  const activeQrState = activeFlowType === 'drive'
+    ? activeDrive?.registration?.qr || null
+    : independentQrState;
+  const hasOngoingDonation = Boolean(
+    activeSubmission?.submission_id
+    && !hasCompletedDonation
+    && (hasDriveFlow || hasIndependentFlow)
+  );
+  const completedDonationHistory = buildCompletedDonationHistory({
+    submissions,
+    activeSubmission: hasOngoingDonation ? activeSubmission : null,
+  });
 
   return {
     latestAnalysisEntry,
@@ -619,8 +1161,20 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
     isAiEligible,
     isManualQualified,
     isDonationReady,
+    hasOngoingDonation,
+    activeFlowType,
+    activeFlow: activeFlowType === 'drive'
+      ? activeDrive
+      : activeSubmission,
+    activeDrive,
+    activeQrState,
+    ongoingDonationMessage: hasOngoingDonation
+      ? 'You already have an ongoing donation. Please complete or wait for the current donation process to finish before starting a new one.'
+      : '',
+    completedDonationHistory,
     drives: drivesResult.data || [],
     logistics,
+    independentQrState,
     trackingEntries,
     parcelImages,
     timelineStages,
@@ -630,6 +1184,7 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
       || drivesResult.error?.message
       || logisticsError?.message
       || trackingError?.message
+      || activeDriveError?.message
       || certificateResult.error?.message
       || donationRequirementResult.error?.message
       || null,
@@ -706,6 +1261,7 @@ export const saveIndependentDonationParcelLog = async ({
   detail,
   photo,
   qrPayloadText,
+  qrState: currentQrState = null,
 }) => {
   if (!userId || !databaseUserId) {
     return { success: false, error: 'Your session is not ready.' };
@@ -716,6 +1272,16 @@ export const saveIndependentDonationParcelLog = async ({
   if (!photo) {
     return { success: false, error: 'Please upload a parcel image before continuing.' };
   }
+
+  const qrState = currentQrState || getIndependentDonationQrState({ submission });
+  if (!qrState?.is_activated) {
+    return { success: false, error: 'Wait until staff scans and activates your QR before uploading the parcel photo.' };
+  }
+  const nextQrMetadata = buildIndependentQrMetadataFromState({
+    qrState,
+    fallbackMetadata: parseQrMetadata(submission?.donor_notes || ''),
+    updatedBy: databaseUserId || null,
+  });
 
   const uploadPayload = await getPhotoUploadPayload(photo);
   const filePath = `${userId}/${submission.submission_id}/parcel-${detail.submission_detail_id}-${Date.now()}.jpg`;
@@ -786,7 +1352,240 @@ export const saveIndependentDonationParcelLog = async ({
     };
   }
 
-  return { success: true };
+  const submissionUpdateResult = await updateHairSubmissionById(submission.submission_id, {
+    donation_source: INDEPENDENT_DONATION_SOURCE,
+    delivery_method: 'shipping',
+    pickup_request: false,
+    donor_notes: mergeDonationNotes(
+      submission?.donor_notes || '',
+      ['Donation path: independent donation.', 'Parcel image uploaded by donor before shipment.'],
+      nextQrMetadata,
+    ),
+    status: 'Ready for shipment',
+  });
+
+  if (submissionUpdateResult.error) {
+    return {
+      success: false,
+      error: submissionUpdateResult.error.message || 'Unable to update the donation submission state.',
+    };
+  }
+
+  await persistDonationNotifications({
+    userId,
+    notifications: [
+      buildDonationNotification({
+        dedupeKey: `${notificationTypes.logisticsUpdated}:${submission.submission_id}:parcel-ready`,
+        title: 'Parcel ready for shipment',
+        message: 'Your parcel image was saved and your donation is ready for shipment.',
+        createdAt: new Date().toISOString(),
+        referenceId: submission.submission_id,
+      }),
+    ],
+  });
+
+  return {
+    success: true,
+    submission: submissionUpdateResult.data || submission,
+    logistics: saveLogisticsResult.data || null,
+  };
+};
+
+export const ensureIndependentDonationQr = async ({
+  userId = null,
+  submission,
+  databaseUserId,
+}) => {
+  if (!submission?.submission_id) {
+    return { success: false, error: 'A valid donation submission is required before generating a QR.' };
+  }
+
+  const currentQr = getIndependentDonationQrState({ submission });
+  if (currentQr?.is_valid && currentQr.reference) {
+    const syncedResult = await syncIndependentDonationSubmission({
+      userId,
+      databaseUserId,
+      submission,
+      qrMetadata: parseQrMetadata(submission?.donor_notes || ''),
+      status: currentQr.is_activated ? 'QR Activated' : 'QR Pending Activation',
+      logisticsStatus: currentQr.is_activated ? 'QR Activated' : 'QR Pending Activation',
+      logisticsNotes: currentQr.is_activated
+        ? 'Independent donation QR is activated and ready for the next shipment step.'
+        : 'Independent donation QR is saved and waiting for staff activation.',
+      shouldTrack: false,
+      shouldNotify: false,
+    });
+
+    if (!syncedResult.success) {
+      return {
+        success: false,
+        error: syncedResult.error,
+      };
+    }
+
+    return {
+      success: true,
+      qrState: currentQr,
+      submission: syncedResult.submission || submission,
+      reused: true,
+    };
+  }
+
+  const currentMetadata = getIndependentQrMetadata(submission);
+  const generatedAt = new Date().toISOString();
+  const nextMetadata = buildIndependentQrMetadata({
+    reference: createDonationQrReference('IND'),
+    status: 'pending',
+    generatedAt,
+    version: Number(currentMetadata?.version || 0) + 1,
+    updatedBy: databaseUserId || null,
+  });
+
+  const syncedResult = await syncIndependentDonationSubmission({
+    userId,
+    databaseUserId,
+    submission,
+    qrMetadata: nextMetadata,
+    status: 'QR Pending Activation',
+    logisticsStatus: 'QR Pending Activation',
+    logisticsNotes: 'Independent donation QR is ready and waiting for staff activation.',
+    trackingTitle: 'Independent donation QR ready',
+    trackingDescription: 'A parcel QR was generated for the independent donation flow and saved to the donor submission record.',
+    shouldTrack: true,
+    shouldNotify: true,
+  });
+
+  if (!syncedResult.success) {
+    return {
+      success: false,
+      error: syncedResult.error || 'The QR could not be generated right now.',
+    };
+  }
+
+  return {
+    success: true,
+    qrState: getIndependentDonationQrState({ submission: syncedResult.submission }),
+    submission: syncedResult.submission,
+    reused: false,
+  };
+};
+
+export const expireIndependentDonationQr = async ({
+  userId = null,
+  submission,
+  databaseUserId = null,
+}) => {
+  if (!submission?.submission_id) {
+    return { success: false, error: 'A valid donation submission is required before expiring the QR.' };
+  }
+
+  const currentMetadata = getIndependentQrMetadata(submission);
+  if (!currentMetadata?.reference || currentMetadata.is_activated || currentMetadata.is_expired) {
+    return {
+      success: true,
+      qrState: getIndependentDonationQrState({ submission }),
+      submission,
+      alreadyExpired: true,
+    };
+  }
+
+  const nextMetadata = buildIndependentQrMetadata({
+    reference: currentMetadata.reference,
+    status: 'expired',
+    generatedAt: currentMetadata.generated_at,
+    activatedAt: currentMetadata.activated_at,
+    version: currentMetadata.version ?? 1,
+  });
+
+  const syncedResult = await syncIndependentDonationSubmission({
+    userId,
+    databaseUserId,
+    submission,
+    qrMetadata: nextMetadata,
+    status: 'QR Expired',
+    logisticsStatus: 'QR Expired',
+    logisticsNotes: 'The independent donation QR expired before staff activation.',
+    trackingTitle: 'Independent donation QR expired',
+    trackingDescription: 'The independent donation QR expired before staff activated it.',
+    shouldTrack: true,
+    shouldNotify: true,
+  });
+
+  if (!syncedResult.success) {
+    return {
+      success: false,
+      error: syncedResult.error || 'The QR could not be marked as expired right now.',
+    };
+  }
+
+  return {
+    success: true,
+    qrState: getIndependentDonationQrState({ submission: syncedResult.submission }),
+    submission: syncedResult.submission,
+    alreadyExpired: false,
+  };
+};
+
+export const activateIndependentDonationQr = async ({
+  userId = null,
+  submission,
+  databaseUserId,
+}) => {
+  if (!submission?.submission_id) {
+    return { success: false, error: 'A valid donation submission is required before activation.' };
+  }
+
+  const currentMetadata = getIndependentQrMetadata(submission);
+  if (!currentMetadata?.reference) {
+    return { success: false, error: 'A valid QR is required before activation.' };
+  }
+
+  if (currentMetadata.is_activated) {
+    return {
+      success: true,
+      qrState: getIndependentDonationQrState({ submission }),
+      submission,
+      alreadyActivated: true,
+    };
+  }
+
+  const activatedAt = new Date().toISOString();
+  const nextMetadata = buildIndependentQrMetadata({
+    reference: currentMetadata.reference,
+    status: 'activated',
+    generatedAt: currentMetadata.generated_at,
+    activatedAt,
+    version: currentMetadata.version ?? 1,
+    updatedBy: databaseUserId || null,
+  });
+
+  const syncedResult = await syncIndependentDonationSubmission({
+    userId,
+    databaseUserId,
+    submission,
+    qrMetadata: nextMetadata,
+    status: 'QR Activated',
+    logisticsStatus: 'QR Activated',
+    logisticsNotes: 'The independent donation QR was scanned and activated by staff.',
+    trackingTitle: 'Independent donation QR activated',
+    trackingDescription: 'Staff activation was recorded for the independent donation QR.',
+    shouldTrack: true,
+    shouldNotify: true,
+  });
+
+  if (!syncedResult.success) {
+    return {
+      success: false,
+      error: syncedResult.error || 'The QR could not be activated right now.',
+    };
+  }
+
+  return {
+    success: true,
+    qrState: getIndependentDonationQrState({ submission: syncedResult.submission }),
+    submission: syncedResult.submission,
+    alreadyActivated: false,
+  };
 };
 
 export const saveManualDonationQualification = async ({
@@ -833,10 +1632,13 @@ export const saveManualDonationQualification = async ({
     bundle_number: 1,
     declared_length: evaluation.normalized_length_inches,
     declared_color: manualDetails?.hair_color || null,
+    declared_texture: null,
     declared_density: manualDetails?.density || null,
     declared_condition: evaluation.isQualified ? 'Qualified for donor donation flow' : 'Needs improvement before donation',
     is_chemically_treated: normalizeYesNoChoice(manualDetails?.treated),
     is_colored: normalizeYesNoChoice(manualDetails?.colored),
+    is_bleached: false,
+    is_rebonded: false,
     detail_notes: submissionNotes,
     status: evaluation.isQualified ? 'Qualified' : 'Needs improvement',
   });
@@ -892,12 +1694,145 @@ export const saveManualDonationQualification = async ({
     };
   }
 
+  await persistDonationNotifications({
+    userId,
+    notifications: buildImmediateNotificationEvents({
+      role: 'donor',
+      payload: {
+        submission: submissionResult.data,
+      },
+    }),
+  });
+
   return {
     success: true,
     canProceed: evaluation.isQualified,
     qualification: evaluation,
     submission: submissionResult.data,
     detail: detailResult.data,
+  };
+};
+
+export const saveDriveDonationParticipation = async ({
+  userId,
+  databaseUserId,
+  drive,
+  submission,
+  detail,
+  qualificationSource = '',
+}) => {
+  if (!userId || !databaseUserId) {
+    return {
+      success: false,
+      error: 'Your donor account is required before joining a donation drive.',
+      registration: null,
+      submission: null,
+    };
+  }
+
+  if (!drive?.donation_drive_id || !submission?.submission_id || !detail?.submission_detail_id) {
+    return {
+      success: false,
+      error: 'A saved donation entry is required before joining a donation drive.',
+      registration: null,
+      submission: null,
+    };
+  }
+
+  const rsvpResult = await createDonationDriveRsvp({
+    driveId: drive.donation_drive_id,
+    databaseUserId,
+    organizationId: drive.organization_id || null,
+  });
+
+  if (rsvpResult.error || !rsvpResult.data?.registration_id) {
+    return {
+      success: false,
+      error: rsvpResult.error?.message || 'RSVP could not be saved right now.',
+      registration: null,
+      submission: null,
+    };
+  }
+
+  const nextSubmissionNotes = mergeDonationNotes(
+    submission?.donor_notes || '',
+    [
+      'Donation path: drive donation.',
+      qualificationSource ? `Qualification source: ${qualificationSource}.` : '',
+      drive?.event_title ? `Drive RSVP saved for ${drive.event_title}.` : 'Drive RSVP saved.',
+    ],
+    parseQrMetadata(submission?.donor_notes || ''),
+  );
+
+  const submissionResult = await updateHairSubmissionById(submission.submission_id, {
+    donation_drive_id: drive.donation_drive_id,
+    organization_id: drive.organization_id || null,
+    delivery_method: drive.donation_setup_type || 'donation_drive',
+    pickup_request: false,
+    donation_source: DRIVE_DONATION_SOURCE,
+    donor_notes: nextSubmissionNotes,
+    status: rsvpResult.data?.qr?.is_activated ? 'Drive RSVP Activated' : 'Drive RSVP Pending',
+  });
+
+  if (submissionResult.error || !submissionResult.data?.submission_id) {
+    return {
+      success: false,
+      error: submissionResult.error?.message || 'Drive participation could not be linked to the donation submission.',
+      registration: null,
+      submission: null,
+    };
+  }
+
+  const shouldTrackDriveParticipation = (
+    !rsvpResult.alreadyRegistered
+    || rsvpResult.regenerated
+    || submission?.donation_drive_id !== drive.donation_drive_id
+    || String(submission?.donation_source || '').trim().toLowerCase() !== DRIVE_DONATION_SOURCE
+  );
+
+  if (shouldTrackDriveParticipation) {
+    const trackingResult = await createHairBundleTrackingEntry({
+      submission_id: submissionResult.data.submission_id,
+      submission_detail_id: detail.submission_detail_id,
+      status: rsvpResult.data?.qr?.is_activated ? 'Drive RSVP Activated' : 'Drive RSVP Pending',
+      title: rsvpResult.regenerated ? 'Drive QR regenerated' : 'Drive RSVP saved',
+      description: rsvpResult.regenerated
+        ? `A new drive QR was generated for ${drive?.event_title || 'the selected drive'}.`
+        : `The donor joined ${drive?.event_title || 'the selected drive'} and the RSVP is now saved.`,
+      changed_by: databaseUserId,
+    });
+
+    if (trackingResult.error) {
+      return {
+        success: false,
+        error: trackingResult.error.message || 'Unable to save the drive participation timeline update.',
+        registration: null,
+        submission: null,
+      };
+    }
+
+    await persistDonationNotifications({
+      userId,
+      notifications: [
+        buildDonationNotification({
+          dedupeKey: `${notificationTypes.logisticsUpdated}:${submissionResult.data.submission_id}:drive-rsvp:${rsvpResult.data.registration_id}`,
+          title: rsvpResult.regenerated ? 'Drive QR regenerated' : 'Drive RSVP saved',
+          message: rsvpResult.regenerated
+            ? `A new QR is ready for ${drive?.event_title || 'your donation drive'}.`
+            : `Your RSVP for ${drive?.event_title || 'the donation drive'} was saved successfully.`,
+          createdAt: new Date().toISOString(),
+          referenceId: submissionResult.data.submission_id,
+        }),
+      ],
+    });
+  }
+
+  return {
+    success: true,
+    registration: rsvpResult.data,
+    submission: submissionResult.data,
+    alreadyRegistered: rsvpResult.alreadyRegistered,
+    regenerated: rsvpResult.regenerated,
   };
 };
 

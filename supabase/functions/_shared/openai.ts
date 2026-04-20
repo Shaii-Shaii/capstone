@@ -13,6 +13,16 @@ type StructuredResponseOptions = {
   instructions?: string;
   maxOutputTokens?: number;
   model?: string;
+  includeDiagnostics?: boolean;
+};
+
+type OpenAiDiagnostics = {
+  provider: 'openai';
+  provider_request_attempted: boolean;
+  provider_response_status: number | null;
+  provider_parse_success: boolean;
+  provider_model: string;
+  provider_error_type?: string;
 };
 
 type ImageEditReference = {
@@ -76,7 +86,16 @@ export const createStructuredResponse = async ({
   instructions,
   maxOutputTokens = 1200,
   model = getDefaultOpenAiModel(),
+  includeDiagnostics = false,
 }: StructuredResponseOptions) => {
+  const diagnostics: OpenAiDiagnostics = {
+    provider: 'openai',
+    provider_request_attempted: false,
+    provider_response_status: null,
+    provider_parse_success: false,
+    provider_model: model,
+  };
+
   console.info('[openai] preparing structured response request', {
     schemaName,
     model,
@@ -113,6 +132,12 @@ export const createStructuredResponse = async ({
     },
   };
 
+  diagnostics.provider_request_attempted = true;
+  console.info('[openai] request started', {
+    schemaName,
+    model,
+  });
+
   const response = await fetch(OPENAI_RESPONSES_URL, {
     method: 'POST',
     headers: {
@@ -123,6 +148,7 @@ export const createStructuredResponse = async ({
   });
 
   const payload = await response.json().catch(() => ({}));
+  diagnostics.provider_response_status = response.status;
 
   console.info('[openai] response received', {
     schemaName,
@@ -132,18 +158,33 @@ export const createStructuredResponse = async ({
   });
 
   if (!response.ok) {
-    throw new Error(extractErrorMessage(payload));
+    const errorMessage = extractErrorMessage(payload);
+    diagnostics.provider_error_type = response.status === 429 ? 'rate_limited' : 'provider_error';
+    const error = new Error(errorMessage) as Error & { diagnostics?: OpenAiDiagnostics };
+    error.diagnostics = diagnostics;
+    throw error;
   }
 
   const outputText = extractOutputText(payload);
   if (!outputText) {
-    throw new Error('OpenAI returned an empty response.');
+    const error = new Error('OpenAI returned an empty response.') as Error & { diagnostics?: OpenAiDiagnostics };
+    error.diagnostics = diagnostics;
+    throw error;
   }
 
   try {
-    return JSON.parse(outputText);
+    const parsed = JSON.parse(outputText);
+    diagnostics.provider_parse_success = true;
+    console.info('[openai] parsed structured response', {
+      schemaName,
+      model,
+      topLevelKeys: parsed && typeof parsed === 'object' ? Object.keys(parsed) : [],
+    });
+    return includeDiagnostics ? { parsed, diagnostics } : parsed;
   } catch {
-    throw new Error('OpenAI returned invalid JSON.');
+    const error = new Error('OpenAI returned invalid JSON.') as Error & { diagnostics?: OpenAiDiagnostics };
+    error.diagnostics = diagnostics;
+    throw error;
   }
 };
 

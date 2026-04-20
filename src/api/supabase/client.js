@@ -212,6 +212,44 @@ const getFunctionErrorMessage = async (error) => {
   return '';
 };
 
+const getAuthErrorMessage = (error) => (
+  String(
+    error?.message
+    || error?.error_description
+    || error?.description
+    || ''
+  ).trim().toLowerCase()
+);
+
+const isInvalidRefreshTokenError = (error) => {
+  const normalized = getAuthErrorMessage(error);
+  return (
+    normalized.includes('invalid refresh token')
+    || normalized.includes('refresh token not found')
+    || normalized.includes('invalid grant')
+  );
+};
+
+const clearPersistedAuthSession = async () => {
+  try {
+    await supabase.auth.signOut({ scope: 'local' });
+    return;
+  } catch (_error) {
+    // Fall through to storage cleanup below.
+  }
+
+  const storage = isWeb ? webStorage : AsyncStorage;
+  if (!storage?.removeItem || !supabaseUrl) return;
+
+  try {
+    const projectRef = new URL(supabaseUrl).hostname.split('.')[0];
+    if (!projectRef) return;
+    await storage.removeItem(`sb-${projectRef}-auth-token`);
+  } catch (_error) {
+    // Ignore cleanup errors and let the app proceed unauthenticated.
+  }
+};
+
 const isInvalidJwtFunctionError = async (error) => {
   const normalized = (await getFunctionErrorMessage(error)).toLowerCase();
   return normalized.includes('invalid jwt');
@@ -219,6 +257,14 @@ const isInvalidJwtFunctionError = async (error) => {
 
 const tryRefreshAuthSession = async () => {
   const directRefreshResult = await supabase.auth.refreshSession();
+  if (isInvalidRefreshTokenError(directRefreshResult?.error)) {
+    await clearPersistedAuthSession();
+    return {
+      session: null,
+      error: directRefreshResult.error,
+    };
+  }
+
   if (directRefreshResult?.data?.session && !directRefreshResult?.error) {
     return {
       session: directRefreshResult.data.session,
@@ -238,6 +284,14 @@ const tryRefreshAuthSession = async () => {
   const { data, error } = await supabase.auth.refreshSession({
     refresh_token: currentSession.refresh_token,
   });
+
+  if (isInvalidRefreshTokenError(error)) {
+    await clearPersistedAuthSession();
+    return {
+      session: null,
+      error,
+    };
+  }
 
   return {
     session: data?.session || null,

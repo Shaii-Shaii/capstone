@@ -131,14 +131,13 @@ const estimateImagePayloadBytes = (images = []) => (
   (images || []).reduce((total, image) => total + (image?.base64 ? image.base64.length : 0), 0)
 );
 
-const parseRetryAfterSecondsFromMessage = (message = '') => {
-  const retryMatch = String(message || '').match(/retry\s+in\s+(\d+(?:\.\d+)?)s/i);
-  if (!retryMatch?.[1]) return null;
-
-  const parsedSeconds = Number(retryMatch[1]);
-  if (!Number.isFinite(parsedSeconds) || parsedSeconds <= 0) return null;
-
-  return Math.max(1, Math.ceil(parsedSeconds));
+const isGatewayFailureResponse = (message = '') => {
+  const normalized = String(message || '').toLowerCase();
+  return (
+    normalized.includes('502 bad gateway')
+    || normalized.includes('<title>502 bad gateway</title>')
+    || normalized.includes('<h1>502 bad gateway</h1>')
+  );
 };
 
 const extractErrorPayloadFromResponse = async (response) => {
@@ -419,51 +418,57 @@ export const analyzeHairPhotos = async ({
       usedStructuredAnalysisValidation: true,
     });
 
+    if (!isGeminiProviderMarker(providerMarker)) {
+      throw new Error('Hair analysis returned an unexpected AI provider response.');
+    }
+
     return {
       analysis: normalizedAnalysis,
-      provider: isGeminiProviderMarker(providerMarker) ? providerMarker : '',
+      provider: providerMarker,
       error: null,
     };
   } catch (error) {
     const resolvedMessage = await resolveFunctionErrorMessage(error);
     const technicalMessage = resolvedMessage.toLowerCase();
-    const retryAfterSeconds = Number.isFinite(Number(error?.retryAfterSeconds))
-      ? Number(error?.retryAfterSeconds)
-      : parseRetryAfterSecondsFromMessage(resolvedMessage);
+    const directRetryAfterSeconds = Number(error?.retryAfterSeconds);
+    const retryAfterSeconds = Number.isFinite(directRetryAfterSeconds) && directRetryAfterSeconds > 0
+      ? Math.max(1, Math.ceil(directRetryAfterSeconds))
+      : null;
     const errorType = String(error?.errorType || '').trim().toLowerCase();
-    const isQuotaError = isQuotaLikeError(resolvedMessage, errorType);
+    const isRateLimitError = isQuotaLikeError(resolvedMessage, errorType);
 
     if (
       !technicalMessage.includes('requested function was not found')
       && !technicalMessage.includes('not_found')
       && !technicalMessage.includes('invalid jwt')
     ) {
-      const loggedError = isQuotaError
-        ? buildStructuredAnalysisError(
-            Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
-              ? `Cannot analyze hair, please try again in ${retryAfterSeconds} seconds.`
-              : 'Cannot analyze hair right now. Please try again later.',
-            {
-              errorType: 'quota_exceeded',
-              retryAfterSeconds: Number.isFinite(retryAfterSeconds) ? retryAfterSeconds : null,
-            }
-          )
-        : error;
-
-      logAppError('hairAnalysis.analyzeHairPhotos', loggedError, {
+      const logContext = {
         imageCount: images?.length || 0,
         functionName: hairAnalysisFunctionName,
-        errorType: isQuotaError ? 'quota_exceeded' : errorType || null,
+        errorType: isRateLimitError ? 'quota_exceeded' : errorType || null,
         retryAfterSeconds: Number.isFinite(retryAfterSeconds) ? retryAfterSeconds : null,
-      });
+      };
+
+      if (isRateLimitError) {
+        logAppEvent('hairAnalysis.analyzeHairPhotos', 'Gemini request returned a retryable quota or rate-limit response.', {
+          ...logContext,
+          message: Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+            ? `Cannot analyze hair, please try again in ${retryAfterSeconds} seconds.`
+            : 'Cannot analyze hair right now. Please try again later.',
+        }, 'warn');
+      } else {
+        logAppError('hairAnalysis.analyzeHairPhotos', error, logContext);
+      }
     }
 
     const userMessage = technicalMessage.includes('at least one hair photo')
       ? 'Please upload at least one clear hair photo before running the analysis.'
-      : isQuotaError
+      : isRateLimitError
         ? Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
           ? `Cannot analyze hair, please try again in ${retryAfterSeconds} seconds.`
           : 'Cannot analyze hair right now. Please try again later.'
+      : isGatewayFailureResponse(resolvedMessage)
+        ? 'Hair analysis is temporarily unavailable on the server right now. Please try again in a moment.'
       : technicalMessage.includes('high demand')
         || technicalMessage.includes('temporarily busy')
         || technicalMessage.includes('temporarily unavailable')
@@ -508,6 +513,8 @@ export const analyzeHairPhotos = async ({
     return {
       analysis: null,
       error: userMessage,
+      errorType: isRateLimitError ? 'quota_exceeded' : errorType || null,
+      retryAfterSeconds: Number.isFinite(retryAfterSeconds) ? retryAfterSeconds : null,
     };
   }
 };

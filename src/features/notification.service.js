@@ -116,6 +116,25 @@ const resolveNotificationBackendUserId = async (userId) => {
   return result.data || null;
 };
 
+const fetchBackendNotifications = async (databaseUserId) => {
+  if (!databaseUserId) {
+    return {
+      notifications: [],
+      error: null,
+    };
+  }
+
+  const backendResult = await NotificationAPI.fetchNotificationsByUserId(databaseUserId)
+    .catch(() => ({ data: [], error: null }));
+
+  return {
+    notifications: (backendResult.data || [])
+      .map(normalizeBackendNotification)
+      .filter((notification) => notification.title || notification.message),
+    error: backendResult.error || null,
+  };
+};
+
 const mergeNotifications = ({ localNotifications, backendNotifications, derivedNotifications }) => {
   const merged = new Map();
 
@@ -301,21 +320,58 @@ const persistMissingBackendNotifications = async ({
   return result.error || null;
 };
 
-export const loadNotifications = async ({ userId, role }) => {
+export const loadNotificationSummary = async ({
+  userId,
+  role,
+  databaseUserId: preferredDatabaseUserId = null,
+}) => {
+  try {
+    const [localNotifications, databaseUserId] = await Promise.all([
+      loadLocalNotifications({ userId, role }),
+      preferredDatabaseUserId
+        ? Promise.resolve(preferredDatabaseUserId)
+        : resolveNotificationBackendUserId(userId),
+    ]);
+
+    const backendResult = await fetchBackendNotifications(databaseUserId);
+    const notifications = backendResult.notifications.length
+      ? backendResult.notifications
+      : localNotifications;
+
+    if (backendResult.notifications.length) {
+      await saveLocalNotifications({ userId, role, notifications });
+    }
+
+    return {
+      notifications,
+      unreadCount: notifications.filter((item) => !item.isRead).length,
+      error: backendResult.error?.message || null,
+      databaseUserId,
+    };
+  } catch (error) {
+    const localNotifications = await loadLocalNotifications({ userId, role });
+
+    return {
+      notifications: localNotifications,
+      unreadCount: localNotifications.filter((item) => !item.isRead).length,
+      error: error.message || 'Unable to load notifications right now.',
+      databaseUserId: preferredDatabaseUserId || null,
+    };
+  }
+};
+
+export const loadNotifications = async ({ userId, role, databaseUserId: preferredDatabaseUserId = null }) => {
   try {
     const [localNotifications, databaseUserId, derivedNotifications] = await Promise.all([
       loadLocalNotifications({ userId, role }),
-      resolveNotificationBackendUserId(userId),
+      preferredDatabaseUserId
+        ? Promise.resolve(preferredDatabaseUserId)
+        : resolveNotificationBackendUserId(userId),
       role === 'donor' ? buildDonorDerivedNotifications(userId) : buildPatientDerivedNotifications(userId),
     ]);
 
-    const backendResult = databaseUserId
-      ? await NotificationAPI.fetchNotificationsByUserId(databaseUserId).catch(() => ({ data: [], error: null }))
-      : { data: [], error: null };
-
-    const backendNotifications = (backendResult.data || [])
-      .map(normalizeBackendNotification)
-      .filter((notification) => notification.title || notification.message);
+    const backendResult = await fetchBackendNotifications(databaseUserId);
+    const backendNotifications = backendResult.notifications;
 
     const mergedNotifications = databaseUserId
       ? mergeNotifications({
@@ -357,6 +413,7 @@ export const loadNotifications = async ({ userId, role }) => {
           notifications: databaseNotifications,
           unreadCount: databaseNotifications.filter((item) => !item.isRead).length,
           error: null,
+          databaseUserId,
         };
       }
     }
@@ -365,6 +422,7 @@ export const loadNotifications = async ({ userId, role }) => {
       notifications: mergedNotifications,
       unreadCount: mergedNotifications.filter((item) => !item.isRead).length,
       error: null,
+      databaseUserId,
     };
   } catch (error) {
     const localNotifications = await loadLocalNotifications({ userId, role });
@@ -373,6 +431,7 @@ export const loadNotifications = async ({ userId, role }) => {
       notifications: localNotifications,
       unreadCount: localNotifications.filter((item) => !item.isRead).length,
       error: error.message || 'Unable to load notifications right now.',
+      databaseUserId: preferredDatabaseUserId || null,
     };
   }
 };

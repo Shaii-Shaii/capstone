@@ -1,11 +1,9 @@
 import React from 'react';
 import {
   ActivityIndicator,
-  FlatList,
   Image,
   Modal,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -26,12 +24,11 @@ import {
   fetchHairSubmissionsByUserId,
 } from '../../src/features/hairSubmission.api';
 import {
-  createDonationDriveRsvp,
   fetchDonationDrivePreview,
   fetchFeaturedOrganizations,
   fetchOrganizationPreview,
-  fetchUpcomingDonationDrives,
 } from '../../src/features/donorHome.api';
+import { getDonorDonationsModuleData } from '../../src/features/donorDonations.service';
 import { useAuthActions } from '../../src/features/auth/hooks/useAuthActions';
 import { useNotifications } from '../../src/hooks/useNotifications';
 import { useAuth } from '../../src/providers/AuthProvider';
@@ -145,6 +142,7 @@ const buildHairConditionHistory = (submissions = []) => {
 };
 
 // Maps each logged calendar date to the submission that owns the latest AI screening on that date.
+// eslint-disable-next-line no-unused-vars
 const buildSubmissionByDate = (submissions = []) => {
   const latest = new Map(); // dateKey → { submission, createdAt }
 
@@ -275,10 +273,11 @@ function DonationDrivePreviewModal({
   errorMessage,
   feedbackMessage,
   feedbackVariant,
-  isSubmittingRsvp,
   onClose,
   onShowMore,
-  onRsvp,
+  onContinue,
+  primaryActionTitle = 'Continue',
+  primaryActionDisabled = false,
 }) {
   const { resolvedTheme } = useAuth();
   const roles = resolveThemeRoles(resolvedTheme);
@@ -351,11 +350,10 @@ function DonationDrivePreviewModal({
 
               <View style={styles.previewActions}>
                 <AppButton
-                  title={drive.registration ? 'RSVP saved' : 'RSVP'}
+                  title={primaryActionTitle}
                   fullWidth={false}
-                  onPress={onRsvp}
-                  disabled={Boolean(drive.registration) || isSubmittingRsvp}
-                  loading={isSubmittingRsvp}
+                  onPress={onContinue}
+                  disabled={primaryActionDisabled}
                 />
                 <AppTextLink title="Show more" onPress={onShowMore} />
               </View>
@@ -626,12 +624,15 @@ export default function DonorHomeScreen() {
   const [isOrganizationPreviewOpen, setIsOrganizationPreviewOpen] = React.useState(false);
   const [isLoadingDrivePreview, setIsLoadingDrivePreview] = React.useState(false);
   const [isLoadingOrganizationPreview, setIsLoadingOrganizationPreview] = React.useState(false);
-  const [isSubmittingDriveRsvp, setIsSubmittingDriveRsvp] = React.useState(false);
   const [selectedDrivePreview, setSelectedDrivePreview] = React.useState(null);
   const [selectedOrganizationPreview, setSelectedOrganizationPreview] = React.useState(null);
   const [drivePreviewError, setDrivePreviewError] = React.useState('');
   const [organizationPreviewError, setOrganizationPreviewError] = React.useState('');
   const [drivePreviewFeedback, setDrivePreviewFeedback] = React.useState({ message: '', variant: 'info' });
+  const [donationFlowState, setDonationFlowState] = React.useState({
+    hasOngoingDonation: false,
+    ongoingDonationMessage: '',
+  });
   // Hair log detail modal
   const [isHairLogModalOpen, setIsHairLogModalOpen] = React.useState(false);
   const [selectedHairLogDate, setSelectedHairLogDate] = React.useState(null);
@@ -650,20 +651,28 @@ export default function DonorHomeScreen() {
     setIsLoadingHome(true);
     setHomeError('');
 
-    const [drivesResult, organizationsResult, submissionsResult] = await Promise.all([
-      fetchUpcomingDonationDrives(8),
+    const [donationModuleResult, organizationsResult, submissionsResult] = await Promise.all([
+      getDonorDonationsModuleData({
+        userId: user.id,
+        databaseUserId: profile?.user_id || null,
+        driveLimit: 8,
+      }),
       fetchFeaturedOrganizations(10),
       fetchHairSubmissionsByUserId(user.id, 12),
     ]);
 
-    setDonationDrives(drivesResult.data || []);
+    setDonationDrives(donationModuleResult.drives || []);
     setOrganizations(organizationsResult.data || []);
     setHairSubmissions(submissionsResult.data || []);
+    setDonationFlowState({
+      hasOngoingDonation: Boolean(donationModuleResult.hasOngoingDonation),
+      ongoingDonationMessage: donationModuleResult.ongoingDonationMessage || '',
+    });
 
-    const loadFailed = Boolean(drivesResult.error || organizationsResult.error || submissionsResult.error);
+    const loadFailed = Boolean(donationModuleResult.error || organizationsResult.error || submissionsResult.error);
     setHomeError(loadFailed ? 'Some donor home updates could not be loaded right now.' : '');
     setIsLoadingHome(false);
-  }, [user?.id]);
+  }, [profile?.user_id, user?.id]);
 
   React.useEffect(() => {
     loadHome();
@@ -717,48 +726,11 @@ export default function DonorHomeScreen() {
     setIsLoadingOrganizationPreview(false);
   }, []);
 
-  const handleRsvpDrive = React.useCallback(async () => {
-    if (!selectedDrivePreview?.donation_drive_id || !profile?.user_id) {
-      setDrivePreviewFeedback({
-        message: 'Your donor account is required before sending an RSVP.',
-        variant: 'info',
-      });
-      return;
-    }
-
-    setIsSubmittingDriveRsvp(true);
-    setDrivePreviewFeedback({ message: '', variant: 'info' });
-
-    const result = await createDonationDriveRsvp({
-      driveId: selectedDrivePreview.donation_drive_id,
-      databaseUserId: profile.user_id,
-      organizationId: selectedDrivePreview.organization_id || null,
-    });
-
-    setIsSubmittingDriveRsvp(false);
-
-    if (result.error) {
-      setDrivePreviewFeedback({
-        message: 'RSVP could not be saved right now. Please try again.',
-        variant: 'error',
-      });
-      return;
-    }
-
-    setSelectedDrivePreview((current) => (
-      current
-        ? {
-          ...current,
-          registration: result.data,
-          can_rsvp: false,
-        }
-        : current
-    ));
-    setDrivePreviewFeedback({
-      message: result.alreadyRegistered ? 'You already saved an RSVP for this drive.' : 'RSVP saved.',
-      variant: 'success',
-    });
-  }, [profile?.user_id, selectedDrivePreview]);
+  const handleContinueDriveFlow = React.useCallback(() => {
+    if (!selectedDrivePreview?.donation_drive_id) return;
+    setIsDrivePreviewOpen(false);
+    router.navigate(`/donor/drives/${selectedDrivePreview.donation_drive_id}`);
+  }, [router, selectedDrivePreview]);
 
   const handleShowDriveMore = React.useCallback(() => {
     if (!selectedDrivePreview?.donation_drive_id) return;
@@ -791,6 +763,28 @@ export default function DonorHomeScreen() {
 
     router.navigate('/donor/organizations');
   }, [router, selectedOrganizationPreview?.organization_id]);
+
+  const hasOngoingDonation = Boolean(donationFlowState.hasOngoingDonation);
+  const ongoingDonationMessage = donationFlowState.ongoingDonationMessage
+    || 'You already have an ongoing donation. Please complete or wait for the current donation process to finish before starting a new one.';
+  const drivePreviewMessage = drivePreviewError
+    || drivePreviewFeedback.message
+    || (
+      selectedDrivePreview?.registration?.qr?.is_valid
+        ? 'This drive already has your saved RSVP. Open the shared drive flow to view the same QR.'
+        : selectedDrivePreview?.registration?.qr?.can_regenerate
+          ? 'This QR expired before staff used it. Continue to generate a new one.'
+        : hasOngoingDonation
+          ? ongoingDonationMessage
+          : selectedDrivePreview?.organization_id && !selectedDrivePreview?.membership?.is_active
+            ? 'Join the organization first to RSVP for this drive.'
+            : ''
+    );
+  const drivePreviewVariant = drivePreviewError
+    ? 'error'
+    : (drivePreviewFeedback.message ? drivePreviewFeedback.variant : 'info');
+  const drivePreviewPrimaryTitle = selectedDrivePreview?.registration?.qr?.is_valid ? 'Show my QR' : 'Continue';
+  const drivePreviewPrimaryDisabled = !selectedDrivePreview?.registration?.qr?.is_valid && hasOngoingDonation;
 
   return (
     <DashboardLayout
@@ -912,16 +906,17 @@ export default function DonorHomeScreen() {
         drive={selectedDrivePreview}
         isLoading={isLoadingDrivePreview}
         errorMessage={drivePreviewError}
-        feedbackMessage={drivePreviewError || drivePreviewFeedback.message}
-        feedbackVariant={drivePreviewError ? 'error' : drivePreviewFeedback.variant}
-        isSubmittingRsvp={isSubmittingDriveRsvp}
+        feedbackMessage={drivePreviewMessage}
+        feedbackVariant={drivePreviewVariant}
         onClose={() => {
           setIsDrivePreviewOpen(false);
           setDrivePreviewError('');
           setDrivePreviewFeedback({ message: '', variant: 'info' });
         }}
         onShowMore={handleShowDriveMore}
-        onRsvp={handleRsvpDrive}
+        onContinue={handleContinueDriveFlow}
+        primaryActionTitle={drivePreviewPrimaryTitle}
+        primaryActionDisabled={drivePreviewPrimaryDisabled}
       />
 
       <OrganizationPreviewModal

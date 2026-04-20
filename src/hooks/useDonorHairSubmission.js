@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
@@ -14,9 +14,10 @@ const WEB_SLOT_IMAGE_QUALITY = 0.68;
 const NATIVE_SLOT_IMAGE_MAX_SIZE = 1280;
 const NATIVE_SLOT_IMAGE_QUALITY = 0.72;
 
-const createErrorState = (title, message) => ({
+const createErrorState = (title, message, extras = {}) => ({
   title,
   message,
+  ...extras,
 });
 
 const createEmptyPhotoSlots = () => Array.from({ length: MAX_PHOTO_COUNT }, () => null);
@@ -249,8 +250,22 @@ const mapImagePickerError = (message = '') => {
   return createErrorState('Unable To Use Photo', 'We could not open that photo right now. Please try again.');
 };
 
-const mapAnalysisError = (message = '') => {
+const mapAnalysisError = (message = '', extras = {}) => {
   const normalized = message.toLowerCase();
+  const directRetryAfterSeconds = Number(extras?.retryAfterSeconds);
+  const retryAfterSeconds = Number.isFinite(directRetryAfterSeconds) && directRetryAfterSeconds > 0
+    ? Math.max(1, Math.ceil(directRetryAfterSeconds))
+    : null;
+  const createRetryState = (title, fallbackMessage) => createErrorState(
+    title,
+    retryAfterSeconds
+      ? `Cannot analyze hair, please try again in ${retryAfterSeconds} seconds.`
+      : fallbackMessage,
+    {
+      retryAfterSeconds,
+      retryUntil: retryAfterSeconds ? Date.now() + (retryAfterSeconds * 1000) : null,
+    }
+  );
 
   if (normalized.includes('at least one hair photo')) {
     return createErrorState('Upload Photos First', 'Add the required hair photos before running the analysis.');
@@ -268,27 +283,20 @@ const mapAnalysisError = (message = '') => {
     return createErrorState('Analysis Was Incomplete', 'The scan did not finish properly. Please try analyzing the photos again.');
   }
 
-  if (normalized.includes('cannot analyze hair, please try again in')) {
-    return createErrorState('Please Wait', message);
-  }
-
   if (normalized.includes('cannot analyze hair right now')) {
-    return createErrorState('Analysis Busy', 'Cannot analyze hair right now. Please try again later.');
+    return createRetryState('Analysis Busy', 'Cannot analyze hair right now. Please try again later.');
   }
 
   if (
     normalized.includes('quota exceeded')
-    || normalized.includes('free tier request limit')
     || normalized.includes('retry in')
     || normalized.includes('rate limit')
+    || normalized.includes('too many requests')
+    || String(extras?.errorType || '').trim().toLowerCase() === 'quota_exceeded'
   ) {
-    const retryMatch = String(message || '').match(/retry\s+in\s+(\d+(?:\.\d+)?)s/i);
-    const retryAfterSeconds = retryMatch?.[1] ? Math.max(1, Math.ceil(Number(retryMatch[1]))) : null;
-    return createErrorState(
+    return createRetryState(
       retryAfterSeconds ? 'Please Wait' : 'Analysis Busy',
-      retryAfterSeconds
-        ? `Cannot analyze hair, please try again in ${retryAfterSeconds} seconds.`
-        : 'Cannot analyze hair right now. Please try again later.'
+      'Cannot analyze hair right now. Please try again later.'
     );
   }
 
@@ -439,6 +447,7 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
   const [isLoadingContext, setIsLoadingContext] = useState(false);
   const [error, setError] = useState(null);
   const [successMessage, setSuccessMessage] = useState('');
+  const latestAnalysisRequestRef = useRef(0);
 
   const completedPhotoCount = useMemo(
     () => photos.filter(Boolean).length,
@@ -680,9 +689,21 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
       return { success: false, error: mappedError.message };
     }
 
+    const requestId = latestAnalysisRequestRef.current + 1;
+    latestAnalysisRequestRef.current = requestId;
+
     setIsAnalyzing(true);
     setError(null);
     setSuccessMessage('');
+
+    logAppEvent('donor_hair_submission.analysis', 'Fresh donor hair analysis request started.', {
+      userId,
+      requestId,
+      photoCount: readyPhotos.length,
+      questionKeys: Object.keys(questionnaireAnswers || {}),
+      hasHistoryContext: Boolean(historyContext?.entries?.length),
+      hasCorrectedDetails: Boolean(correctedDetails),
+    });
 
     const normalizedHistoryContext = questionnaireAnswers?.questionnaireMode === 'returning_follow_up'
       ? historyContext
@@ -711,18 +732,38 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
       correctedDetails: normalizedCorrectedDetails,
     });
 
+    if (latestAnalysisRequestRef.current !== requestId) {
+      logAppEvent('donor_hair_submission.analysis', 'Stale donor hair analysis response ignored.', {
+        userId,
+        requestId,
+        latestRequestId: latestAnalysisRequestRef.current,
+      }, 'warn');
+      return { success: false, error: 'A newer hair analysis request is already in progress.' };
+    }
+
     setIsAnalyzing(false);
 
     if (result.error) {
       setAnalysis(null);
-      const mappedError = mapAnalysisError(result.error);
+      const mappedError = mapAnalysisError(result.error, {
+        errorType: result.errorType || null,
+        retryAfterSeconds: result.retryAfterSeconds ?? null,
+      });
       setError(mappedError);
+      logAppEvent('donor_hair_submission.analysis', 'Donor hair analysis request failed.', {
+        userId,
+        requestId,
+        errorTitle: mappedError.title,
+        errorMessage: mappedError.message,
+      }, 'warn');
       return { success: false, error: mappedError.message };
     }
 
     setAnalysis(result.analysis);
+    setError(null);
     logAppEvent('donor_hair_submission.analysis', 'Hair analysis ready for rendering.', {
       userId,
+      requestId,
       screeningIntent: questionnaireAnswers?.screeningIntent || null,
       analysisKeys: result.analysis ? Object.keys(result.analysis) : [],
       renderKeys: [
@@ -741,6 +782,10 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
 
     return { success: true, analysis: result.analysis };
   };
+
+  const clearAnalysisError = useCallback(() => {
+    setError(null);
+  }, []);
 
   const submitSubmission = async (confirmedValues, options = {}) => {
     setIsSaving(true);
@@ -826,5 +871,6 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
     analyzePhotos,
     submitSubmission,
     resetFlow,
+    clearAnalysisError,
   };
 };

@@ -3,12 +3,25 @@ import { supabase } from '../api/supabase/client';
 import { getProcessTracking } from '../features/processTracking.service';
 import { resolveDatabaseUserId } from '../features/profile/api/profile.api';
 
+const PROCESS_TRACKING_CACHE_TTL_MS = 30 * 1000;
+const processTrackingCache = new Map();
+const processTrackingInflightRequests = new Map();
+
+const getProcessTrackingCacheKey = ({ role, userId }) => (
+  `${role || 'unknown'}:${userId || 'anonymous'}`
+);
+
+const isProcessTrackingCacheFresh = (cacheEntry) => (
+  Boolean(cacheEntry?.fetchedAt && Date.now() - cacheEntry.fetchedAt < PROCESS_TRACKING_CACHE_TTL_MS)
+);
+
 export const useProcessTracking = ({ role, userId, databaseUserId: preferredDatabaseUserId = null }) => {
   const [tracker, setTracker] = useState(null);
   const [trackingError, setTrackingError] = useState(null);
   const [isLoadingTracking, setIsLoadingTracking] = useState(false);
   const [isRefreshingTracking, setIsRefreshingTracking] = useState(false);
-  const [databaseUserId, setDatabaseUserId] = useState(null);
+  const [databaseUserId, setDatabaseUserId] = useState(preferredDatabaseUserId || null);
+  const cacheKey = getProcessTrackingCacheKey({ role, userId });
 
   useEffect(() => {
     let isMounted = true;
@@ -37,8 +50,33 @@ export const useProcessTracking = ({ role, userId, databaseUserId: preferredData
     };
   }, [preferredDatabaseUserId, userId]);
 
-  const loadTracking = useCallback(async ({ silent = false } = {}) => {
+  const applyTrackingResult = useCallback((result) => {
+    setTracker(result?.tracker || null);
+    setTrackingError(result?.error || null);
+  }, []);
+
+  const loadTracking = useCallback(async ({ silent = false, force = false } = {}) => {
     if (!userId || !role) return { success: false, error: 'Session is not ready.' };
+
+    const cached = processTrackingCache.get(cacheKey);
+    if (!force && isProcessTrackingCacheFresh(cached)) {
+      applyTrackingResult(cached.result);
+      return {
+        success: !cached.result?.error,
+        tracker: cached.result?.tracker || null,
+        error: cached.result?.error || null,
+      };
+    }
+
+    if (!force && processTrackingInflightRequests.has(cacheKey)) {
+      const inflightResult = await processTrackingInflightRequests.get(cacheKey);
+      applyTrackingResult(inflightResult);
+      return {
+        success: !inflightResult?.error,
+        tracker: inflightResult?.tracker || null,
+        error: inflightResult?.error || null,
+      };
+    }
 
     if (silent) {
       setIsRefreshingTracking(true);
@@ -46,7 +84,26 @@ export const useProcessTracking = ({ role, userId, databaseUserId: preferredData
       setIsLoadingTracking(true);
     }
 
-    const result = await getProcessTracking({ role, userId });
+    const request = getProcessTracking({ role, userId })
+      .then((result) => {
+        const normalizedResult = {
+          tracker: result?.tracker || null,
+          error: result?.error || null,
+        };
+
+        processTrackingCache.set(cacheKey, {
+          fetchedAt: Date.now(),
+          result: normalizedResult,
+        });
+
+        return normalizedResult;
+      })
+      .finally(() => {
+        processTrackingInflightRequests.delete(cacheKey);
+      });
+
+    processTrackingInflightRequests.set(cacheKey, request);
+    const result = await request;
 
     if (silent) {
       setIsRefreshingTracking(false);
@@ -54,24 +111,29 @@ export const useProcessTracking = ({ role, userId, databaseUserId: preferredData
       setIsLoadingTracking(false);
     }
 
-    setTracker(result.tracker);
-    setTrackingError(result.error);
+    applyTrackingResult(result);
 
     return {
       success: !result.error,
       tracker: result.tracker,
       error: result.error,
     };
-  }, [role, userId]);
+  }, [applyTrackingResult, cacheKey, role, userId]);
 
   const refreshTracking = useCallback(async () => (
-    await loadTracking({ silent: true })
+    await loadTracking({ silent: true, force: true })
   ), [loadTracking]);
 
   useEffect(() => {
     if (!userId || !role) return;
-    loadTracking();
-  }, [loadTracking, role, userId]);
+    const cached = processTrackingCache.get(cacheKey);
+    if (cached?.result) {
+      applyTrackingResult(cached.result);
+    }
+    if (!isProcessTrackingCacheFresh(cached)) {
+      loadTracking({ silent: Boolean(cached?.result) });
+    }
+  }, [applyTrackingResult, cacheKey, loadTracking, role, userId]);
 
   useEffect(() => {
     if (!userId || !role) return undefined;

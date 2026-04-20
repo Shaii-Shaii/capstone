@@ -17,16 +17,8 @@ type GoogleAiDiagnostics = {
   provider_parse_success: boolean;
   provider_endpoint: string;
   provider_model: string;
-  provider_attempt_count?: number;
-  provider_retry_exhausted?: boolean;
-  provider_fallback_used?: boolean;
   provider_error_type?: string;
   retry_after_seconds?: number | null;
-};
-
-type RetryDecision = {
-  retryable: boolean;
-  reason: string;
 };
 
 const parseRetryAfterSeconds = (message: string) => {
@@ -38,6 +30,74 @@ const parseRetryAfterSeconds = (message: string) => {
   if (!Number.isFinite(parsedSeconds) || parsedSeconds <= 0) return null;
 
   return Math.max(1, Math.ceil(parsedSeconds));
+};
+
+const parseRetryAfterHeaderValue = (value: string | null) => {
+  const normalized = String(value || '').trim();
+  if (!normalized) return null;
+
+  const numericValue = Number(normalized);
+  if (Number.isFinite(numericValue) && numericValue > 0) {
+    return Math.max(1, Math.ceil(numericValue));
+  }
+
+  const parsedDateMs = Date.parse(normalized);
+  if (!Number.isFinite(parsedDateMs)) return null;
+
+  const diffSeconds = Math.ceil((parsedDateMs - Date.now()) / 1000);
+  return diffSeconds > 0 ? diffSeconds : null;
+};
+
+const extractRetryAfterSecondsFromPayload = (payload: any) => {
+  const candidates = [
+    payload?.retry_after_seconds,
+    payload?.retryAfterSeconds,
+    payload?.error?.retry_after_seconds,
+    payload?.error?.retryAfterSeconds,
+    ...(Array.isArray(payload?.error?.details) ? payload.error.details.flatMap((detail: any) => [
+      detail?.retryDelay,
+      detail?.retry_after_seconds,
+      detail?.retryAfterSeconds,
+      detail?.metadata?.retryDelay,
+      detail?.metadata?.retry_after_seconds,
+      detail?.metadata?.retryAfterSeconds,
+    ]) : []),
+  ];
+
+  for (const candidate of candidates) {
+    if (candidate == null) continue;
+
+    const rawValue = String(candidate).trim();
+    const numericValue = Number(rawValue);
+    if (Number.isFinite(numericValue) && numericValue > 0) {
+      return Math.max(1, Math.ceil(numericValue));
+    }
+
+    const durationMatch = rawValue.match(/(\d+(?:\.\d+)?)s/i);
+    if (durationMatch?.[1]) {
+      const parsedSeconds = Number(durationMatch[1]);
+      if (Number.isFinite(parsedSeconds) && parsedSeconds > 0) {
+        return Math.max(1, Math.ceil(parsedSeconds));
+      }
+    }
+  }
+
+  return null;
+};
+
+const extractRetryAfterSecondsFromResponse = async (response: Response, message = '') => {
+  const headerValue = parseRetryAfterHeaderValue(response.headers.get('retry-after'));
+  if (headerValue) return headerValue;
+
+  try {
+    const payload = await response.clone().json();
+    const payloadRetryAfter = extractRetryAfterSecondsFromPayload(payload);
+    if (payloadRetryAfter) return payloadRetryAfter;
+  } catch {
+    // Ignore payload parsing issues and fall back to message parsing.
+  }
+
+  return parseRetryAfterSeconds(message);
 };
 
 const classifyProviderErrorType = ({
@@ -80,10 +140,6 @@ const createGoogleAiError = (message: string, diagnostics: GoogleAiDiagnostics) 
   return error;
 };
 
-const sleep = async (ms: number) => {
-  await new Promise((resolve) => setTimeout(resolve, ms));
-};
-
 const extractGoogleAiError = async (response: Response) => {
   try {
     const payload = await response.clone().json();
@@ -105,48 +161,6 @@ const extractGoogleAiError = async (response: Response) => {
   }
 
   return 'Google AI request failed.';
-};
-
-const classifyRetryableProviderError = ({
-  status,
-  message,
-}: {
-  status: number | null;
-  message: string;
-}): RetryDecision => {
-  const normalizedMessage = String(message || '').toLowerCase();
-
-  if ([429, 500, 502, 503, 504].includes(Number(status))) {
-    if (
-      normalizedMessage.includes('invalid')
-      || normalizedMessage.includes('malformed')
-      || normalizedMessage.includes('unsupported')
-      || normalizedMessage.includes('schema')
-      || normalizedMessage.includes('api key')
-      || normalizedMessage.includes('permission')
-    ) {
-      return { retryable: false, reason: 'non_retryable_status_with_request_error' };
-    }
-
-    return { retryable: true, reason: 'retryable_status_code' };
-  }
-
-  if (
-    normalizedMessage.includes('high demand')
-    || normalizedMessage.includes('overloaded')
-    || normalizedMessage.includes('temporarily unavailable')
-    || normalizedMessage.includes('temporary unavailable')
-    || normalizedMessage.includes('retry later')
-    || normalizedMessage.includes('rate limit')
-    || normalizedMessage.includes('quota')
-    || normalizedMessage.includes('resource exhausted')
-    || normalizedMessage.includes('try again later')
-    || normalizedMessage.includes('service unavailable')
-  ) {
-    return { retryable: true, reason: 'retryable_message_match' };
-  }
-
-  return { retryable: false, reason: 'non_retryable_provider_error' };
 };
 
 const getResponseText = (payload: any) => {
@@ -280,53 +294,6 @@ const buildResponsePreview = (value: string) => {
     : normalized;
 };
 
-const getCandidateModels = (primaryModel: string) => {
-  const fallbackModel = String(Deno.env.get('GOOGLE_AI_FALLBACK_MODEL') || '').trim();
-  return [primaryModel, fallbackModel]
-    .filter(Boolean)
-    .filter((model, index, source) => source.indexOf(model) === index);
-};
-
-const requestStructuredContentOnce = async ({
-  apiKey,
-  endpoint,
-  contents,
-  maxOutputTokens,
-  responseJsonSchema,
-  systemInstruction,
-  temperature,
-}: {
-  apiKey: string;
-  endpoint: string;
-  contents: Array<Record<string, unknown>>;
-  maxOutputTokens: number;
-  responseJsonSchema: Record<string, unknown>;
-  systemInstruction: string;
-  temperature: number;
-}) => {
-  return await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-goog-api-key': apiKey,
-    },
-    body: JSON.stringify({
-      system_instruction: systemInstruction
-        ? {
-            parts: [{ text: systemInstruction }],
-          }
-        : undefined,
-      contents,
-      generationConfig: {
-        temperature,
-        maxOutputTokens,
-        responseMimeType: 'application/json',
-        responseJsonSchema,
-      },
-    }),
-  });
-};
-
 const repairMalformedJsonResponse = async ({
   apiKey,
   endpoint,
@@ -346,14 +313,15 @@ const repairMalformedJsonResponse = async ({
     malformedPreview: buildResponsePreview(malformedText),
   });
 
-  const repairResponse = await fetch(endpoint, {
+  const repairUrl = `${endpoint}?key=${encodeURIComponent(apiKey)}`;
+
+  const repairResponse = await fetch(repairUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-goog-api-key': apiKey,
     },
     body: JSON.stringify({
-      system_instruction: {
+      systemInstruction: {
         parts: [{
           text: [
             'You repair malformed JSON returned by another model call.',
@@ -380,7 +348,7 @@ const repairMalformedJsonResponse = async ({
         temperature: 0,
         maxOutputTokens: 2048,
         responseMimeType: 'application/json',
-        responseJsonSchema,
+        responseSchema: responseJsonSchema,
       },
     }),
   });
@@ -485,33 +453,13 @@ export const createStructuredResponse = async ({
     provider_parse_success: false,
     provider_endpoint: endpoint,
     provider_model: model,
-    provider_attempt_count: 0,
-    provider_retry_exhausted: false,
-    provider_fallback_used: false,
   };
-  const candidateModels = getCandidateModels(model);
-  const retryDelaysMs = [350, 900];
 
   console.info('[google-ai] structured response requested', {
     model,
     endpoint,
-    candidateModels,
     hasApiKey: Boolean(apiKey),
     contentCount: Array.isArray(contents) ? contents.length : 0,
-    contentPartCounts: Array.isArray(contents)
-      ? contents.map((content, index) => {
-          const parts = Array.isArray((content as { parts?: unknown[] })?.parts)
-            ? (content as { parts?: unknown[] }).parts || []
-            : [];
-          return {
-            index,
-            role: typeof (content as { role?: string })?.role === 'string' ? (content as { role?: string }).role : 'unknown',
-            totalParts: parts.length,
-            textParts: parts.filter((part) => typeof (part as { text?: unknown })?.text === 'string').length,
-            imageParts: parts.filter((part) => Boolean((part as { inline_data?: unknown })?.inline_data)).length,
-          };
-        })
-      : [],
     hasSystemInstruction: Boolean(systemInstruction),
     maxOutputTokens,
     temperature,
@@ -521,164 +469,62 @@ export const createStructuredResponse = async ({
     throw createGoogleAiError('Google AI API key is not configured in Edge Function Secrets.', diagnostics);
   }
 
-  let response: Response | null = null;
-  let activeModel = model;
-  let lastErrorMessage = '';
-  let attemptCount = 0;
-  let lastRetryableDecision: RetryDecision = { retryable: false, reason: 'not_started' };
+  const requestUrl = `${endpoint}?key=${encodeURIComponent(apiKey)}`;
 
-  modelLoop:
-  for (let modelIndex = 0; modelIndex < candidateModels.length; modelIndex += 1) {
-    activeModel = candidateModels[modelIndex];
-    diagnostics.provider_model = activeModel;
-    diagnostics.provider_endpoint = `${GOOGLE_AI_API_URL}/${activeModel}:generateContent`;
-    diagnostics.provider_fallback_used = modelIndex > 0;
+  console.info('[google-ai] request started', {
+    model,
+    endpoint,
+  });
+  diagnostics.provider_request_attempted = true;
 
-    for (let retryIndex = 0; retryIndex <= retryDelaysMs.length; retryIndex += 1) {
-      attemptCount += 1;
-      diagnostics.provider_attempt_count = attemptCount;
-      diagnostics.provider_request_attempted = true;
+  const response = await fetch(requestUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      systemInstruction: systemInstruction
+        ? {
+            parts: [{ text: systemInstruction }],
+          }
+        : undefined,
+      contents,
+      generationConfig: {
+        temperature,
+        maxOutputTokens,
+        responseMimeType: 'application/json',
+        responseSchema: responseJsonSchema,
+      },
+    }),
+  });
 
-      console.info('[google-ai] provider request attempt started', {
-        model: activeModel,
-        attempt: attemptCount,
-        retryIndex,
-        usesFallbackModel: modelIndex > 0,
-        endpoint: diagnostics.provider_endpoint,
-      });
+  console.info('[google-ai] response received', {
+    model,
+    status: response.status,
+    ok: response.ok,
+  });
+  diagnostics.provider_response_status = response.status;
 
-      try {
-        response = await requestStructuredContentOnce({
-          apiKey,
-          endpoint: diagnostics.provider_endpoint,
-          contents,
-          maxOutputTokens,
-          responseJsonSchema,
-          systemInstruction,
-          temperature,
-        });
-      } catch (networkError) {
-        lastErrorMessage = networkError instanceof Error ? networkError.message : String(networkError);
-        lastRetryableDecision = { retryable: true, reason: 'network_fetch_failure' };
-        console.warn('[google-ai] provider request network failure', {
-          model: activeModel,
-          attempt: attemptCount,
-          message: lastErrorMessage,
-        });
+  if (!response.ok) {
+    const providerErrorMessage = await extractGoogleAiError(response);
+    diagnostics.provider_error_type = classifyProviderErrorType({
+      status: response.status,
+      message: providerErrorMessage,
+    });
+    diagnostics.retry_after_seconds = await extractRetryAfterSecondsFromResponse(
+      response,
+      providerErrorMessage,
+    );
 
-        if (retryIndex < retryDelaysMs.length) {
-          const delayMs = retryDelaysMs[retryIndex];
-          console.info('[google-ai] backoff delay applied', {
-            model: activeModel,
-            attempt: attemptCount,
-            delayMs,
-            retryReason: lastRetryableDecision.reason,
-          });
-          await sleep(delayMs);
-          continue;
-        }
-
-        break;
-      }
-
-      console.info('[google-ai] response received', {
-        model: activeModel,
-        attempt: attemptCount,
-        status: response.status,
-        ok: response.ok,
-      });
-      diagnostics.provider_response_status = response.status;
-
-      if (response.ok) {
-        break modelLoop;
-      }
-
-      lastErrorMessage = await extractGoogleAiError(response);
-      lastRetryableDecision = classifyRetryableProviderError({
-        status: response.status,
-        message: lastErrorMessage,
-      });
-      diagnostics.provider_error_type = classifyProviderErrorType({
-        status: response.status,
-        message: lastErrorMessage,
-      });
-      diagnostics.retry_after_seconds = parseRetryAfterSeconds(lastErrorMessage);
-
-      console.warn('[google-ai] provider error classified', {
-        model: activeModel,
-        attempt: attemptCount,
-        status: response.status,
-        retryable: lastRetryableDecision.retryable,
-        reason: lastRetryableDecision.reason,
-        providerErrorType: diagnostics.provider_error_type,
-        retryAfterSeconds: diagnostics.retry_after_seconds,
-        messagePreview: buildResponsePreview(lastErrorMessage),
-      });
-
-      if (!lastRetryableDecision.retryable) {
-        throw createGoogleAiError(lastErrorMessage, diagnostics);
-      }
-
-      if (retryIndex < retryDelaysMs.length) {
-        const delayMs = retryDelaysMs[retryIndex];
-        console.info('[google-ai] retryable provider error detected', {
-          model: activeModel,
-          attempt: attemptCount,
-          delayMs,
-          reason: lastRetryableDecision.reason,
-        });
-        console.info('[google-ai] backoff delay applied', {
-          model: activeModel,
-          attempt: attemptCount,
-          delayMs,
-          retryReason: lastRetryableDecision.reason,
-        });
-        await sleep(delayMs);
-        continue;
-      }
-
-      console.warn('[google-ai] retries exhausted for model', {
-        model: activeModel,
-        attempt: attemptCount,
-        reason: lastRetryableDecision.reason,
-      });
-      break;
-    }
-
-    if (modelIndex < candidateModels.length - 1 && lastRetryableDecision.retryable) {
-      console.info('[google-ai] fallback model selected after retry exhaustion', {
-        previousModel: activeModel,
-        fallbackModel: candidateModels[modelIndex + 1],
-        attemptsSoFar: attemptCount,
-      });
-      continue;
-    }
-
-    break;
-  }
-
-  if (!response || !response.ok) {
-    diagnostics.provider_retry_exhausted = Boolean(lastRetryableDecision.retryable);
-    diagnostics.provider_error_type = diagnostics.provider_error_type
-      || classifyProviderErrorType({
-        status: diagnostics.provider_response_status,
-        message: lastErrorMessage,
-      });
-    diagnostics.retry_after_seconds = diagnostics.retry_after_seconds ?? parseRetryAfterSeconds(lastErrorMessage);
-    const finalMessage = diagnostics.provider_retry_exhausted
-      ? 'Google AI is temporarily busy right now. Please try again later.'
-      : (lastErrorMessage || 'Google AI request failed.');
-    console.error('[google-ai] provider request failed after retries', {
-      model: activeModel,
-      attemptCount,
-      retryExhausted: diagnostics.provider_retry_exhausted,
-      lastRetryReason: lastRetryableDecision.reason,
+    console.warn('[google-ai] provider error classified', {
+      model,
+      status: response.status,
       providerErrorType: diagnostics.provider_error_type,
       retryAfterSeconds: diagnostics.retry_after_seconds,
-      fallbackUsed: diagnostics.provider_fallback_used,
-      messagePreview: buildResponsePreview(finalMessage),
+      messagePreview: buildResponsePreview(providerErrorMessage),
     });
-    throw createGoogleAiError(finalMessage, diagnostics);
+
+    throw createGoogleAiError(providerErrorMessage, diagnostics);
   }
 
   const payload = await response.json();
@@ -748,7 +594,7 @@ export const createStructuredResponse = async ({
     }
 
     console.error('[google-ai] invalid json response', {
-      model: activeModel,
+      model,
       error: error instanceof Error ? error.message : String(error),
       responsePreview: buildResponsePreview(responseText),
       extractedPreview: buildResponsePreview(jsonCandidate),

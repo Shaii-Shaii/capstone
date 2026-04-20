@@ -3,11 +3,9 @@ import { createStructuredResponse } from '../_shared/google-ai.ts';
 
 const analysisSchema = {
   type: 'object',
-  additionalProperties: false,
   properties: {
     analysis: {
       type: 'object',
-      additionalProperties: false,
       properties: {
         is_hair_detected: {
           type: 'boolean',
@@ -25,7 +23,6 @@ const analysisSchema = {
           type: 'array',
           items: {
             type: 'object',
-            additionalProperties: false,
             properties: {
               view: {
                 type: 'string',
@@ -41,7 +38,8 @@ const analysisSchema = {
           },
         },
         estimated_length: {
-          type: ['number', 'null'],
+          type: 'number',
+          nullable: true,
         },
         detected_texture: {
           type: 'string',
@@ -56,15 +54,13 @@ const analysisSchema = {
           type: 'string',
         },
         confidence_score: {
-          type: ['number', 'null'],
+          type: 'number',
+          nullable: true,
         },
         decision: {
           type: 'string',
         },
         summary: {
-          type: 'string',
-        },
-        length_assessment: {
           type: 'string',
         },
         donation_readiness_note: {
@@ -77,7 +73,6 @@ const analysisSchema = {
           type: 'array',
           items: {
             type: 'object',
-            additionalProperties: false,
             properties: {
               title: {
                 type: 'string',
@@ -106,7 +101,6 @@ const analysisSchema = {
         'confidence_score',
         'decision',
         'summary',
-        'length_assessment',
         'donation_readiness_note',
         'history_assessment',
         'recommendations',
@@ -149,37 +143,18 @@ type SubmissionContext = {
   declared_condition?: string;
 };
 
-type CorrectedDetailsContext = {
-  length_value?: number | null;
-  length_unit?: string;
-  normalized_length_cm?: number | null;
-  texture?: string;
-  density?: string;
-};
-
 type HistoryContextEntry = {
   created_at?: string;
   detected_condition?: string;
   decision?: string;
   summary?: string;
   estimated_length?: number | null;
-  recommendations?: {
-    title?: string;
-    recommendation_text?: string;
-    priority_order?: number | null;
-  }[];
 };
 
 type HistoryContext = {
   total_checks?: number | null;
   latest_condition?: string;
   latest_check_at?: string;
-  latest_result?: HistoryContextEntry | null;
-  latest_recommendations?: {
-    title?: string;
-    recommendation_text?: string;
-    priority_order?: number | null;
-  }[];
   entries?: HistoryContextEntry[];
 };
 
@@ -200,6 +175,124 @@ const canonicalViewAliases: Record<string, string> = {
   hair_ends_close_up: 'Hair Ends Close-Up',
 };
 
+const instructions = [
+  // Role and output format
+  'You are a hair-condition analyst reviewing donor hair photos for a hair donation mobile app.',
+  'Your primary job is to carefully examine each uploaded photo, describe EXACTLY what you observe, then provide tailored recommendations based on those specific observations.',
+  'Return valid JSON only — no markdown, no commentary outside the JSON structure.',
+
+  // Image-first analysis mandate — STRENGTHENED
+  'CRITICAL RULE 1: The uploaded photos are the PRIMARY and MOST IMPORTANT source of truth. Questionnaire answers are ONLY supporting context.',
+  'CRITICAL RULE 2: You MUST describe what you ACTUALLY SEE in the photos. Do not rely on questionnaire answers alone.',
+  'CRITICAL RULE 3: Every recommendation MUST be based on VISIBLE observations from the photos, not generic hair care advice.',
+  '',
+  'OBSERVATION CHECKLIST — examine each photo for:',
+  '1. SCALP: Is the scalp visible? Is it oily (shiny, greasy appearance)? Dry (flaky, tight)? Clean? Any visible flaking or buildup?',
+  '2. ROOTS: Are the roots oily or dry? Any product buildup visible?',
+  '3. HAIR SHAFT: Does the hair look shiny and lustrous, or dull and matte? Any visible frizz along the shaft? Signs of chemical processing (uneven color, texture changes)?',
+  '4. TEXTURE: Straight, wavy, curly, coily, or mixed? Is the texture consistent or uneven?',
+  '5. DENSITY: How thick does the hair appear? Light, medium, thick, or dense coverage?',
+  '6. ENDS: Are the ends split, frayed, or damaged? Do they look dry and rough, or healthy and sealed?',
+  '7. OVERALL HEALTH: Does the hair look healthy and well-maintained, or does it show signs of damage, dryness, or neglect?',
+  '8. SPECIFIC DAMAGE SIGNS: Breakage, thinning, brittleness, excessive frizz, uneven texture, color damage?',
+  '',
+  'Your detected_condition, visible_damage_notes, summary, and recommendations MUST directly reflect these observations.',
+  'If the questionnaire says "dry hair" but the photos show shiny, healthy hair, trust the photos and note the discrepancy.',
+  'If the photos show visible split ends and dryness but the questionnaire says "no problems", trust the photos.',
+
+  // Hair detection and validity
+  'First confirm whether the images clearly show human hair intended for screening.',
+  'If the images do not clearly show hair, set is_hair_detected to false, explain briefly in invalid_image_reason, and set decision to "Retake Photos".',
+  'Only use "Retake Photos" decision when image quality genuinely prevents analysis.',
+
+  // Per-view notes — STRENGTHENED
+  'For each provided photo view, write a detailed per_view_notes entry describing WHAT YOU SEE:',
+  '- Front View: scalp condition, root oiliness/dryness, overall hair appearance, texture, density',
+  '- Side Profile: hair length visibility, shaft condition, shine or dullness, texture consistency',
+  '- Hair Ends Close-Up: ends condition (split/healthy), dryness, damage, fraying',
+  'Use missing_views only when a required view is genuinely absent or completely unusable.',
+
+  // Length estimation
+  'Estimate hair length in centimeters as a numeric value when the full hair fall from root to ends is visible. Use the Front View Photo and Side Profile Photo together. Return null only if both root and ends are blocked or cropped.',
+
+  // Detected fields — OBSERVATION-BASED
+  'detected_texture: use Straight, Wavy, Curly, Coily, or Mixed — based ONLY on what you see in the photos.',
+  'detected_density: use Light, Medium, Thick, or Dense — based ONLY on what you see in the photos.',
+  'detected_condition: use one precise label based on the MOST PROMINENT VISIBLE condition you observe:',
+  '  - Healthy: shiny, lustrous, no visible damage, sealed ends, good scalp condition',
+  '  - Dry: dull appearance, rough texture, lack of shine, dry-looking ends',
+  '  - Frizzy: visible frizz along shaft, flyaways, uneven texture',
+  '  - Damaged: visible breakage, split ends, frayed ends, brittle appearance',
+  '  - Oily: shiny/greasy scalp, oily roots, limp appearance near scalp',
+  '  - Chemically Treated: uneven color, texture changes, processing signs',
+  '  - Dry and Frizzy: combination of dullness and frizz',
+  '  - Dry and Damaged: combination of dryness and visible damage',
+  'Do NOT default to "Needs Better Photos" unless the image quality truly prevents observation.',
+  'confidence_score: decimal 0–1 reflecting how clearly the photos allowed detailed observation.',
+
+  // visible_damage_notes — OBSERVATION-BASED
+  'visible_damage_notes: describe EXACTLY what you observe in the photos:',
+  '- If you see split ends, say "visible split ends observed in close-up view"',
+  '- If you see oily scalp, say "scalp appears oily with visible shine at roots"',
+  '- If you see dryness, say "hair shaft appears dull with lack of natural shine"',
+  '- If you see healthy hair, say "hair appears healthy with good shine and sealed ends"',
+  'Be specific and factual. This field should read like observation notes, not generic statements.',
+
+  // Summary — OBSERVATION-BASED
+  'summary: write 2–3 sentences that:',
+  '1. Start with what you OBSERVE in the photos (e.g., "The uploaded photos show hair with visible shine and healthy-looking ends...")',
+  '2. Mention specific visible characteristics (texture, scalp condition, ends condition, shine/dullness)',
+  '3. Connect observations to the detected condition',
+  '4. End with "Final screening requires manual review."',
+  'Example: "The uploaded photos show wavy hair with medium density and visible shine along the shaft. The ends appear mostly healthy with minimal splitting. The scalp looks clean without visible oiliness or flaking. This check suggests the hair is in good condition. Final screening requires manual review."',
+
+  // Recommendations — MOST CRITICAL SECTION
+  'recommendations: provide exactly 3 recommendations that are DIRECTLY TIED to your observations.',
+  '',
+  'CRITICAL: Each recommendation MUST be SPECIFIC to what you OBSERVED in the photos.',
+  'DO NOT give generic hair care advice. DO NOT repeat the same recommendations for different hair conditions.',
+  '',
+  'RECOMMENDATION GENERATION RULES:',
+  '1. If you observed OILY SCALP → recommend scalp-control shampoo, washing technique, avoiding heavy products on scalp',
+  '2. If you observed DRY HAIR/DULL APPEARANCE → recommend deep conditioning, moisturizing products, reducing wash frequency',
+  '3. If you observed SPLIT/DAMAGED ENDS → recommend trimming ends, protein treatments, reducing heat',
+  '4. If you observed FRIZZ → recommend anti-frizz products, microfiber towel, humidity protection',
+  '5. If you observed HEALTHY HAIR → recommend maintenance routine, protective measures, monthly treatments',
+  '6. If you observed CHEMICAL DAMAGE → recommend color-safe products, protein-moisture balance, recovery treatments',
+  '7. If you observed SCALP FLAKING → recommend anti-dandruff products, scalp exfoliation, gentle cleansing',
+  '',
+  'Each recommendation must have:',
+  '- title: short, specific label (e.g., "Address Visible Split Ends" not "Hair Care")',
+  '- recommendation_text: 2–3 actionable sentences explaining WHAT to do and WHY based on what you observed',
+  '- priority_order: 1 = most urgent based on severity of observed issue',
+  '',
+  'BAD EXAMPLE (generic): "Use a good conditioner to keep your hair healthy."',
+  'GOOD EXAMPLE (observation-based): "The close-up view shows visible split ends and fraying. Trim 1-2 cm of the ends to remove damaged portions and prevent further splitting up the hair shaft."',
+
+  // Decision
+  'decision: set to one of: Eligible, Needs Review, Not Yet Eligible, or Retake Photos.',
+  'Base this on: (1) visible evidence from photos, (2) donation requirement context if provided, (3) observed hair condition.',
+  'Use "Retake Photos" ONLY when image quality prevents observation, not as a default.',
+
+  // donation_readiness_note
+  'donation_readiness_note: include only when the observed hair length and condition suggest donation readiness.',
+  'Base this on what you observe in the photos, not just the questionnaire.',
+  'If the hair looks too short, damaged, or not ready, explain why based on observations.',
+
+  // history_assessment — STRENGTHENED
+  'history_assessment: if 2 or more prior hair-check entries are provided:',
+  '- Compare the current observed condition to the most recent prior condition',
+  '- State whether the hair appears to be improving, similar, or declining',
+  '- Be specific: "Compared to the last check, the hair now shows less visible dryness and improved shine."',
+  '- If less than 2 prior entries, return an empty string.',
+
+  // Safety and accuracy
+  'Use safe wording: "this check suggests", "based on the visible photos", "the photos show", "observed in the images".',
+  'Do not diagnose medical conditions. Do not invent characteristics not visible in the images.',
+  'If a field cannot be determined from the photos, return an empty string or null.',
+  'This is AI-assisted screening guidance only, not medical advice.',
+].join('\n');
+
 const analysisInstructions = [
   'You are an AI hair analysis assistant for Donivra.',
   'Return valid JSON only.',
@@ -207,42 +300,28 @@ const analysisInstructions = [
   'Do not use markdown.',
   'Do not wrap the JSON in code fences.',
   'Do not add explanatory text before or after the JSON.',
-  'The uploaded hair photos are the primary source of truth. Questionnaire answers are supporting context only.',
-  'Analyze the actual uploaded hair photos carefully and let visible evidence drive the result.',
-  'The current uploaded photos must determine the current detected_condition, estimated_length, length_assessment, decision, summary, and recommendations.',
-  'If corrected_details are provided, treat the corrected hair length, texture, and density as user-confirmed override inputs for this reassessment.',
-  'When corrected_details are provided, use them in the final reassessment while still relying on the uploaded photos for the visible condition, damage notes, summary, donation suitability reasoning, and recommendations.',
-  'Do not reuse, copy, or paraphrase wording from previous logs as the current result.',
-  'If prior history is provided, use it only for comparison and follow-up context. It must not replace what is visible in the current uploaded photos.',
+  'Use the uploaded or captured hair photos as a major basis for the result. Use the questionnaire only as supporting context, not the main basis.',
   'Analyze visible hair condition, visible hair assessment, visible hair length estimate, donation suitability, and improvement recommendations.',
   'Be practical, honest, and evidence-based. Do not invent certainty when the image evidence is weak.',
   'Analyze visible clues such as dryness, oiliness, flakes if visible, frizz, roughness, split or damaged ends, shine or dullness, density appearance, texture appearance, scalp visibility, and overall healthy or unhealthy appearance.',
   'Do not give generic repeated recommendations unless the visible evidence truly supports them.',
   'Do not let the final result mainly focus on retaking photos, improving lighting, or capture quality. Mention those only briefly when they materially limit confidence.',
-  'You must differentiate different-looking photo sets. If the uploaded images look different, preserve those differences in the condition, summary, length assessment, and recommendations.',
   'Use per_view_notes for factual view-specific observations that describe what is actually visible.',
   'Use visible_damage_notes for a concise note about visible damage, or state that no obvious visible damage is seen when appropriate.',
   'Use detected_condition for the main visible condition. Prefer labels like Healthy, Dry, Oily, Damaged, Mixed Concerns, Frizzy, Dry and Damaged, Dry and Frizzy, or Chemically Treated.',
-  'Estimate visible hair length only. Visible hair length means the visible length from the scalp or root area down to the lowest clearly visible hair tip.',
-  'Use the front and side views together to judge visible length from root to hair end. Look at whether the hair falls above the shoulder, at shoulder level, below the shoulder, near the chest, or lower.',
-  'Look for where the hair visibly starts near the head or scalp and where it visibly ends. Note when the hair is curled, tied, cropped, blocked, or partially hidden.',
-  'Return a numeric estimated_length only when a reasonable image-based estimate is possible. Lower confidence honestly if the visible root-to-tip span is unclear.',
-  'length_assessment must explain the visual basis for the length estimate using the uploaded views, including whether the ends are fully visible and whether the hair appears likely to meet the 14-inch donation threshold.',
+  'Estimate visible hair length only. Visible hair length means the visible length from the scalp or head area to the lowest clearly visible hair tip.',
+  'Do not invent fake precision when the hair is curled, tied, blocked, cropped, blurry, or lacks reliable scale. Return null when a numeric estimate is not reasonably supported.',
   `Donation suitability must respect the 14-inch rule. Fourteen inches is ${MIN_DONATION_LENGTH_CM} cm.`,
   `Set decision to exactly one of: "${ELIGIBLE_STATUS}" or "${IMPROVE_STATUS}".`,
-  `Use "${ELIGIBLE_STATUS}" only when the visible hair length appears at least ${MIN_DONATION_LENGTH_CM} cm from root to tip, the visible condition appears suitable for donation, and the evidence is clear enough for that judgment.`,
-  `Use "${IMPROVE_STATUS}" when the visible root-to-tip length appears below ${MIN_DONATION_LENGTH_CM} cm, the visible condition is not suitable, or the evidence is too limited for confident eligibility.`,
+  `Use "${ELIGIBLE_STATUS}" only when the visible hair length appears at least ${MIN_DONATION_LENGTH_CM} cm, the visible condition appears suitable for donation, and the evidence is clear enough for that judgment.`,
+  `Use "${IMPROVE_STATUS}" when the visible length appears below ${MIN_DONATION_LENGTH_CM} cm, the visible condition is not suitable, or the evidence is too limited for confident eligibility.`,
   'If the hair looks healthy but too short for donation, still return "Improve hair condition" and tailor recommendations toward healthy growth, length retention, reduced breakage, and maintaining current hair health.',
   'Questionnaire answers should support interpretation for wash frequency, itch, flakes, oiliness, dryness, hair fall, chemical history, and heat use, but they must not replace the photo evidence.',
   'confidence_score must reflect image clarity, visibility of ends and full length, texture and scalp detail, consistency across views, and consistency with the questionnaire.',
-  'summary must be concise, human-friendly, and primarily grounded in image-based observations before mentioning supporting questionnaire context.',
+  'summary must be concise, human-friendly, and combine image-based observations, questionnaire context, and the final combined assessment.',
   'history_assessment should mention whether the current result appears better, similar, or worse than recent saved checks only when history is provided.',
-  'When questionnaire_mode is "returning_follow_up", treat the questionnaire as a progress check. Compare the current photos with the latest saved result and latest recommendations when they are provided.',
-  'For returning follow-up checks, use prior recommendations to assess whether the user appears to have followed advice, whether the hair looks improved or worse, and whether new visible issues appeared.',
-  'History is secondary context only. Never let prior logs decide the current condition when the new uploaded photos show something different.',
   'recommendations must focus on improving hair condition, maintaining healthy hair, supporting longer healthier growth if the hair is too short, and reducing visible damage.',
   'Recommendations should be specific to the observed condition, such as reducing heat exposure, improving scalp care, adjusting wash routine, improving moisture care, trimming damaged ends when appropriate, and avoiding harsh chemical processing.',
-  'Do not repeat generic recommendation wording across different results unless the visible evidence is truly the same.',
   'Do not diagnose disease. Use careful phrases such as "the photos show", "this check suggests", and "based on the visible images".',
 ].join('\n');
 
@@ -302,7 +381,7 @@ const normalizeRecommendationsV2 = (source: unknown) => {
   const rows = Array.isArray(source)
     ? source
       .map((item, index) => ({
-        title: normalizeString(item?.title),
+        title: normalizeString(item?.title) || `Recommendation ${index + 1}`,
         recommendation_text: normalizeString(item?.recommendation_text),
         priority_order: Number.isFinite(Number(item?.priority_order)) && Number(item?.priority_order) > 0
           ? Number(item?.priority_order)
@@ -314,31 +393,134 @@ const normalizeRecommendationsV2 = (source: unknown) => {
 
   return rows.slice(0, 3);
 };
+
+const buildSummaryFromAnalysisFields = ({
+  isHairDetected,
+  invalidImageReason,
+  missingViews,
+  detectedTexture,
+  detectedDensity,
+  detectedCondition,
+  visibleDamageNotes,
+  decision,
+}: {
+  isHairDetected: boolean;
+  invalidImageReason: string;
+  missingViews: string[];
+  detectedTexture: string;
+  detectedDensity: string;
+  detectedCondition: string;
+  visibleDamageNotes: string;
+  decision: string;
+}) => {
+  if (!isHairDetected) {
+    return invalidImageReason || 'The uploaded photos did not show enough visible hair for a reliable image-based result. Final screening requires manual review.';
+  }
+
+  if (missingViews.length) {
+    return `The current photos allow only a partial hair check because these required views are missing or unclear: ${missingViews.join(', ')}. Final screening requires manual review.`;
+  }
+
+  const observationParts = [
+    detectedTexture ? `${detectedTexture.toLowerCase()} hair` : 'visible hair',
+    detectedDensity ? `with ${detectedDensity.toLowerCase()} density` : '',
+    detectedCondition ? `showing a ${detectedCondition.toLowerCase()} condition` : '',
+  ].filter(Boolean);
+
+  const notesPart = visibleDamageNotes
+    ? `${visibleDamageNotes.charAt(0).toUpperCase()}${visibleDamageNotes.slice(1)}.`
+    : '';
+
+  const decisionPart = decision === ELIGIBLE_STATUS
+    ? 'This check suggests the visible condition and length may be suitable for donation.'
+    : 'This check suggests the hair still needs improvement before donation readiness.';
+
+  return `${observationParts.join(' ')}. ${notesPart} ${decisionPart} Final screening requires manual review.`
+    .replace(/\s+/g, ' ')
+    .trim();
+};
+
 const hasIncompleteCriticalAnalysisFields = (analysis: Record<string, unknown>) => {
   const summary = normalizeString(analysis?.summary);
   const detectedCondition = normalizeString(analysis?.detected_condition);
-  const lengthAssessment = normalizeString(analysis?.length_assessment);
   const recommendations = normalizeRecommendationsV2(analysis?.recommendations);
   const isHairDetected = analysis?.is_hair_detected !== false;
 
   if (!summary) return true;
   if (isHairDetected && !detectedCondition) return true;
-  if (isHairDetected && !lengthAssessment) return true;
   if (isHairDetected && !recommendations.length) return true;
   return false;
+};
+
+const repairIncompleteAnalysis = async ({
+  partialAnalysis,
+  concernType,
+  questionnaireAnswers,
+  requirementContext,
+  historyContext,
+  providedViews,
+}: {
+  partialAnalysis: Record<string, unknown>;
+  concernType: string;
+  questionnaireAnswers: Record<string, unknown>;
+  requirementContext: DonationRequirementContext | null;
+  historyContext: HistoryContext | null;
+  providedViews: string[];
+}) => {
+  console.info('[analyze-hair-submission] repair pass started', {
+    concernType,
+    providedViews,
+    partialKeys: Object.keys(partialAnalysis || {}),
+  });
+
+  const repaired = await createStructuredResponse({
+    model: 'gemini-2.5-flash',
+    responseJsonSchema: analysisSchema,
+    maxOutputTokens: 1400,
+    temperature: 0.15,
+    systemInstruction: [
+      'You repair incomplete structured hair-analysis JSON for Donivra.',
+      'Return one JSON object only.',
+      'Do not use markdown.',
+      'Do not use code fences.',
+      'Do not add explanation before or after the JSON.',
+      'Preserve all valid existing fields when possible.',
+      'Fill any missing or empty critical fields, especially summary, detected_condition, and recommendations.',
+      'Recommendations must remain specific to the observed condition and not generic.',
+      'Summary must be concise, human-friendly, and aligned with the existing visible findings.',
+    ].join('\n'),
+    contents: [
+      {
+        role: 'user',
+        parts: [{
+          text: [
+            'Repair this partial hair analysis so that required structured fields are complete.',
+            `concern_type: ${concernType}`,
+            `provided_views: ${providedViews.join(', ') || 'not provided'}`,
+            '',
+            'Questionnaire context:',
+            formatQuestionnaireAnswers(questionnaireAnswers),
+            '',
+            'History context:',
+            formatHistoryContext(historyContext),
+            '',
+            'Requirement context:',
+            formatRequirementContext(requirementContext),
+            '',
+            'Partial analysis JSON:',
+            JSON.stringify({ analysis: partialAnalysis }),
+          ].join('\n'),
+        }],
+      },
+    ],
+  });
+
+  return repaired?.analysis || {};
 };
 
 const resolveSafeAnalysisError = (error: unknown) => {
   const message = normalizeString(error instanceof Error ? error.message : String(error || ''));
   const technicalMessage = message.toLowerCase();
-  const diagnostics = (error as {
-    diagnostics?: {
-      provider_response_status?: number | null;
-      provider_retry_exhausted?: boolean;
-      provider_error_type?: string;
-      retry_after_seconds?: number | null;
-    };
-  })?.diagnostics;
 
   if (!message) {
     return {
@@ -356,44 +538,6 @@ const resolveSafeAnalysisError = (error: unknown) => {
     || technicalMessage.includes('no valid image payload')
   ) {
     return { status: 422, message };
-  }
-
-  if (
-    diagnostics?.provider_error_type === 'quota_exceeded'
-    || technicalMessage.includes('quota exceeded')
-    || technicalMessage.includes('free tier request limit')
-    || technicalMessage.includes('rate limit')
-  ) {
-    const retryAfterSeconds = Number(diagnostics?.retry_after_seconds);
-    console.warn('[analyze-hair-submission] quota or rate-limit error detected', {
-      providerResponseStatus: diagnostics?.provider_response_status ?? null,
-      providerErrorType: diagnostics?.provider_error_type || 'unknown',
-      retryAfterSeconds: Number.isFinite(retryAfterSeconds) ? retryAfterSeconds : null,
-    });
-
-    return {
-      status: 429,
-      message: Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
-        ? `Cannot analyze hair, please try again in ${retryAfterSeconds} seconds.`
-        : 'Cannot analyze hair right now. Please try again later.',
-    };
-  }
-
-  if (
-    diagnostics?.provider_retry_exhausted
-    || diagnostics?.provider_response_status === 429
-    || diagnostics?.provider_response_status === 503
-    || technicalMessage.includes('high demand')
-    || technicalMessage.includes('temporarily busy')
-    || technicalMessage.includes('temporarily unavailable')
-    || technicalMessage.includes('retry later')
-    || technicalMessage.includes('service unavailable')
-    || technicalMessage.includes('resource exhausted')
-  ) {
-    return {
-      status: 503,
-      message: 'Hair analysis is temporarily busy right now. Please try again in a moment.',
-    };
   }
 
   if (
@@ -454,20 +598,10 @@ const formatSubmissionContext = (submissionContext: SubmissionContext | null) =>
     `donation_drive_id: ${submissionContext.donation_drive_id ?? 'not provided'}`,
     `organization_id: ${submissionContext.organization_id ?? 'not provided'}`,
     `detail_id: ${submissionContext.detail_id ?? 'not provided'}`,
-  ].join('\n');
-};
-
-const formatCorrectedDetailsContext = (correctedDetails: CorrectedDetailsContext | null) => {
-  if (!correctedDetails) {
-    return 'No user-corrected hair details were provided for this analysis pass.';
-  }
-
-  return [
-    `corrected_length_value: ${correctedDetails.length_value ?? 'not provided'}`,
-    `corrected_length_unit: ${normalizeString(correctedDetails.length_unit) || 'not provided'}`,
-    `corrected_length_cm: ${normalizeNumber(correctedDetails.normalized_length_cm) ?? 'not provided'}`,
-    `corrected_texture: ${normalizeString(correctedDetails.texture) || 'not provided'}`,
-    `corrected_density: ${normalizeString(correctedDetails.density) || 'not provided'}`,
+    `declared_length: ${submissionContext.declared_length ?? 'not provided'}`,
+    `declared_texture: ${normalizeString(submissionContext.declared_texture) || 'not provided'}`,
+    `declared_density: ${normalizeString(submissionContext.declared_density) || 'not provided'}`,
+    `declared_condition: ${normalizeString(submissionContext.declared_condition) || 'not provided'}`,
   ].join('\n');
 };
 
@@ -480,20 +614,9 @@ const formatHistoryContext = (historyContext: HistoryContext | null) => {
     `total_checks: ${historyContext.total_checks ?? historyContext.entries.length}`,
     `latest_condition: ${normalizeString(historyContext.latest_condition) || 'not provided'}`,
     `latest_check_at: ${normalizeString(historyContext.latest_check_at) || 'not provided'}`,
-    historyContext.latest_result
-      ? `latest_result: created_at=${normalizeString(historyContext.latest_result.created_at) || 'not provided'} | condition=${normalizeString(historyContext.latest_result.detected_condition) || 'not provided'} | decision=${normalizeString(historyContext.latest_result.decision) || 'not provided'} | estimated_length=${normalizeNumber(historyContext.latest_result.estimated_length) ?? 'not provided'}`
-      : 'latest_result: not provided',
-    Array.isArray(historyContext.latest_recommendations) && historyContext.latest_recommendations.length
-      ? [
-          'latest_recommendations:',
-          ...historyContext.latest_recommendations.slice(0, 4).map((recommendation, index) => (
-            `- ${index + 1}. title=${normalizeString(recommendation.title) || 'not provided'} | recommendation=${normalizeString(recommendation.recommendation_text) || 'not provided'} | priority=${normalizeNumber(recommendation.priority_order) ?? 'not provided'}`
-          )),
-        ].join('\n')
-      : 'latest_recommendations: not provided',
-    'Recent checks for trend comparison only:',
+    'Recent checks:',
     ...historyContext.entries.slice(0, 6).map((entry, index) => (
-      `${index + 1}. created_at=${normalizeString(entry.created_at) || 'not provided'} | condition=${normalizeString(entry.detected_condition) || 'not provided'} | decision=${normalizeString(entry.decision) || 'not provided'} | estimated_length=${normalizeNumber(entry.estimated_length) ?? 'not provided'}${Array.isArray(entry.recommendations) && entry.recommendations.length ? ` | recommendations=${entry.recommendations.map((recommendation) => normalizeString(recommendation.title) || normalizeString(recommendation.recommendation_text)).filter(Boolean).slice(0, 3).join('; ')}` : ''}`
+      `${index + 1}. created_at=${normalizeString(entry.created_at) || 'not provided'} | condition=${normalizeString(entry.detected_condition) || 'not provided'} | decision=${normalizeString(entry.decision) || 'not provided'} | estimated_length=${normalizeNumber(entry.estimated_length) ?? 'not provided'} | summary=${normalizeString(entry.summary) || 'not provided'}`
     )),
   ].join('\n');
 };
@@ -517,11 +640,53 @@ const isDonationConditionAcceptable = (condition: string, visibleDamageNotes: st
   return normalizedCondition.includes('good');
 };
 
+const scoreConditionForTrend = (condition: string) => {
+  const normalized = condition.toLowerCase();
+  if (normalized.includes('healthy') || normalized.includes('good')) return 4;
+  if (normalized.includes('oily')) return 3;
+  if (normalized.includes('dry') || normalized.includes('frizz')) return 2;
+  if (normalized.includes('damage') || normalized.includes('treated')) return 1;
+  return 2;
+};
+
+const inferHistoryAssessment = (historyContext: HistoryContext | null, currentCondition: string, currentLength: number | null) => {
+  if (!historyContext?.entries?.length) return '';
+
+  const latestPrior = historyContext.entries[0];
+  if (!latestPrior) return '';
+
+  const priorCondition = normalizeString(latestPrior.detected_condition);
+  const priorLength = normalizeNumber(latestPrior.estimated_length);
+  const currentScore = scoreConditionForTrend(currentCondition);
+  const priorScore = scoreConditionForTrend(priorCondition);
+
+  if (currentScore > priorScore) {
+    return 'Compared with your most recent saved check, the current photos suggest better overall hair condition and improved donation readiness.';
+  }
+
+  if (currentScore < priorScore) {
+    return 'Compared with your most recent saved check, the current photos suggest more visible care needs, so improving condition should come before donation planning.';
+  }
+
+  if (currentLength != null && priorLength != null) {
+    if (currentLength > priorLength + 1) {
+      return 'Compared with your most recent saved check, the condition looks similar but the visible length appears improved.';
+    }
+    if (currentLength < priorLength - 1) {
+      return 'Compared with your most recent saved check, the visible length appears shorter or less clearly retained, so focus on preserving length.';
+    }
+  }
+
+  return 'Compared with your most recent saved check, the overall appearance looks similar.';
+};
+
 const normalizeAnalysisPayload = (
   analysis: Record<string, unknown>,
   providedViews: string[],
   concernType: string,
   requirementContext: DonationRequirementContext | null,
+  questionnaireAnswers: Record<string, unknown>,
+  historyContext: HistoryContext | null,
 ) => {
   const isHairDetected = analysis?.is_hair_detected !== false;
   const normalizedMissingViews = normalizeMissingViews(analysis?.missing_views);
@@ -547,52 +712,37 @@ const normalizeAnalysisPayload = (
     MIN_DONATION_LENGTH_CM,
     requirementContext?.minimum_hair_length != null ? Number(requirementContext.minimum_hair_length) : 0,
   );
-  const lengthAssessment = normalizeString(analysis?.length_assessment);
   const donationReadinessNote = normalizeString(analysis?.donation_readiness_note);
   const historyAssessment = normalizeString(analysis?.history_assessment);
+  const conditionAcceptable = isDonationConditionAcceptable(detectedCondition, visibleDamageNotes);
+  const hasClearEnoughEvidence = isHairDetected && !missingViews.length && (confidenceScore == null || confidenceScore >= 0.35);
+  const meetsLengthRule = estimatedLength != null && estimatedLength >= minimumDonationLengthCm;
   const normalizedRecommendations = normalizeRecommendationsV2(analysis?.recommendations);
-  const decision = normalizeString(analysis?.decision);
+
+  let decision = normalizeString(analysis?.decision) === ELIGIBLE_STATUS
+    ? ELIGIBLE_STATUS
+    : IMPROVE_STATUS;
+  if (!hasClearEnoughEvidence || !meetsLengthRule || !conditionAcceptable || concernType === 'donation_eligibility' && normalizeString(analysis?.decision) !== ELIGIBLE_STATUS) {
+    decision = IMPROVE_STATUS;
+  }
 
   if (isHairDetected && !detectedCondition) {
     throw new Error('Google AI returned an incomplete hair condition result.');
-  }
-
-  if (isHairDetected && !lengthAssessment) {
-    throw new Error('Google AI returned no usable image-based hair length assessment.');
   }
 
   if (isHairDetected && !normalizedRecommendations.length) {
     throw new Error('Google AI returned no usable hair-care recommendations.');
   }
 
-  const summary = normalizeString(analysis?.summary);
-
-  if (!summary) {
-    throw new Error('Google AI returned no usable assessment summary.');
-  }
-
-  if (decision !== ELIGIBLE_STATUS && decision !== IMPROVE_STATUS) {
-    throw new Error('Google AI returned an unsupported donation decision.');
-  }
-
-  console.info('[analyze-hair-submission] normalized ai field origin', {
-    concernType,
-    providedViews,
-    usedAiSummary: Boolean(summary),
-    usedAiCondition: Boolean(detectedCondition),
-    usedAiTexture: Boolean(detectedTexture),
-    usedAiDensity: Boolean(detectedDensity),
-    usedAiLengthEstimate: estimatedLength != null,
-    usedAiLengthAssessment: Boolean(lengthAssessment),
-    usedAiRecommendations: normalizedRecommendations.length,
-    usedAiDonationReadinessNote: Boolean(donationReadinessNote),
-    usedAiHistoryAssessment: Boolean(historyAssessment),
-    confidenceScore,
-    decision,
-    minimumDonationLengthCm,
-    likelyMeetsDonationLengthThreshold: estimatedLength != null ? estimatedLength >= minimumDonationLengthCm : null,
-    conditionAcceptableByRule: isDonationConditionAcceptable(detectedCondition, visibleDamageNotes),
+  const summary = normalizeString(analysis?.summary) || buildSummaryFromAnalysisFields({
+    isHairDetected,
+    invalidImageReason,
     missingViews,
+    detectedTexture,
+    detectedDensity,
+    detectedCondition,
+    visibleDamageNotes,
+    decision,
   });
 
   return {
@@ -601,14 +751,13 @@ const normalizeAnalysisPayload = (
     missing_views: missingViews,
     per_view_notes: normalizedViewNotes,
     estimated_length: estimatedLength,
-    detected_texture: detectedTexture,
-    detected_density: detectedDensity,
-    detected_condition: detectedCondition,
+    detected_texture: detectedTexture || (!isHairDetected ? '' : 'Unclear'),
+    detected_density: detectedDensity || (!isHairDetected ? '' : 'Unclear'),
+    detected_condition: detectedCondition || (!isHairDetected ? 'Low-confidence image review' : 'Mixed Concerns'),
     visible_damage_notes: visibleDamageNotes,
     confidence_score: confidenceScore,
     decision,
     summary,
-    length_assessment: lengthAssessment,
     donation_readiness_note: donationReadinessNote,
     history_assessment: historyAssessment,
     recommendations: normalizedRecommendations,
@@ -637,9 +786,6 @@ Deno.serve(async (request) => {
       : null;
     const historyContext = body?.history_context && typeof body.history_context === 'object'
       ? body.history_context as HistoryContext
-      : null;
-    const correctedDetails = body?.corrected_details && typeof body.corrected_details === 'object'
-      ? body.corrected_details as CorrectedDetailsContext
       : null;
 
     if (!images.length) {
@@ -679,7 +825,6 @@ Deno.serve(async (request) => {
       hasDonationRequirementContext: Boolean(donationRequirementContext),
       hasSubmissionContext: Boolean(submissionContext?.submission_id),
       historyEntryCount: Array.isArray(historyContext?.entries) ? historyContext.entries.length : 0,
-      hasCorrectedDetails: Boolean(correctedDetails),
       hasGoogleAiApiKey: Boolean(Deno.env.get('GOOGLE_AI_API_KEY')),
     });
     console.info('[analyze-hair-submission] received questionnaire', {
@@ -691,15 +836,6 @@ Deno.serve(async (request) => {
       validImageCount: validImages.length,
       providedViews: Array.from(providedViews),
     });
-    console.info('[analyze-hair-submission] image payload validation', {
-      imageDetails: validImages.map((image, index) => ({
-        index: index + 1,
-        view: normalizeViewLabel(image.viewLabel || image.viewKey) || `Photo ${index + 1}`,
-        mimeType: extractMimeTypeFromDataUrl(String(image.dataUrl || '')) || normalizeString(image.mimeType) || 'unknown',
-        hasDataUrl: typeof image?.dataUrl === 'string' && image.dataUrl.startsWith('data:'),
-        base64Length: extractBase64Payload(String(image.dataUrl || '')).length,
-      })),
-    });
 
     const userContent = [
       {
@@ -707,7 +843,6 @@ Deno.serve(async (request) => {
         text: [
           '=== HAIR ANALYSIS REQUEST ===',
           `concern_type: ${concernType}`,
-          `questionnaire_mode: ${normalizeString(questionnaireAnswers?.questionnaire_mode) || 'first_time'}`,
           `screening_intent: ${normalizeString(questionnaireAnswers?.screening_intent) || 'not provided'}`,
           `photo_compliance_acknowledged: ${complianceContext?.acknowledged === true ? 'yes' : 'no'}`,
           '',
@@ -719,7 +854,6 @@ Deno.serve(async (request) => {
           '- Texture and density: straight/wavy/curly/coily, light/medium/thick/dense',
           '- Ends: split ends, dry or rough ends, healthy ends',
           '- Visible damage: breakage, frizz, thinning, brittleness',
-          '- Visible length: where the hair starts near the head/root area, where the visible hair ends, and whether the hair falls above the shoulder, at the shoulder, below the shoulder, near the chest, or lower',
           'Use per_view_notes to record what you observe in each view.',
           '',
           '=== STEP 2: STRUCTURED QUESTIONNAIRE CONTEXT (supporting only) ===',
@@ -728,36 +862,23 @@ Deno.serve(async (request) => {
           formatQuestionnaireAnswers(questionnaireAnswers),
           '',
           '=== STEP 3: PRIOR HAIR-CHECK HISTORY ===',
-          normalizeString(questionnaireAnswers?.questionnaire_mode) === 'returning_follow_up'
-            ? formatHistoryContext(historyContext)
-            : 'Ignore prior hair-check history for the current analysis result. Treat this as a fresh photo-based analysis.',
-          normalizeString(questionnaireAnswers?.questionnaire_mode) === 'returning_follow_up'
-            ? 'Returning-user follow-up instruction: compare the current photos and answers against the latest saved result and recommendations only for follow-up context. The current detected condition, length, decision, summary, and recommendations must still come from the new uploaded photos.'
-            : 'First-time instruction: treat this as a baseline hair check and focus on the current photos plus the full intake answers.',
+          formatHistoryContext(historyContext),
           '',
-          '=== STEP 4: USER-CORRECTED DETAILS ===',
-          formatCorrectedDetailsContext(correctedDetails),
-          correctedDetails
-            ? 'Use the corrected hair length, texture, and density as confirmed inputs for this reassessment. Do not let them manually replace the final result; instead, use them to produce an updated AI assessment and recommendation.'
-            : 'No corrected details were provided, so use the photo-based detection normally.',
-          '',
-          '=== STEP 5: DONATION REQUIREMENT CONTEXT ===',
+          '=== STEP 4: DONATION REQUIREMENT CONTEXT ===',
           formatRequirementContext(donationRequirementContext),
           '',
-          '=== STEP 6: PREVIOUS SUBMISSION CONTEXT ===',
+          '=== STEP 5: PREVIOUS SUBMISSION CONTEXT ===',
           formatSubmissionContext(submissionContext),
           '',
-          '=== STEP 7: GENERATE RESULT ===',
+          '=== STEP 6: GENERATE RESULT ===',
           'Based on what you see in the photos and the supporting questionnaire context:',
           '1. detected_condition — the most prominent visible condition label',
-          '2. estimated_length — your numeric visible root-to-tip length estimate in centimeters when reasonably supported by the images',
-          '3. length_assessment — explain the visible basis for the length estimate, including whether the ends are fully visible and whether the hair appears likely to meet the 14-inch threshold',
-          '4. summary — 2-3 sentences about what the photos show and what is recommended. Be specific about visible characteristics.',
-          '5. recommendations — 3 items, each SPECIFIC to the visible detected_condition. Do NOT give generic advice. Tailor each recommendation to what you see.',
-          '6. decision — based on photo evidence and requirement context',
-          '7. visible_damage_notes — factual description of what photos show about ends and scalp',
+          '2. summary — 2-3 sentences about what the photos show and what is recommended. Be specific about visible characteristics.',
+          '3. recommendations — 3 items, each SPECIFIC to the visible detected_condition. Do NOT give generic advice. Tailor each recommendation to what you see.',
+          '4. decision — based on photo evidence and requirement context',
+          '5. visible_damage_notes — factual description of what photos show about ends and scalp',
           'Expected views present: Front View Photo, Side Profile Photo, Hair Ends Close-Up.',
-          `Visible length must be treated as visible hair only from root to visible tip, and the 14-inch rule means at least ${MIN_DONATION_LENGTH_CM} cm of visible length.`,
+          `Visible length must be treated as visible hair only, and the 14-inch rule means at least ${MIN_DONATION_LENGTH_CM} cm of visible length.`,
           `Use "${ELIGIBLE_STATUS}" only when visible condition appears suitable and visible length appears to meet the 14-inch rule.`,
           `Use "${IMPROVE_STATUS}" when the visible length appears shorter than 14 inches, when condition needs work, or when confidence is too low for a strong eligibility judgment.`,
           'If the hair appears healthy but too short, focus the recommendations on length retention, healthy growth habits, reduced breakage, and maintaining current hair health.',
@@ -787,7 +908,6 @@ Deno.serve(async (request) => {
       model: 'gemini-2.5-flash',
       textPartCount: userContent.filter((item) => item.type === 'input_text').length,
       imagePartCount: userContent.filter((item) => item.type === 'input_image').length,
-      imageLabels: validImages.map((image, index) => normalizeViewLabel(image.viewLabel || image.viewKey) || `Photo ${index + 1}`),
       hasQuestionnaireAnswers: Boolean(Object.keys(questionnaireAnswers).length),
       historyEntryCount: Array.isArray(historyContext?.entries) ? historyContext.entries.length : 0,
     });
@@ -811,8 +931,8 @@ Deno.serve(async (request) => {
             const imageData = extractBase64Payload(imageUrl);
 
             return {
-              inline_data: {
-                mime_type: mimeType,
+              inlineData: {
+                mimeType,
                 data: imageData,
               },
             };
@@ -826,7 +946,6 @@ Deno.serve(async (request) => {
       provider_request_attempted: true,
       provider_response_status: null,
       provider_parse_success: false,
-      provider_endpoint: '',
       provider_model: 'gemini-2.5-flash',
     };
 
@@ -839,28 +958,23 @@ Deno.serve(async (request) => {
     });
 
     let rawAnalysis = result?.analysis || {};
-    console.info('[analyze-hair-submission] raw ai analysis field presence', {
-      concernType,
-      hasSummary: Boolean(normalizeString(rawAnalysis?.summary)),
-      hasLengthAssessment: Boolean(normalizeString(rawAnalysis?.length_assessment)),
-      hasDetectedCondition: Boolean(normalizeString(rawAnalysis?.detected_condition)),
-      hasDetectedTexture: Boolean(normalizeString(rawAnalysis?.detected_texture)),
-      hasDetectedDensity: Boolean(normalizeString(rawAnalysis?.detected_density)),
-      hasVisibleDamageNotes: Boolean(normalizeString(rawAnalysis?.visible_damage_notes)),
-      hasEstimatedLength: normalizeNumber(rawAnalysis?.estimated_length) != null,
-      recommendationCount: normalizeRecommendationsV2(rawAnalysis?.recommendations).length,
-      perViewNoteCount: Array.isArray(rawAnalysis?.per_view_notes) ? rawAnalysis.per_view_notes.length : 0,
-    });
 
     if (hasIncompleteCriticalAnalysisFields(rawAnalysis)) {
-      console.error('[analyze-hair-submission] incomplete ai analysis from gemini', {
+      console.warn('[analyze-hair-submission] incomplete analysis detected, requesting repair', {
         concernType,
         hasSummary: Boolean(normalizeString(rawAnalysis?.summary)),
-        hasLengthAssessment: Boolean(normalizeString(rawAnalysis?.length_assessment)),
         hasDetectedCondition: Boolean(normalizeString(rawAnalysis?.detected_condition)),
         recommendationCount: normalizeRecommendationsV2(rawAnalysis?.recommendations).length,
       });
-      throw new Error('Google AI returned incomplete hair analysis fields.');
+
+      rawAnalysis = await repairIncompleteAnalysis({
+        partialAnalysis: rawAnalysis,
+        concernType,
+        questionnaireAnswers,
+        requirementContext: donationRequirementContext,
+        historyContext,
+        providedViews: Array.from(providedViews),
+      });
     }
 
     const analysis = normalizeAnalysisPayload(
@@ -868,6 +982,8 @@ Deno.serve(async (request) => {
       Array.from(providedViews),
       concernType,
       donationRequirementContext,
+      questionnaireAnswers,
+      historyContext,
     );
 
     console.info('[analyze-hair-submission] google ai result ready', {
@@ -876,8 +992,6 @@ Deno.serve(async (request) => {
       isHairDetected: analysis?.is_hair_detected ?? null,
       missingViews: Array.isArray(analysis?.missing_views) ? analysis.missing_views : [],
       decision: analysis?.decision || '',
-      estimatedLength: analysis?.estimated_length ?? null,
-      hasLengthAssessment: Boolean(analysis?.length_assessment),
       recommendationCount: Array.isArray(analysis?.recommendations) ? analysis.recommendations.length : 0,
       responseKeys: result && typeof result === 'object' ? Object.keys(result) : [],
     });

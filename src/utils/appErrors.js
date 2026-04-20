@@ -11,7 +11,31 @@ export const getErrorMessage = (error, fallback = '') => {
   return fallback;
 };
 
+const LOG_LEVEL_PRIORITY = {
+  debug: 10,
+  info: 20,
+  warn: 30,
+  error: 40,
+};
+
+const resolveConfiguredLogLevel = () => {
+  const configuredLevel = String(process.env.EXPO_PUBLIC_APP_LOG_LEVEL || 'warn')
+    .trim()
+    .toLowerCase();
+
+  return LOG_LEVEL_PRIORITY[configuredLevel] ? configuredLevel : 'warn';
+};
+
+const shouldWriteConsoleLog = (level = 'info') => {
+  const normalizedLevel = LOG_LEVEL_PRIORITY[level] ? level : 'info';
+  return LOG_LEVEL_PRIORITY[normalizedLevel] >= LOG_LEVEL_PRIORITY[resolveConfiguredLogLevel()];
+};
+
 const writeConsoleLog = (level, scope, message, extras = {}, error = undefined) => {
+  if (!shouldWriteConsoleLog(level)) {
+    return;
+  }
+
   const logger = typeof console?.[level] === 'function' ? console[level] : console.log;
   logger(`[${scope}] ${message}`, {
     timestamp: new Date().toISOString(),

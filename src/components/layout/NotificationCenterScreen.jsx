@@ -26,7 +26,13 @@ export function NotificationCenterScreen({ role }) {
     refreshNotifications,
     readNotification,
     readAllNotifications,
-  } = useNotifications({ role, userId: user?.id, databaseUserId: profile?.user_id });
+  } = useNotifications({
+    role,
+    userId: user?.id,
+    databaseUserId: profile?.user_id,
+    mode: 'full',
+    liveUpdates: true,
+  });
 
   const navItems = role === 'donor' ? donorDashboardNavItems : patientDashboardNavItems;
   const firstName = profile?.first_name || '';
@@ -99,7 +105,7 @@ export function NotificationCenterScreen({ role }) {
             variant="secondary"
             fullWidth={false}
             loading={isRefreshingNotifications}
-            onPress={() => refreshNotifications({ silent: true })}
+            onPress={() => refreshNotifications({ silent: true, force: true })}
             leading={<AppIcon name="refresh" state="muted" />}
           />
           <AppButton

@@ -963,6 +963,41 @@ export const createHairSubmissionLogistics = async (payload) => {
   };
 };
 
+export const updateHairSubmissionById = async (submissionId, payload) => {
+  if (!submissionId) {
+    return { data: null, error: new Error('Submission ID is required.') };
+  }
+
+  logHairQuery('updateHairSubmissionById', {
+    table: hairSubmissionsTable,
+    phase: 'update',
+    filters: { Submission_ID: submissionId },
+    columns: ['Donation_Drive_ID', 'Organization_ID', 'Delivery_Method', 'Pickup_Request', 'Submission_Code', 'Donation_Source', 'Bundle_Quantity', 'Donor_Notes', 'Status'],
+  });
+
+  const result = await supabase
+    .from(hairSubmissionsTable)
+    .update({
+      Donation_Drive_ID: payload?.donation_drive_id ?? undefined,
+      Organization_ID: payload?.organization_id ?? undefined,
+      Delivery_Method: payload?.delivery_method ?? undefined,
+      Pickup_Request: payload?.pickup_request ?? undefined,
+      Submission_Code: payload?.submission_code ?? undefined,
+      Donation_Source: payload?.donation_source ?? undefined,
+      Bundle_Quantity: payload?.bundle_quantity ?? undefined,
+      Donor_Notes: payload?.donor_notes ?? undefined,
+      Status: payload?.status ?? undefined,
+    })
+    .eq('Submission_ID', submissionId)
+    .select(hairSubmissionSelect)
+    .maybeSingle();
+
+  return {
+    data: result.data ? normalizeHairSubmission(result.data) : null,
+    error: result.error,
+  };
+};
+
 export const updateHairSubmissionLogisticsById = async (submissionLogisticsId, payload) => {
   if (!submissionLogisticsId) {
     return { data: null, error: new Error('Submission logistics ID is required.') };
