@@ -587,6 +587,126 @@ const resolveAiDonationRecord = (latestAnalysisEntry = null) => (
     : null
 );
 
+const getSubmissionParcelImages = (submission = null) => (
+  (submission?.submission_details || []).flatMap((detail) => (
+    (detail?.images || []).filter((image) => PARCEL_IMAGE_TYPES.includes(image?.image_type))
+  ))
+);
+
+const hasCurrentFlowStatus = (submission = null) => (
+  [
+    'qr pending activation',
+    'qr activated',
+    'ready for shipment',
+    'in transit',
+    'received',
+    'quality',
+    'shipment',
+  ].some((token) => normalizeStatus(submission?.status).includes(token))
+);
+
+const isSubmissionCompleted = ({ submission = null, certificate = null }) => (
+  Boolean(
+    !submission?.submission_id
+    || normalizeStatus(submission?.status) === 'completed'
+    || (certificate?.submission_id && certificate.submission_id === submission.submission_id)
+  )
+);
+
+const resolveQualifiedDonationRecordForSubmission = ({ submission = null, donationRequirement = null }) => {
+  if (!submission?.submission_id) {
+    return null;
+  }
+
+  const detail = getLatestSubmissionDetail(submission);
+  if (!detail?.submission_detail_id) {
+    return null;
+  }
+
+  const latestEligibleScreening = [...(submission?.ai_screenings || [])]
+    .sort((left, right) => new Date(right?.created_at || 0).getTime() - new Date(left?.created_at || 0).getTime())
+    .find((screening) => isEligibleHairAnalysisDecision(screening?.decision || '')) || null;
+
+  if (latestEligibleScreening) {
+    return {
+      source: 'ai',
+      submission,
+      detail,
+      screening: latestEligibleScreening,
+      recommendations: submission?.donor_recommendations || [],
+      qualification: {
+        isQualified: true,
+        reason: latestEligibleScreening?.decision || 'Eligible for donation.',
+      },
+      created_at: submission?.updated_at || submission?.created_at || latestEligibleScreening?.created_at || null,
+    };
+  }
+
+  if (!isManualDonationSubmission(submission)) {
+    return null;
+  }
+
+  const manualDetails = {
+    length_value: detail.declared_length ?? null,
+    length_unit: 'in',
+    treated: detail.is_chemically_treated ? 'yes' : 'no',
+    colored: detail.is_colored ? 'yes' : 'no',
+    trimmed: String(detail.detail_notes || '').toLowerCase().includes('trimmed: yes') ? 'yes' : 'no',
+    hair_color: detail.declared_color || '',
+    density: detail.declared_density || '',
+  };
+  const qualification = evaluateManualDonationEligibility({ manualDetails, donationRequirement });
+  if (!qualification.isQualified) {
+    return null;
+  }
+
+  return {
+    source: 'manual',
+    submission,
+    detail,
+    screening: null,
+    recommendations: [],
+    qualification,
+    created_at: submission?.updated_at || submission?.created_at || null,
+  };
+};
+
+const resolveCurrentDonationRecord = ({
+  submissions = [],
+  donationRequirement = null,
+  certificate = null,
+  fallbackRecord = null,
+}) => {
+  const sortedSubmissions = sortSubmissionsByCreatedAt(submissions);
+
+  const flowMatchedRecord = sortedSubmissions
+    .filter((submission) => !isSubmissionCompleted({ submission, certificate }))
+    .find((submission) => (
+      Boolean(submission?.donation_drive_id)
+      || Boolean(getIndependentQrMetadata(submission)?.reference)
+      || Boolean(getSubmissionParcelImages(submission).length)
+      || [INDEPENDENT_DONATION_SOURCE, DRIVE_DONATION_SOURCE].includes(String(submission?.donation_source || '').trim().toLowerCase())
+      || hasCurrentFlowStatus(submission)
+    ));
+
+  if (flowMatchedRecord) {
+    const resolvedRecord = resolveQualifiedDonationRecordForSubmission({
+      submission: flowMatchedRecord,
+      donationRequirement,
+    });
+
+    if (resolvedRecord) {
+      return resolvedRecord;
+    }
+  }
+
+  if (fallbackRecord?.submission && !isSubmissionCompleted({ submission: fallbackRecord.submission, certificate })) {
+    return fallbackRecord;
+  }
+
+  return null;
+};
+
 const resolveActiveDonationRecord = ({ aiRecord = null, manualRecord = null }) => (
   [aiRecord, manualRecord]
     .filter((record) => record?.qualification?.isQualified)
@@ -635,7 +755,12 @@ const matchesAnyToken = (source = '', tokens = []) => {
 };
 
 const resolveTimelineStages = ({ logistics, trackingEntries, parcelImages, certificate }) => {
-  const readyDate = parcelImages[0]?.uploaded_at || logistics?.created_at || null;
+  const readyEntry = findTimelineMatch(trackingEntries, (entry) => (
+    matchesAnyToken(entry?.status, ['ready for shipment', 'parcel logged', 'parcel prepared'])
+    || matchesAnyToken(entry?.title, ['ready for shipment', 'parcel logged', 'parcel prepared'])
+    || matchesAnyToken(entry?.description, ['ready for shipment', 'parcel logged', 'parcel prepared'])
+  ));
+  const readyDate = parcelImages[0]?.uploaded_at || readyEntry?.updated_at || logistics?.created_at || null;
   const transitEntry = findTimelineMatch(trackingEntries, (entry) => (
     matchesAnyToken(entry?.status, ['transit', 'shipped', 'shipping'])
     || matchesAnyToken(entry?.title, ['transit', 'shipped', 'shipping'])
@@ -666,44 +791,55 @@ const resolveTimelineStages = ({ logistics, trackingEntries, parcelImages, certi
     {
       key: 'ready_for_shipment',
       label: 'Ready for shipment',
-      description: 'Your parcel image and QR are ready to be attached before handoff.',
+      statusLabel: readyEntry?.status || logistics?.shipment_status || '',
+      savedNote: readyEntry?.description || logistics?.notes || '',
       completedAt: readyDate,
-      images: parcelImages,
+      parcelImages,
     },
     {
       key: 'in_transit',
       label: 'In transit',
-      description: 'The parcel is moving to the organization.',
+      statusLabel: transitEntry?.status || (matchesAnyToken(logistics?.shipment_status, ['transit', 'shipped']) ? logistics?.shipment_status : ''),
+      savedNote: transitEntry?.description || '',
       completedAt: transitEntry?.updated_at || (matchesAnyToken(logistics?.shipment_status, ['transit', 'shipped']) ? logistics?.updated_at : null),
       entry: transitEntry,
+      parcelImages,
     },
     {
       key: 'received_by_organization',
       label: 'Received by the organization',
-      description: 'The organization has confirmed parcel receipt.',
+      statusLabel: receivedOrgEntry?.status || (logistics?.received_at ? 'Received by the organization' : ''),
+      savedNote: receivedOrgEntry?.description || logistics?.notes || '',
       completedAt: receivedOrgEntry?.updated_at || logistics?.received_at || null,
       entry: receivedOrgEntry,
+      parcelImages,
     },
     {
       key: 'quality_checking',
       label: 'Quality checking',
-      description: 'The organization is reviewing the donated hair quality.',
+      statusLabel: qualityEntry?.status || '',
+      savedNote: qualityEntry?.description || '',
       completedAt: qualityEntry?.updated_at || null,
       entry: qualityEntry,
+      parcelImages,
     },
     {
       key: 'ready_for_shipment_to_receiver',
       label: 'Ready for shipment to the receiver',
-      description: 'The approved donation is being prepared for the next recipient step.',
+      statusLabel: receiverShipmentEntry?.status || '',
+      savedNote: receiverShipmentEntry?.description || '',
       completedAt: receiverShipmentEntry?.updated_at || null,
       entry: receiverShipmentEntry,
+      parcelImages,
     },
     {
       key: 'received_by_patient',
       label: 'Received by patient',
-      description: 'The donation reached the final patient handoff stage.',
+      statusLabel: patientReceivedEntry?.status || (certificate?.issued_at ? 'Received by patient' : ''),
+      savedNote: patientReceivedEntry?.description || certificate?.remarks || '',
       completedAt: patientReceivedEntry?.updated_at || certificate?.issued_at || null,
       entry: patientReceivedEntry,
+      parcelImages,
     },
   ];
 
@@ -713,7 +849,7 @@ const resolveTimelineStages = ({ logistics, trackingEntries, parcelImages, certi
   return stages.map((stage, index) => ({
     ...stage,
     state: stage.completedAt ? 'completed' : index === resolvedCurrentIndex ? 'current' : 'upcoming',
-    timestampLabel: stage.completedAt ? formatDateTime(stage.completedAt) : '',
+    timestampLabel: stage.completedAt ? `Updated ${formatDateTime(stage.completedAt)}` : '',
   }));
 };
 
@@ -1060,7 +1196,13 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
     submissions,
     donationRequirement: donationRequirementResult.data || null,
   });
-  const activeRecord = resolveActiveDonationRecord({ aiRecord, manualRecord });
+  const latestQualifiedRecord = resolveActiveDonationRecord({ aiRecord, manualRecord });
+  const activeRecord = resolveCurrentDonationRecord({
+    submissions,
+    donationRequirement: donationRequirementResult.data || null,
+    certificate: certificateResult.data || null,
+    fallbackRecord: latestQualifiedRecord,
+  });
   const isAiEligible = Boolean(aiRecord?.qualification?.isQualified);
   const isManualQualified = Boolean(manualRecord?.qualification?.isQualified);
   const isDonationReady = Boolean(activeRecord?.qualification?.isQualified);

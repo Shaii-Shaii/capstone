@@ -124,18 +124,6 @@ const formatQrStatusLabel = (status = '') => {
   return normalized.charAt(0).toUpperCase() + normalized.slice(1);
 };
 
-const getStageInstructionLines = (stage = null) => {
-  if (stage?.key !== 'ready_for_shipment') {
-    return [];
-  }
-
-  return [
-    'Attach your QR to the parcel.',
-    'Take a clear photo of the packed parcel with the QR visible.',
-    'Upload the parcel photo before handoff or shipment.',
-  ];
-};
-
 function SectionTitle({ eyebrow, title, body }) {
   return (
     <View style={styles.sectionTitleWrap}>
@@ -330,55 +318,43 @@ function StageDetailModal({
   visible,
   stage,
   onClose,
-  onSubmit,
   onViewQr,
-  onUploadParcel,
   canViewQr = false,
-  canUploadParcel = false,
 }) {
-  const instructionLines = getStageInstructionLines(stage);
+  const parcelImages = (stage?.parcelImages || stage?.images || []).filter((image) => image?.signed_url);
+  const stageStatus = stage?.statusLabel
+    || (stage?.state === 'completed' ? 'Completed' : stage?.state === 'current' ? 'Current stage' : 'Waiting for update');
 
   return (
     <ModalShell
       visible={visible}
       title={stage?.label || 'Timeline stage'}
-      subtitle={stage?.state === 'completed' ? 'Completed stage' : stage?.state === 'current' ? 'Current stage' : 'Waiting stage'}
+      subtitle={stageStatus}
       onClose={onClose}
-      footer={(
-        <View style={styles.inlineActions}>
-          {canViewQr ? <AppButton title="View my QR" variant="outline" fullWidth={false} onPress={onViewQr} /> : null}
-          {canUploadParcel ? <AppButton title="Upload parcel photo" variant="outline" fullWidth={false} onPress={onUploadParcel} /> : null}
-          <AppButton title="Submit" fullWidth={false} onPress={onSubmit} />
-        </View>
-      )}
     >
       <View style={styles.stageDetailBody}>
-        <Text style={styles.stageDetailText}>{stage?.description || 'No details yet.'}</Text>
-        {instructionLines.length ? (
-          <View style={styles.stageInstructionList}>
-            {instructionLines.map((line) => (
-              <View key={line} style={styles.stageInstructionRow}>
-                <View style={styles.stageInstructionDot} />
-                <Text style={styles.stageInstructionText}>{line}</Text>
-              </View>
-            ))}
-          </View>
-        ) : null}
+        {stage?.savedNote ? <Text style={styles.stageDetailText}>{stage.savedNote}</Text> : null}
         {stage?.timestampLabel ? <Text style={styles.stageDetailTimestamp}>{stage.timestampLabel}</Text> : null}
-        {stage?.images?.length ? (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.stageImageRow}>
-            {stage.images.map((image) => (
-              image?.signed_url ? (
+        <View style={styles.stageSection}>
+          <Text style={styles.stageSectionLabel}>Parcel photo</Text>
+          {parcelImages.length ? (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.stageImageRow}>
+              {parcelImages.map((image) => (
                 <Image
                   key={image.image_id || image.file_path}
                   source={{ uri: image.signed_url }}
                   style={styles.stageImage}
                   resizeMode="cover"
                 />
-              ) : null
-            ))}
-          </ScrollView>
-        ) : null}
+              ))}
+            </ScrollView>
+          ) : (
+            <View style={styles.stageEmptyState}>
+              <Text style={styles.stageEmptyText}>No parcel photo uploaded yet.</Text>
+            </View>
+          )}
+        </View>
+        {canViewQr ? <AppButton title="View my QR" variant="outline" fullWidth={false} onPress={onViewQr} /> : null}
       </View>
     </ModalShell>
   );
@@ -898,7 +874,6 @@ export function DonorDonationStatusScreen() {
   );
   const hasActiveQrAction = Boolean(
     hasOngoingDonation
-    && activeQrState?.is_valid
     && (
       activeFlowType === 'drive'
         ? activeDrive?.registration?.registration_id
@@ -914,13 +889,6 @@ export function DonorDonationStatusScreen() {
       ? 'Independent donation'
       : 'Donation in progress';
   const currentStatusLabel = currentTimelineStage?.label || formatQrStatusLabel(activeQrState?.status || '') || 'In progress';
-  const stageActionable = selectedTimelineStage?.key === 'ready_for_shipment';
-  const canUploadParcelFromStage = Boolean(
-    stageActionable
-    && activeFlowType === 'independent'
-    && activeSubmission?.submission_id
-    && activeDetail?.submission_detail_id
-  );
 
   React.useEffect(() => {
     if (!independentQrState?.is_pending || !independentQrState?.expires_at || !activeSubmission?.submission_id) {
@@ -1361,12 +1329,12 @@ export function DonorDonationStatusScreen() {
       return;
     }
 
-    if (activeFlowType === 'drive' && activeDrive?.registration?.qr?.is_valid) {
+    if (activeFlowType === 'drive' && activeDrive?.registration?.registration_id) {
       buildDriveQrSheet(activeDrive, activeDrive.registration);
       return;
     }
 
-    if (activeFlowType === 'independent' && independentQrState?.show_my_qr) {
+    if (activeFlowType === 'independent' && independentQrState?.reference) {
       await buildIndependentQrSheet();
       return;
     }
@@ -1381,7 +1349,7 @@ export function DonorDonationStatusScreen() {
     buildDriveQrSheet,
     buildIndependentQrSheet,
     hasOngoingDonation,
-    independentQrState?.show_my_qr,
+    independentQrState?.reference,
   ]);
 
   const handleAgreementContinue = React.useCallback(async () => {
@@ -1642,18 +1610,6 @@ export function DonorDonationStatusScreen() {
     }
   }, [buildDriveQrSheet, donorIdentity, entryPath, loadModuleData, profile?.user_id, qualifiedDetail, qualifiedDonationRecord?.source, qualifiedScreening, qualifiedSubmission, qrSheet?.type, selectedDrive, user?.id]);
 
-  const handleOpenParcelUpload = React.useCallback(() => {
-    if (!activeSubmission || !activeDetail) {
-      setModuleFeedback({
-        message: 'A qualified donation entry is required before parcel logging.',
-        variant: 'error',
-      });
-      return;
-    }
-
-    setIsParcelModalOpen(true);
-  }, [activeDetail, activeSubmission]);
-
   const handleUploadParcel = React.useCallback(async () => {
     if (!activeSubmission || !activeDetail) {
       setModuleFeedback({
@@ -1734,29 +1690,6 @@ export function DonorDonationStatusScreen() {
     setSelectedTimelineStage(null);
     await handleViewCurrentDonationQr();
   }, [handleViewCurrentDonationQr]);
-
-  const handleUploadParcelFromStage = React.useCallback(() => {
-    setSelectedTimelineStage(null);
-    handleOpenParcelUpload();
-  }, [handleOpenParcelUpload]);
-
-  const handleSubmitStage = React.useCallback(() => {
-    if (selectedTimelineStage?.key === 'ready_for_shipment' && canUploadParcelFromStage && !selectedTimelineStage?.images?.length) {
-      setModuleFeedback({
-        message: 'Upload the parcel photo before submitting this shipment step.',
-        variant: 'info',
-      });
-      return;
-    }
-
-    setSelectedTimelineStage(null);
-    setModuleFeedback({
-      message: selectedTimelineStage?.key === 'ready_for_shipment'
-        ? 'Shipment step submitted.'
-        : 'Stage submitted.',
-      variant: 'success',
-    });
-  }, [canUploadParcelFromStage, selectedTimelineStage]);
 
   const handleOpenManualModal = React.useCallback(() => {
     if (hasOngoingDonation) {
@@ -2097,11 +2030,8 @@ export function DonorDonationStatusScreen() {
       <StageDetailModal
         visible={Boolean(selectedTimelineStage)}
         stage={selectedTimelineStage}
-        canViewQr={stageActionable && hasActiveQrAction}
-        canUploadParcel={canUploadParcelFromStage}
-        onSubmit={handleSubmitStage}
+        canViewQr={hasActiveQrAction}
         onViewQr={handleViewQrFromStage}
-        onUploadParcel={handleUploadParcelFromStage}
         onClose={() => setSelectedTimelineStage(null)}
       />
     </DashboardLayout>
@@ -2787,27 +2717,28 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.semantic.caption,
     color: theme.colors.textMuted,
   },
-  stageInstructionList: {
+  stageSection: {
     gap: theme.spacing.sm,
   },
-  stageInstructionRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: theme.spacing.sm,
+  stageSectionLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textPrimary,
   },
-  stageInstructionDot: {
-    width: 8,
-    height: 8,
-    marginTop: 6,
-    borderRadius: theme.radius.full,
-    backgroundColor: theme.colors.brandPrimary,
+  stageEmptyState: {
+    borderRadius: theme.radius.lg,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.lg,
+    backgroundColor: theme.colors.surfaceSoft,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
   },
-  stageInstructionText: {
-    flex: 1,
+  stageEmptyText: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.bodySm,
     lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
-    color: theme.colors.textPrimary,
+    color: theme.colors.textSecondary,
   },
   stageImageRow: {
     gap: theme.spacing.sm,
