@@ -27,7 +27,6 @@ import {
 import {
   buildDriveInvitationQrPayload,
   buildQrImageUrl,
-  formatQrCountdownLabel,
   generateDonationQrPdf,
   getDonorDonationsModuleData,
   isQrSharingSupported,
@@ -103,12 +102,9 @@ function DriveQrModal({
   title,
   subtitle,
   helperText,
-  countdownText,
   isSaving,
   onClose,
   onSave,
-  onRegenerate,
-  canRegenerate = false,
 }) {
   const { resolvedTheme } = useAuth();
   const roles = resolveThemeRoles(resolvedTheme);
@@ -129,15 +125,9 @@ function DriveQrModal({
           {helperText ? (
             <Text style={[styles.qrHelper, { color: roles.metaText }]}>{helperText}</Text>
           ) : null}
-          {countdownText ? (
-            <Text style={[styles.qrHelper, { color: roles.metaText }]}>{countdownText}</Text>
-          ) : null}
           <View style={styles.modalActions}>
             <AppButton title="Close" variant="ghost" fullWidth={false} onPress={onClose} />
             <AppButton title="Save QR" fullWidth={false} onPress={onSave} loading={isSaving} />
-            {canRegenerate ? (
-              <AppButton title="Generate new QR" variant="outline" fullWidth={false} onPress={onRegenerate} />
-            ) : null}
           </View>
         </AppCard>
       </View>
@@ -162,7 +152,6 @@ export default function DonorDriveDetailRoute() {
   const [isMembershipPromptOpen, setIsMembershipPromptOpen] = React.useState(false);
   const [membershipFeedback, setMembershipFeedback] = React.useState({ message: '', variant: 'info' });
   const [qrSheet, setQrSheet] = React.useState(null);
-  const [qrNowMs, setQrNowMs] = React.useState(Date.now());
   const [qrSharingAvailable, setQrSharingAvailable] = React.useState(false);
   const [isSavingQr, setIsSavingQr] = React.useState(false);
   const [donationFlowState, setDonationFlowState] = React.useState({
@@ -231,19 +220,6 @@ export default function DonorDriveDetailRoute() {
     };
   }, []);
 
-  React.useEffect(() => {
-    if (!qrSheet?.expiresAt || qrSheet?.isConfirmed) {
-      return undefined;
-    }
-
-    setQrNowMs(Date.now());
-    const timer = setInterval(() => {
-      setQrNowMs(Date.now());
-    }, 1000);
-
-    return () => clearInterval(timer);
-  }, [qrSheet?.expiresAt, qrSheet?.isConfirmed]);
-
   const hasOngoingDonation = Boolean(donationFlowState.hasOngoingDonation);
   const ongoingDonationMessage = donationFlowState.ongoingDonationMessage
     || 'You already have an ongoing donation. Please complete or wait for the current donation process to finish before starting a new one.';
@@ -260,13 +236,8 @@ export default function DonorDriveDetailRoute() {
       subtitle: 'Present this QR at the donation drive.',
       helperText: registration?.qr?.is_activated
         ? 'This QR is activated and stays official for this drive registration.'
-        : registration?.qr?.is_expired
-          ? 'This QR expired before staff used it. Generate a new QR to continue.'
-          : 'This QR stays valid for 15 minutes unless staff activates it first.',
+        : 'This saved QR stays tied to your current drive registration.',
       payload,
-      expiresAt: registration?.qr?.expires_at || '',
-      isConfirmed: Boolean(registration?.qr?.is_activated),
-      canRegenerate: Boolean(registration?.qr?.can_regenerate),
     });
   }, [donorIdentity]);
 
@@ -302,7 +273,7 @@ export default function DonorDriveDetailRoute() {
     };
 
     setDrive(nextDrive);
-    setFeedbackMessage(result.regenerated ? 'Expired QR replaced with a new one.' : result.alreadyRegistered ? 'RSVP already saved.' : 'RSVP saved.');
+    setFeedbackMessage(result.alreadyRegistered ? 'RSVP already saved.' : 'RSVP saved.');
     setFeedbackVariant('success');
     buildDriveQrSheet(nextDrive, nextDrive.registration || result.data);
   }, [buildDriveQrSheet, drive, profile?.user_id]);
@@ -366,35 +337,6 @@ export default function DonorDriveDetailRoute() {
     if (!drive?.registration) return;
     buildDriveQrSheet(drive, drive.registration);
   }, [buildDriveQrSheet, drive]);
-
-  const handleRegenerateQr = React.useCallback(async () => {
-    if (!drive?.donation_drive_id || !profile?.user_id) {
-      return;
-    }
-
-    const result = await createDonationDriveRsvp({
-      driveId: drive.donation_drive_id,
-      databaseUserId: profile.user_id,
-      organizationId: drive.organization_id || null,
-    });
-
-    if (result.error) {
-      setFeedbackMessage('A new drive QR could not be generated right now.');
-      setFeedbackVariant('error');
-      return;
-    }
-
-    const refreshed = await fetchDonationDrivePreview(drive.donation_drive_id, profile.user_id);
-    const nextDrive = refreshed.data || {
-      ...drive,
-      registration: result.data,
-      can_rsvp: false,
-    };
-    setDrive(nextDrive);
-    setFeedbackMessage(result.regenerated ? 'A new drive QR is ready.' : 'Your current drive QR is still valid.');
-    setFeedbackVariant('success');
-    buildDriveQrSheet(nextDrive, nextDrive.registration || result.data);
-  }, [buildDriveQrSheet, drive, profile?.user_id]);
 
   const handleSaveQr = React.useCallback(async () => {
     if (!qrSheet?.payload) return;
@@ -502,11 +444,9 @@ export default function DonorDriveDetailRoute() {
                 text={drive.registration
                   ? drive.registration?.qr?.is_activated
                     ? 'QR activated for this drive.'
-                    : drive.registration?.qr?.is_expired
-                      ? 'QR expired. Generate a new one to continue.'
-                      : drive.registration?.qr?.is_pending
-                        ? `Pending activation. ${formatQrCountdownLabel(drive.registration?.qr?.expires_at, qrNowMs)}`
-                        : 'Drive RSVP already saved.'
+                    : drive.registration?.qr?.is_pending
+                      ? 'Saved QR is ready for this drive.'
+                      : 'Drive RSVP already saved.'
                   : drive.membership?.is_active
                     ? 'Organization membership is active.'
                     : 'Membership required before RSVP.'}
@@ -523,7 +463,7 @@ export default function DonorDriveDetailRoute() {
                 />
               ) : (
                 <AppButton
-                  title={drive.registration?.qr?.can_regenerate ? 'Generate new QR' : 'RSVP'}
+                  title="RSVP"
                   fullWidth={false}
                   onPress={handleRsvp}
                   disabled={hasOngoingDonation}
@@ -570,12 +510,9 @@ export default function DonorDriveDetailRoute() {
         subtitle={qrSheet?.subtitle || ''}
         helperText={qrSheet?.helperText || ''}
         payload={qrSheet?.payload || ''}
-        countdownText={qrSheet?.isConfirmed ? '' : formatQrCountdownLabel(qrSheet?.expiresAt || '', qrNowMs)}
         isSaving={isSavingQr}
         onClose={() => setQrSheet(null)}
         onSave={handleSaveQr}
-        onRegenerate={handleRegenerateQr}
-        canRegenerate={Boolean(qrSheet?.canRegenerate)}
       />
     </DashboardLayout>
   );

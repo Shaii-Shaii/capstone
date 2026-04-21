@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, StyleSheet, Text, Pressable, Alert, ScrollView, Modal, KeyboardAvoidingView, Platform, useWindowDimensions } from 'react-native';
+import { View, StyleSheet, Text, Pressable, Alert, ScrollView, Modal, KeyboardAvoidingView, Platform, useWindowDimensions, Image } from 'react-native';
 import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { Controller, useForm, useWatch } from 'react-hook-form';
@@ -32,16 +32,78 @@ import {
 } from '../src/constants/profile';
 import { changePasswordSchema, profileUpdateSchema } from '../src/features/profile/profile.schema';
 import { donorDashboardNavItems, patientDashboardNavItems } from '../src/constants/dashboard';
+import { fetchHairSubmissionsByUserId } from '../src/features/hairSubmission.api';
+import { fetchDonationDrivePreview } from '../src/features/donorHome.api';
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 const PROFILE_MINIMUM_AGE = 18;
 const MINIMUM_BIRTHDATE = new Date(1900, 0, 1);
 const REQUIRED_PROFILE_FIELDS = new Set(['firstName', 'lastName', 'birthdate', 'gender', 'phone']);
+const HISTORY_PREVIEW_LIMIT = 3;
 
 const getMaximumBirthdate = () => {
   const maxDate = new Date();
   maxDate.setFullYear(maxDate.getFullYear() - PROFILE_MINIMUM_AGE);
   return maxDate;
+};
+
+const formatDateLabel = (value) => {
+  if (!value) return '';
+
+  try {
+    return new Intl.DateTimeFormat('en-PH', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    }).format(new Date(value));
+  } catch {
+    return String(value);
+  }
+};
+
+const formatSourceLabel = (value = '') => {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) return 'Donation record';
+  if (normalized === 'manual_donor_details') return 'Manual donor entry';
+  if (normalized === 'independent_donation') return 'Independent donation';
+  if (normalized === 'drive_donation') return 'Donation drive';
+  if (normalized === 'mobile_app') return 'Mobile donation';
+  return normalized
+    .split(/[_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+};
+
+const formatStatusLabel = (value = '') => {
+  const normalized = String(value || '').trim();
+  if (!normalized) return 'Pending';
+  return normalized
+    .split(/[_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(' ');
+};
+
+const formatAddressSummary = (profile = null) => (
+  [
+    profile?.street,
+    profile?.barangay,
+    profile?.city,
+    profile?.province,
+    profile?.region,
+    profile?.country,
+  ]
+    .filter(Boolean)
+    .join(', ')
+    .trim()
+);
+
+const summarizeText = (value = '', maxLength = 92) => {
+  const normalized = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!normalized) return '';
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength - 3).trimEnd()}...`;
 };
 
 function ActionRow({ item, onPress }) {
@@ -70,6 +132,46 @@ function ActionRow({ item, onPress }) {
       </View>
       <AppIcon name="chevronRight" state="muted" />
     </AnimatedPressable>
+  );
+}
+
+function PreviewRow({
+  icon,
+  title,
+  subtitle,
+  meta,
+  badge,
+}) {
+  return (
+    <View style={styles.previewRow}>
+      <View style={styles.previewIconWrap}>
+        <AppIcon name={icon} state="active" size="sm" />
+      </View>
+      <View style={styles.previewCopy}>
+        <View style={styles.previewTitleRow}>
+          <Text numberOfLines={1} style={styles.previewTitle}>{title}</Text>
+          {badge ? (
+            <View style={styles.previewBadge}>
+              <Text numberOfLines={1} style={styles.previewBadgeText}>{badge}</Text>
+            </View>
+          ) : null}
+        </View>
+        {subtitle ? <Text numberOfLines={2} style={styles.previewSubtitle}>{subtitle}</Text> : null}
+        {meta ? <Text numberOfLines={1} style={styles.previewMeta}>{meta}</Text> : null}
+      </View>
+    </View>
+  );
+}
+
+function PreviewEmptyState({ icon, title, message }) {
+  return (
+    <View style={styles.previewEmptyState}>
+      <View style={styles.previewEmptyIcon}>
+        <AppIcon name={icon} state="muted" />
+      </View>
+      <Text style={styles.previewEmptyTitle}>{title}</Text>
+      <Text style={styles.previewEmptyMessage}>{message}</Text>
+    </View>
   );
 }
 
@@ -104,6 +206,12 @@ export default function ProfileScreen() {
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [passwordSuccess, setPasswordSuccess] = useState(false);
   const [activeProfilePicker, setActiveProfilePicker] = useState('');
+  const [donorHistoryState, setDonorHistoryState] = useState({
+    isLoading: false,
+    error: '',
+    submissions: [],
+    drivesById: {},
+  });
   const successTimerRef = useRef(null);
 
   const profileForm = useForm({
@@ -141,6 +249,7 @@ export default function ProfileScreen() {
   const hasOrganization = !isPatient && Boolean(staffProfile?.hospital_id);
   const navItems = role === 'donor' ? donorDashboardNavItems : patientDashboardNavItems;
   const roleLabel = roleLabelMap[normalizedRole] || roleLabelMap[role] || 'Member';
+  const donorProfileReady = profileCompletionMeta?.isComplete;
   const firstName = (profile?.first_name || '').trim();
   const middleName = (profile?.middle_name || '').trim();
   const lastName = (profile?.last_name || '').trim();
@@ -148,6 +257,12 @@ export default function ProfileScreen() {
   const avatarUri = profile?.avatar_url || profile?.photo_path || patientProfile?.patient_picture || '';
   const avatarInitials = `${firstName?.[0] || ''}${lastName?.[0] || ''}`.trim();
   const fullName = [firstName, middleName, lastName, suffix].filter(Boolean).join(' ');
+  const joinedDateLabel = useMemo(() => (
+    formatDateLabel(profile?.joined_date || profile?.created_at || user?.created_at || '')
+  ), [profile?.created_at, profile?.joined_date, user?.created_at]);
+  const addressSummary = useMemo(() => (
+    formatAddressSummary(profile)
+  ), [profile]);
   const displayRows = useMemo(() => (
     profileDisplayFields
       .map((field) => {
@@ -268,23 +383,127 @@ export default function ProfileScreen() {
     profile?.region,
     profile?.country,
   ]);
-  const actionItems = useMemo(() => (
+  const donorOverviewItems = useMemo(() => (
     [
-      ...(!isPatient && hasOrganization ? [{
-        key: 'organization',
-        icon: 'support',
-        title: 'Open Organization',
-        description: `Go to hospital ID ${staffProfile?.hospital_id}.`,
-      }] : []),
-      ...(!isPatient && !hasOrganization ? [{
-        key: 'completeSetup',
-        icon: 'editProfile',
-        title: 'Complete Account Setup',
-        description: 'Finish your account details.',
-      }] : []),
-      ...profileActionConfig,
+      {
+        key: 'full_name',
+        label: 'Full name',
+        value: fullName || 'Add your full name',
+      },
+      {
+        key: 'email',
+        label: 'Email',
+        value: user?.email || 'Not available',
+        wide: true,
+      },
+      {
+        key: 'role',
+        label: 'Account type',
+        value: roleLabel,
+      },
+      {
+        key: 'phone',
+        label: 'Phone number',
+        value: profile?.contact_number || profile?.phone || 'Not added yet',
+      },
+      {
+        key: 'joined_date',
+        label: 'Joined date',
+        value: joinedDateLabel || 'Not available',
+      },
+      {
+        key: 'address_summary',
+        label: 'Address summary',
+        value: addressSummary || 'Add your address details',
+        wide: true,
+      },
     ]
-  ), [hasOrganization, isPatient, staffProfile?.hospital_id]);
+  ), [addressSummary, fullName, joinedDateLabel, profile?.contact_number, profile?.phone, roleLabel, user?.email]);
+  const donorActionItems = useMemo(() => (
+    [
+      {
+        key: 'edit',
+        icon: 'editProfile',
+        title: donorProfileReady ? 'Edit Profile' : 'Complete Account Setup',
+        description: donorProfileReady
+          ? 'Update your donor details and photo.'
+          : 'Finish the core donor details on your account.',
+      },
+      {
+        key: 'password',
+        icon: 'settings',
+        title: 'Account Settings',
+        description: 'Manage your password and account access.',
+      },
+    ]
+  ), [donorProfileReady]);
+  const actionItems = useMemo(() => (
+    role === 'donor'
+      ? donorActionItems
+      : [
+          ...(!isPatient && hasOrganization ? [{
+            key: 'organization',
+            icon: 'support',
+            title: 'Open Organization',
+            description: `Go to hospital ID ${staffProfile?.hospital_id}.`,
+          }] : []),
+          ...(!isPatient && !hasOrganization ? [{
+            key: 'completeSetup',
+            icon: 'editProfile',
+            title: 'Complete Account Setup',
+            description: 'Finish your account details.',
+          }] : []),
+          ...profileActionConfig,
+        ]
+  ), [donorActionItems, hasOrganization, isPatient, role, staffProfile?.hospital_id]);
+  const recentDonationHistory = useMemo(() => (
+    donorHistoryState.submissions
+      .slice()
+      .sort((left, right) => (
+        new Date(right?.updated_at || right?.created_at || 0).getTime()
+        - new Date(left?.updated_at || left?.created_at || 0).getTime()
+      ))
+      .slice(0, HISTORY_PREVIEW_LIMIT)
+      .map((submission) => {
+        const drive = donorHistoryState.drivesById[submission?.donation_drive_id] || null;
+        return {
+          key: `submission-${submission?.submission_id || submission?.submission_code || 'record'}`,
+          title: submission?.submission_code || 'Donation record',
+          subtitle: [
+            formatSourceLabel(submission?.donation_source),
+            drive?.event_title || drive?.organization_name || '',
+          ].filter(Boolean).join(' | '),
+          meta: formatDateLabel(submission?.updated_at || submission?.created_at || ''),
+          badge: formatStatusLabel(submission?.status || ''),
+        };
+      })
+  ), [donorHistoryState.drivesById, donorHistoryState.submissions]);
+  const recentHairAnalysisHistory = useMemo(() => (
+    donorHistoryState.submissions
+      .flatMap((submission) => (
+        (submission?.ai_screenings || []).map((screening) => ({
+          key: `analysis-${screening?.ai_screening_id || screening?.id || submission?.submission_id}`,
+          title: screening?.detected_condition || 'Hair analysis saved',
+          subtitle: summarizeText(
+            screening?.summary
+              || screening?.visible_damage_notes
+              || screening?.decision
+              || 'A recent hair analysis result was recorded.',
+            108,
+          ),
+          meta: [
+            submission?.submission_code || '',
+            formatDateLabel(screening?.created_at || submission?.created_at || ''),
+          ].filter(Boolean).join(' | '),
+          badge: formatStatusLabel(screening?.decision || 'Recorded'),
+          createdAt: screening?.created_at || submission?.created_at || '',
+        }))
+      ))
+      .sort((left, right) => (
+        new Date(right?.createdAt || 0).getTime() - new Date(left?.createdAt || 0).getTime()
+      ))
+      .slice(0, HISTORY_PREVIEW_LIMIT)
+  ), [donorHistoryState.submissions]);
   const passwordStrengthMessage = getPasswordStrengthMessage(watchedNewPassword);
   const passwordStrengthVariant = watchedNewPassword
     ? passwordStrengthMessage === 'Strong password'
@@ -420,6 +639,8 @@ export default function ProfileScreen() {
 
   const handlePhotoPress = async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setActiveProfilePicker('');
+    setMode('view');
     const result = await uploadAvatar();
     if (result.canceled) return;
 
@@ -463,6 +684,227 @@ export default function ProfileScreen() {
     }
   }, [defaultValues, mode, passwordForm, profileForm]);
 
+  useEffect(() => {
+    if (role !== 'donor' || !user?.id) {
+      setDonorHistoryState({
+        isLoading: false,
+        error: '',
+        submissions: [],
+        drivesById: {},
+      });
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadDonorHistory = async () => {
+      setDonorHistoryState((current) => ({
+        ...current,
+        isLoading: true,
+        error: '',
+      }));
+
+      const submissionsResult = await fetchHairSubmissionsByUserId(user.id, 8);
+      if (cancelled) return;
+
+      if (submissionsResult.error) {
+        setDonorHistoryState({
+          isLoading: false,
+          error: submissionsResult.error.message || 'Recent profile activity could not be loaded.',
+          submissions: [],
+          drivesById: {},
+        });
+        return;
+      }
+
+      const submissions = submissionsResult.data || [];
+      const driveIds = [...new Set(
+        submissions
+          .map((submission) => submission?.donation_drive_id)
+          .filter(Boolean)
+      )];
+
+      const driveResults = await Promise.all(
+        driveIds.map(async (driveId) => {
+          const driveResult = await fetchDonationDrivePreview(driveId, profile?.user_id || null);
+          return [driveId, driveResult.data || null];
+        })
+      );
+      if (cancelled) return;
+
+      setDonorHistoryState({
+        isLoading: false,
+        error: '',
+        submissions,
+        drivesById: Object.fromEntries(driveResults),
+      });
+    };
+
+    loadDonorHistory();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [profile?.user_id, role, user?.id]);
+
+  const renderDonorProfileContent = () => (
+    <>
+      <AppCard variant="donorTint" radius="xl" padding="lg" style={styles.profileHeroCard}>
+        <View style={styles.profileHeroTopRow}>
+          <View style={styles.profileHeroIdentity}>
+            <View style={styles.profileHeroAvatar}>
+              {avatarUri ? (
+                <Image source={{ uri: avatarUri }} style={styles.profileHeroAvatarImage} resizeMode="cover" />
+              ) : (
+                <Text style={styles.profileHeroAvatarText}>{(avatarInitials || 'DN').toUpperCase().slice(0, 2)}</Text>
+              )}
+            </View>
+
+            <View style={styles.profileHeroCopy}>
+              <Text numberOfLines={2} style={styles.profileHeroName}>{fullName || 'Complete your donor profile'}</Text>
+              <Text numberOfLines={1} style={styles.profileHeroEmail}>{user?.email || 'No email linked'}</Text>
+
+              <View style={styles.profileHeroBadgeRow}>
+                <View style={styles.profileHeroBadge}>
+                  <Text style={styles.profileHeroBadgeText}>{roleLabel}</Text>
+                </View>
+                <View style={[
+                  styles.profileHeroBadge,
+                  donorProfileReady ? styles.profileHeroBadgeSuccess : styles.profileHeroBadgeMuted,
+                ]}
+                >
+                  <Text style={[
+                    styles.profileHeroBadgeText,
+                    donorProfileReady ? styles.profileHeroBadgeTextSuccess : null,
+                  ]}
+                  >
+                    {donorProfileReady ? 'Profile ready' : 'Needs setup'}
+                  </Text>
+                </View>
+              </View>
+            </View>
+          </View>
+        </View>
+
+        <View style={styles.profileHeroFooter}>
+          <Text style={styles.profileHeroJoined}>Joined {joinedDateLabel || 'recently'}</Text>
+          <AppButton
+            title="Change Photo"
+            variant="outline"
+            size="sm"
+            fullWidth={false}
+            loading={isUploadingAvatar}
+            leading={<AppIcon name="camera" state="muted" />}
+            onPress={handlePhotoPress}
+          />
+        </View>
+      </AppCard>
+
+      <AppCard variant="elevated" radius="xl" padding="lg">
+        <DashboardSectionHeader
+          title="Profile Overview"
+          description="Your most important account details in one place."
+          style={styles.sectionHeader}
+        />
+
+        <View style={styles.overviewGrid}>
+          {donorOverviewItems.map((item) => (
+            <View
+              key={item.key}
+              style={[
+                styles.overviewTile,
+                item.wide ? styles.overviewTileWide : null,
+              ]}
+            >
+              <Text style={styles.overviewTileLabel}>{item.label}</Text>
+              <Text style={styles.overviewTileValue}>{item.value}</Text>
+            </View>
+          ))}
+        </View>
+      </AppCard>
+
+      <AppCard variant="elevated" radius="xl" padding="lg">
+        <DashboardSectionHeader
+          title="Recent Donation History"
+          description="A quick look at your latest donor submissions."
+          style={styles.sectionHeader}
+        />
+
+        {donorHistoryState.isLoading ? (
+          <Text style={styles.previewSectionMessage}>Loading recent donation history...</Text>
+        ) : donorHistoryState.error ? (
+          <Text style={styles.previewSectionMessage}>{donorHistoryState.error}</Text>
+        ) : recentDonationHistory.length ? (
+          <View style={styles.previewList}>
+            {recentDonationHistory.map((item) => (
+              <PreviewRow
+                key={item.key}
+                icon="donations"
+                title={item.title}
+                subtitle={item.subtitle}
+                meta={item.meta}
+                badge={item.badge}
+              />
+            ))}
+          </View>
+        ) : (
+          <PreviewEmptyState
+            icon="donations"
+            title="No donation history yet"
+            message="Your recent donation records will appear here once a donor submission is saved."
+          />
+        )}
+      </AppCard>
+
+      <AppCard variant="elevated" radius="xl" padding="lg">
+        <DashboardSectionHeader
+          title="Recent Hair Analysis History"
+          description="Your latest saved hair-check results."
+          style={styles.sectionHeader}
+        />
+
+        {donorHistoryState.isLoading ? (
+          <Text style={styles.previewSectionMessage}>Loading recent hair analysis history...</Text>
+        ) : donorHistoryState.error ? (
+          <Text style={styles.previewSectionMessage}>{donorHistoryState.error}</Text>
+        ) : recentHairAnalysisHistory.length ? (
+          <View style={styles.previewList}>
+            {recentHairAnalysisHistory.map((item) => (
+              <PreviewRow
+                key={item.key}
+                icon="checkHair"
+                title={item.title}
+                subtitle={item.subtitle}
+                meta={item.meta}
+                badge={item.badge}
+              />
+            ))}
+          </View>
+        ) : (
+          <PreviewEmptyState
+            icon="checkHair"
+            title="No hair analysis history yet"
+            message="Saved hair analysis results will appear here after you complete a hair check."
+          />
+        )}
+      </AppCard>
+
+      <AppCard variant="elevated" radius="xl" padding="lg">
+        <DashboardSectionHeader
+          title="Manage Account"
+          description="Open the existing account modules without crowding the main profile page."
+          style={styles.sectionHeader}
+        />
+
+        <View style={styles.actionList}>
+          {actionItems.map((item) => (
+            <ActionRow key={item.key} item={item} onPress={handleActionPress} />
+          ))}
+        </View>
+      </AppCard>
+    </>
+  );
+
   return (
     <>
       <DashboardLayout
@@ -491,49 +933,53 @@ export default function ProfileScreen() {
           />
         )}
       >
-        <AppCard variant={role === 'donor' ? 'donorTint' : 'patientTint'} radius="xl" padding="lg">
-          <DashboardSectionHeader
-            title="Overview"
-            description=""
-            style={styles.sectionHeader}
-          />
+        {role === 'donor' ? renderDonorProfileContent() : (
+          <>
+            <AppCard variant="patientTint" radius="xl" padding="lg">
+              <DashboardSectionHeader
+                title="Overview"
+                description=""
+                style={styles.sectionHeader}
+              />
 
-          <View style={styles.overviewButtonRow}>
-            <AppButton
-              title="Change Photo"
-              variant="outline"
-              size="md"
-              fullWidth={false}
-              loading={isUploadingAvatar}
-              leading={<AppIcon name="camera" state="muted" />}
-              onPress={handlePhotoPress}
-              style={styles.overviewButton}
-            />
-          </View>
-
-          <View style={styles.overviewList}>
-            {overviewRows.map((row) => (
-              <View key={row.key} style={styles.overviewRow}>
-                <Text style={styles.overviewLabel}>{row.label}</Text>
-                <Text style={styles.overviewValue}>{row.value}</Text>
+              <View style={styles.overviewButtonRow}>
+                <AppButton
+                  title="Change Photo"
+                  variant="outline"
+                  size="md"
+                  fullWidth={false}
+                  loading={isUploadingAvatar}
+                  leading={<AppIcon name="camera" state="muted" />}
+                  onPress={handlePhotoPress}
+                  style={styles.overviewButton}
+                />
               </View>
-            ))}
-          </View>
-        </AppCard>
 
-        <AppCard variant="elevated" radius="xl" padding="lg">
-          <DashboardSectionHeader
-            title="Actions"
-            description=""
-            style={styles.sectionHeader}
-          />
+              <View style={styles.overviewList}>
+                {overviewRows.map((row) => (
+                  <View key={row.key} style={styles.overviewRow}>
+                    <Text style={styles.overviewLabel}>{row.label}</Text>
+                    <Text style={styles.overviewValue}>{row.value}</Text>
+                  </View>
+                ))}
+              </View>
+            </AppCard>
 
-          <View style={styles.actionList}>
-            {actionItems.map((item) => (
-              <ActionRow key={item.key} item={item} onPress={handleActionPress} />
-            ))}
-          </View>
-        </AppCard>
+            <AppCard variant="elevated" radius="xl" padding="lg">
+              <DashboardSectionHeader
+                title="Actions"
+                description=""
+                style={styles.sectionHeader}
+              />
+
+              <View style={styles.actionList}>
+                {actionItems.map((item) => (
+                  <ActionRow key={item.key} item={item} onPress={handleActionPress} />
+                ))}
+              </View>
+            </AppCard>
+          </>
+        )}
 
         <Modal transparent visible={isPopupVisible} animationType="fade" onRequestClose={handleModalClose}>
           <KeyboardAvoidingView
@@ -805,6 +1251,232 @@ export default function ProfileScreen() {
 }
 
 const styles = StyleSheet.create({
+  profileHeroCard: {
+    overflow: 'hidden',
+  },
+  profileHeroTopRow: {
+    marginBottom: theme.spacing.md,
+  },
+  profileHeroIdentity: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.md,
+  },
+  profileHeroAvatar: {
+    width: 74,
+    height: 74,
+    borderRadius: theme.radius.full,
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.surfaceCard,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+  },
+  profileHeroAvatarImage: {
+    width: '100%',
+    height: '100%',
+  },
+  profileHeroAvatarText: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    color: theme.colors.brandPrimary,
+  },
+  profileHeroCopy: {
+    flex: 1,
+    gap: theme.spacing.xs,
+  },
+  profileHeroName: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    color: theme.colors.textPrimary,
+  },
+  profileHeroEmail: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    color: theme.colors.textSecondary,
+  },
+  profileHeroBadgeRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.spacing.xs,
+    marginTop: theme.spacing.xs,
+  },
+  profileHeroBadge: {
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: 6,
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.surfaceCard,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+  },
+  profileHeroBadgeMuted: {
+    backgroundColor: theme.colors.surfaceSoft,
+  },
+  profileHeroBadgeSuccess: {
+    backgroundColor: theme.colors.brandPrimaryMuted,
+    borderColor: theme.colors.borderSubtle,
+  },
+  profileHeroBadgeText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textSecondary,
+  },
+  profileHeroBadgeTextSuccess: {
+    color: theme.colors.textSuccess,
+  },
+  profileHeroFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+    paddingTop: theme.spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.borderSubtle,
+  },
+  profileHeroJoined: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    color: theme.colors.textSecondary,
+  },
+  overviewGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.spacing.sm,
+  },
+  overviewTile: {
+    flexGrow: 1,
+    flexBasis: '47%',
+    minWidth: 148,
+    gap: 4,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.md,
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.surfaceSoft,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+  },
+  overviewTileWide: {
+    flexBasis: '100%',
+  },
+  overviewTileLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.semibold,
+    letterSpacing: 0.3,
+    textTransform: 'uppercase',
+    color: theme.colors.textSecondary,
+  },
+  overviewTileValue: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textPrimary,
+  },
+  previewList: {
+    gap: theme.spacing.sm,
+  },
+  previewRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.md,
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.surfaceSoft,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+  },
+  previewIconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.brandPrimaryMuted,
+  },
+  previewCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  previewTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+  },
+  previewTitle: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textPrimary,
+  },
+  previewBadge: {
+    maxWidth: '45%',
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: 5,
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.surfaceCard,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+  },
+  previewBadgeText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textSecondary,
+  },
+  previewSubtitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textPrimary,
+  },
+  previewMeta: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    color: theme.colors.textSecondary,
+  },
+  previewSectionMessage: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    color: theme.colors.textSecondary,
+  },
+  previewEmptyState: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: theme.spacing.xs,
+    paddingHorizontal: theme.spacing.lg,
+    paddingVertical: theme.spacing.xl,
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.surfaceSoft,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+  },
+  previewEmptyIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.surfaceCard,
+  },
+  previewEmptyTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textPrimary,
+  },
+  previewEmptyMessage: {
+    textAlign: 'center',
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textSecondary,
+  },
   overviewButtonRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',

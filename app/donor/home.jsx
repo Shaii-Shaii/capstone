@@ -772,8 +772,6 @@ export default function DonorHomeScreen() {
     || (
       selectedDrivePreview?.registration?.qr?.is_valid
         ? 'This drive already has your saved RSVP. Open the shared drive flow to view the same QR.'
-        : selectedDrivePreview?.registration?.qr?.can_regenerate
-          ? 'This QR expired before staff used it. Continue to generate a new one.'
         : hasOngoingDonation
           ? ongoingDonationMessage
           : selectedDrivePreview?.organization_id && !selectedDrivePreview?.membership?.is_active

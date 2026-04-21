@@ -32,7 +32,6 @@ const PARCEL_IMAGE_TYPES = ['independent_parcel_photo', 'parcel_photo', 'parcel_
 const QR_IMAGE_BASE_URL = 'https://api.qrserver.com/v1/create-qr-code/';
 const QR_META_START = '[DONIVRA_QR_META]';
 const QR_META_END = '[/DONIVRA_QR_META]';
-export const DONATION_QR_VALIDITY_MS = 15 * 60 * 1000;
 
 const escapeHtml = (value = '') => String(value)
   .replaceAll('&', '&amp;')
@@ -258,12 +257,6 @@ const persistDonationNotifications = async ({
   }
 };
 
-const resolveQrExpiryAt = (generatedAt = '') => {
-  const generatedTime = generatedAt ? new Date(generatedAt).getTime() : NaN;
-  if (!Number.isFinite(generatedTime)) return '';
-  return new Date(generatedTime + DONATION_QR_VALIDITY_MS).toISOString();
-};
-
 const getIndependentQrMetadata = (submission = null) => {
   const metadata = parseQrMetadata(submission?.donor_notes || '');
   if (!metadata || metadata.type !== 'independent' || !metadata.reference) {
@@ -271,22 +264,20 @@ const getIndependentQrMetadata = (submission = null) => {
   }
 
   const generatedAt = metadata.generated_at || metadata.confirmed_at || '';
-  const expiresAt = metadata.expires_at || resolveQrExpiryAt(generatedAt);
   const activatedAt = metadata.activated_at || metadata.confirmed_at || '';
   const isActivated = metadata.status === 'activated' || metadata.confirmed === true;
-  const isExpired = !isActivated && Boolean(expiresAt) && new Date(expiresAt).getTime() <= Date.now();
 
   return {
     reference: metadata.reference,
     generated_at: generatedAt,
-    expires_at: expiresAt,
+    expires_at: '',
     activated_at: activatedAt,
     version: metadata.version ?? 1,
-    status: isActivated ? 'activated' : isExpired ? 'expired' : 'pending',
+    status: isActivated ? 'activated' : 'pending',
     is_activated: isActivated,
-    is_expired: isExpired,
-    is_pending: !isActivated && !isExpired,
-    can_regenerate: !isActivated && isExpired,
+    is_expired: false,
+    is_pending: !isActivated,
+    can_regenerate: false,
   };
 };
 
@@ -302,7 +293,7 @@ const buildIndependentQrMetadata = ({
   reference,
   status,
   generated_at: generatedAt,
-  expires_at: resolveQrExpiryAt(generatedAt),
+  expires_at: '',
   activated_at: activatedAt || '',
   version,
   updated_by: updatedBy || null,
@@ -319,7 +310,7 @@ const buildIndependentQrMetadataFromState = ({
 
   return buildIndependentQrMetadata({
     reference: qrState.reference,
-    status: qrState.is_activated ? 'activated' : qrState.is_expired ? 'expired' : 'pending',
+    status: qrState.is_activated ? 'activated' : 'pending',
     generatedAt: qrState.generated_at || fallbackMetadata?.generated_at || new Date().toISOString(),
     activatedAt: qrState.activated_at || fallbackMetadata?.activated_at || '',
     version: Number(fallbackMetadata?.version || 0) + 1,
@@ -506,24 +497,11 @@ export const getIndependentDonationQrState = ({
     status: isFlowActivated ? 'activated' : metadata.status,
     is_activated: isFlowActivated,
     is_pending: !isFlowActivated && metadata.is_pending,
-    is_expired: !isFlowActivated && metadata.is_expired,
+    is_expired: false,
     is_valid: isFlowActivated || metadata.is_pending,
     show_my_qr: isFlowActivated || metadata.is_pending,
     upload_unlocked: isFlowActivated,
   };
-};
-
-export const formatQrCountdownLabel = (expiresAt = '', now = Date.now()) => {
-  const expiryTime = expiresAt ? new Date(expiresAt).getTime() : NaN;
-  if (!Number.isFinite(expiryTime)) return '';
-
-  const remainingMs = expiryTime - now;
-  if (remainingMs <= 0) return 'QR expired';
-
-  const totalSeconds = Math.max(0, Math.ceil(remainingMs / 1000));
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `Expires in ${minutes}:${String(seconds).padStart(2, '0')}`;
 };
 
 const buildManualDonationNotes = ({ manualDetails = {}, evaluation = null }) => (
@@ -943,7 +921,7 @@ export const buildDriveInvitationQrPayload = ({ drive, registration, donor }) =>
     donor_name: donor?.name || [donor?.first_name, donor?.last_name].filter(Boolean).join(' ').trim() || '',
     registered_at: registration?.registered_at || new Date().toISOString(),
     generated_at: registration?.registered_at || new Date().toISOString(),
-    expires_at: registration?.qr?.expires_at || '',
+    expires_at: '',
     activated_at: registration?.qr?.activated_at || '',
     qr_status: registration?.qr?.status || 'pending',
   })
@@ -976,7 +954,7 @@ export const buildIndependentDonationQrPayload = ({
     declared_density: detail?.declared_density || '',
     declared_texture: detail?.declared_texture || '',
     generated_at: generatedAt || new Date().toISOString(),
-    expires_at: resolveQrExpiryAt(generatedAt || new Date().toISOString()),
+    expires_at: '',
     activated_at: confirmedAt || '',
   })
 );
@@ -1612,62 +1590,6 @@ export const ensureIndependentDonationQr = async ({
   };
 };
 
-export const expireIndependentDonationQr = async ({
-  userId = null,
-  submission,
-  databaseUserId = null,
-}) => {
-  if (!submission?.submission_id) {
-    return { success: false, error: 'A valid donation submission is required before expiring the QR.' };
-  }
-
-  const currentMetadata = getIndependentQrMetadata(submission);
-  if (!currentMetadata?.reference || currentMetadata.is_activated || currentMetadata.is_expired) {
-    return {
-      success: true,
-      qrState: getIndependentDonationQrState({ submission }),
-      submission,
-      alreadyExpired: true,
-    };
-  }
-
-  const nextMetadata = buildIndependentQrMetadata({
-    reference: currentMetadata.reference,
-    status: 'expired',
-    generatedAt: currentMetadata.generated_at,
-    activatedAt: currentMetadata.activated_at,
-    version: currentMetadata.version ?? 1,
-  });
-
-  const syncedResult = await syncIndependentDonationSubmission({
-    userId,
-    databaseUserId,
-    submission,
-    qrMetadata: nextMetadata,
-    status: 'QR Expired',
-    logisticsStatus: 'QR Expired',
-    logisticsNotes: 'The independent donation QR expired before staff activation.',
-    trackingTitle: 'Independent donation QR expired',
-    trackingDescription: 'The independent donation QR expired before staff activated it.',
-    shouldTrack: true,
-    shouldNotify: true,
-  });
-
-  if (!syncedResult.success) {
-    return {
-      success: false,
-      error: syncedResult.error || 'The QR could not be marked as expired right now.',
-    };
-  }
-
-  return {
-    success: true,
-    qrState: getIndependentDonationQrState({ submission: syncedResult.submission }),
-    submission: syncedResult.submission,
-    alreadyExpired: false,
-  };
-};
-
 export const activateIndependentDonationQr = async ({
   userId = null,
   submission,
@@ -1927,7 +1849,6 @@ export const saveDriveDonationParticipation = async ({
 
   const shouldTrackDriveParticipation = (
     !rsvpResult.alreadyRegistered
-    || rsvpResult.regenerated
     || submission?.donation_drive_id !== drive.donation_drive_id
     || String(submission?.donation_source || '').trim().toLowerCase() !== DRIVE_DONATION_SOURCE
   );
@@ -1937,10 +1858,8 @@ export const saveDriveDonationParticipation = async ({
       submission_id: submissionResult.data.submission_id,
       submission_detail_id: detail.submission_detail_id,
       status: rsvpResult.data?.qr?.is_activated ? 'Drive RSVP Activated' : 'Drive RSVP Pending',
-      title: rsvpResult.regenerated ? 'Drive QR regenerated' : 'Drive RSVP saved',
-      description: rsvpResult.regenerated
-        ? `A new drive QR was generated for ${drive?.event_title || 'the selected drive'}.`
-        : `The donor joined ${drive?.event_title || 'the selected drive'} and the RSVP is now saved.`,
+      title: 'Drive RSVP saved',
+      description: `The donor joined ${drive?.event_title || 'the selected drive'} and the RSVP is now saved.`,
       changed_by: databaseUserId,
     });
 
@@ -1958,10 +1877,8 @@ export const saveDriveDonationParticipation = async ({
       notifications: [
         buildDonationNotification({
           dedupeKey: `${notificationTypes.logisticsUpdated}:${submissionResult.data.submission_id}:drive-rsvp:${rsvpResult.data.registration_id}`,
-          title: rsvpResult.regenerated ? 'Drive QR regenerated' : 'Drive RSVP saved',
-          message: rsvpResult.regenerated
-            ? `A new QR is ready for ${drive?.event_title || 'your donation drive'}.`
-            : `Your RSVP for ${drive?.event_title || 'the donation drive'} was saved successfully.`,
+          title: 'Drive RSVP saved',
+          message: `Your RSVP for ${drive?.event_title || 'the donation drive'} was saved successfully.`,
           createdAt: new Date().toISOString(),
           referenceId: submissionResult.data.submission_id,
         }),
@@ -1974,7 +1891,7 @@ export const saveDriveDonationParticipation = async ({
     registration: rsvpResult.data,
     submission: submissionResult.data,
     alreadyRegistered: rsvpResult.alreadyRegistered,
-    regenerated: rsvpResult.regenerated,
+    regenerated: false,
   };
 };
 

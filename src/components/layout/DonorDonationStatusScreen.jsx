@@ -24,8 +24,6 @@ import {
   buildIndependentDonationQrPayload,
   buildQrImageUrl,
   ensureIndependentDonationQr,
-  expireIndependentDonationQr,
-  formatQrCountdownLabel,
   generateDonationQrPdf,
   getDonorDonationsModuleData,
   getIndependentDonationQrState,
@@ -120,7 +118,7 @@ const formatQrStatusLabel = (status = '') => {
   const normalized = String(status || '').trim().toLowerCase();
   if (!normalized) return 'Pending';
   if (normalized === 'activated') return 'Activated';
-  if (normalized === 'expired') return 'Expired';
+  if (normalized === 'expired') return 'Pending';
   return normalized.charAt(0).toUpperCase() + normalized.slice(1);
 };
 
@@ -366,18 +364,14 @@ function QrModal({
   subtitle,
   helperText,
   payload,
-  countdownText,
   statusLabel,
   onClose,
   onDownload,
   onPrint,
-  onRegenerate,
   onNext,
   nextLabel = 'Next',
   isDownloading,
   isPrinting,
-  canRegenerate = false,
-  isConfirmed = false,
 }) {
   if (!visible || !payload) return null;
 
@@ -389,12 +383,8 @@ function QrModal({
       onClose={onClose}
       footer={(
         <View style={styles.qrActionWrap}>
-          <AppButton title="Close" variant="outline" fullWidth={false} onPress={onClose} />
           <AppButton title="Print" variant="outline" fullWidth={false} onPress={onPrint} loading={isPrinting} />
           <AppButton title="Download" fullWidth={false} onPress={onDownload} loading={isDownloading} />
-          {canRegenerate && onRegenerate ? (
-            <AppButton title="Generate new QR" variant="outline" fullWidth={false} onPress={onRegenerate} />
-          ) : null}
           {onNext ? <AppButton title={nextLabel} fullWidth={false} onPress={onNext} /> : null}
         </View>
       )}
@@ -403,7 +393,6 @@ function QrModal({
         <Image source={{ uri: buildQrImageUrl(payload, 420) }} style={styles.qrPreviewImage} resizeMode="contain" />
       </View>
       {statusLabel ? <Text style={styles.qrStatus}>Status: {statusLabel}</Text> : null}
-      {countdownText ? <Text style={styles.qrCountdown}>{countdownText}</Text> : null}
       {helperText ? <Text style={styles.qrHelper}>{helperText}</Text> : null}
     </ModalShell>
   );
@@ -468,7 +457,7 @@ function DriveBrowserModal({
           ) : null}
           {isDetailView ? (
             <AppButton
-              title={selectedDrive?.registration?.qr?.can_regenerate ? 'Generate new QR' : selectedDrive?.registration?.qr?.is_valid ? 'Show my QR' : 'RSVP'}
+              title={selectedDrive?.registration?.qr?.is_valid ? 'Show my QR' : 'RSVP'}
               fullWidth={false}
               onPress={selectedDrive?.registration?.qr?.is_valid ? onViewQr : onRsvp}
               disabled={Boolean(selectedDrive?.registration?.qr?.is_activated)}
@@ -512,11 +501,9 @@ function DriveBrowserModal({
             <Text style={styles.driveDetailMeta}>
               {selectedDrive?.registration?.qr?.is_activated
                 ? 'QR activated for this drive'
-                : selectedDrive?.registration?.qr?.is_expired
-                  ? 'QR expired. Generate a new one to continue.'
-                  : selectedDrive?.registration?.qr?.is_pending
-                    ? `Pending activation. ${formatQrCountdownLabel(selectedDrive?.registration?.qr?.expires_at)}`
-                    : selectedDrive?.membership?.is_active ? 'Organization member' : 'Membership required before RSVP'}
+                : selectedDrive?.registration?.qr?.is_pending
+                  ? 'Saved QR is ready for this drive.'
+                  : selectedDrive?.membership?.is_active ? 'Organization member' : 'Membership required before RSVP'}
             </Text>
           </View>
 
@@ -715,7 +702,6 @@ export function DonorDonationStatusScreen() {
   const [isUploadingParcel, setIsUploadingParcel] = React.useState(false);
 
   const [qrSheet, setQrSheet] = React.useState(null);
-  const [qrNowMs, setQrNowMs] = React.useState(Date.now());
   const [isDownloadingQr, setIsDownloadingQr] = React.useState(false);
   const [isPrintingQr, setIsPrintingQr] = React.useState(false);
   const [qrSharingAvailable, setQrSharingAvailable] = React.useState(false);
@@ -802,25 +788,6 @@ export function DonorDonationStatusScreen() {
   }, []);
 
   React.useEffect(() => {
-    const activePendingExpiry = qrSheet?.expiresAt && !qrSheet?.isConfirmed
-      ? qrSheet.expiresAt
-      : independentQrState?.is_pending
-        ? independentQrState.expires_at
-        : '';
-
-    if (!activePendingExpiry) {
-      return undefined;
-    }
-
-    setQrNowMs(Date.now());
-    const timer = setInterval(() => {
-      setQrNowMs(Date.now());
-    }, 1000);
-
-    return () => clearInterval(timer);
-  }, [independentQrState?.expires_at, independentQrState?.is_pending, qrSheet?.expiresAt, qrSheet?.isConfirmed]);
-
-  React.useEffect(() => {
     if (moduleData?.isAiEligible) {
       if (!entryPath) {
         setEntryPath(MANUAL_ENTRY_PATHS.ai);
@@ -889,61 +856,6 @@ export function DonorDonationStatusScreen() {
       ? 'Independent donation'
       : 'Donation in progress';
   const currentStatusLabel = currentTimelineStage?.label || formatQrStatusLabel(activeQrState?.status || '') || 'In progress';
-
-  React.useEffect(() => {
-    if (!independentQrState?.is_pending || !independentQrState?.expires_at || !activeSubmission?.submission_id) {
-      return undefined;
-    }
-
-    if (new Date(independentQrState.expires_at).getTime() > qrNowMs) {
-      return undefined;
-    }
-
-    let cancelled = false;
-
-    const expireQr = async () => {
-      const result = await expireIndependentDonationQr({
-        submission: activeSubmission,
-        databaseUserId: profile?.user_id || null,
-      });
-
-      if (!cancelled && result.success) {
-        if (qrSheet?.type === 'independent') {
-          setQrSheet((current) => current ? {
-            ...current,
-            helperText: 'This QR expired before staff activated it. Generate a new QR to continue.',
-            isConfirmed: false,
-            canRegenerate: true,
-            expiresAt: result.qrState?.expires_at || current.expiresAt,
-            qrStatus: 'expired',
-          } : current);
-        }
-        loadModuleData();
-      }
-    };
-
-    expireQr();
-    return () => {
-      cancelled = true;
-    };
-  }, [activeSubmission, independentQrState?.expires_at, independentQrState?.is_pending, loadModuleData, profile?.user_id, qrNowMs, qrSheet?.type]);
-
-  React.useEffect(() => {
-    if (!qrSheet?.expiresAt || qrSheet?.isConfirmed || qrSheet?.type !== 'drive') {
-      return;
-    }
-
-    if (new Date(qrSheet.expiresAt).getTime() > qrNowMs || qrSheet?.qrStatus === 'expired') {
-      return;
-    }
-
-    setQrSheet((current) => current ? {
-      ...current,
-      helperText: 'This QR expired before staff used it. Generate a new QR to continue.',
-      canRegenerate: true,
-      qrStatus: 'expired',
-    } : current);
-  }, [qrNowMs, qrSheet?.expiresAt, qrSheet?.isConfirmed, qrSheet?.qrStatus, qrSheet?.type]);
 
   const handleNavPress = React.useCallback((item) => {
     if (!item.route || item.route === '/donor/status') return;
@@ -1104,13 +1016,8 @@ export function DonorDonationStatusScreen() {
       subtitle: 'Present this QR at the donation drive.',
       helperText: qrState?.is_activated
         ? 'This QR is activated and stays official for this drive registration.'
-        : qrState?.is_expired
-          ? 'This QR expired before staff used it. Generate a new QR to continue.'
-          : 'This QR stays valid for 15 minutes unless staff activates it first.',
+        : 'This saved QR stays tied to your current drive registration.',
       payload,
-      isConfirmed: Boolean(qrState?.is_activated),
-      canRegenerate: Boolean(qrState?.can_regenerate),
-      expiresAt: qrState?.expires_at || '',
       qrStatus: qrState?.status || 'pending',
     });
   }, [donorIdentity]);
@@ -1149,7 +1056,7 @@ export function DonorDonationStatusScreen() {
     };
     setSelectedDrive(nextDrive);
     setDriveFeedback({
-      message: result.regenerated ? 'Expired QR replaced with a new one.' : result.alreadyRegistered ? 'RSVP already saved.' : 'RSVP saved.',
+      message: result.alreadyRegistered ? 'RSVP already saved.' : 'RSVP saved.',
       variant: 'success',
     });
     buildDriveQrSheet(nextDrive, result.registration);
@@ -1248,15 +1155,10 @@ export function DonorDonationStatusScreen() {
       subtitle: 'Attach this QR to the parcel.',
       helperText: qrState.is_activated
         ? 'This QR is activated and is now the official QR for your donation flow.'
-        : qrState.is_expired
-          ? 'This QR expired before staff activated it. Generate a new QR to continue.'
-          : 'Wait for staff to scan and activate this QR before continuing to parcel upload.',
+        : 'This saved QR stays tied to your current donation flow.',
       payload,
       qrReference: qrState.reference,
       generatedAt: qrState.generated_at || '',
-      expiresAt: qrState.expires_at || '',
-      isConfirmed: Boolean(qrState.is_activated),
-      canRegenerate: Boolean(qrState.can_regenerate),
       qrStatus: qrState.status || 'pending',
     };
   }, [donorIdentity, entryPath, moduleData?.independentQrState, qualifiedDetail, qualifiedDonationRecord?.source, qualifiedScreening, qualifiedSubmission]);
@@ -1318,7 +1220,7 @@ export function DonorDonationStatusScreen() {
     const didOpenQr = await openIndependentQrSheet();
     if (!didOpenQr) {
       setModuleFeedback({
-        message: 'No QR is ready yet. Generate a new QR first.',
+        message: 'No saved QR is ready yet for this donation flow.',
         variant: 'info',
       });
     }
@@ -1340,7 +1242,7 @@ export function DonorDonationStatusScreen() {
     }
 
     setModuleFeedback({
-      message: 'No valid QR is available for the current donation yet.',
+      message: 'No saved QR is available for the current donation yet.',
       variant: 'info',
     });
   }, [
@@ -1447,7 +1349,7 @@ export function DonorDonationStatusScreen() {
     }
 
     setModuleFeedback({
-      message: result.reused ? 'Your current valid QR was loaded.' : 'A new QR is ready. It will expire in 15 minutes unless staff activates it first.',
+      message: result.reused ? 'Your saved QR was loaded.' : 'Your QR was saved and is ready to view.',
       variant: 'success',
     });
   }, [activeSubmission, createIndependentQrSheet, entryPath, hasOngoingDonation, loadModuleData, moduleData?.activeScreening, moduleData?.independentQrState, moduleData?.latestDetail, ongoingDonationMessage, openIndependentQrSheet, profile?.user_id, qualifiedDetail, qualifiedDonationRecord?.source, qualifiedScreening, qualifiedSubmission, showQrSheet, user?.id]);
@@ -1515,100 +1417,6 @@ export function DonorDonationStatusScreen() {
     }
     setQrSheet(null);
   }, []);
-
-  const handleRegenerateQr = React.useCallback(async () => {
-    if (qrSheet?.type === 'independent') {
-      const expireResult = await expireIndependentDonationQr({
-        userId: user?.id,
-        submission: qualifiedSubmission,
-        databaseUserId: profile?.user_id || null,
-      });
-
-      if (!expireResult.success) {
-        setModuleFeedback({
-          message: expireResult.error || 'The expired QR could not be cleared right now.',
-          variant: 'error',
-        });
-        return;
-      }
-
-      const result = await ensureIndependentDonationQr({
-        userId: user?.id,
-        submission: expireResult.submission || qualifiedSubmission,
-        databaseUserId: profile?.user_id || null,
-      });
-
-      if (!result.success || !result.qrState?.reference) {
-        setModuleFeedback({
-          message: result.error || 'A new QR could not be generated right now.',
-          variant: 'error',
-        });
-        return;
-      }
-
-      const nextSubmission = result.submission || expireResult.submission || qualifiedSubmission;
-      const nextDetail = getLatestSubmissionDetailRecord(nextSubmission, qualifiedDetail);
-
-      const nextPayload = buildIndependentDonationQrPayload({
-        submission: nextSubmission,
-        detail: nextDetail,
-        screening: qualifiedScreening,
-        donor: donorIdentity,
-        qualificationSource: qualifiedDonationRecord?.source || entryPath,
-        qrReference: result.qrState.reference,
-        generatedAt: result.qrState.generated_at || '',
-        confirmedAt: result.qrState.activated_at || '',
-      });
-
-      setQrSheet((current) => current ? {
-        ...current,
-        payload: nextPayload,
-        qrReference: result.qrState.reference,
-        generatedAt: result.qrState.generated_at || '',
-        expiresAt: result.qrState.expires_at || '',
-        helperText: 'A new QR is ready. It will expire in 15 minutes unless staff activates it first.',
-        isConfirmed: Boolean(result.qrState.is_activated),
-        canRegenerate: Boolean(result.qrState.can_regenerate),
-        qrStatus: result.qrState.status || 'pending',
-      } : current);
-
-      setModuleFeedback({
-        message: 'A new parcel QR was generated.',
-        variant: 'success',
-      });
-      await loadModuleData();
-      return;
-    }
-
-    if (qrSheet?.type === 'drive' && selectedDrive?.donation_drive_id && profile?.user_id) {
-      const result = await saveDriveDonationParticipation({
-        userId: user?.id,
-        databaseUserId: profile.user_id,
-        drive: selectedDrive,
-        submission: qualifiedSubmission,
-        detail: qualifiedDetail,
-        qualificationSource: qualifiedDonationRecord?.source || entryPath,
-      });
-
-      if (result.error || !result.registration) {
-        setDriveFeedback({ message: 'A new drive QR could not be generated right now.', variant: 'error' });
-        return;
-      }
-
-      const nextDrive = {
-        ...selectedDrive,
-        registration: result.registration,
-        can_rsvp: false,
-      };
-      setSelectedDrive(nextDrive);
-      buildDriveQrSheet(nextDrive, result.registration);
-      setDriveFeedback({
-        message: result.regenerated ? 'A new drive QR is ready.' : 'Your current drive QR is still valid.',
-        variant: 'success',
-      });
-      await loadModuleData();
-    }
-  }, [buildDriveQrSheet, donorIdentity, entryPath, loadModuleData, profile?.user_id, qualifiedDetail, qualifiedDonationRecord?.source, qualifiedScreening, qualifiedSubmission, qrSheet?.type, selectedDrive, user?.id]);
 
   const handleUploadParcel = React.useCallback(async () => {
     if (!activeSubmission || !activeDetail) {
@@ -1871,8 +1679,8 @@ export function DonorDonationStatusScreen() {
                           {independentQrState?.is_activated
                             ? 'Your official active QR is ready to view.'
                             : independentQrState?.is_pending
-                              ? `${formatQrCountdownLabel(independentQrState.expires_at, qrNowMs)}. Waiting for staff activation.`
-                              : 'Review agreement, generate QR, then wait for staff activation.'}
+                              ? 'Your saved QR is ready and waiting for staff activation.'
+                              : 'Review agreement, save your QR, then wait for staff activation.'}
                         </Text>
                       </View>
                       <AppIcon name="chevron-right" size="sm" state="muted" />
@@ -2003,20 +1811,16 @@ export function DonorDonationStatusScreen() {
         helperText={qrSheet?.helperText || ''}
         payload={qrSheet?.payload || ''}
         statusLabel={formatQrStatusLabel(qrSheet?.qrStatus || '')}
-        countdownText={qrSheet?.isConfirmed ? '' : formatQrCountdownLabel(qrSheet?.expiresAt || '', qrNowMs)}
         onClose={handleCloseQrSheet}
         onDownload={handleDownloadQr}
         onPrint={handlePrintQr}
-        onRegenerate={handleRegenerateQr}
-        onNext={qrSheet?.type === 'independent' && qrSheet?.isConfirmed ? () => {
+        onNext={qrSheet?.type === 'independent' && qrSheet?.qrStatus === 'activated' ? () => {
           handleCloseQrSheet();
           setIsParcelModalOpen(true);
         } : null}
         nextLabel="Continue to upload"
         isDownloading={isDownloadingQr}
         isPrinting={isPrintingQr}
-        canRegenerate={Boolean(qrSheet?.canRegenerate)}
-        isConfirmed={Boolean(qrSheet?.isConfirmed)}
       />
 
       <ParcelUploadModal

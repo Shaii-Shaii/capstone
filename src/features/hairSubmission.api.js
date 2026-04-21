@@ -1093,7 +1093,9 @@ export const fetchHairBundleTrackingHistory = async ({ submissionId, submissionD
     .limit(limit);
 
   if (submissionId && submissionDetailId) {
-    const result = await query.or(`Submission_ID.eq.${submissionId},Submission_Detail_ID.eq.${submissionDetailId}`);
+    const result = await query
+      .eq('Submission_ID', submissionId)
+      .or(`Submission_Detail_ID.eq.${submissionDetailId},Submission_Detail_ID.is.null`);
     return {
       data: (result.data || []).map(normalizeTrackingEntry),
       error: result.error,

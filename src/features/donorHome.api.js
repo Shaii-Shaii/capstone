@@ -52,40 +52,28 @@ const donationDriveRegistrationSelect = `
   updated_at:Updated_At
 `;
 
-const DRIVE_QR_VALIDITY_MS = 15 * 60 * 1000;
-
 const normalizeRegistrationStatus = (value = '') => String(value || '').trim().toLowerCase();
 
 const resolveDriveQrState = (row) => {
   const registrationStatus = normalizeRegistrationStatus(row?.registration_status);
   const attendanceStatus = normalizeRegistrationStatus(row?.attendance_status);
   const generatedAt = row?.registered_at || row?.updated_at || null;
-  const generatedTime = generatedAt ? new Date(generatedAt).getTime() : null;
-  const expiresAt = Number.isFinite(generatedTime)
-    ? new Date(generatedTime + DRIVE_QR_VALIDITY_MS).toISOString()
-    : null;
-  const now = Date.now();
   const isActivated = (
     ['activated', 'active', 'approved', 'used', 'scanned', 'participated', 'attended'].includes(registrationStatus)
     || ['marked', 'attended', 'present', 'checked in', 'checked-in'].includes(attendanceStatus)
   );
-  const isExplicitlyExpired = registrationStatus === 'expired' || registrationStatus === 'qr expired';
-  const isExpired = !isActivated && (
-    isExplicitlyExpired
-    || (Number.isFinite(generatedTime) && generatedTime + DRIVE_QR_VALIDITY_MS <= now)
-  );
-  const isPending = Boolean(row?.registration_id) && !isActivated && !isExpired;
+  const isPending = Boolean(row?.registration_id) && !isActivated;
 
   return {
-    state: isActivated ? 'activated' : isExpired ? 'expired' : isPending ? 'pending' : 'missing',
+    state: isActivated ? 'activated' : isPending ? 'pending' : 'missing',
     generated_at: generatedAt,
-    expires_at: expiresAt,
+    expires_at: null,
     activated_at: isActivated ? (row?.updated_at || row?.registered_at || null) : null,
     is_pending: isPending,
-    is_expired: isExpired,
+    is_expired: false,
     is_activated: isActivated,
-    can_regenerate: Boolean(row?.registration_id) && isExpired && !isActivated,
-    is_valid: isActivated || isPending,
+    can_regenerate: false,
+    is_valid: Boolean(row?.registration_id),
   };
 };
 
@@ -399,7 +387,8 @@ export const fetchFeaturedOrganizations = async (limit = 8) => {
     .from(organizationsTable)
     .select(organizationSelect)
     .eq('Status', 'Active')
-    .order('Is_Approved', { ascending: false })
+    .eq('Is_Approved', true)
+    .eq('Approval_Status', 'Approved')
     .order('Updated_At', { ascending: false })
     .limit(limit);
 
@@ -428,6 +417,7 @@ export const fetchUpcomingDonationDrives = async (limit = 6) => {
   const result = await supabase
     .from(donationDriveRequestsTable)
     .select(donationDriveSelect)
+    .eq('Status', 'Approved')
     .not('Start_Date', 'is', null)
     .gte('Start_Date', today)
     .order('Start_Date', { ascending: true })
@@ -532,42 +522,6 @@ export const createDonationDriveRsvp = async ({
 
   const existingResult = await findExistingDriveRegistration(driveId, databaseUserId);
   if (existingResult.data) {
-    if (existingResult.data?.qr?.can_regenerate) {
-      const updateResult = await supabase
-        .from(donationDriveRegistrationsTable)
-        .update({
-          Registration_Status: 'Pending QR',
-          Attendance_Status: 'Not Marked',
-          Registered_At: new Date().toISOString(),
-        })
-        .eq('Registration_ID', existingResult.data.registration_id)
-        .select(donationDriveRegistrationSelect)
-        .maybeSingle();
-
-      if (updateResult.error) {
-        logAppError('donor_home.rsvp.regenerate', updateResult.error, {
-          table: donationDriveRegistrationsTable,
-          driveId,
-          databaseUserId,
-          registrationId: existingResult.data.registration_id,
-        });
-
-        return {
-          data: null,
-          error: updateResult.error,
-          alreadyRegistered: false,
-          regenerated: false,
-        };
-      }
-
-      return {
-        data: normalizeDonationDriveRegistration(updateResult.data),
-        error: null,
-        alreadyRegistered: false,
-        regenerated: true,
-      };
-    }
-
     return {
       data: existingResult.data,
       error: null,
