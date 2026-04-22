@@ -23,6 +23,7 @@ const isCacheFresh = (cacheEntry) => (
 export const useNotifications = ({
   role,
   userId,
+  userEmail = '',
   databaseUserId: preferredDatabaseUserId = null,
   mode = 'badge',
   liveUpdates = false,
@@ -67,6 +68,7 @@ export const useNotifications = ({
 
     const request = loader({
       userId,
+      userEmail,
       role,
       databaseUserId: preferredDatabaseUserId || databaseUserId || null,
     })
@@ -101,7 +103,7 @@ export const useNotifications = ({
 
     applyNotificationResult(result);
     return result;
-  }, [applyNotificationResult, cacheKey, databaseUserId, loader, preferredDatabaseUserId, role, userId]);
+  }, [applyNotificationResult, cacheKey, databaseUserId, loader, preferredDatabaseUserId, role, userEmail, userId]);
 
   useEffect(() => {
     if (!userId || !role) {

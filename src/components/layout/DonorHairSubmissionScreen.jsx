@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Image, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Image, Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Controller, useForm, useWatch } from 'react-hook-form';
 import { useRouter } from 'expo-router';
@@ -47,17 +47,6 @@ const PHOTO_CAPTURE_TARGETS = [
   'Hair ends close-up',
 ];
 
-const getChoiceLabel = (choices = [], value = '') => (
-  choices.find((item) => item.value === value)?.label || value || 'Not set'
-);
-
-const getChoiceLabels = (choices = [], values = []) => (
-  (Array.isArray(values) ? values : [])
-    .map((value) => getChoiceLabel(choices, value))
-    .filter(Boolean)
-    .join(', ')
-);
-
 const isAnswered = (question, answers = {}) => {
   const value = answers?.[question?.key];
 
@@ -92,6 +81,8 @@ const formatScheduleDateLabel = (dateValue, startTime = '', endTime = '') => {
     return [dateValue, startTime, endTime].filter(Boolean).join(' • ');
   }
 };
+
+void formatScheduleDateLabel;
 
 const normalizeAnalysisText = (analysis) => (
   [
@@ -609,27 +600,6 @@ const buildHistoryTrendLabel = (submissions = []) => {
   return 'Trend looks similar to your last hair check.';
 };
 
-const buildDonationReadinessLabel = ({ screening, donationRequirement }) => {
-  if (!screening) return '';
-  if (screening?.donation_readiness_note) return screening.donation_readiness_note;
-
-  const estimatedLength = Number(screening.estimated_length);
-  const minimumDonationLength = Math.max(
-    35.56,
-    donationRequirement?.minimum_hair_length != null ? Number(donationRequirement.minimum_hair_length) : 0
-  );
-
-  if (!Number.isFinite(estimatedLength)) return '';
-  if (estimatedLength < minimumDonationLength) return 'Hair is not yet long enough for donation guidance.';
-
-  const condition = String(screening.detected_condition || '').toLowerCase();
-  if (condition.includes('healthy') || condition.includes('good')) {
-    return 'Hair may be ready for donation review if you want to continue.';
-  }
-
-  return 'Hair may be long enough, but this check suggests improving the condition first.';
-};
-
 const buildRetryCountdownMessage = (errorState, secondsRemaining) => {
   if (!errorState) return '';
   if (!Number.isFinite(secondsRemaining) || secondsRemaining <= 0) {
@@ -819,7 +789,16 @@ export function DonorHairSubmissionScreen() {
   const [transientErrorNotice, setTransientErrorNotice] = useState(null);
   const { user, profile, resolvedTheme } = useAuth();
   const { logout, isLoading: isLoggingOut } = useAuthActions();
-  const { unreadCount } = useNotifications({ role: 'donor', userId: user?.id, databaseUserId: profile?.user_id });
+  const {
+    unreadCount,
+  } = useNotifications({
+    role: 'donor',
+    userId: user?.id,
+    userEmail: user?.email || profile?.email || '',
+    databaseUserId: profile?.user_id,
+    mode: 'badge',
+    liveUpdates: true,
+  });
   const {
     photos,
     requiredViews,
@@ -1544,6 +1523,7 @@ export function DonorHairSubmissionScreen() {
                 <StatusBanner title={eligibility.status} message={eligibility.reasons[0] || eligibility.contextNote || 'The AI screening result is ready for review.'} variant={eligibility.tone} style={styles.bannerGap} />
                 <View style={styles.metricsGrid}>
                   <ResultMetricCard label="Estimated length" value={formatLengthLabel(analysis.estimated_length)} />
+                  <ResultMetricCard label="Color" value={analysis.detected_color} />
                   <ResultMetricCard label="Texture" value={analysis.detected_texture} />
                   <ResultMetricCard label="Density" value={analysis.detected_density} />
                   <ResultMetricCard label="Hair condition" value={analysis.detected_condition} />

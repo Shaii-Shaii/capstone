@@ -33,11 +33,6 @@ const decodeBase64ToArrayBuffer = (base64Value = '') => {
     return bytes.buffer;
   }
 
-  if (typeof Buffer !== 'undefined' && typeof Buffer.from === 'function') {
-    const bytes = Uint8Array.from(Buffer.from(normalizedBase64, 'base64'));
-    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-  }
-
   const base64Chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
   const sanitizedBase64 = normalizedBase64.replace(/=+$/, '');
   const outputLength = Math.floor((sanitizedBase64.length * 3) / 4);
@@ -77,6 +72,17 @@ const getFileExtension = (mimeType = 'image/jpeg', fileName = '') => {
 };
 
 const buildUploadSourceUri = (photo) => photo?.dataUrl || photo?.uri || '';
+
+const resolveAnalysisImageType = (viewKey = '') => {
+  const normalizedViewKey = String(viewKey || '').trim();
+  return [
+    hairSubmissionImageTypes.frontView,
+    hairSubmissionImageTypes.sideProfile,
+    hairSubmissionImageTypes.hairEndsCloseUp,
+  ].includes(normalizedViewKey)
+    ? normalizedViewKey
+    : hairSubmissionImageTypes.donorUpload;
+};
 
 const getPhotoUploadPayload = async (photo) => {
   const contentType = photo?.mimeType || photo?.file?.type || 'image/jpeg';
@@ -124,12 +130,13 @@ const uploadSelectedImages = async ({ userId, submissionId, detailId, photos }) 
 
   for (let index = 0; index < photos.length; index += 1) {
     const photo = photos[index];
+    const imageType = resolveAnalysisImageType(photo?.viewKey);
     logAppEvent('hair_submission.save', 'Preparing hair submission photo upload.', {
       userId,
       submissionId,
       detailId,
       index,
-      viewKey: photo?.viewKey || null,
+      viewKey: imageType,
       sourceType: photo?.sourceType || null,
       usesFileObject: Boolean(photo?.file && typeof photo.file.arrayBuffer === 'function'),
       usesDataUrl: Boolean(photo?.dataUrl),
@@ -146,7 +153,7 @@ const uploadSelectedImages = async ({ userId, submissionId, detailId, photos }) 
         submissionId,
         detailId,
         index,
-        viewKey: photo?.viewKey || null,
+        viewKey: imageType,
         message: payloadError?.message || 'Image payload could not be prepared.',
       }, 'warn');
 
@@ -154,7 +161,7 @@ const uploadSelectedImages = async ({ userId, submissionId, detailId, photos }) 
     }
 
     const extension = getFileExtension(uploadPayload.contentType, uploadPayload.fileName);
-    const filePath = `${userId}/${submissionId}/${detailId}-${photo.viewKey || `view-${index + 1}`}.${extension}`;
+    const filePath = `${userId}/${submissionId}/${detailId}-${imageType || `view-${index + 1}`}.${extension}`;
     const uploadResult = await HairSubmissionAPI.uploadHairSubmissionImage({
       path: filePath,
       fileBody: uploadPayload.fileBody,
@@ -168,7 +175,7 @@ const uploadSelectedImages = async ({ userId, submissionId, detailId, photos }) 
         submissionId,
         detailId,
         index,
-        viewKey: photo?.viewKey || null,
+        viewKey: imageType,
         bucket: hairSubmissionStorageBucket,
         message: uploadResult.error.message || 'Storage upload failed.',
       }, 'warn');
@@ -186,14 +193,14 @@ const uploadSelectedImages = async ({ userId, submissionId, detailId, photos }) 
       submissionId,
       detailId,
       index,
-      viewKey: photo.viewKey || null,
+      viewKey: imageType,
       bucket: hairSubmissionStorageBucket,
     });
 
     uploadedRows.push({
       submission_detail_id: detailId,
       file_path: filePath,
-      image_type: photo.viewKey || hairSubmissionImageTypes.donorUpload,
+      image_type: imageType,
     });
   }
 
@@ -398,7 +405,7 @@ export const saveHairSubmissionFlow = async ({
       submission_id: submission.submission_id,
       bundle_number: 1,
       declared_length: Number(confirmedValues.declaredLength),
-      declared_color: null,
+      declared_color: confirmedValues.declaredColor || aiAnalysis?.detected_color || null,
       declared_texture: confirmedValues.declaredTexture,
       declared_density: confirmedValues.declaredDensity,
       declared_condition: confirmedValues.declaredCondition,
@@ -487,6 +494,7 @@ export const saveHairSubmissionFlow = async ({
     const { data: screening, error: screeningError } = await HairSubmissionAPI.createAiScreening({
       submission_id: submission.submission_id,
       estimated_length: Number.isFinite(normalizedEstimatedLength) ? normalizedEstimatedLength : null,
+      detected_color: aiAnalysis.detected_color || null,
       detected_texture: aiAnalysis.detected_texture || null,
       detected_density: aiAnalysis.detected_density || null,
       detected_condition: aiAnalysis.detected_condition || null,
@@ -502,6 +510,7 @@ export const saveHairSubmissionFlow = async ({
       analysisKeys: aiAnalysis ? Object.keys(aiAnalysis) : [],
       dbPayloadKeys: [
         'estimated_length',
+        'detected_color',
         'detected_texture',
         'detected_density',
         'detected_condition',

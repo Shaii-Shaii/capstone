@@ -156,6 +156,24 @@ const ensureMutationAuthContext = async ({
   };
 };
 
+const normalizeOptionalDateValue = (value) => {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (typeof value === 'string') {
+    const trimmedValue = value.trim();
+    return trimmedValue ? trimmedValue : null;
+  }
+  return value;
+};
+
+const normalizeOptionalCoordinateValue = (value) => {
+  if (value === undefined) return undefined;
+  if (value === null || value === '') return null;
+
+  const normalizedNumber = Number(value);
+  return Number.isFinite(normalizedNumber) ? normalizedNumber : null;
+};
+
 const resolveQueryRows = ({
   table,
   filter,
@@ -453,6 +471,7 @@ export const fetchSystemUserByAuthUserId = async (authUserId) => {
     table: 'users',
     filter: { auth_user_id: authUserId },
     authUserId,
+    logZeroRows: false,
     queryBuilder: supabase
       .from('users')
       .select('*')
@@ -469,6 +488,7 @@ export const fetchSystemUserByEmail = async (email) => {
   return await runSingleRowSelect({
     table: 'users',
     filter: { email: email.trim().toLowerCase() },
+    logZeroRows: false,
     queryBuilder: supabase
       .from('users')
       .select('*')
@@ -617,6 +637,13 @@ export const ensureSystemUserRecord = async ({ authUserId, email, role }) => {
 
   const existing = await fetchSystemUserByAuthUserId(authUserId);
   if (existing.data?.user_id || existing.error) {
+    if (existing.data?.user_id) {
+      logAppEvent('profile.bootstrap.system_user_found', 'Using existing users row for authenticated account.', {
+        table: 'users',
+        authUserId,
+        systemUserId: existing.data.user_id,
+      }, 'info');
+    }
     return existing;
   }
 
@@ -635,6 +662,12 @@ export const ensureSystemUserRecord = async ({ authUserId, email, role }) => {
       });
 
       if (!linkResult.error) {
+        logAppEvent('profile.bootstrap.system_user_linked', 'Linked existing users row to authenticated account.', {
+          table: 'users',
+          authUserId,
+          systemUserId: existingByEmail.data.user_id,
+          matchedBy: 'email',
+        }, 'info');
         return linkResult;
       }
     }
@@ -647,6 +680,13 @@ export const ensureSystemUserRecord = async ({ authUserId, email, role }) => {
   });
 
   if (!createResult.error) {
+    if (createResult.data?.user_id) {
+      logAppEvent('profile.bootstrap.system_user_created', 'Created users row for authenticated account.', {
+        table: 'users',
+        authUserId,
+        systemUserId: createResult.data.user_id,
+      }, 'info');
+    }
     return createResult;
   }
 
@@ -678,6 +718,16 @@ export const ensureSystemUserByAuthUserId = async (authUserId) => {
     return existing;
   }
 
+  const sessionResult = await ensureActiveSession();
+  const sessionUser = sessionResult.session?.user || null;
+  if (!sessionResult.error && sessionUser?.id === authUserId) {
+    return await ensureSystemUserRecord({
+      authUserId,
+      email: sessionUser.email || null,
+      role: sessionUser.user_metadata?.role || null,
+    });
+  }
+
   return { data: null, error: buildMissingSystemUserError() };
 };
 
@@ -686,6 +736,7 @@ export const fetchUserDetailsBySystemUserId = async (systemUserId) => {
     table: 'user_details',
     filter: { user_id: systemUserId },
     systemUserId,
+    logZeroRows: false,
     duplicateRowsLevel: 'warn',
     duplicateResolution: 'latest_updated_user_details',
     queryBuilder: supabase
@@ -752,7 +803,7 @@ export const createUserDetails = async ({ systemUserId, details = {} }) => {
       middle_name: details.middle_name || '',
       last_name: details.last_name || '',
       suffix: details.suffix || '',
-      birthdate: details.birthdate || null,
+      birthdate: normalizeOptionalDateValue(details.birthdate),
       gender: details.gender || '',
       street: details.street || '',
       region: details.region || '',
@@ -761,10 +812,10 @@ export const createUserDetails = async ({ systemUserId, details = {} }) => {
       province: details.province || '',
       country: details.country || '',
       contact_number: details.contact_number || '',
-      joined_date: details.joined_date || null,
+      joined_date: normalizeOptionalDateValue(details.joined_date),
       photo_path: details.photo_path || null,
-      latitude: details.latitude ? Number(details.latitude) : null,
-      longitude: details.longitude ? Number(details.longitude) : null,
+      latitude: normalizeOptionalCoordinateValue(details.latitude),
+      longitude: normalizeOptionalCoordinateValue(details.longitude),
     }])
     .select()
     .maybeSingle();
@@ -803,11 +854,25 @@ export const ensureUserDetailsRecord = async ({ systemUserId, details = {} }) =>
 
   const existing = await fetchUserDetailsBySystemUserId(systemUserId);
   if (existing.data?.user_details_id || existing.error) {
+    if (existing.data?.user_details_id) {
+      logAppEvent('profile.bootstrap.user_details_found', 'Using existing user_details row for app user.', {
+        table: 'user_details',
+        systemUserId,
+        userDetailsId: existing.data.user_details_id,
+      }, 'info');
+    }
     return existing;
   }
 
   const createResult = await createUserDetails({ systemUserId, details });
   if (!createResult.error) {
+    if (createResult.data?.user_details_id) {
+      logAppEvent('profile.bootstrap.user_details_created', 'Created user_details row for app user.', {
+        table: 'user_details',
+        systemUserId,
+        userDetailsId: createResult.data.user_details_id,
+      }, 'info');
+    }
     return createResult;
   }
 
@@ -973,7 +1038,7 @@ export const updateProfile = async (authUserId, updates) => {
     middle_name: updates.middle_name ?? undefined,
     last_name: updates.last_name ?? undefined,
     suffix: updates.suffix ?? undefined,
-    birthdate: updates.birthdate ?? undefined,
+    birthdate: normalizeOptionalDateValue(updates.birthdate),
     gender: updates.gender ?? undefined,
     contact_number: updates.phone ?? updates.contact_number ?? undefined,
     city: updates.city ?? undefined,
@@ -982,9 +1047,9 @@ export const updateProfile = async (authUserId, updates) => {
     barangay: updates.barangay ?? undefined,
     region: updates.region ?? undefined,
     country: updates.country ?? undefined,
-    latitude: updates.latitude !== undefined && updates.latitude !== '' ? Number(updates.latitude) : undefined,
-    longitude: updates.longitude !== undefined && updates.longitude !== '' ? Number(updates.longitude) : undefined,
-    joined_date: updates.joined_date ?? undefined,
+    latitude: normalizeOptionalCoordinateValue(updates.latitude),
+    longitude: normalizeOptionalCoordinateValue(updates.longitude),
+    joined_date: normalizeOptionalDateValue(updates.joined_date),
     photo_path: updates.avatar_url ?? updates.photo_path ?? undefined,
     updated_at: new Date().toISOString(),
   };
@@ -1135,6 +1200,7 @@ export const fetchPatientDetailsByUserId = async (userIdentifier) => {
     filter: { User_ID: systemUserResult.data.user_id },
     authUserId: isUuid(userIdentifier) ? userIdentifier : '',
     systemUserId: systemUserResult.data.user_id,
+    logZeroRows: false,
     queryBuilder: supabase
       .from(patientsTable)
       .select(patientSelectColumns)
@@ -1360,7 +1426,7 @@ export const createPatientDetails = async (payload) => {
     hospital_id: payload?.hospital_id || null,
     patient_picture: payload?.patient_picture || null,
     medical_condition: payload?.medical_condition || null,
-    date_of_diagnosis: payload?.date_of_diagnosis || null,
+    date_of_diagnosis: normalizeOptionalDateValue(payload?.date_of_diagnosis),
     guardian: payload?.guardian || null,
     guardian_relationship: payload?.guardian_relationship || null,
     guardian_contact_number: payload?.guardian_contact_number || null,
@@ -1496,7 +1562,7 @@ export const updatePatientDetails = async (userIdentifier, updates) => {
     Hospital_ID: updates.hospital_id ?? undefined,
     Medical_Condition: updates.medical_condition ?? undefined,
     Patient_Picture: updates.patient_picture ?? updates.avatar_url ?? undefined,
-    Date_of_Diagnosis: updates.date_of_diagnosis ?? undefined,
+    Date_of_Diagnosis: normalizeOptionalDateValue(updates.date_of_diagnosis),
     Guardian: updates.guardian ?? undefined,
     Guardian_Relationship: updates.guardian_relationship ?? undefined,
     Guardian_Contact_Number: updates.guardian_contact_number ?? undefined,

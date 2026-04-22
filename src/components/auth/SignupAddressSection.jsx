@@ -207,9 +207,10 @@ export function SignupAddressSection({
   showHeader = true,
   showHelperText = true,
   showTopBorder = true,
+  twoColumnMinWidth = 390,
 }) {
   const { width } = useWindowDimensions();
-  const isWide = width >= 390;
+  const isWide = width >= twoColumnMinWidth;
   const [activePicker, setActivePicker] = useState('');
   const [region, province, city, barangay, country] = useWatch({
     control,

@@ -114,11 +114,18 @@ function DriveQrModal({
       <View style={styles.modalOverlay}>
         <Pressable style={styles.modalBackdrop} onPress={onClose} />
         <AppCard variant="elevated" radius="xl" padding="lg" style={styles.modalCard}>
-          <Text style={[styles.modalEyebrow, { color: roles.metaText }]}>Drive QR</Text>
-          <Text style={[styles.modalTitle, { color: roles.headingText }]}>{title}</Text>
-          {subtitle ? (
-            <Text style={[styles.modalBody, { color: roles.bodyText }]}>{subtitle}</Text>
-          ) : null}
+          <View style={styles.modalHeader}>
+            <View style={styles.modalHeaderCopy}>
+              <Text style={[styles.modalEyebrow, { color: roles.metaText }]}>Drive QR</Text>
+              <Text style={[styles.modalTitle, { color: roles.headingText }]}>{title}</Text>
+              {subtitle ? (
+                <Text style={[styles.modalBody, { color: roles.bodyText }]}>{subtitle}</Text>
+              ) : null}
+            </View>
+            <Pressable onPress={onClose} style={[styles.modalCloseButton, { backgroundColor: roles.supportCardBackground, borderColor: roles.supportCardBorder }]}>
+              <AppIcon name="close" state="muted" />
+            </Pressable>
+          </View>
           <View style={styles.qrWrap}>
             <Image source={{ uri: buildQrImageUrl(payload, 420) }} style={styles.qrImage} resizeMode="contain" />
           </View>
@@ -126,7 +133,6 @@ function DriveQrModal({
             <Text style={[styles.qrHelper, { color: roles.metaText }]}>{helperText}</Text>
           ) : null}
           <View style={styles.modalActions}>
-            <AppButton title="Close" variant="ghost" fullWidth={false} onPress={onClose} />
             <AppButton title="Save QR" fullWidth={false} onPress={onSave} loading={isSaving} />
           </View>
         </AppCard>
@@ -396,14 +402,14 @@ export default function DonorDriveDetailRoute() {
         />
       )}
     >
-      <AppButton
-        title="Back to home"
-        variant="ghost"
-        fullWidth={false}
-        leading={<AppIcon name="arrowLeft" state="muted" />}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Go back"
         onPress={() => router.back()}
-        style={styles.backButton}
-      />
+        style={[styles.backIconButton, { backgroundColor: roles.supportCardBackground, borderColor: roles.supportCardBorder }]}
+      >
+        <AppIcon name="arrowLeft" state="muted" />
+      </Pressable>
 
       {errorMessage ? (
         <StatusBanner message={errorMessage} variant="info" style={styles.bannerGap} />
@@ -519,8 +525,15 @@ export default function DonorDriveDetailRoute() {
 }
 
 const styles = StyleSheet.create({
-  backButton: {
+  backIconButton: {
+    width: 40,
+    height: 40,
+    borderRadius: theme.radius.full,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
     marginBottom: theme.spacing.sm,
+    alignSelf: 'flex-start',
   },
   bannerGap: {
     marginBottom: theme.spacing.sm,
@@ -619,6 +632,24 @@ const styles = StyleSheet.create({
   },
   modalCard: {
     gap: theme.spacing.sm,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+  },
+  modalHeaderCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  modalCloseButton: {
+    width: 36,
+    height: 36,
+    borderRadius: theme.radius.full,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   modalEyebrow: {
     fontFamily: theme.typography.fontFamily,

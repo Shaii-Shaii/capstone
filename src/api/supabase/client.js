@@ -230,6 +230,86 @@ const isInvalidRefreshTokenError = (error) => {
   );
 };
 
+const getAuthStorage = () => (isWeb ? webStorage : AsyncStorage);
+
+const getPersistedAuthStorageKey = () => {
+  if (!supabaseUrl) return '';
+
+  try {
+    const projectRef = new URL(supabaseUrl).hostname.split('.')[0];
+    return projectRef ? `sb-${projectRef}-auth-token` : '';
+  } catch (_error) {
+    return '';
+  }
+};
+
+const extractPersistedSession = (payload) => {
+  if (!payload || typeof payload !== 'object') return null;
+
+  if (payload.currentSession && typeof payload.currentSession === 'object') {
+    return payload.currentSession;
+  }
+
+  if (payload.session && typeof payload.session === 'object') {
+    return payload.session;
+  }
+
+  if (payload.access_token || payload.refresh_token || payload.user) {
+    return payload;
+  }
+
+  return null;
+};
+
+const sanitizePersistedAuthSession = async () => {
+  const storage = getAuthStorage();
+  const storageKey = getPersistedAuthStorageKey();
+
+  if (!storage?.getItem || !storage?.removeItem || !storageKey) return;
+
+  try {
+    const rawValue = await storage.getItem(storageKey);
+    if (!rawValue) return;
+
+    let parsedValue;
+    try {
+      parsedValue = JSON.parse(rawValue);
+    } catch (_parseError) {
+      await storage.removeItem(storageKey);
+      return;
+    }
+
+    const persistedSession = extractPersistedSession(parsedValue);
+    const hasAccessToken = Boolean(persistedSession?.access_token);
+    const hasRefreshToken = Boolean(persistedSession?.refresh_token);
+    const hasUser = Boolean(persistedSession?.user);
+
+    if ((hasAccessToken || hasUser) && !hasRefreshToken) {
+      await storage.removeItem(storageKey);
+    }
+  } catch (_error) {
+    // Ignore storage cleanup issues and continue without blocking the app.
+  }
+};
+
+const getSessionSafely = async () => {
+  await sanitizePersistedAuthSession();
+
+  const sessionResult = await supabase.auth.getSession();
+  if (isInvalidRefreshTokenError(sessionResult?.error)) {
+    await clearPersistedAuthSession();
+    return {
+      session: null,
+      error: null,
+    };
+  }
+
+  return {
+    session: sessionResult?.data?.session || null,
+    error: sessionResult?.error || null,
+  };
+};
+
 const clearPersistedAuthSession = async () => {
   try {
     await supabase.auth.signOut({ scope: 'local' });
@@ -238,13 +318,12 @@ const clearPersistedAuthSession = async () => {
     // Fall through to storage cleanup below.
   }
 
-  const storage = isWeb ? webStorage : AsyncStorage;
-  if (!storage?.removeItem || !supabaseUrl) return;
+  const storage = getAuthStorage();
+  const storageKey = getPersistedAuthStorageKey();
+  if (!storage?.removeItem || !storageKey) return;
 
   try {
-    const projectRef = new URL(supabaseUrl).hostname.split('.')[0];
-    if (!projectRef) return;
-    await storage.removeItem(`sb-${projectRef}-auth-token`);
+    await storage.removeItem(storageKey);
   } catch (_error) {
     // Ignore cleanup errors and let the app proceed unauthenticated.
   }
@@ -256,12 +335,23 @@ const isInvalidJwtFunctionError = async (error) => {
 };
 
 const tryRefreshAuthSession = async () => {
+  const currentSessionResult = await getSessionSafely();
+  const currentSession = currentSessionResult?.session || null;
+
+  if (!currentSession?.refresh_token) {
+    await clearPersistedAuthSession();
+    return {
+      session: null,
+      error: null,
+    };
+  }
+
   const directRefreshResult = await supabase.auth.refreshSession();
   if (isInvalidRefreshTokenError(directRefreshResult?.error)) {
     await clearPersistedAuthSession();
     return {
       session: null,
-      error: directRefreshResult.error,
+      error: null,
     };
   }
 
@@ -269,15 +359,6 @@ const tryRefreshAuthSession = async () => {
     return {
       session: directRefreshResult.data.session,
       error: null,
-    };
-  }
-
-  const { data: sessionResult } = await supabase.auth.getSession();
-  const currentSession = sessionResult?.session;
-  if (!currentSession?.refresh_token) {
-    return {
-      session: null,
-      error: directRefreshResult?.error || new Error('No refresh token available.'),
     };
   }
 
@@ -289,7 +370,7 @@ const tryRefreshAuthSession = async () => {
     await clearPersistedAuthSession();
     return {
       session: null,
-      error,
+      error: null,
     };
   }
 
@@ -312,8 +393,8 @@ const withAccessToken = (options = {}, accessToken) => {
 };
 
 const getCurrentAccessToken = async () => {
-  const { data } = await supabase.auth.getSession();
-  return data?.session?.access_token || '';
+  const sessionResult = await getSessionSafely();
+  return sessionResult?.session?.access_token || '';
 };
 
 const shouldRefreshSession = (session) => {
@@ -328,13 +409,13 @@ const shouldRefreshSession = (session) => {
 };
 
 export const ensureActiveSession = async () => {
-  const { data } = await supabase.auth.getSession();
-  const session = data?.session || null;
+  const sessionResult = await getSessionSafely();
+  const session = sessionResult?.session || null;
 
   if (!session) {
     return {
       session: null,
-      error: new Error('No active session found.'),
+      error: null,
     };
   }
 
@@ -371,6 +452,10 @@ export const invokeEdgeFunction = async (functionName, options = {}) => {
 
 if (!hasSupabaseConfig && typeof console !== 'undefined') {
   console.warn(missingSupabaseConfigMessage);
+}
+
+if (hasSupabaseConfig) {
+  void sanitizePersistedAuthSession();
 }
 
 if (!isWeb && hasSupabaseConfig) {

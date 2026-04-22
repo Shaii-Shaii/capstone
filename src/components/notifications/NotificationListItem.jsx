@@ -9,22 +9,27 @@ const TYPE_ICON_MAP = {
   ai_screening_completed: 'star-four-points-outline',
   recommendation_available: 'lightbulb-on-outline',
   logistics_update: 'truck-delivery-outline',
+  donation_tracking_updated: 'timeline-text-outline',
+  hair_analysis_reminder: 'line-scan',
+  donation_drive_update: 'calendar-clock-outline',
+  donation_drive_rsvp_reminder: 'calendar-clock-outline',
   wig_request_updated: 'clipboard-text-outline',
   wig_allocation_updated: 'content-cut',
   certificate_available: 'certificate-outline',
 };
 
-export function NotificationListItem({ notification, onPress }) {
+export function NotificationListItem({ notification, onPress, compact = false }) {
   return (
     <Pressable
       onPress={() => onPress?.(notification)}
       style={({ pressed }) => [
-        styles.card,
-        !notification.isRead ? styles.cardUnread : null,
-        pressed ? styles.cardPressed : null,
+        styles.row,
+        compact ? styles.rowCompact : null,
+        !notification.isRead ? styles.rowUnread : null,
+        pressed ? styles.rowPressed : null,
       ]}
     >
-      <View style={styles.iconWrap}>
+      <View style={[styles.iconWrap, !notification.isRead ? styles.iconWrapUnread : null]}>
         <AppIcon
           name={TYPE_ICON_MAP[notification.type] || 'bell-outline'}
           state={!notification.isRead ? 'active' : 'muted'}
@@ -33,32 +38,37 @@ export function NotificationListItem({ notification, onPress }) {
 
       <View style={styles.copyWrap}>
         <View style={styles.topRow}>
-          <Text style={styles.title}>{notification.title}</Text>
+          <Text numberOfLines={1} style={styles.title}>{notification.title}</Text>
+          <Text style={styles.timestamp}>{getNotificationTimestampLabel(notification.createdAt)}</Text>
+        </View>
+        <View style={styles.messageRow}>
+          <Text numberOfLines={2} style={styles.message}>{notification.message}</Text>
           {!notification.isRead ? <View style={styles.unreadDot} /> : null}
         </View>
-        <Text style={styles.message}>{notification.message}</Text>
-        <Text style={styles.timestamp}>{getNotificationTimestampLabel(notification.createdAt)}</Text>
       </View>
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
-  card: {
+  row: {
     flexDirection: 'row',
     gap: theme.spacing.sm,
-    padding: theme.spacing.md,
-    borderRadius: theme.radius.lg,
-    backgroundColor: theme.colors.backgroundPrimary,
-    borderWidth: 1,
-    borderColor: theme.colors.borderSubtle,
+    paddingVertical: theme.spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.borderSubtle,
   },
-  cardUnread: {
-    borderColor: theme.colors.brandPrimaryMuted,
+  rowCompact: {
+    paddingVertical: theme.spacing.sm,
+  },
+  rowUnread: {
     backgroundColor: theme.colors.surfaceSoft,
+    borderRadius: theme.radius.lg,
+    paddingHorizontal: theme.spacing.sm,
+    marginHorizontal: -theme.spacing.xs,
   },
-  cardPressed: {
-    opacity: 0.92,
+  rowPressed: {
+    opacity: 0.84,
   },
   iconWrap: {
     width: 34,
@@ -67,6 +77,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: theme.colors.backgroundPrimary,
+    marginTop: 2,
+  },
+  iconWrapUnread: {
+    backgroundColor: theme.colors.brandPrimaryMuted,
   },
   copyWrap: {
     flex: 1,
@@ -75,7 +89,7 @@ const styles = StyleSheet.create({
   topRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: theme.spacing.sm,
   },
   title: {
@@ -90,8 +104,15 @@ const styles = StyleSheet.create({
     height: 9,
     borderRadius: theme.radius.full,
     backgroundColor: theme.colors.brandPrimary,
+    marginTop: 4,
+    marginLeft: theme.spacing.sm,
+  },
+  messageRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
   },
   message: {
+    flex: 1,
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.bodySm,
     lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,

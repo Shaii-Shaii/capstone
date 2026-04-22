@@ -28,6 +28,7 @@ const DRIVE_DONATION_SOURCE = 'drive_donation';
 const MANUAL_HAIR_PHOTO_IMAGE_TYPE = 'manual_donation_hair_photo';
 const MANUAL_DONATION_NOTE_MARKER = 'Manual donor details saved from the donor Donations module.';
 const MINIMUM_MANUAL_LENGTH_INCHES = 14;
+const CM_PER_INCH = 2.54;
 const PARCEL_IMAGE_TYPES = ['independent_parcel_photo', 'parcel_photo', 'parcel_log'];
 const QR_IMAGE_BASE_URL = 'https://api.qrserver.com/v1/create-qr-code/';
 const QR_META_START = '[DONIVRA_QR_META]';
@@ -76,6 +77,27 @@ const formatHistoryDateLabel = (value) => (
 
 const normalizeDecision = (value = '') => String(value || '').trim().toLowerCase();
 const normalizeStatus = (value = '') => String(value || '').trim().toLowerCase();
+
+const formatQrDisplayLabel = (value = '') => String(value || '')
+  .split(/[_\s]+/)
+  .filter(Boolean)
+  .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+  .join(' ');
+
+const formatDonationSourceLabel = (value = '') => {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) return '';
+  if (normalized === MANUAL_DONATION_SOURCE) return 'Manual donor entry';
+  if (normalized === INDEPENDENT_DONATION_SOURCE) return 'Independent donation';
+  if (normalized === DRIVE_DONATION_SOURCE) return 'Donation drive';
+  return formatQrDisplayLabel(normalized);
+};
+
+const formatDonationStatusLabel = (value = '') => {
+  const normalized = String(value || '').trim();
+  if (!normalized) return '';
+  return formatQrDisplayLabel(normalized);
+};
 
 export const isEligibleHairAnalysisDecision = (decision = '') => (
   normalizeDecision(decision) === ELIGIBLE_DECISION
@@ -136,16 +158,21 @@ const convertLengthToInches = (value, unit = 'in') => {
 };
 
 const resolveMinimumLengthInches = (donationRequirement = null) => {
-  const configuredLength = Number(donationRequirement?.minimum_hair_length);
-  if (Number.isFinite(configuredLength) && configuredLength > 0) {
-    return configuredLength;
-  }
-  return MINIMUM_MANUAL_LENGTH_INCHES;
+  const minimumLengthCm = resolveMinimumLengthCm(donationRequirement);
+  return toRoundedNumber(minimumLengthCm / CM_PER_INCH, 1) || MINIMUM_MANUAL_LENGTH_INCHES;
 };
 
 const buildManualDonationReason = (reasons = []) => (
   reasons.filter(Boolean).join(' ')
 );
+
+const resolveMinimumLengthCm = (donationRequirement = null) => {
+  const configuredLength = Number(donationRequirement?.minimum_hair_length);
+  if (Number.isFinite(configuredLength) && configuredLength > 0) {
+    return configuredLength;
+  }
+  return MINIMUM_MANUAL_LENGTH_INCHES * CM_PER_INCH;
+};
 
 const evaluateManualDonationEligibility = ({ manualDetails = {}, donationRequirement = null }) => {
   const minimumLengthInches = resolveMinimumLengthInches(donationRequirement);
@@ -174,6 +201,52 @@ const evaluateManualDonationEligibility = ({ manualDetails = {}, donationRequire
     reason: reasons.length
       ? buildManualDonationReason(reasons)
       : 'Your manual donor details meet the current donation criteria.',
+  };
+};
+
+const evaluateAiDonationEligibility = ({ screening = null, detail = null, donationRequirement = null }) => {
+  const minimumLengthCm = resolveMinimumLengthCm(donationRequirement);
+  const normalizedLengthCm = toRoundedNumber(screening?.estimated_length, 1);
+  const reasons = [];
+
+  if (!screening) {
+    reasons.push('No saved AI screening result is available for this donation.');
+  }
+
+  if (screening && !isEligibleHairAnalysisDecision(screening?.decision || '')) {
+    reasons.push(screening?.decision || 'The saved AI screening does not currently qualify for donation.');
+  }
+
+  if (!normalizedLengthCm || normalizedLengthCm < minimumLengthCm) {
+    reasons.push(
+      `Hair must be at least ${toRoundedNumber(minimumLengthCm / CM_PER_INCH, 1)} inches (${toRoundedNumber(minimumLengthCm, 1)} cm) based on the current donation requirement.`,
+    );
+  }
+
+  if (donationRequirement?.chemical_treatment_status === false && detail?.is_chemically_treated) {
+    reasons.push('Current donation rules do not allow chemically treated hair.');
+  }
+
+  if (donationRequirement?.colored_hair_status === false && detail?.is_colored) {
+    reasons.push('Current donation rules do not allow colored hair.');
+  }
+
+  if (donationRequirement?.bleached_hair_status === false && detail?.is_bleached) {
+    reasons.push('Current donation rules do not allow bleached hair.');
+  }
+
+  if (donationRequirement?.rebonded_hair_status === false && detail?.is_rebonded) {
+    reasons.push('Current donation rules do not allow rebonded hair.');
+  }
+
+  return {
+    isQualified: reasons.length === 0,
+    normalized_length_cm: normalizedLengthCm,
+    minimum_length_cm: minimumLengthCm,
+    reasons,
+    reason: reasons.length
+      ? buildManualDonationReason(reasons)
+      : screening?.decision || 'The saved AI screening still meets the current donation criteria.',
   };
 };
 
@@ -263,9 +336,10 @@ const getIndependentQrMetadata = (submission = null) => {
     return null;
   }
 
+  const normalizedStatus = String(metadata.status || '').trim().toLowerCase();
   const generatedAt = metadata.generated_at || metadata.confirmed_at || '';
   const activatedAt = metadata.activated_at || metadata.confirmed_at || '';
-  const isActivated = metadata.status === 'activated' || metadata.confirmed === true;
+  const isActivated = ['activated', 'active'].includes(normalizedStatus) || metadata.confirmed === true;
 
   return {
     reference: metadata.reference,
@@ -273,8 +347,9 @@ const getIndependentQrMetadata = (submission = null) => {
     expires_at: '',
     activated_at: activatedAt,
     version: metadata.version ?? 1,
-    status: isActivated ? 'activated' : 'pending',
+    status: isActivated ? 'active' : 'inactive',
     is_activated: isActivated,
+    is_inactive: !isActivated,
     is_expired: false,
     is_pending: !isActivated,
     can_regenerate: false,
@@ -283,7 +358,7 @@ const getIndependentQrMetadata = (submission = null) => {
 
 const buildIndependentQrMetadata = ({
   reference = '',
-  status = 'pending',
+  status = 'inactive',
   generatedAt = new Date().toISOString(),
   activatedAt = '',
   version = 1,
@@ -310,7 +385,7 @@ const buildIndependentQrMetadataFromState = ({
 
   return buildIndependentQrMetadata({
     reference: qrState.reference,
-    status: qrState.is_activated ? 'activated' : 'pending',
+    status: qrState.is_activated ? 'active' : 'inactive',
     generatedAt: qrState.generated_at || fallbackMetadata?.generated_at || new Date().toISOString(),
     activatedAt: qrState.activated_at || fallbackMetadata?.activated_at || '',
     version: Number(fallbackMetadata?.version || 0) + 1,
@@ -483,23 +558,24 @@ export const getIndependentDonationQrState = ({
 
   const shipmentStatus = normalizeStatus(logistics?.shipment_status);
   const hasActivationTracking = (trackingEntries || []).some((entry) => (
-    matchesAnyToken(entry?.status, ['qr activated', 'activated', 'ready for parcel upload', 'ready for shipment'])
-    || matchesAnyToken(entry?.title, ['qr activated', 'activated', 'ready for parcel upload', 'ready for shipment'])
+    matchesAnyToken(entry?.status, ['qr activated', 'qr active', 'donation qr activated'])
+    || matchesAnyToken(entry?.title, ['qr activated', 'qr active', 'donation qr activated'])
   ));
   const isFlowActivated = (
     metadata.is_activated
-    || ['qr activated', 'activated', 'ready for parcel upload', 'ready for shipment', 'in transit', 'received'].includes(shipmentStatus)
+    || ['qr activated', 'activated', 'qr active', 'active'].includes(shipmentStatus)
     || hasActivationTracking
   );
 
   return {
     ...metadata,
-    status: isFlowActivated ? 'activated' : metadata.status,
+    status: isFlowActivated ? 'active' : 'inactive',
     is_activated: isFlowActivated,
-    is_pending: !isFlowActivated && metadata.is_pending,
+    is_inactive: !isFlowActivated,
+    is_pending: !isFlowActivated,
     is_expired: false,
-    is_valid: isFlowActivated || metadata.is_pending,
-    show_my_qr: isFlowActivated || metadata.is_pending,
+    is_valid: Boolean(metadata.reference),
+    show_my_qr: Boolean(metadata.reference),
     upload_unlocked: isFlowActivated,
   };
 };
@@ -548,22 +624,31 @@ const resolveManualDonationRecord = ({ submissions = [], donationRequirement = n
   };
 };
 
-const resolveAiDonationRecord = (latestAnalysisEntry = null) => (
-  latestAnalysisEntry && isEligibleHairAnalysisDecision(latestAnalysisEntry?.screening?.decision || '')
-    ? {
-        source: 'ai',
-        submission: latestAnalysisEntry.submission || null,
-        detail: latestAnalysisEntry.detail || null,
-        screening: latestAnalysisEntry.screening || null,
-        recommendations: latestAnalysisEntry.recommendations || [],
-        qualification: {
-          isQualified: true,
-          reason: latestAnalysisEntry?.screening?.decision || 'Eligible for donation.',
-        },
-        created_at: latestAnalysisEntry?.submission?.created_at || latestAnalysisEntry?.screening?.created_at || null,
-      }
-    : null
-);
+const resolveAiDonationRecord = (latestAnalysisEntry = null, donationRequirement = null) => {
+  if (!latestAnalysisEntry?.screening) {
+    return null;
+  }
+
+  const qualification = evaluateAiDonationEligibility({
+    screening: latestAnalysisEntry.screening,
+    detail: latestAnalysisEntry.detail,
+    donationRequirement,
+  });
+
+  if (!qualification.isQualified) {
+    return null;
+  }
+
+  return {
+    source: 'ai',
+    submission: latestAnalysisEntry.submission || null,
+    detail: latestAnalysisEntry.detail || null,
+    screening: latestAnalysisEntry.screening || null,
+    recommendations: latestAnalysisEntry.recommendations || [],
+    qualification,
+    created_at: latestAnalysisEntry?.submission?.created_at || latestAnalysisEntry?.screening?.created_at || null,
+  };
+};
 
 const getSubmissionParcelImages = (submission = null) => (
   (submission?.submission_details || []).flatMap((detail) => (
@@ -573,6 +658,8 @@ const getSubmissionParcelImages = (submission = null) => (
 
 const hasCurrentFlowStatus = (submission = null) => (
   [
+    'qr inactive',
+    'qr active',
     'qr pending activation',
     'qr activated',
     'ready for shipment',
@@ -601,22 +688,27 @@ const resolveQualifiedDonationRecordForSubmission = ({ submission = null, donati
     return null;
   }
 
-  const latestEligibleScreening = [...(submission?.ai_screenings || [])]
+  const latestQualifiedAiScreeningEntry = [...(submission?.ai_screenings || [])]
     .sort((left, right) => new Date(right?.created_at || 0).getTime() - new Date(left?.created_at || 0).getTime())
-    .find((screening) => isEligibleHairAnalysisDecision(screening?.decision || '')) || null;
+    .map((screening) => ({
+      screening,
+      qualification: evaluateAiDonationEligibility({
+        screening,
+        detail,
+        donationRequirement,
+      }),
+    }))
+    .find((entry) => entry.qualification.isQualified) || null;
 
-  if (latestEligibleScreening) {
+  if (latestQualifiedAiScreeningEntry?.screening) {
     return {
       source: 'ai',
       submission,
       detail,
-      screening: latestEligibleScreening,
+      screening: latestQualifiedAiScreeningEntry.screening,
       recommendations: submission?.donor_recommendations || [],
-      qualification: {
-        isQualified: true,
-        reason: latestEligibleScreening?.decision || 'Eligible for donation.',
-      },
-      created_at: submission?.updated_at || submission?.created_at || latestEligibleScreening?.created_at || null,
+      qualification: latestQualifiedAiScreeningEntry.qualification,
+      created_at: submission?.updated_at || submission?.created_at || latestQualifiedAiScreeningEntry.screening?.created_at || null,
     };
   }
 
@@ -732,38 +824,58 @@ const matchesAnyToken = (source = '', tokens = []) => {
   return tokens.some((token) => normalized.includes(token));
 };
 
+const buildTimelineProgressLabel = ({ stageState, index, currentIndex }) => {
+  if (stageState === 'completed') return 'Complete';
+  if (stageState === 'current') return 'Ongoing';
+
+  const distanceFromCurrent = index - currentIndex;
+  if (distanceFromCurrent === 1) {
+    return 'To receive';
+  }
+
+  return 'On waiting';
+};
+
 const resolveTimelineStages = ({ logistics, trackingEntries, parcelImages, certificate }) => {
   const readyEntry = findTimelineMatch(trackingEntries, (entry) => (
     matchesAnyToken(entry?.status, ['ready for shipment', 'parcel logged', 'parcel prepared'])
     || matchesAnyToken(entry?.title, ['ready for shipment', 'parcel logged', 'parcel prepared'])
     || matchesAnyToken(entry?.description, ['ready for shipment', 'parcel logged', 'parcel prepared'])
   ));
-  const readyDate = parcelImages[0]?.uploaded_at || readyEntry?.updated_at || logistics?.created_at || null;
+  const readyEvidenceAt = parcelImages[0]?.uploaded_at || readyEntry?.updated_at || logistics?.created_at || null;
   const transitEntry = findTimelineMatch(trackingEntries, (entry) => (
     matchesAnyToken(entry?.status, ['transit', 'shipped', 'shipping'])
     || matchesAnyToken(entry?.title, ['transit', 'shipped', 'shipping'])
     || matchesAnyToken(entry?.description, ['transit', 'shipped', 'shipping'])
   ));
+  const transitEvidenceAt = transitEntry?.updated_at
+    || (matchesAnyToken(logistics?.shipment_status, ['transit', 'shipped']) ? logistics?.created_at || null : null);
   const receivedOrgEntry = findTimelineMatch(trackingEntries, (entry) => (
     matchesAnyToken(entry?.status, ['received by the organization', 'organization received', 'received'])
     || matchesAnyToken(entry?.title, ['received by the organization', 'organization received', 'received'])
     || matchesAnyToken(entry?.description, ['received by the organization', 'organization received'])
   ));
+  const receivedOrgEvidenceAt = receivedOrgEntry?.updated_at
+    || logistics?.received_at
+    || (matchesAnyToken(logistics?.shipment_status, ['received by the organization', 'organization received']) ? logistics?.created_at || null : null);
   const qualityEntry = findTimelineMatch(trackingEntries, (entry) => (
     matchesAnyToken(entry?.status, ['quality', 'checking', 'assessment', 'qa'])
     || matchesAnyToken(entry?.title, ['quality', 'checking', 'assessment', 'qa'])
     || matchesAnyToken(entry?.description, ['quality', 'checking', 'assessment', 'qa'])
   ));
+  const qualityEvidenceAt = qualityEntry?.updated_at || null;
   const receiverShipmentEntry = findTimelineMatch(trackingEntries, (entry) => (
     matchesAnyToken(entry?.status, ['ready for shipment to the receiver', 'shipment to the receiver', 'receiver shipment'])
     || matchesAnyToken(entry?.title, ['ready for shipment to the receiver', 'shipment to the receiver', 'receiver shipment'])
     || matchesAnyToken(entry?.description, ['ready for shipment to the receiver', 'shipment to the receiver', 'receiver shipment'])
   ));
+  const receiverShipmentEvidenceAt = receiverShipmentEntry?.updated_at || null;
   const patientReceivedEntry = findTimelineMatch(trackingEntries, (entry) => (
     matchesAnyToken(entry?.status, ['received by patient', 'patient received', 'delivered'])
     || matchesAnyToken(entry?.title, ['received by patient', 'patient received', 'delivered'])
     || matchesAnyToken(entry?.description, ['received by patient', 'patient received'])
   ));
+  const patientReceivedEvidenceAt = patientReceivedEntry?.updated_at || certificate?.issued_at || null;
 
   const stages = [
     {
@@ -771,7 +883,7 @@ const resolveTimelineStages = ({ logistics, trackingEntries, parcelImages, certi
       label: 'Ready for shipment',
       statusLabel: readyEntry?.status || logistics?.shipment_status || '',
       savedNote: readyEntry?.description || logistics?.notes || '',
-      completedAt: readyDate,
+      evidenceAt: readyEvidenceAt,
       parcelImages,
     },
     {
@@ -779,7 +891,7 @@ const resolveTimelineStages = ({ logistics, trackingEntries, parcelImages, certi
       label: 'In transit',
       statusLabel: transitEntry?.status || (matchesAnyToken(logistics?.shipment_status, ['transit', 'shipped']) ? logistics?.shipment_status : ''),
       savedNote: transitEntry?.description || '',
-      completedAt: transitEntry?.updated_at || (matchesAnyToken(logistics?.shipment_status, ['transit', 'shipped']) ? logistics?.updated_at : null),
+      evidenceAt: transitEvidenceAt,
       entry: transitEntry,
       parcelImages,
     },
@@ -788,7 +900,7 @@ const resolveTimelineStages = ({ logistics, trackingEntries, parcelImages, certi
       label: 'Received by the organization',
       statusLabel: receivedOrgEntry?.status || (logistics?.received_at ? 'Received by the organization' : ''),
       savedNote: receivedOrgEntry?.description || logistics?.notes || '',
-      completedAt: receivedOrgEntry?.updated_at || logistics?.received_at || null,
+      evidenceAt: receivedOrgEvidenceAt,
       entry: receivedOrgEntry,
       parcelImages,
     },
@@ -797,7 +909,7 @@ const resolveTimelineStages = ({ logistics, trackingEntries, parcelImages, certi
       label: 'Quality checking',
       statusLabel: qualityEntry?.status || '',
       savedNote: qualityEntry?.description || '',
-      completedAt: qualityEntry?.updated_at || null,
+      evidenceAt: qualityEvidenceAt,
       entry: qualityEntry,
       parcelImages,
     },
@@ -806,7 +918,7 @@ const resolveTimelineStages = ({ logistics, trackingEntries, parcelImages, certi
       label: 'Ready for shipment to the receiver',
       statusLabel: receiverShipmentEntry?.status || '',
       savedNote: receiverShipmentEntry?.description || '',
-      completedAt: receiverShipmentEntry?.updated_at || null,
+      evidenceAt: receiverShipmentEvidenceAt,
       entry: receiverShipmentEntry,
       parcelImages,
     },
@@ -815,20 +927,38 @@ const resolveTimelineStages = ({ logistics, trackingEntries, parcelImages, certi
       label: 'Received by patient',
       statusLabel: patientReceivedEntry?.status || (certificate?.issued_at ? 'Received by patient' : ''),
       savedNote: patientReceivedEntry?.description || certificate?.remarks || '',
-      completedAt: patientReceivedEntry?.updated_at || certificate?.issued_at || null,
+      evidenceAt: patientReceivedEvidenceAt,
       entry: patientReceivedEntry,
       parcelImages,
     },
   ];
 
-  const currentIndex = stages.findIndex((stage) => !stage.completedAt);
-  const resolvedCurrentIndex = currentIndex === -1 ? stages.length - 1 : currentIndex;
+  const reachedStageIndexes = stages.reduce((indexes, stage, index) => (
+    stage?.evidenceAt ? [...indexes, index] : indexes
+  ), []);
+  const resolvedCurrentIndex = reachedStageIndexes.length
+    ? reachedStageIndexes[reachedStageIndexes.length - 1]
+    : 0;
+  const isDonationCompleted = Boolean(patientReceivedEvidenceAt);
 
-  return stages.map((stage, index) => ({
-    ...stage,
-    state: stage.completedAt ? 'completed' : index === resolvedCurrentIndex ? 'current' : 'upcoming',
-    timestampLabel: stage.completedAt ? `Updated ${formatDateTime(stage.completedAt)}` : '',
-  }));
+  return stages.map((stage, index) => {
+    const stageState = isDonationCompleted
+      ? index <= resolvedCurrentIndex ? 'completed' : 'upcoming'
+      : index < resolvedCurrentIndex ? 'completed' : index === resolvedCurrentIndex ? 'current' : 'upcoming';
+    const completedAt = stageState === 'completed' ? stage.evidenceAt : null;
+
+    return {
+      ...stage,
+      completedAt,
+      state: stageState,
+      progressLabel: buildTimelineProgressLabel({
+        stageState,
+        index,
+        currentIndex: resolvedCurrentIndex,
+      }),
+      timestampLabel: stage.evidenceAt ? `Updated ${formatDateTime(stage.evidenceAt)}` : '',
+    };
+  });
 };
 
 const buildTimelineEvents = ({ logistics, trackingEntries, parcelImages, certificate }) => {
@@ -959,6 +1089,205 @@ export const buildIndependentDonationQrPayload = ({
   })
 );
 
+export const buildDonationTrackingQrPayload = ({
+  submission = null,
+  detail = null,
+  logistics = null,
+  donor = null,
+  drive = null,
+  qrReference = '',
+  trackingStatus = '',
+} = {}) => {
+  const lines = [
+    'DONIVRA Donation QR',
+    `Donation Code: ${submission?.submission_code || 'Pending donation code'}`,
+  ];
+
+  if (donor?.name) {
+    lines.push(`Donor: ${donor.name}`);
+  }
+
+  const donationSource = formatDonationSourceLabel(submission?.donation_source || '');
+  if (donationSource) {
+    lines.push(`Donation Source: ${donationSource}`);
+  }
+
+  const donationStatus = formatDonationStatusLabel(submission?.status || '');
+  if (donationStatus) {
+    lines.push(`Donation Status: ${donationStatus}`);
+  }
+
+  if (detail?.declared_length != null && detail?.declared_length !== '') {
+    lines.push(`Hair Length: ${detail.declared_length}`);
+  }
+  if (detail?.declared_texture) {
+    lines.push(`Hair Texture: ${detail.declared_texture}`);
+  }
+  if (detail?.declared_density) {
+    lines.push(`Hair Density: ${detail.declared_density}`);
+  }
+  if (detail?.declared_condition) {
+    lines.push(`Hair Condition: ${detail.declared_condition}`);
+  }
+  if (detail?.declared_color) {
+    lines.push(`Hair Color: ${detail.declared_color}`);
+  }
+  if (detail?.bundle_number != null) {
+    lines.push(`Bundle Number: ${detail.bundle_number}`);
+  } else if (submission?.bundle_quantity) {
+    lines.push(`Bundle Count: ${submission.bundle_quantity}`);
+  }
+
+  if (trackingStatus) {
+    lines.push(`Current Tracking: ${trackingStatus}`);
+  }
+
+  const shipmentStatus = formatDonationStatusLabel(logistics?.shipment_status || '');
+  if (shipmentStatus && shipmentStatus !== trackingStatus) {
+    lines.push(`Shipment Status: ${shipmentStatus}`);
+  }
+
+  if (drive?.event_title) {
+    lines.push(`Drive: ${drive.event_title}`);
+  }
+  if (drive?.organization_name) {
+    lines.push(`Organization: ${drive.organization_name}`);
+  }
+
+  if (qrReference) {
+    lines.push(`Donation QR Ref: ${qrReference}`);
+  }
+
+  lines.push('This QR is linked to your hair donation details.');
+  return lines.join('\n');
+};
+
+const getDonationQrPayloadValue = (payloadText = '', label = '') => {
+  const escapedLabel = String(label || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = new RegExp(`^${escapedLabel}:\\s*(.+)$`, 'im');
+  const match = String(payloadText || '').match(pattern);
+  return match?.[1]?.trim() || '';
+};
+
+const parseDonationTrackingQrPayload = (payloadText = '') => ({
+  submission_code: getDonationQrPayloadValue(payloadText, 'Donation Code'),
+  donor_name: getDonationQrPayloadValue(payloadText, 'Donor'),
+  donation_source: getDonationQrPayloadValue(payloadText, 'Donation Source'),
+  donation_status: getDonationQrPayloadValue(payloadText, 'Donation Status'),
+  qr_reference: getDonationQrPayloadValue(payloadText, 'Donation QR Ref'),
+});
+
+const renderDonationQrDetailsHtml = (details = []) => (
+  (details || [])
+    .filter((item) => String(item?.value || '').trim())
+    .map((item) => `
+      <div class="detail-row">
+        <div class="detail-label">${escapeHtml(item.label || '')}</div>
+        <div class="detail-value">${escapeHtml(item.value || '')}</div>
+      </div>
+    `)
+    .join('')
+);
+
+const buildDonationQrHtmlDocument = ({
+  title,
+  subtitle,
+  qrPayloadText,
+  helperText = '',
+  details = [],
+}) => {
+  const qrImageUrl = buildQrImageUrl(qrPayloadText, 420);
+  const detailsMarkup = renderDonationQrDetailsHtml(details);
+
+  return `
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <style>
+          body {
+            margin: 0;
+            padding: 28px;
+            font-family: Arial, sans-serif;
+            background: #f6f1ea;
+            color: #241a13;
+          }
+          .sheet {
+            background: #fffaf5;
+            border: 1px solid #e1d2c2;
+            border-radius: 20px;
+            padding: 28px;
+          }
+          .eyebrow {
+            text-transform: uppercase;
+            letter-spacing: 1.2px;
+            font-size: 11px;
+            color: #8a6546;
+            margin-bottom: 8px;
+          }
+          h1 {
+            margin: 0 0 8px;
+            font-size: 24px;
+            color: #59351d;
+          }
+          p {
+            margin: 0 0 16px;
+            color: #5a4940;
+            line-height: 1.5;
+          }
+          .qr {
+            width: 320px;
+            height: 320px;
+            display: block;
+            margin: 18px auto;
+            border: 10px solid white;
+            border-radius: 16px;
+          }
+          .details {
+            margin-top: 18px;
+            padding: 14px 16px;
+            border-radius: 14px;
+            background: #f2e7da;
+          }
+          .detail-row + .detail-row {
+            margin-top: 12px;
+          }
+          .detail-label {
+            font-size: 11px;
+            letter-spacing: 0.8px;
+            text-transform: uppercase;
+            color: #8a6546;
+            margin-bottom: 4px;
+          }
+          .detail-value {
+            font-size: 14px;
+            line-height: 1.45;
+            color: #241a13;
+          }
+          .payload {
+            margin-top: 18px;
+            padding: 12px;
+            border-radius: 12px;
+            background: #f2e7da;
+            font-size: 11px;
+            word-break: break-word;
+            white-space: pre-wrap;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="sheet">
+          <div class="eyebrow">Donivra donation QR</div>
+          <h1>${escapeHtml(title)}</h1>
+          <p>${escapeHtml(subtitle)}</p>
+          ${helperText ? `<p>${escapeHtml(helperText)}</p>` : ''}
+          <img class="qr" src="${qrImageUrl}" />
+          ${detailsMarkup ? `<div class="details">${detailsMarkup}</div>` : `<div class="payload">${escapeHtml(qrPayloadText)}</div>`}
+        </div>
+      </body>
+    </html>
+  `;
+};
+
 export const buildQrImageUrl = (payloadText = '', size = 320) => (
   `${QR_IMAGE_BASE_URL}?size=${size}x${size}&data=${encodeURIComponent(payloadText)}`
 );
@@ -972,73 +1301,15 @@ export const generateDonationQrPdf = async ({
   subtitle,
   qrPayloadText,
   helperText = '',
+  details = [],
 }) => {
-  const qrImageUrl = buildQrImageUrl(qrPayloadText, 420);
-  const html = `
-    <html>
-      <head>
-        <meta charset="utf-8" />
-        <style>
-          body {
-            margin: 0;
-            padding: 28px;
-            font-family: Arial, sans-serif;
-            background: #f6f1ea;
-            color: #241a13;
-          }
-          .sheet {
-            background: #fffaf5;
-            border: 1px solid #e1d2c2;
-            border-radius: 20px;
-            padding: 28px;
-          }
-          .eyebrow {
-            text-transform: uppercase;
-            letter-spacing: 1.2px;
-            font-size: 11px;
-            color: #8a6546;
-            margin-bottom: 8px;
-          }
-          h1 {
-            margin: 0 0 8px;
-            font-size: 24px;
-            color: #59351d;
-          }
-          p {
-            margin: 0 0 16px;
-            color: #5a4940;
-            line-height: 1.5;
-          }
-          .qr {
-            width: 320px;
-            height: 320px;
-            display: block;
-            margin: 18px auto;
-            border: 10px solid white;
-            border-radius: 16px;
-          }
-          .payload {
-            margin-top: 18px;
-            padding: 12px;
-            border-radius: 12px;
-            background: #f2e7da;
-            font-size: 11px;
-            word-break: break-word;
-          }
-        </style>
-      </head>
-      <body>
-        <div class="sheet">
-          <div class="eyebrow">Donivra donor QR</div>
-          <h1>${escapeHtml(title)}</h1>
-          <p>${escapeHtml(subtitle)}</p>
-          ${helperText ? `<p>${escapeHtml(helperText)}</p>` : ''}
-          <img class="qr" src="${qrImageUrl}" />
-          <div class="payload">${escapeHtml(qrPayloadText)}</div>
-        </div>
-      </body>
-    </html>
-  `;
+  const html = buildDonationQrHtmlDocument({
+    title,
+    subtitle,
+    qrPayloadText,
+    helperText,
+    details,
+  });
 
   return await Print.printToFileAsync({ html, base64: false });
 };
@@ -1048,73 +1319,15 @@ export const printDonationQrPdf = async ({
   subtitle,
   qrPayloadText,
   helperText = '',
+  details = [],
 }) => {
-  const qrImageUrl = buildQrImageUrl(qrPayloadText, 420);
-  const html = `
-    <html>
-      <head>
-        <meta charset="utf-8" />
-        <style>
-          body {
-            margin: 0;
-            padding: 28px;
-            font-family: Arial, sans-serif;
-            background: #f6f1ea;
-            color: #241a13;
-          }
-          .sheet {
-            background: #fffaf5;
-            border: 1px solid #e1d2c2;
-            border-radius: 20px;
-            padding: 28px;
-          }
-          .eyebrow {
-            text-transform: uppercase;
-            letter-spacing: 1.2px;
-            font-size: 11px;
-            color: #8a6546;
-            margin-bottom: 8px;
-          }
-          h1 {
-            margin: 0 0 8px;
-            font-size: 24px;
-            color: #59351d;
-          }
-          p {
-            margin: 0 0 16px;
-            color: #5a4940;
-            line-height: 1.5;
-          }
-          .qr {
-            width: 320px;
-            height: 320px;
-            display: block;
-            margin: 18px auto;
-            border: 10px solid white;
-            border-radius: 16px;
-          }
-          .payload {
-            margin-top: 18px;
-            padding: 12px;
-            border-radius: 12px;
-            background: #f2e7da;
-            font-size: 11px;
-            word-break: break-word;
-          }
-        </style>
-      </head>
-      <body>
-        <div class="sheet">
-          <div class="eyebrow">Donivra donor QR</div>
-          <h1>${escapeHtml(title)}</h1>
-          <p>${escapeHtml(subtitle)}</p>
-          ${helperText ? `<p>${escapeHtml(helperText)}</p>` : ''}
-          <img class="qr" src="${qrImageUrl}" />
-          <div class="payload">${escapeHtml(qrPayloadText)}</div>
-        </div>
-      </body>
-    </html>
-  `;
+  const html = buildDonationQrHtmlDocument({
+    title,
+    subtitle,
+    qrPayloadText,
+    helperText,
+    details,
+  });
 
   await Print.printAsync({ html });
 };
@@ -1169,7 +1382,7 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
   const sortedEntries = sortScreeningEntries(flattenScreeningEntries(submissions));
   const latestAnalysisEntry = sortedEntries[0] || null;
   const latestScreening = latestAnalysisEntry?.screening || null;
-  const aiRecord = resolveAiDonationRecord(latestAnalysisEntry);
+  const aiRecord = resolveAiDonationRecord(latestAnalysisEntry, donationRequirementResult.data || null);
   const manualRecord = resolveManualDonationRecord({
     submissions,
     donationRequirement: donationRequirementResult.data || null,
@@ -1395,7 +1608,7 @@ export const saveIndependentDonationParcelLog = async ({
 
   const qrState = currentQrState || getIndependentDonationQrState({ submission });
   if (!qrState?.is_activated) {
-    return { success: false, error: 'Wait until staff scans and activates your QR before uploading the parcel photo.' };
+    return { success: false, error: 'Scan your saved donation QR first to activate donation tracking before uploading the parcel photo.' };
   }
   const nextQrMetadata = buildIndependentQrMetadataFromState({
     qrState,
@@ -1527,11 +1740,11 @@ export const ensureIndependentDonationQr = async ({
       databaseUserId,
       submission,
       qrMetadata: parseQrMetadata(submission?.donor_notes || ''),
-      status: currentQr.is_activated ? 'QR Activated' : 'QR Pending Activation',
-      logisticsStatus: currentQr.is_activated ? 'QR Activated' : 'QR Pending Activation',
+      status: 'Ready for shipment',
+      logisticsStatus: 'Ready for shipment',
       logisticsNotes: currentQr.is_activated
-        ? 'Independent donation QR is activated and ready for the next shipment step.'
-        : 'Independent donation QR is saved and waiting for staff activation.',
+        ? 'Your donation QR is active and ready for shipment tracking.'
+        : 'Your donation QR is saved and inactive until you scan it to activate donation tracking.',
       shouldTrack: false,
       shouldNotify: false,
     });
@@ -1555,7 +1768,7 @@ export const ensureIndependentDonationQr = async ({
   const generatedAt = new Date().toISOString();
   const nextMetadata = buildIndependentQrMetadata({
     reference: createDonationQrReference('IND'),
-    status: 'pending',
+    status: 'inactive',
     generatedAt,
     version: Number(currentMetadata?.version || 0) + 1,
     updatedBy: databaseUserId || null,
@@ -1566,11 +1779,11 @@ export const ensureIndependentDonationQr = async ({
     databaseUserId,
     submission,
     qrMetadata: nextMetadata,
-    status: 'QR Pending Activation',
-    logisticsStatus: 'QR Pending Activation',
-    logisticsNotes: 'Independent donation QR is ready and waiting for staff activation.',
-    trackingTitle: 'Independent donation QR ready',
-    trackingDescription: 'A parcel QR was generated for the independent donation flow and saved to the donor submission record.',
+    status: 'Ready for shipment',
+    logisticsStatus: 'Ready for shipment',
+    logisticsNotes: 'Your donation QR is saved and inactive until you scan it to activate donation tracking.',
+    trackingTitle: 'Donation QR ready',
+    trackingDescription: 'A donation QR was generated for the donor shipment flow and saved to the current donation record.',
     shouldTrack: true,
     shouldNotify: true,
   });
@@ -1616,7 +1829,7 @@ export const activateIndependentDonationQr = async ({
   const activatedAt = new Date().toISOString();
   const nextMetadata = buildIndependentQrMetadata({
     reference: currentMetadata.reference,
-    status: 'activated',
+    status: 'active',
     generatedAt: currentMetadata.generated_at,
     activatedAt,
     version: currentMetadata.version ?? 1,
@@ -1628,11 +1841,11 @@ export const activateIndependentDonationQr = async ({
     databaseUserId,
     submission,
     qrMetadata: nextMetadata,
-    status: 'QR Activated',
-    logisticsStatus: 'QR Activated',
-    logisticsNotes: 'The independent donation QR was scanned and activated by staff.',
-    trackingTitle: 'Independent donation QR activated',
-    trackingDescription: 'Staff activation was recorded for the independent donation QR.',
+    status: 'Ready for shipment',
+    logisticsStatus: 'Ready for shipment',
+    logisticsNotes: 'Your donation QR is active and ready for shipment tracking.',
+    trackingTitle: 'Donation QR activated',
+    trackingDescription: 'The donor scanned the saved donation QR and activated donation tracking.',
     shouldTrack: true,
     shouldNotify: true,
   });
@@ -1650,6 +1863,40 @@ export const activateIndependentDonationQr = async ({
     submission: syncedResult.submission,
     alreadyActivated: false,
   };
+};
+
+export const activateIndependentDonationQrByScan = async ({
+  userId = null,
+  submission,
+  databaseUserId,
+  scannedPayload = '',
+}) => {
+  if (!submission?.submission_id) {
+    return { success: false, error: 'A valid donation submission is required before activation.' };
+  }
+
+  const currentMetadata = getIndependentQrMetadata(submission);
+  if (!currentMetadata?.reference) {
+    return { success: false, error: 'No saved donation QR is available for this donation flow.' };
+  }
+
+  const scannedQr = parseDonationTrackingQrPayload(scannedPayload);
+  if (!scannedQr.qr_reference || !scannedQr.submission_code) {
+    return { success: false, error: 'The scanned code is not a valid Donivra donation QR.' };
+  }
+
+  if (
+    scannedQr.qr_reference !== currentMetadata.reference
+    || scannedQr.submission_code !== submission.submission_code
+  ) {
+    return { success: false, error: 'The scanned QR does not match your current donation.' };
+  }
+
+  return await activateIndependentDonationQr({
+    userId,
+    submission,
+    databaseUserId,
+  });
 };
 
 export const saveManualDonationQualification = async ({

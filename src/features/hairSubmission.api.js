@@ -64,6 +64,7 @@ const aiScreeningSelect = `
   ai_screening_id:AI_Screening_ID,
   submission_id:Submission_ID,
   estimated_length:Estimated_Length,
+  detected_color:Detected_Color,
   detected_texture:Detected_Texture,
   detected_density:Detected_Density,
   detected_condition:Detected_Condition,
@@ -234,6 +235,7 @@ const normalizeAiScreening = (row) => ({
   ai_screening_id: row?.ai_screening_id || null,
   submission_id: row?.submission_id || null,
   estimated_length: row?.estimated_length ?? null,
+  detected_color: row?.detected_color || '',
   detected_texture: row?.detected_texture || '',
   detected_density: row?.detected_density || '',
   detected_condition: row?.detected_condition || '',
@@ -525,7 +527,7 @@ export const createAiScreening = async (payload) => {
     table: aiScreeningsTable,
     phase: 'create',
     filters: { Submission_ID: payload?.submission_id },
-    columns: ['Submission_ID', 'Estimated_Length', 'Detected_Texture', 'Detected_Density', 'Detected_Condition', 'Visible_Damage_Notes', 'Confidence_Score', 'Decision', 'Summary'],
+    columns: ['Submission_ID', 'Estimated_Length', 'Detected_Color', 'Detected_Texture', 'Detected_Density', 'Detected_Condition', 'Visible_Damage_Notes', 'Confidence_Score', 'Decision', 'Summary'],
   });
 
   const result = await supabase
@@ -533,6 +535,7 @@ export const createAiScreening = async (payload) => {
     .insert([{
       Submission_ID: payload?.submission_id || null,
       Estimated_Length: payload?.estimated_length ?? null,
+      Detected_Color: payload?.detected_color || null,
       Detected_Texture: payload?.detected_texture || null,
       Detected_Density: payload?.detected_density || null,
       Detected_Condition: payload?.detected_condition || null,
@@ -714,6 +717,33 @@ export const fetchLatestDonationCertificateByUserId = async (userId) => {
   };
 };
 
+export const fetchDonationCertificatesByUserId = async (userId, limit = 20) => {
+  const resolvedUserId = await resolveSubmissionUserId(userId);
+  if (resolvedUserId.error) {
+    return { data: [], error: resolvedUserId.error };
+  }
+
+  logHairQuery('fetchDonationCertificatesByUserId', {
+    table: donationCertificatesTable,
+    phase: 'read',
+    filters: { User_ID: resolvedUserId.userId },
+    columns: ['Certificate_ID', 'User_ID', 'Certificate_Number', 'Certificate_Type', 'File_URL', 'Issued_At', 'Submission_ID'],
+    limit,
+  });
+
+  const result = await supabase
+    .from(donationCertificatesTable)
+    .select(donationCertificateSelect)
+    .eq('User_ID', resolvedUserId.userId)
+    .order('Issued_At', { ascending: false })
+    .limit(limit);
+
+  return {
+    data: (result.data || []).map(normalizeDonationCertificate),
+    error: result.error,
+  };
+};
+
 export const fetchDonorRecommendationsBySubmissionId = async (submissionId, limit = 5) => {
   logHairQuery('fetchDonorRecommendationsBySubmissionId', {
     table: donorRecommendationsTable,
@@ -731,6 +761,47 @@ export const fetchDonorRecommendationsBySubmissionId = async (submissionId, limi
 
   return {
     data: (result.data || []).map(normalizeDonorRecommendation),
+    error: result.error,
+  };
+};
+
+export const fetchLatestDonorRecommendationByUserId = async (userId) => {
+  const resolvedUserId = await resolveSubmissionUserId(userId);
+  if (resolvedUserId.error) {
+    return { data: null, error: resolvedUserId.error };
+  }
+
+  logHairQuery('fetchLatestDonorRecommendationByUserId', {
+    table: donorRecommendationsTable,
+    phase: 'read',
+    filters: { User_ID: resolvedUserId.userId },
+    columns: ['Recommendation_ID', 'Submission_ID', 'Title', 'Recommendation_Text', 'Created_At'],
+  });
+
+  // First, get the latest submission
+  const submissionResult = await supabase
+    .from(hairSubmissionsTable)
+    .select('Submission_ID')
+    .eq('User_ID', resolvedUserId.userId)
+    .order('Created_At', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!submissionResult.data) {
+    return { data: null, error: submissionResult.error };
+  }
+
+  // Then get the latest recommendation for that submission
+  const result = await supabase
+    .from(donorRecommendationsTable)
+    .select(donorRecommendationSelect)
+    .eq('Submission_ID', submissionResult.data.Submission_ID)
+    .order('Priority_Order', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  return {
+    data: result.data ? normalizeDonorRecommendation(result.data) : null,
     error: result.error,
   };
 };

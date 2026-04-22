@@ -33,6 +33,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: theme.spacing.xs,
+    paddingHorizontal: theme.spacing.md,
   },
   copyWrap: {
     flex: 1,

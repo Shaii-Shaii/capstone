@@ -1,11 +1,15 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { invokeEdgeFunction } from '../api/supabase/client';
 import * as NotificationAPI from './notification.api';
 import { notificationStoragePrefix, notificationTypes } from './notification.constants';
 import {
+  fetchHairBundleTrackingHistory,
+  fetchLatestDonationCertificateByUserId,
   fetchDonorRecommendationsBySubmissionId,
   fetchHairSubmissionLogisticsBySubmissionId,
   fetchHairSubmissionsByUserId,
 } from './hairSubmission.api';
+import { fetchRelevantDonationDriveUpdates } from './donorHome.api';
 import {
   fetchLatestWigAllocationByPatientDetailsId,
   fetchLatestWigRequestByPatientDetailsId,
@@ -14,6 +18,10 @@ import { fetchPatientDetailsByUserId, resolveDatabaseUserId } from './profile/ap
 import { writeAuditLog } from '../utils/appErrors';
 
 const buildStorageKey = ({ userId, role }) => `${notificationStoragePrefix}.${role}.${userId}`;
+const DONOR_REMINDER_EMAIL_FUNCTION = 'send-donor-hair-analysis-reminder';
+const DRIVE_NOTIFICATION_LOOKBACK_MS = 14 * 24 * 60 * 60 * 1000;
+const DRIVE_REMINDER_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
+const reminderEmailAttemptCache = new Map();
 
 const formatDateTime = (value) => {
   if (!value) return new Date().toISOString();
@@ -40,6 +48,141 @@ const formatReadableDate = (value) => {
   }
 };
 
+const toLocalDateKey = (value = new Date()) => {
+  const date = value instanceof Date ? value : new Date(value);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const getNotificationRouteFromType = (notification) => {
+  if (notification?.referenceType === 'route' && typeof notification?.referenceId === 'string') {
+    return notification.referenceId;
+  }
+
+  if (notification?.referenceType === 'donation_drive' && notification?.referenceId) {
+    return `/donor/drives/${notification.referenceId}`;
+  }
+
+  switch (notification?.type) {
+    case notificationTypes.hairAnalysisReminder:
+      return '/donor/donations';
+    case notificationTypes.driveUpdated:
+    case notificationTypes.driveRsvpReminder:
+      return notification?.referenceId ? `/donor/drives/${notification.referenceId}` : '/donor/home';
+    case notificationTypes.wigAllocationUpdated:
+    case notificationTypes.wigRequestUpdated:
+      return '/patient/requests';
+    case notificationTypes.submissionReceived:
+    case notificationTypes.screeningCompleted:
+    case notificationTypes.recommendationAvailable:
+    case notificationTypes.logisticsUpdated:
+    case notificationTypes.donationTrackingUpdated:
+    case notificationTypes.certificateAvailable:
+      return '/donor/status';
+    default:
+      return null;
+  }
+};
+
+const hasScreeningForLocalDay = (submissions = [], localDateKey) => (
+  submissions.some((submission) => (
+    (submission?.ai_screenings || []).some((screening) => (
+      screening?.created_at && toLocalDateKey(screening.created_at) === localDateKey
+    ))
+  ))
+);
+
+const formatDriveWindowLabel = (drive) => {
+  if (!drive?.start_date) return 'Schedule to be announced';
+
+  try {
+    return new Intl.DateTimeFormat('en-PH', {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    }).format(new Date(drive.start_date));
+  } catch {
+    return drive.start_date;
+  }
+};
+
+const shouldIncludeDriveUpdate = (drive) => {
+  const now = Date.now();
+  const updatedAt = drive?.updated_at ? new Date(drive.updated_at).getTime() : 0;
+  const startsAt = drive?.start_date ? new Date(drive.start_date).getTime() : 0;
+  const hasUpcomingReminderWindow = startsAt && startsAt >= now && startsAt - now <= DRIVE_REMINDER_WINDOW_MS;
+
+  return hasUpcomingReminderWindow || (updatedAt && now - updatedAt <= DRIVE_NOTIFICATION_LOOKBACK_MS);
+};
+
+const buildDriveNotification = (drive) => {
+  const organizationName = drive?.organization_name || 'your organization';
+  const startsSoon = drive?.start_date
+    ? (new Date(drive.start_date).getTime() - Date.now()) <= DRIVE_REMINDER_WINDOW_MS
+    : false;
+
+  if (drive?.registration?.registration_id && startsSoon) {
+    return buildNotification({
+      dedupeKey: `${notificationTypes.driveRsvpReminder}:${drive.donation_drive_id}`,
+      type: notificationTypes.driveRsvpReminder,
+      title: 'Drive RSVP reminder',
+      message: `${drive.event_title || 'Donation drive'} starts ${formatDriveWindowLabel(drive)}.`,
+      createdAt: drive.updated_at || drive.start_date || new Date().toISOString(),
+      referenceType: 'donation_drive',
+      referenceId: drive.donation_drive_id,
+    });
+  }
+
+  return buildNotification({
+    dedupeKey: `${notificationTypes.driveUpdated}:${drive.donation_drive_id}`,
+    type: notificationTypes.driveUpdated,
+    title: drive?.registration?.registration_id ? 'Drive update' : 'New donation drive available',
+    message: drive?.registration?.registration_id
+      ? `${drive.event_title || 'Donation drive'} from ${organizationName} has a new schedule or status update.`
+      : `${organizationName} posted ${drive.event_title || 'a new donation drive'}.`,
+    createdAt: drive.updated_at || drive.start_date || new Date().toISOString(),
+    referenceType: 'donation_drive',
+    referenceId: drive.donation_drive_id,
+  });
+};
+
+const triggerHairAnalysisReminderEmail = async ({
+  authUserId,
+  databaseUserId,
+  userEmail,
+  localDateKey,
+}) => {
+  const cacheKey = `${databaseUserId || authUserId || 'anonymous'}:${localDateKey}`;
+  if (reminderEmailAttemptCache.has(cacheKey)) {
+    return reminderEmailAttemptCache.get(cacheKey);
+  }
+
+  const invokeResult = await invokeEdgeFunction(DONOR_REMINDER_EMAIL_FUNCTION, {
+    body: {
+      authUserId,
+      databaseUserId,
+      userEmail,
+      localDate: localDateKey,
+    },
+  }).catch((error) => ({ data: null, error }));
+
+  const normalizedResult = {
+    sent: Boolean(invokeResult?.data?.sent),
+    skipped: Boolean(invokeResult?.data?.skipped),
+    reason: invokeResult?.data?.reason || '',
+    error: invokeResult?.error || null,
+  };
+
+  if (normalizedResult.sent || normalizedResult.skipped) {
+    reminderEmailAttemptCache.set(cacheKey, normalizedResult);
+  }
+
+  return normalizedResult;
+};
+
 const buildNotification = ({
   dedupeKey,
   type,
@@ -64,13 +207,89 @@ const buildNotification = ({
   isRead,
 });
 
+const normalizeTextToken = (value = '') => String(value || '')
+  .replace(/\s+/g, ' ')
+  .trim()
+  .toLowerCase();
+
+const getNotificationIdentityKey = (notification = {}) => {
+  const backendId = notification.backendId || notification.notificationId || null;
+  if (backendId) {
+    return `backend:${backendId}`;
+  }
+
+  if (notification.dedupeKey) {
+    return `dedupe:${notification.dedupeKey}`;
+  }
+
+  const type = normalizeTextToken(notification.type || 'system_update');
+  const referenceType = normalizeTextToken(notification.referenceType || 'none');
+  const referenceId = String(notification.referenceId || notification.submissionId || notification.aiScreeningId || 'none').trim();
+  const createdAt = String(notification.createdAt || notification.updatedAt || notification.created_at || '').trim();
+  const title = normalizeTextToken(notification.title || 'system update');
+  const message = normalizeTextToken(notification.message || '');
+
+  return `fallback:${type}:${referenceType}:${referenceId}:${createdAt}:${title}:${message}`;
+};
+
+const sortNotificationsByNewest = (notifications = []) => (
+  [...notifications].sort((left, right) => (
+    new Date(right.createdAt || 0).getTime() - new Date(left.createdAt || 0).getTime()
+  ))
+);
+
+const dedupeNotifications = (notifications = []) => {
+  const merged = new Map();
+
+  (Array.isArray(notifications) ? notifications : []).forEach((notification) => {
+    if (!notification || (!notification.title && !notification.message)) {
+      return;
+    }
+
+    const identityKey = getNotificationIdentityKey(notification);
+    const existing = merged.get(identityKey);
+
+    if (!existing) {
+      merged.set(identityKey, {
+        ...notification,
+        identityKey,
+      });
+      return;
+    }
+
+    const existingTime = new Date(existing.createdAt || 0).getTime();
+    const incomingTime = new Date(notification.createdAt || 0).getTime();
+    const preferIncoming = incomingTime >= existingTime;
+
+    merged.set(identityKey, {
+      ...(preferIncoming ? existing : notification),
+      ...(preferIncoming ? notification : existing),
+      id: notification.backendId || existing.backendId || notification.id || existing.id || identityKey,
+      backendId: notification.backendId || existing.backendId || null,
+      dedupeKey: notification.dedupeKey || existing.dedupeKey || identityKey,
+      stableKey: notification.stableKey || existing.stableKey || identityKey,
+      identityKey,
+      isRead: Boolean(existing.isRead || notification.isRead),
+      createdAt: preferIncoming ? (notification.createdAt || existing.createdAt) : (existing.createdAt || notification.createdAt),
+      referenceType: existing.referenceType === 'notification'
+        ? (notification.referenceType || existing.referenceType || null)
+        : (existing.referenceType || notification.referenceType || null),
+      referenceId: existing.referenceType === 'notification'
+        ? (notification.referenceId || existing.referenceId || null)
+        : (existing.referenceId || notification.referenceId || null),
+    });
+  });
+
+  return sortNotificationsByNewest(Array.from(merged.values())).slice(0, 40);
+};
+
 const loadLocalNotifications = async ({ userId, role }) => {
   const rawValue = await AsyncStorage.getItem(buildStorageKey({ userId, role }));
   if (!rawValue) return [];
 
   try {
     const parsed = JSON.parse(rawValue);
-    return Array.isArray(parsed) ? parsed : [];
+    return dedupeNotifications(Array.isArray(parsed) ? parsed : []);
   } catch {
     return [];
   }
@@ -79,7 +298,7 @@ const loadLocalNotifications = async ({ userId, role }) => {
 const saveLocalNotifications = async ({ userId, role, notifications }) => {
   await AsyncStorage.setItem(
     buildStorageKey({ userId, role }),
-    JSON.stringify(notifications)
+    JSON.stringify(dedupeNotifications(notifications))
   );
 };
 
@@ -136,114 +355,159 @@ const fetchBackendNotifications = async (databaseUserId) => {
 };
 
 const mergeNotifications = ({ localNotifications, backendNotifications, derivedNotifications }) => {
-  const merged = new Map();
-
-  [...backendNotifications, ...localNotifications, ...derivedNotifications].forEach((notification) => {
-    const mergeKey = notification.stableKey || notification.dedupeKey;
-    const existing = merged.get(mergeKey);
-
-    if (!existing) {
-      merged.set(mergeKey, notification);
-      return;
-    }
-
-    merged.set(mergeKey, {
-      ...existing,
-      ...notification,
-      id: notification.backendId || existing.backendId || notification.id || existing.id,
-      backendId: notification.backendId || existing.backendId || null,
-      dedupeKey: existing.dedupeKey || notification.dedupeKey,
-      stableKey: notification.stableKey || existing.stableKey,
-      isRead: existing.isRead || notification.isRead,
-      createdAt: existing.createdAt > notification.createdAt ? existing.createdAt : notification.createdAt,
-    });
-  });
-
-  return Array.from(merged.values()).sort((left, right) => (
-    new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
-  ));
+  return dedupeNotifications([
+    ...(backendNotifications || []),
+    ...(localNotifications || []),
+    ...(derivedNotifications || []),
+  ]);
 };
 
-const buildDonorDerivedNotifications = async (userId) => {
+const buildDonorDerivedNotifications = async ({
+  userId,
+  databaseUserId = null,
+  userEmail = '',
+}) => {
   const notifications = [];
-  const { data, error } = await fetchHairSubmissionsByUserId(userId, 1);
+  const { data: submissions, error } = await fetchHairSubmissionsByUserId(userId, 6);
 
   if (error) {
     throw new Error(error.message || 'Unable to load donor notifications.');
   }
+  const todayLocalDateKey = toLocalDateKey(new Date());
 
-  const submission = data?.[0];
-  const screening = Array.isArray(submission?.ai_screenings)
-    ? submission.ai_screenings[0]
-    : submission?.ai_screenings;
-  const submissionId = submission?.submission_id;
-  const screeningId = screening?.ai_screening_id;
-
-  if (!submissionId) {
-    return notifications;
-  }
-
-  notifications.push(buildNotification({
-    dedupeKey: `${notificationTypes.submissionReceived}:${submissionId}`,
-    type: notificationTypes.submissionReceived,
-    title: 'Submission received',
-    message: `Your hair submission ${submission.submission_code || ''} was saved and is now in the review flow.`.trim(),
-    createdAt: submission.created_at,
-    referenceType: 'hair_submission',
-    referenceId: submissionId,
-  }));
-
-  if (screeningId) {
+  if (!hasScreeningForLocalDay(submissions || [], todayLocalDateKey)) {
     notifications.push(buildNotification({
-      dedupeKey: `${notificationTypes.screeningCompleted}:${screeningId}`,
-      type: notificationTypes.screeningCompleted,
-      title: 'AI screening completed',
-      message: screening.summary || `Your latest screening result is ${screening.decision || 'ready for review'}.`,
-      createdAt: screening.created_at,
-      referenceType: 'ai_screening',
-      referenceId: screeningId,
+      dedupeKey: `${notificationTypes.hairAnalysisReminder}:${todayLocalDateKey}`,
+      type: notificationTypes.hairAnalysisReminder,
+      title: 'Hair analysis reminder',
+      message: 'You have not checked your hair today.',
+      createdAt: new Date().toISOString(),
+      referenceType: 'route',
+      referenceId: '/donor/donations',
     }));
 
-    if (String(screening.decision || '').toLowerCase().includes('eligible')) {
+    if (databaseUserId || userId) {
+      await triggerHairAnalysisReminderEmail({
+        authUserId: userId,
+        databaseUserId,
+        userEmail,
+        localDateKey: todayLocalDateKey,
+      });
+    }
+  }
+
+  await Promise.all((submissions || []).map(async (submission) => {
+    const submissionId = submission?.submission_id;
+    if (!submissionId) return;
+
+    const screening = Array.isArray(submission?.ai_screenings)
+      ? submission.ai_screenings[0]
+      : submission?.ai_screenings;
+    const screeningId = screening?.ai_screening_id;
+
+    notifications.push(buildNotification({
+      dedupeKey: `${notificationTypes.submissionReceived}:${submissionId}`,
+      type: notificationTypes.submissionReceived,
+      title: 'Donation submitted',
+      message: `Your donation ${submission.submission_code || ''} was submitted and is now being processed.`.trim(),
+      createdAt: submission.updated_at || submission.created_at,
+      referenceType: 'hair_submission',
+      referenceId: submissionId,
+    }));
+
+    if (screeningId) {
       notifications.push(buildNotification({
-        dedupeKey: `${notificationTypes.certificateAvailable}:${submissionId}`,
-        type: notificationTypes.certificateAvailable,
-        title: 'Certificate available',
-        message: 'Your donation reached a qualified result and the donor certificate is now available in the donations screen.',
+        dedupeKey: `${notificationTypes.screeningCompleted}:${screeningId}`,
+        type: notificationTypes.screeningCompleted,
+        title: 'Hair analysis completed',
+        message: screening.summary || `Your latest screening result is ${screening.decision || 'ready for review'}.`,
         createdAt: screening.created_at,
+        referenceType: 'ai_screening',
+        referenceId: screeningId,
+      }));
+    }
+
+    const recommendationRows = submission?.donor_recommendations?.length
+      ? submission.donor_recommendations
+      : (await fetchDonorRecommendationsBySubmissionId(submissionId)).data || [];
+    if (recommendationRows.length) {
+      const topRecommendation = recommendationRows[0];
+      notifications.push(buildNotification({
+        dedupeKey: `${notificationTypes.recommendationAvailable}:${submissionId}`,
+        type: notificationTypes.recommendationAvailable,
+        title: 'Recommendation available',
+        message: topRecommendation.recommendation_text || 'New donor guidance is now available after screening.',
+        createdAt: topRecommendation.created_at,
         referenceType: 'hair_submission',
         referenceId: submissionId,
       }));
     }
-  }
 
-  const { data: recommendations } = await fetchDonorRecommendationsBySubmissionId(submissionId);
-  if (recommendations?.length) {
-    const topRecommendation = recommendations[0];
+    const [logisticsResult, trackingResult] = await Promise.all([
+      fetchHairSubmissionLogisticsBySubmissionId(submissionId),
+      fetchHairBundleTrackingHistory({ submissionId, limit: 4 }),
+    ]);
+
+    const logistics = logisticsResult.data;
+    if (logistics?.submission_logistics_id) {
+      notifications.push(buildNotification({
+        dedupeKey: `${notificationTypes.logisticsUpdated}:${logistics.submission_logistics_id}`,
+        type: notificationTypes.logisticsUpdated,
+        title: 'Donation update',
+        message: logistics.notes
+          || [logistics.shipment_status, logistics.courier_name, logistics.tracking_number].filter(Boolean).join(' • ')
+          || `Shipment status: ${logistics.shipment_status || logistics.logistics_type || 'updated'}.`,
+        createdAt: logistics.updated_at || logistics.created_at,
+        referenceType: 'hair_submission',
+        referenceId: submissionId,
+      }));
+    }
+
+    (trackingResult.data || []).forEach((entry) => {
+      notifications.push(buildNotification({
+        dedupeKey: `${notificationTypes.donationTrackingUpdated}:${entry.tracking_id}`,
+        type: notificationTypes.donationTrackingUpdated,
+        title: entry.title || 'Donation update',
+        message: entry.description || `Donation status: ${entry.status || 'updated'}.`,
+        createdAt: entry.updated_at,
+        referenceType: 'hair_submission',
+        referenceId: entry.submission_id || submissionId,
+      }));
+    });
+
+    if (String(screening?.decision || '').toLowerCase().includes('eligible')) {
+      notifications.push(buildNotification({
+        dedupeKey: `${notificationTypes.certificateAvailable}:${submissionId}:eligible`,
+        type: notificationTypes.certificateAvailable,
+        title: 'Certificate available',
+        message: 'Your donation reached a qualified result and the donor certificate is now available.',
+        createdAt: screening.created_at || submission.updated_at || submission.created_at,
+        referenceType: 'hair_submission',
+        referenceId: submissionId,
+      }));
+    }
+  }));
+
+  const latestCertificate = (await fetchLatestDonationCertificateByUserId(userId)).data;
+  if (latestCertificate?.certificate_id) {
     notifications.push(buildNotification({
-      dedupeKey: `${notificationTypes.recommendationAvailable}:${submissionId}`,
-      type: notificationTypes.recommendationAvailable,
-      title: 'Recommendation available',
-      message: topRecommendation.recommendation_text || 'New donor guidance is now available after screening.',
-      createdAt: topRecommendation.created_at,
+      dedupeKey: `${notificationTypes.certificateAvailable}:${latestCertificate.certificate_id}`,
+      type: notificationTypes.certificateAvailable,
+      title: 'Certificate available',
+      message: 'Your donor certificate is ready to view and share.',
+      createdAt: latestCertificate.issued_at || new Date().toISOString(),
       referenceType: 'hair_submission',
-      referenceId: submissionId,
+      referenceId: latestCertificate.submission_id,
     }));
   }
 
-  const { data: logistics } = await fetchHairSubmissionLogisticsBySubmissionId(submissionId);
-  if (logistics?.submission_logistics_id) {
-    notifications.push(buildNotification({
-      dedupeKey: `${notificationTypes.logisticsUpdated}:${logistics.submission_logistics_id}`,
-      type: notificationTypes.logisticsUpdated,
-      title: 'Logistics update',
-      message: logistics.notes
-        || [logistics.courier_name, logistics.tracking_number].filter(Boolean).join(' | ')
-        || `Shipment status: ${logistics.shipment_status || logistics.logistics_type || 'updated'}.`,
-      createdAt: logistics.updated_at || logistics.created_at,
-      referenceType: 'hair_submission_logistics',
-      referenceId: logistics.submission_logistics_id,
-    }));
+  if (databaseUserId) {
+    const driveUpdatesResult = await fetchRelevantDonationDriveUpdates({ databaseUserId, limit: 8 });
+    (driveUpdatesResult.data || [])
+      .filter(shouldIncludeDriveUpdate)
+      .forEach((drive) => {
+        notifications.push(buildDriveNotification(drive));
+      });
   }
 
   return notifications;
@@ -322,6 +586,7 @@ const persistMissingBackendNotifications = async ({
 
 export const loadNotificationSummary = async ({
   userId,
+  userEmail = '',
   role,
   databaseUserId: preferredDatabaseUserId = null,
 }) => {
@@ -333,13 +598,31 @@ export const loadNotificationSummary = async ({
         : resolveNotificationBackendUserId(userId),
     ]);
 
+    const derivedNotifications = role === 'donor'
+      ? await buildDonorDerivedNotifications({
+          userId,
+          databaseUserId,
+          userEmail,
+        })
+      : await buildPatientDerivedNotifications(userId);
     const backendResult = await fetchBackendNotifications(databaseUserId);
-    const notifications = backendResult.notifications.length
-      ? backendResult.notifications
-      : localNotifications;
+    const notifications = mergeNotifications({
+      localNotifications,
+      backendNotifications: backendResult.notifications,
+      derivedNotifications,
+    });
 
-    if (backendResult.notifications.length) {
+    if (notifications.length) {
       await saveLocalNotifications({ userId, role, notifications });
+    }
+
+    if (databaseUserId) {
+      await persistMissingBackendNotifications({
+        databaseUserId,
+        role,
+        notifications: derivedNotifications,
+        backendNotifications: backendResult.notifications,
+      });
     }
 
     return {
@@ -360,30 +643,36 @@ export const loadNotificationSummary = async ({
   }
 };
 
-export const loadNotifications = async ({ userId, role, databaseUserId: preferredDatabaseUserId = null }) => {
+export const loadNotifications = ({
+  userId,
+  userEmail = '',
+  role,
+  databaseUserId: preferredDatabaseUserId = null,
+}) => {
+  return (async () => {
   try {
-    const [localNotifications, databaseUserId, derivedNotifications] = await Promise.all([
+    const [localNotifications, databaseUserId] = await Promise.all([
       loadLocalNotifications({ userId, role }),
       preferredDatabaseUserId
         ? Promise.resolve(preferredDatabaseUserId)
         : resolveNotificationBackendUserId(userId),
-      role === 'donor' ? buildDonorDerivedNotifications(userId) : buildPatientDerivedNotifications(userId),
     ]);
+    const derivedNotifications = role === 'donor'
+      ? await buildDonorDerivedNotifications({
+          userId,
+          databaseUserId,
+          userEmail,
+        })
+      : await buildPatientDerivedNotifications(userId);
 
     const backendResult = await fetchBackendNotifications(databaseUserId);
     const backendNotifications = backendResult.notifications;
 
-    const mergedNotifications = databaseUserId
-      ? mergeNotifications({
-          localNotifications: [],
-          backendNotifications,
-          derivedNotifications: [],
-        })
-      : mergeNotifications({
-          localNotifications,
-          backendNotifications,
-          derivedNotifications,
-        });
+    const mergedNotifications = mergeNotifications({
+      localNotifications,
+      backendNotifications,
+      derivedNotifications,
+    });
 
     await saveLocalNotifications({ userId, role, notifications: mergedNotifications });
 
@@ -402,9 +691,9 @@ export const loadNotifications = async ({ userId, role, databaseUserId: preferre
           .filter((notification) => notification.title || notification.message);
 
         const databaseNotifications = mergeNotifications({
-          localNotifications: [],
+          localNotifications,
           backendNotifications: refreshedBackendNotifications,
-          derivedNotifications: [],
+          derivedNotifications,
         });
 
         await saveLocalNotifications({ userId, role, notifications: databaseNotifications });
@@ -434,6 +723,7 @@ export const loadNotifications = async ({ userId, role, databaseUserId: preferre
       databaseUserId: preferredDatabaseUserId || null,
     };
   }
+  })();
 };
 
 export const recordNotifications = async ({ userId, role, notifications }) => {
@@ -628,5 +918,9 @@ export const markAllNotificationsRead = async ({ userId, role }) => {
     unreadCount: 0,
   };
 };
+
+export const getNotificationNavigationTarget = (notification) => (
+  getNotificationRouteFromType(notification)
+);
 
 export const getNotificationTimestampLabel = (value) => formatReadableDate(value);

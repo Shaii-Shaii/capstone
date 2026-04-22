@@ -6,3 +6,6 @@ verify_jwt = false
 
 [functions.generate-wig-preview]
 verify_jwt = false
+
+[functions.send-donor-hair-analysis-reminder]
+verify_jwt = false

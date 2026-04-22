@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system/legacy';
 import { Platform } from 'react-native';
 import { useAuth } from '../providers/AuthProvider';
 import { useAuthActions } from '../features/auth/hooks/useAuthActions';
@@ -14,6 +15,7 @@ import {
 import { logAppError, logAppEvent } from '../utils/appErrors';
 
 const IMAGE_MEDIA_TYPES = ['images'];
+const BASE64_CHARACTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 
 const getFileExtension = (mimeType = '', fileName = '') => {
   const normalizedMimeType = String(mimeType || '').toLowerCase();
@@ -25,6 +27,42 @@ const getFileExtension = (mimeType = '', fileName = '') => {
   return 'jpg';
 };
 
+const decodeBase64ToArrayBuffer = (value = '') => {
+  const normalizedValue = String(value || '').replace(/\s/g, '');
+  if (!normalizedValue) {
+    return new ArrayBuffer(0);
+  }
+
+  const paddingLength = normalizedValue.endsWith('==')
+    ? 2
+    : (normalizedValue.endsWith('=') ? 1 : 0);
+  const outputLength = Math.floor((normalizedValue.length * 3) / 4) - paddingLength;
+  const bytes = new Uint8Array(outputLength);
+
+  let byteIndex = 0;
+  for (let index = 0; index < normalizedValue.length; index += 4) {
+    const chunk =
+      (BASE64_CHARACTERS.indexOf(normalizedValue[index]) << 18)
+      | (BASE64_CHARACTERS.indexOf(normalizedValue[index + 1]) << 12)
+      | ((normalizedValue[index + 2] === '=' ? 0 : BASE64_CHARACTERS.indexOf(normalizedValue[index + 2])) << 6)
+      | (normalizedValue[index + 3] === '=' ? 0 : BASE64_CHARACTERS.indexOf(normalizedValue[index + 3]));
+
+    if (byteIndex < outputLength) {
+      bytes[byteIndex++] = (chunk >> 16) & 0xff;
+    }
+
+    if (byteIndex < outputLength && normalizedValue[index + 2] !== '=') {
+      bytes[byteIndex++] = (chunk >> 8) & 0xff;
+    }
+
+    if (byteIndex < outputLength && normalizedValue[index + 3] !== '=') {
+      bytes[byteIndex++] = chunk & 0xff;
+    }
+  }
+
+  return bytes.buffer;
+};
+
 const getAssetUploadPayload = async (asset) => {
   if (!asset) {
     throw new Error('Unable to read the selected image.');
@@ -34,13 +72,8 @@ const getAssetUploadPayload = async (asset) => {
   const fileName = asset.fileName || asset.file?.name || `profile-photo.${getFileExtension(contentType)}`;
 
   if (asset.base64) {
-    const fileResponse = await fetch(`data:${contentType};base64,${asset.base64}`);
-    if (!fileResponse.ok) {
-      throw new Error('Unable to read the selected image.');
-    }
-
     return {
-      fileBody: await fileResponse.arrayBuffer(),
+      fileBody: decodeBase64ToArrayBuffer(asset.base64),
       contentType,
       fileName,
     };
@@ -55,13 +88,12 @@ const getAssetUploadPayload = async (asset) => {
   }
 
   if (asset.uri) {
-    const response = await fetch(asset.uri);
-    if (!response.ok) {
-      throw new Error('Unable to read the selected image.');
-    }
+    const base64File = await FileSystem.readAsStringAsync(asset.uri, {
+      encoding: 'base64',
+    });
 
     return {
-      fileBody: await response.arrayBuffer(),
+      fileBody: decodeBase64ToArrayBuffer(base64File),
       contentType,
       fileName,
     };
@@ -242,6 +274,8 @@ export const useProfileActions = () => {
   };
 
   const uploadAvatar = async () => {
+    setIsUploadingAvatar(true);
+
     try {
       if (!user?.id) {
         return { success: false, error: 'Session not found.' };
@@ -273,10 +307,7 @@ export const useProfileActions = () => {
 
       const asset = result.assets?.[0];
       const avatarUploadPayload = await getAssetUploadPayload(asset);
-
-      setIsUploadingAvatar(true);
       const uploadResult = await saveAvatar(user.id, avatarUploadPayload);
-      setIsUploadingAvatar(false);
 
       if (uploadResult.error) {
         logAppError('profile_photo.upload', new Error(uploadResult.error), {
@@ -294,12 +325,13 @@ export const useProfileActions = () => {
       });
       return { success: true, avatarUrl: uploadResult.profile?.avatar_url || uploadResult.profile?.photo_path || '' };
     } catch (error) {
-      setIsUploadingAvatar(false);
       logAppError('profile_photo.upload', error, {
         authUserId: user?.id || null,
         platform: Platform.OS,
       });
       return { success: false, error: error.message || 'Unable to update your photo.' };
+    } finally {
+      setIsUploadingAvatar(false);
     }
   };
 

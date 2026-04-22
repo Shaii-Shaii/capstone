@@ -1,5 +1,5 @@
-import { createJsonResponse, handleCorsPreflight } from '../_shared/cors.ts';
-import { createStructuredResponse } from '../_shared/openai.ts';
+import { createJsonResponse, handleCorsPreflight } from '../_shared/cors';
+import { createStructuredResponse } from '../_shared/openai';
 
 const replySchema = {
   type: 'object',

@@ -9,21 +9,24 @@ export const hairSubmissionStatuses = {
 
 export const hairSubmissionImageTypes = {
   donorUpload: 'donor_upload',
+  frontView: 'front_view',
+  sideProfile: 'side_profile',
+  hairEndsCloseUp: 'hair_ends_close_up',
 };
 
 export const hairAnalysisRequiredViews = [
   {
-    key: 'front_view',
+    key: hairSubmissionImageTypes.frontView,
     label: 'Front View Photo',
     helperText: 'Capture the front view clearly with your hair and face visible.',
   },
   {
-    key: 'side_profile',
+    key: hairSubmissionImageTypes.sideProfile,
     label: 'Side Profile Photo',
     helperText: 'Capture one clear side profile view of your hair.',
   },
   {
-    key: 'hair_ends_close_up',
+    key: hairSubmissionImageTypes.hairEndsCloseUp,
     label: 'Hair Ends Close-Up',
     helperText: 'Capture the hair ends closely so dryness and split ends can be checked.',
   },

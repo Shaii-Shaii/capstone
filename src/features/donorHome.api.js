@@ -36,8 +36,12 @@ const organizationSelect = `
   city:City,
   province:Province,
   country:Country,
+  contact_number:Contact_Number,
   status:Status,
   is_approved:Is_Approved,
+  approval_status:Approval_Status,
+  review_notes:Review_Notes,
+  created_at:Created_At,
   updated_at:Updated_At
 `;
 
@@ -122,8 +126,12 @@ const normalizeOrganization = (row) => ({
   city: row?.city || '',
   province: row?.province || '',
   country: row?.country || '',
+  contact_number: row?.contact_number || '',
   status: row?.status || '',
   is_approved: row?.is_approved ?? false,
+  approval_status: row?.approval_status || '',
+  review_notes: row?.review_notes || '',
+  created_at: row?.created_at || null,
   updated_at: row?.updated_at || null,
   location_label: buildLocationLabel(row),
   address_label: buildFullAddressLabel(row),
@@ -243,6 +251,51 @@ const findExistingDriveRegistration = async (driveId, databaseUserId) => {
   };
 };
 
+const findDriveRegistrationsByUserIdAndDriveIds = async (driveIds = [], databaseUserId) => {
+  if (!databaseUserId || !driveIds.length) {
+    return {
+      data: new Map(),
+      error: null,
+    };
+  }
+
+  const result = await supabase
+    .from(donationDriveRegistrationsTable)
+    .select(donationDriveRegistrationSelect)
+    .eq('User_ID', databaseUserId)
+    .in('Donation_Drive_ID', driveIds)
+    .order('Updated_At', { ascending: false });
+
+  if (result.error) {
+    logAppError('donor_home.drive_registrations.by_drive_ids', result.error, {
+      table: donationDriveRegistrationsTable,
+      databaseUserId,
+      driveIds,
+    });
+
+    return {
+      data: new Map(),
+      error: result.error,
+    };
+  }
+
+  const byDriveId = new Map();
+  (result.data || [])
+    .map(normalizeDonationDriveRegistration)
+    .forEach((registration) => {
+      if (!registration?.donation_drive_id || byDriveId.has(registration.donation_drive_id)) {
+        return;
+      }
+
+      byDriveId.set(registration.donation_drive_id, registration);
+    });
+
+  return {
+    data: byDriveId,
+    error: null,
+  };
+};
+
 const fetchOrganizationsByIds = async (organizationIds = []) => {
   if (!organizationIds.length) {
     return {
@@ -274,6 +327,70 @@ const fetchOrganizationsByIds = async (organizationIds = []) => {
         .map(normalizeOrganization)
         .map((item) => [item.organization_id, item])
     ),
+    error: null,
+  };
+};
+
+export const fetchOrganizationMembershipsByUserId = async (databaseUserId) => {
+  if (!databaseUserId) {
+    return {
+      data: [],
+      error: null,
+    };
+  }
+
+  const result = await supabase
+    .from(organizationMembersTable)
+    .select(organizationMemberSelect)
+    .eq('User_ID', databaseUserId)
+    .order('Updated_At', { ascending: false });
+
+  if (result.error) {
+    logAppError('donor_home.organization_memberships', result.error, {
+      table: organizationMembersTable,
+      databaseUserId,
+    });
+
+    return {
+      data: [],
+      error: result.error,
+    };
+  }
+
+  return {
+    data: (result.data || []).map(normalizeOrganizationMember),
+    error: null,
+  };
+};
+
+export const fetchDonationDriveRegistrationsByUserId = async (databaseUserId) => {
+  if (!databaseUserId) {
+    return {
+      data: [],
+      error: null,
+    };
+  }
+
+  const result = await supabase
+    .from(donationDriveRegistrationsTable)
+    .select(donationDriveRegistrationSelect)
+    .eq('User_ID', databaseUserId)
+    .order('Updated_At', { ascending: false });
+
+  if (result.error) {
+    logAppError('donor_home.drive_registrations', result.error, {
+      table: donationDriveRegistrationsTable,
+      databaseUserId,
+    });
+
+    return {
+      data: [],
+      error: result.error,
+    };
+  }
+
+  return {
+    data: (result.data || []).map(normalizeDonationDriveRegistration),
     error: null,
   };
 };
@@ -330,16 +447,102 @@ export const joinOrganizationMembership = async ({
     };
   }
 
+  const organizationResult = await supabase
+    .from(organizationsTable)
+    .select(organizationSelect)
+    .eq('Organization_ID', organizationId)
+    .maybeSingle();
+
+  if (organizationResult.error) {
+    logAppError('donor_home.organization_membership.organization_lookup', organizationResult.error, {
+      table: organizationsTable,
+      organizationId,
+      databaseUserId,
+    });
+
+    return {
+      data: null,
+      error: organizationResult.error,
+      alreadyMember: false,
+    };
+  }
+
+  if (!organizationResult.data) {
+    return {
+      data: null,
+      error: new Error('The selected organization could not be found.'),
+      alreadyMember: false,
+    };
+  }
+
+  const organization = normalizeOrganization(organizationResult.data);
+  const isJoinable = (
+    String(organization.status || '').trim().toLowerCase() === 'active'
+    && Boolean(organization.is_approved)
+    && String(organization.approval_status || '').trim().toLowerCase() === 'approved'
+  );
+
+  if (!isJoinable) {
+    return {
+      data: null,
+      error: new Error('This organization is not available to join right now.'),
+      alreadyMember: false,
+    };
+  }
+
   const existingResult = await fetchOrganizationMembership({
     organizationId,
     databaseUserId,
   });
+
+  if (existingResult.error) {
+    return {
+      data: null,
+      error: existingResult.error,
+      alreadyMember: false,
+    };
+  }
 
   if (existingResult.data?.is_active) {
     return {
       data: existingResult.data,
       error: null,
       alreadyMember: true,
+    };
+  }
+
+  if (existingResult.data?.member_id) {
+    const updateResult = await supabase
+      .from(organizationMembersTable)
+      .update({
+        Membership_Role: existingResult.data.membership_role || 'Member',
+        Is_Primary: false,
+        Status: 'Active',
+        Updated_At: new Date().toISOString(),
+      })
+      .eq('Member_ID', existingResult.data.member_id)
+      .select(organizationMemberSelect)
+      .maybeSingle();
+
+    if (updateResult.error) {
+      logAppError('donor_home.organization_membership.reactivate', updateResult.error, {
+        table: organizationMembersTable,
+        organizationId,
+        databaseUserId,
+        memberId: existingResult.data.member_id,
+      });
+
+      return {
+        data: null,
+        error: updateResult.error,
+        alreadyMember: false,
+      };
+    }
+
+    return {
+      data: normalizeOrganizationMember(updateResult.data),
+      error: null,
+      alreadyMember: false,
     };
   }
 
@@ -573,7 +776,7 @@ export const createDonationDriveRsvp = async ({
   };
 };
 
-export const fetchOrganizationPreview = async (organizationId, driveLimit = 3) => {
+export const fetchOrganizationPreview = async (organizationId, databaseUserId = null, driveLimit = 3) => {
   if (!organizationId) {
     return {
       data: null,
@@ -625,15 +828,32 @@ export const fetchOrganizationPreview = async (organizationId, driveLimit = 3) =
   }
 
   const organization = normalizeOrganization(organizationResult.data);
-  const drives = (drivesResult.data || []).map((row) => normalizeDonationDrive(row, organization));
+  const driveRows = drivesResult.data || [];
+  const driveIds = driveRows.map((row) => row?.donation_drive_id).filter(Boolean);
+  const [membershipResult, registrationsResult] = await Promise.all([
+    fetchOrganizationMembership({
+      organizationId,
+      databaseUserId,
+    }),
+    findDriveRegistrationsByUserIdAndDriveIds(driveIds, databaseUserId),
+  ]);
+
+  const membership = membershipResult.data || null;
+  const drives = driveRows.map((row) => normalizeDonationDrive(
+    row,
+    organization,
+    registrationsResult.data.get(row?.donation_drive_id) || null,
+    membership
+  ));
 
   return {
     data: {
       ...organization,
+      membership,
       drives,
       short_overview: buildShortOverview(`${organization.organization_type || ''} ${organization.location_label || ''}`.trim(), 100),
     },
-    error: organizationResult.error || drivesResult.error,
+    error: organizationResult.error || drivesResult.error || membershipResult.error || registrationsResult.error,
   };
 };
 
@@ -687,5 +907,106 @@ export const fetchOrganizationsWithDrives = async (limit = 24, driveLimitPerOrga
         .map((row) => normalizeDonationDrive(row, organization)),
     })),
     error: organizationsResult.error || drivesResult.error,
+  };
+};
+
+export const fetchRelevantDonationDriveUpdates = async ({
+  databaseUserId,
+  limit = 12,
+}) => {
+  if (!databaseUserId) {
+    return {
+      data: [],
+      error: null,
+    };
+  }
+
+  const [membershipsResult, registrationsResult] = await Promise.all([
+    fetchOrganizationMembershipsByUserId(databaseUserId),
+    fetchDonationDriveRegistrationsByUserId(databaseUserId),
+  ]);
+
+  const memberships = membershipsResult.data || [];
+  const registrations = registrationsResult.data || [];
+  const activeMemberships = memberships.filter((item) => item.is_active);
+  const organizationIds = [...new Set(activeMemberships.map((item) => item.organization_id).filter(Boolean))];
+  const driveIds = [...new Set(registrations.map((item) => item.donation_drive_id).filter(Boolean))];
+
+  if (!organizationIds.length && !driveIds.length) {
+    return {
+      data: [],
+      error: membershipsResult.error || registrationsResult.error || null,
+    };
+  }
+
+  const [organizationDrivesResult, registeredDrivesResult] = await Promise.all([
+    organizationIds.length
+      ? supabase
+          .from(donationDriveRequestsTable)
+          .select(donationDriveSelect)
+          .in('Organization_ID', organizationIds)
+          .order('Updated_At', { ascending: false })
+          .limit(limit)
+      : Promise.resolve({ data: [], error: null }),
+    driveIds.length
+      ? supabase
+          .from(donationDriveRequestsTable)
+          .select(donationDriveSelect)
+          .in('Donation_Drive_ID', driveIds)
+          .order('Updated_At', { ascending: false })
+          .limit(limit)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+
+  if (organizationDrivesResult.error) {
+    logAppError('donor_home.relevant_drive_updates.organizations', organizationDrivesResult.error, {
+      table: donationDriveRequestsTable,
+      organizationIds,
+      databaseUserId,
+    });
+  }
+
+  if (registeredDrivesResult.error) {
+    logAppError('donor_home.relevant_drive_updates.registrations', registeredDrivesResult.error, {
+      table: donationDriveRequestsTable,
+      driveIds,
+      databaseUserId,
+    });
+  }
+
+  const rawDrives = [...(organizationDrivesResult.data || []), ...(registeredDrivesResult.data || [])];
+  const uniqueDrives = new Map();
+  rawDrives.forEach((row) => {
+    const driveId = row?.donation_drive_id;
+    if (!driveId) return;
+    const existing = uniqueDrives.get(driveId);
+    if (!existing || new Date(row?.updated_at || 0).getTime() > new Date(existing?.updated_at || 0).getTime()) {
+      uniqueDrives.set(driveId, row);
+    }
+  });
+
+  const organizationLookup = await fetchOrganizationsByIds(
+    [...new Set(Array.from(uniqueDrives.values()).map((row) => row?.organization_id).filter(Boolean))]
+  );
+  const registrationByDriveId = new Map(registrations.map((item) => [item.donation_drive_id, item]));
+  const membershipByOrganizationId = new Map(activeMemberships.map((item) => [item.organization_id, item]));
+
+  return {
+    data: sortByNewestTimestamp(
+      Array.from(uniqueDrives.values()).map((row) => normalizeDonationDrive(
+        row,
+        organizationLookup.data.get(row?.organization_id) || null,
+        registrationByDriveId.get(row?.donation_drive_id) || null,
+        membershipByOrganizationId.get(row?.organization_id) || null
+      )),
+      ['updated_at', 'start_date']
+    ).slice(0, limit),
+    error:
+      membershipsResult.error
+      || registrationsResult.error
+      || organizationDrivesResult.error
+      || registeredDrivesResult.error
+      || organizationLookup.error
+      || null,
   };
 };

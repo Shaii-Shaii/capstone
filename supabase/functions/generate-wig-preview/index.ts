@@ -1,5 +1,5 @@
-import { createJsonResponse, handleCorsPreflight } from '../_shared/cors.ts';
-import { createImageEdit, createStructuredResponse } from '../_shared/openai.ts';
+import { createJsonResponse, handleCorsPreflight } from '../_shared/cors';
+import { createImageEdit, createStructuredResponse } from '../_shared/openai';
 
 const MAX_PREVIEW_VARIANTS = 3;
 

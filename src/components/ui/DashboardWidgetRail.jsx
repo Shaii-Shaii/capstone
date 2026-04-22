@@ -40,7 +40,7 @@ export const DashboardWidgetRail = ({
 
 const styles = StyleSheet.create({
   content: {
-    paddingLeft: 1,
+    paddingLeft: theme.spacing.md,
   },
   contentCompact: {
     paddingRight: theme.spacing.xs,

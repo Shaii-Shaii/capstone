@@ -198,6 +198,7 @@ export function HairLogDetailModal({ visible, dateKey = '', entries = [], onClos
   const tone = normalizeConditionTone(screening.detected_condition);
   const hasAssessmentDetails = Boolean(
     screening?.estimated_length != null
+    || screening?.detected_color
     || screening?.detected_texture
     || screening?.detected_density
     || screening?.summary
@@ -305,6 +306,12 @@ export function HairLogDetailModal({ visible, dateKey = '', entries = [], onClos
                       <Text style={[styles.metaKey, { color: roles.metaText }]}>Condition</Text>
                       <Text style={[styles.metaValue, { color: roles.headingText }]}>
                         {screening.detected_condition || 'Not detected'}
+                      </Text>
+                    </View>
+                    <View style={styles.metaItem}>
+                      <Text style={[styles.metaKey, { color: roles.metaText }]}>Color</Text>
+                      <Text style={[styles.metaValue, { color: roles.headingText }]}>
+                        {screening.detected_color || 'Not detected'}
                       </Text>
                     </View>
                     <View style={styles.metaItem}>

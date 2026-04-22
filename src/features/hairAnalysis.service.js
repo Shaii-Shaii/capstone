@@ -38,6 +38,7 @@ const normalizeAnalysis = (data) => ({
   missing_views: Array.isArray(data?.missing_views) ? data.missing_views : [],
   per_view_notes: normalizeViewNotes(data?.per_view_notes || []),
   estimated_length: data?.estimated_length ?? null,
+  detected_color: data?.detected_color || '',
   detected_texture: data?.detected_texture || '',
   detected_density: data?.detected_density || '',
   detected_condition: data?.detected_condition || '',
@@ -54,6 +55,7 @@ const normalizeAnalysis = (data) => ({
 const hasStructuredAnalysisContent = (analysis) => Boolean(
   analysis?.summary
   || analysis?.decision
+  || analysis?.detected_color
   || analysis?.detected_texture
   || analysis?.detected_density
   || analysis?.detected_condition
@@ -203,6 +205,42 @@ const isQuotaLikeError = (message = '', errorType = '') => {
   );
 };
 
+const isTemporaryUnavailableError = (message = '', errorType = '') => {
+  const normalizedMessage = String(message || '').toLowerCase();
+  const normalizedType = String(errorType || '').trim().toLowerCase();
+
+  return (
+    normalizedType === 'temporary_unavailable'
+    || normalizedMessage.includes('high demand')
+    || normalizedMessage.includes('temporarily busy')
+    || normalizedMessage.includes('temporarily unavailable')
+    || normalizedMessage.includes('service unavailable')
+    || normalizedMessage.includes('retry later')
+    || normalizedMessage.includes('resource exhausted')
+    || normalizedMessage.includes('overloaded')
+  );
+};
+
+const isServerConfigurationError = (message = '') => {
+  const normalized = String(message || '').toLowerCase();
+  return (
+    normalized.includes('api key is not configured')
+    || normalized.includes('not configured in edge function secrets')
+    || normalized.includes('hair analysis is not configured on the server')
+  );
+};
+
+const isInvokeTransportError = (message = '') => {
+  const normalized = String(message || '').toLowerCase();
+  return (
+    normalized.includes('network request failed')
+    || normalized.includes('failed to fetch')
+    || normalized.includes('load failed')
+    || normalized.includes('fetcherror')
+    || normalized.includes('could not connect')
+  );
+};
+
 export const analyzeHairPhotos = async ({
   images,
   questionnaireAnswers,
@@ -338,11 +376,29 @@ export const analyzeHairPhotos = async ({
 
     if (functionResult.error) {
       const errorPayload = await extractErrorPayloadFromResponse(functionResult.error?.context);
+      const edgeFunctionInvoked = errorPayload?.edge_function_invoked === true;
+      const providerRequestAttempted = errorPayload?.provider_request_attempted === true;
+      const providerResponseStatus = errorPayload?.provider_response_status ?? null;
+      const providerParseSuccess = errorPayload?.provider_parse_success ?? null;
+
+      logAppEvent('hairAnalysis.invoke', 'Hair analysis edge invoke failed before a usable result was returned.', {
+        functionName: hairAnalysisFunctionName,
+        hasErrorContext: Boolean(functionResult.error?.context),
+        edgeFunctionInvoked,
+        providerRequestAttempted,
+        providerResponseStatus,
+        providerParseSuccess,
+      }, 'warn');
+
       throw buildStructuredAnalysisError(
         errorPayload?.error || await resolveFunctionErrorMessage(functionResult.error),
         {
-          errorType: errorPayload?.error_type || null,
-          retryAfterSeconds: errorPayload?.retry_after_seconds ?? null,
+          errorType: providerRequestAttempted ? errorPayload?.error_type || null : null,
+          retryAfterSeconds: providerRequestAttempted ? errorPayload?.retry_after_seconds ?? null : null,
+          edgeFunctionInvoked,
+          providerRequestAttempted,
+          providerResponseStatus,
+          providerParseSuccess,
         }
       );
     }
@@ -394,6 +450,7 @@ export const analyzeHairPhotos = async ({
       usedAiSummary: Boolean(normalizedAnalysis.summary),
       usedAiLengthAssessment: Boolean(normalizedAnalysis.length_assessment),
       usedAiEstimatedLength: normalizedAnalysis.estimated_length != null,
+      usedAiColor: Boolean(normalizedAnalysis.detected_color),
       usedAiCondition: Boolean(normalizedAnalysis.detected_condition),
       usedAiTexture: Boolean(normalizedAnalysis.detected_texture),
       usedAiDensity: Boolean(normalizedAnalysis.detected_density),
@@ -430,12 +487,20 @@ export const analyzeHairPhotos = async ({
   } catch (error) {
     const resolvedMessage = await resolveFunctionErrorMessage(error);
     const technicalMessage = resolvedMessage.toLowerCase();
+    const providerRequestAttempted = error?.providerRequestAttempted === true;
+    const edgeFunctionInvoked = error?.edgeFunctionInvoked === true;
+    const providerResponseStatus = Number.isFinite(Number(error?.providerResponseStatus))
+      ? Number(error.providerResponseStatus)
+      : null;
     const directRetryAfterSeconds = Number(error?.retryAfterSeconds);
     const retryAfterSeconds = Number.isFinite(directRetryAfterSeconds) && directRetryAfterSeconds > 0
       ? Math.max(1, Math.ceil(directRetryAfterSeconds))
       : null;
-    const errorType = String(error?.errorType || '').trim().toLowerCase();
-    const isRateLimitError = isQuotaLikeError(resolvedMessage, errorType);
+    const errorType = providerRequestAttempted
+      ? String(error?.errorType || '').trim().toLowerCase()
+      : '';
+    const isRateLimitError = providerRequestAttempted && isQuotaLikeError(resolvedMessage, errorType);
+    const isTemporaryBusyError = providerRequestAttempted && isTemporaryUnavailableError(resolvedMessage, errorType);
 
     if (
       !technicalMessage.includes('requested function was not found')
@@ -445,7 +510,14 @@ export const analyzeHairPhotos = async ({
       const logContext = {
         imageCount: images?.length || 0,
         functionName: hairAnalysisFunctionName,
-        errorType: isRateLimitError ? 'quota_exceeded' : errorType || null,
+        edgeFunctionInvoked,
+        providerRequestAttempted,
+        providerResponseStatus,
+        errorType: isRateLimitError
+          ? 'quota_exceeded'
+          : isTemporaryBusyError
+            ? 'temporary_unavailable'
+            : errorType || null,
         retryAfterSeconds: Number.isFinite(retryAfterSeconds) ? retryAfterSeconds : null,
       };
 
@@ -455,6 +527,21 @@ export const analyzeHairPhotos = async ({
           message: Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
             ? `Cannot analyze hair, please try again in ${retryAfterSeconds} seconds.`
             : 'Cannot analyze hair right now. Please try again later.',
+        }, 'warn');
+      } else if (isTemporaryBusyError) {
+        logAppEvent('hairAnalysis.analyzeHairPhotos', 'Gemini request returned a temporary-unavailable response.', {
+          ...logContext,
+          message: 'Hair analysis is temporarily busy right now. Please try again in a moment.',
+        }, 'warn');
+      } else if (!edgeFunctionInvoked) {
+        logAppEvent('hairAnalysis.analyzeHairPhotos', 'Hair analysis invoke failed before the edge function was reached.', {
+          ...logContext,
+          message: resolvedMessage || 'Hair analysis could not reach the server function.',
+        }, 'warn');
+      } else if (!providerRequestAttempted) {
+        logAppEvent('hairAnalysis.analyzeHairPhotos', 'Hair analysis failed on the server before Gemini was called.', {
+          ...logContext,
+          message: resolvedMessage || 'Hair analysis failed before the provider request started.',
         }, 'warn');
       } else {
         logAppError('hairAnalysis.analyzeHairPhotos', error, logContext);
@@ -469,13 +556,16 @@ export const analyzeHairPhotos = async ({
           : 'Cannot analyze hair right now. Please try again later.'
       : isGatewayFailureResponse(resolvedMessage)
         ? 'Hair analysis is temporarily unavailable on the server right now. Please try again in a moment.'
-      : technicalMessage.includes('high demand')
-        || technicalMessage.includes('temporarily busy')
-        || technicalMessage.includes('temporarily unavailable')
-        || technicalMessage.includes('retry later')
-        || technicalMessage.includes('service unavailable')
-        || technicalMessage.includes('resource exhausted')
+      : isTemporaryBusyError
         ? 'Hair analysis is temporarily busy right now. Please try again in a moment.'
+      : isServerConfigurationError(resolvedMessage)
+        ? 'Hair analysis is not configured on the server right now. Please try again later.'
+      : !edgeFunctionInvoked && isInvokeTransportError(resolvedMessage)
+        ? 'Hair analysis could not reach the server right now. Please try again.'
+      : !edgeFunctionInvoked
+        ? 'Cannot start hair analysis right now. Please try again.'
+      : edgeFunctionInvoked && !providerRequestAttempted
+        ? 'Hair analysis could not start on the server right now. Please try again.'
       : technicalMessage.includes('guided donation questions') || technicalMessage.includes('guided hair questions')
         ? 'Please complete the guided questions before analysis.'
       : technicalMessage.includes('compliance checklist')
@@ -515,6 +605,9 @@ export const analyzeHairPhotos = async ({
       error: userMessage,
       errorType: isRateLimitError ? 'quota_exceeded' : errorType || null,
       retryAfterSeconds: Number.isFinite(retryAfterSeconds) ? retryAfterSeconds : null,
+      edgeFunctionInvoked,
+      providerRequestAttempted,
+      providerResponseStatus,
     };
   }
 };

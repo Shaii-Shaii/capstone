@@ -1,5 +1,6 @@
 import React from 'react';
 import { ActivityIndicator, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 import { DashboardLayout } from './DashboardLayout';
@@ -20,8 +21,8 @@ import {
   joinOrganizationMembership,
 } from '../../features/donorHome.api';
 import {
-  buildDriveInvitationQrPayload,
-  buildIndependentDonationQrPayload,
+  activateIndependentDonationQrByScan,
+  buildDonationTrackingQrPayload,
   buildQrImageUrl,
   ensureIndependentDonationQr,
   generateDonationQrPdf,
@@ -41,7 +42,7 @@ const AGREEMENT_COPY = [
   'You will handle shipping.',
   'The parcel goes to Hair for Hope.',
   'Attach the QR to the parcel.',
-  'Staff will scan the QR for tracking.',
+  'Scan the QR to activate donation tracking.',
 ];
 
 const MANUAL_ENTRY_PATHS = {
@@ -116,11 +117,76 @@ const getLatestSubmissionDetailRecord = (submission = null, fallbackDetail = nul
 
 const formatQrStatusLabel = (status = '') => {
   const normalized = String(status || '').trim().toLowerCase();
-  if (!normalized) return 'Pending';
-  if (normalized === 'activated') return 'Activated';
-  if (normalized === 'expired') return 'Pending';
+  if (!normalized) return 'Inactive';
+  if (['active', 'activated'].includes(normalized)) return 'Active';
+  if (['inactive', 'pending', 'expired'].includes(normalized)) return 'Inactive';
   return normalized.charAt(0).toUpperCase() + normalized.slice(1);
 };
+
+const formatDonationSourceLabel = (value = '') => {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) return 'Not available';
+  if (normalized === 'manual_donor_details') return 'Manual donor entry';
+  if (normalized === 'independent_donation') return 'Independent donation';
+  if (normalized === 'drive_donation') return 'Donation drive';
+  return normalized
+    .split(/[_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(' ');
+};
+
+const formatDonationValue = (value, fallback = 'Not available') => {
+  if (value == null) return fallback;
+  const normalized = String(value).trim();
+  return normalized || fallback;
+};
+
+const resolveDonationTrackingLabel = ({
+  submission = null,
+  logistics = null,
+  timelineStage = null,
+  qrStatus = '',
+} = {}) => (
+  timelineStage?.label
+  || timelineStage?.statusLabel
+  || logistics?.shipment_status
+  || submission?.status
+  || qrStatus
+  || 'Pending'
+);
+
+const buildDonationQrDetails = ({
+  submission = null,
+  detail = null,
+  logistics = null,
+  drive = null,
+  donorName = '',
+  trackingLabel = '',
+  qrLifecycleStatus = '',
+} = {}) => (
+  [
+    { label: 'Donation code', value: submission?.submission_code || 'Pending donation code' },
+    { label: 'Donor name', value: donorName || '' },
+    { label: 'QR status', value: qrLifecycleStatus || '' },
+    { label: 'Donation source', value: formatDonationSourceLabel(submission?.donation_source || '') },
+    { label: 'Donation status', value: formatQrStatusLabel(submission?.status || '') },
+    { label: 'Hair length', value: detail?.declared_length != null && detail?.declared_length !== '' ? String(detail.declared_length) : '' },
+    { label: 'Hair color', value: detail?.declared_color || '' },
+    { label: 'Hair texture', value: detail?.declared_texture || '' },
+    { label: 'Hair density', value: detail?.declared_density || '' },
+    { label: 'Hair condition', value: detail?.declared_condition || '' },
+    { label: 'Current tracking status', value: trackingLabel || '' },
+    { label: 'Shipment status', value: logistics?.shipment_status || '' },
+    { label: 'Drive', value: drive?.event_title || '' },
+    { label: 'Organization', value: drive?.organization_name || '' },
+  ]
+    .filter((item) => String(item.value || '').trim().length > 0)
+    .map((item) => ({
+      ...item,
+      value: formatDonationValue(item.value),
+    }))
+);
 
 function SectionTitle({ eyebrow, title, body }) {
   return (
@@ -132,7 +198,16 @@ function SectionTitle({ eyebrow, title, body }) {
   );
 }
 
-function ModalShell({ visible, title, subtitle, onClose, children, footer }) {
+function ModalShell({
+  visible,
+  title,
+  subtitle,
+  onClose,
+  children,
+  footer,
+  scrollContent = false,
+  contentContainerStyle,
+}) {
   if (!visible) return null;
 
   return (
@@ -150,7 +225,17 @@ function ModalShell({ visible, title, subtitle, onClose, children, footer }) {
             </Pressable>
           </View>
 
-          {children}
+          <View style={styles.modalContent}>
+            {scrollContent ? (
+              <ScrollView
+                style={styles.modalScrollView}
+                contentContainerStyle={[styles.modalScrollContent, contentContainerStyle]}
+                showsVerticalScrollIndicator={false}
+              >
+                {children}
+              </ScrollView>
+            ) : children}
+          </View>
 
           {footer ? <View style={styles.modalFooter}>{footer}</View> : null}
         </AppCard>
@@ -302,7 +387,7 @@ function TimelinePreview({ stages, onOpenStage }) {
             <View style={[styles.timelineCard, stage.state === 'current' ? styles.timelineCardCurrent : null]}>
               <Text numberOfLines={2} style={styles.timelineCardTitle}>{stage.label}</Text>
               <Text style={styles.timelineCardStatus}>
-                {stage.state === 'completed' ? 'Done' : stage.state === 'current' ? 'Current' : 'Waiting'}
+                {stage.progressLabel || (stage.state === 'completed' ? 'Complete' : stage.state === 'current' ? 'Ongoing' : 'On waiting')}
               </Text>
             </View>
           </Pressable>
@@ -316,12 +401,12 @@ function StageDetailModal({
   visible,
   stage,
   onClose,
-  onViewQr,
-  canViewQr = false,
+  onScanQr,
+  canScanQr = false,
 }) {
   const parcelImages = (stage?.parcelImages || stage?.images || []).filter((image) => image?.signed_url);
-  const stageStatus = stage?.statusLabel
-    || (stage?.state === 'completed' ? 'Completed' : stage?.state === 'current' ? 'Current stage' : 'Waiting for update');
+  const stageStatus = stage?.progressLabel
+    || (stage?.state === 'completed' ? 'Complete' : stage?.state === 'current' ? 'Ongoing' : 'On waiting');
 
   return (
     <ModalShell
@@ -352,7 +437,11 @@ function StageDetailModal({
             </View>
           )}
         </View>
-        {canViewQr ? <AppButton title="View my QR" variant="outline" fullWidth={false} onPress={onViewQr} /> : null}
+        {canScanQr ? (
+          <View style={styles.stageActionRow}>
+            <AppButton title="Scan QR" fullWidth={false} onPress={onScanQr} />
+          </View>
+        ) : null}
       </View>
     </ModalShell>
   );
@@ -364,7 +453,9 @@ function QrModal({
   subtitle,
   helperText,
   payload,
-  statusLabel,
+  qrStatusLabel,
+  donationStatusLabel,
+  details = [],
   onClose,
   onDownload,
   onPrint,
@@ -381,10 +472,12 @@ function QrModal({
       title={title}
       subtitle={subtitle}
       onClose={onClose}
+      scrollContent
+      contentContainerStyle={styles.qrModalScrollContent}
       footer={(
         <View style={styles.qrActionWrap}>
           <AppButton title="Print" variant="outline" fullWidth={false} onPress={onPrint} loading={isPrinting} />
-          <AppButton title="Download" fullWidth={false} onPress={onDownload} loading={isDownloading} />
+          <AppButton title="Download PDF" fullWidth={false} onPress={onDownload} loading={isDownloading} />
           {onNext ? <AppButton title={nextLabel} fullWidth={false} onPress={onNext} /> : null}
         </View>
       )}
@@ -392,9 +485,82 @@ function QrModal({
       <View style={styles.qrPreviewWrap}>
         <Image source={{ uri: buildQrImageUrl(payload, 420) }} style={styles.qrPreviewImage} resizeMode="contain" />
       </View>
-      {statusLabel ? <Text style={styles.qrStatus}>Status: {statusLabel}</Text> : null}
+      {qrStatusLabel ? <Text style={styles.qrStatus}>QR status: {qrStatusLabel}</Text> : null}
+      {donationStatusLabel ? <Text style={styles.qrDonationStatus}>Donation status: {donationStatusLabel}</Text> : null}
       {helperText ? <Text style={styles.qrHelper}>{helperText}</Text> : null}
+      {details.length ? (
+        <View style={styles.qrDetailsCard}>
+          {details.map((item) => (
+            <View key={`${item.label}-${item.value}`} style={styles.qrDetailRow}>
+              <Text style={styles.qrDetailLabel}>{item.label}</Text>
+              <Text style={styles.qrDetailValue}>{item.value}</Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
     </ModalShell>
+  );
+}
+
+function QrScannerModal({
+  visible,
+  hasCameraPermission,
+  feedbackMessage,
+  isActivating,
+  onClose,
+  onRequestPermission,
+  onScanned,
+}) {
+  if (!visible) return null;
+
+  return (
+    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
+      <View style={styles.modalOverlay}>
+        <Pressable style={styles.modalBackdrop} onPress={onClose} />
+        <AppCard variant="elevated" radius="xl" padding="lg" style={styles.modalCard}>
+          <View style={styles.modalHeader}>
+            <View style={styles.modalHeaderCopy}>
+              <Text style={styles.modalTitle}>Scan donation QR</Text>
+              <Text style={styles.modalBody}>Scan the saved QR for your current donation to activate tracking.</Text>
+            </View>
+            <Pressable onPress={onClose} style={styles.modalCloseButton}>
+              <AppIcon name="close" state="muted" />
+            </Pressable>
+          </View>
+
+          <View style={styles.qrScannerStage}>
+            {hasCameraPermission ? (
+              <CameraView
+                style={styles.qrScannerPreview}
+                facing="back"
+                barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
+                onBarcodeScanned={isActivating ? undefined : ({ data }) => onScanned?.(data || '')}
+              />
+            ) : (
+              <View style={styles.qrScannerPlaceholder}>
+                <AppIcon name="camera" state="active" size="xl" />
+                <Text style={styles.qrScannerPlaceholderTitle}>Camera access needed</Text>
+                <Text style={styles.qrScannerPlaceholderBody}>
+                  Allow camera access so the app can scan your saved donation QR.
+                </Text>
+              </View>
+            )}
+          </View>
+
+          {feedbackMessage ? <Text style={styles.qrScannerError}>{feedbackMessage}</Text> : null}
+
+          <View style={styles.inlineActions}>
+            {!hasCameraPermission ? (
+              <AppButton title="Allow Camera" fullWidth={false} onPress={onRequestPermission} />
+            ) : (
+              <Text style={styles.qrScannerHint}>
+                {isActivating ? 'Activating donation QR...' : 'Point the camera at your saved donation QR.'}
+              </Text>
+            )}
+          </View>
+        </AppCard>
+      </View>
+    </Modal>
   );
 }
 
@@ -664,7 +830,16 @@ export function DonorDonationStatusScreen() {
   const { user, profile, resolvedTheme } = useAuth();
   const roles = resolveThemeRoles(resolvedTheme);
   const { logout, isLoading: isLoggingOut } = useAuthActions();
-  const { unreadCount } = useNotifications({ role: 'donor', userId: user?.id, databaseUserId: profile?.user_id });
+  const {
+    unreadCount,
+  } = useNotifications({
+    role: 'donor',
+    userId: user?.id,
+    userEmail: user?.email || profile?.email || '',
+    databaseUserId: profile?.user_id,
+    mode: 'badge',
+    liveUpdates: true,
+  });
   const {
     certificate,
     generatedFileUri,
@@ -705,6 +880,10 @@ export function DonorDonationStatusScreen() {
   const [isDownloadingQr, setIsDownloadingQr] = React.useState(false);
   const [isPrintingQr, setIsPrintingQr] = React.useState(false);
   const [qrSharingAvailable, setQrSharingAvailable] = React.useState(false);
+  const [scanCameraPermission, requestScanCameraPermission] = useCameraPermissions();
+  const [isQrScannerOpen, setIsQrScannerOpen] = React.useState(false);
+  const [isActivatingQr, setIsActivatingQr] = React.useState(false);
+  const [qrScannerError, setQrScannerError] = React.useState('');
 
   const [selectedTimelineStage, setSelectedTimelineStage] = React.useState(null);
 
@@ -713,6 +892,7 @@ export function DonorDonationStatusScreen() {
     [profile, user]
   );
   const qrOpenTimerRef = React.useRef(null);
+  const qrScanLockRef = React.useRef(false);
   const avatarInitials = `${profile?.first_name?.[0] || ''}${profile?.last_name?.[0] || ''}`.trim();
 
   const loadModuleData = React.useCallback(async () => {
@@ -819,7 +999,6 @@ export function DonorDonationStatusScreen() {
   const qualifiedScreening = qualifiedDonationRecord?.screening || null;
   const activeSubmission = moduleData?.latestSubmission || qualifiedSubmission || null;
   const activeDetail = moduleData?.latestDetail || getLatestSubmissionDetailRecord(activeSubmission, qualifiedDetail);
-  const activeScreening = moduleData?.activeScreening || qualifiedScreening || null;
   const activeQualificationSource = selectedPathIsQualified
     ? qualifiedDonationRecord?.source || ''
     : moduleData?.activeQualificationSource || '';
@@ -856,6 +1035,7 @@ export function DonorDonationStatusScreen() {
       ? 'Independent donation'
       : 'Donation in progress';
   const currentStatusLabel = currentTimelineStage?.label || formatQrStatusLabel(activeQrState?.status || '') || 'In progress';
+  const hasScanCameraPermission = Boolean(scanCameraPermission?.granted);
 
   const handleNavPress = React.useCallback((item) => {
     if (!item.route || item.route === '/donor/status') return;
@@ -1002,25 +1182,79 @@ export function DonorDonationStatusScreen() {
     }
   }, [profile?.user_id]);
 
+  const createDonationQrSheet = React.useCallback(({
+    submission = null,
+    detail = null,
+    logistics = null,
+    drive = null,
+    qrReference = '',
+    qrStatus = '',
+    qrLifecycleStatus = '',
+  } = {}) => {
+    if (!submission?.submission_id) {
+      return null;
+    }
+
+    const resolvedDetail = getLatestSubmissionDetailRecord(submission, detail);
+    const trackingLabel = resolveDonationTrackingLabel({
+      submission,
+      logistics,
+      timelineStage: currentTimelineStage,
+      qrStatus,
+    });
+    const formattedQrLifecycleStatus = formatQrStatusLabel(qrLifecycleStatus);
+
+    return {
+      type: 'donation',
+      title: 'Donation QR',
+      subtitle: 'This QR is linked to your donation details.',
+      helperText: formattedQrLifecycleStatus === 'Active'
+        ? 'Show or attach this QR for your donation tracking.'
+        : 'Scan QR to activate donation tracking for this donation.',
+      payload: buildDonationTrackingQrPayload({
+        submission,
+        detail: resolvedDetail,
+        logistics,
+        donor: donorIdentity,
+        drive,
+        qrReference,
+        trackingStatus: trackingLabel,
+      }),
+      qrStatus: qrLifecycleStatus || '',
+      donationStatus: trackingLabel,
+      details: buildDonationQrDetails({
+        submission,
+        detail: resolvedDetail,
+        logistics,
+        drive,
+        donorName: donorIdentity?.name || '',
+        trackingLabel,
+        qrLifecycleStatus: formattedQrLifecycleStatus,
+      }),
+    };
+  }, [currentTimelineStage, donorIdentity]);
+
   const buildDriveQrSheet = React.useCallback((drive, registration) => {
-    const qrState = registration?.qr || null;
-    const payload = buildDriveInvitationQrPayload({
+    const nextQrSheet = createDonationQrSheet({
+      submission: activeSubmission || qualifiedSubmission,
+      detail: activeDetail || qualifiedDetail,
+      logistics: moduleData?.logistics || null,
       drive,
-      registration,
-      donor: donorIdentity,
+      qrReference: registration?.registration_id ? `RSVP-${registration.registration_id}` : activeSubmission?.submission_code || '',
+      qrStatus: moduleData?.logistics?.shipment_status || activeSubmission?.status || registration?.qr?.status || 'inactive',
+      qrLifecycleStatus: registration?.qr?.status || 'inactive',
     });
 
-    setQrSheet({
-      type: 'drive',
-      title: 'Drive invitation QR',
-      subtitle: 'Present this QR at the donation drive.',
-      helperText: qrState?.is_activated
-        ? 'This QR is activated and stays official for this drive registration.'
-        : 'This saved QR stays tied to your current drive registration.',
-      payload,
-      qrStatus: qrState?.status || 'pending',
-    });
-  }, [donorIdentity]);
+    if (!nextQrSheet) {
+      setModuleFeedback({
+        message: 'No saved donation QR is available for this drive record yet.',
+        variant: 'info',
+      });
+      return;
+    }
+
+    setQrSheet(nextQrSheet);
+  }, [activeDetail, activeSubmission, createDonationQrSheet, moduleData?.logistics, qualifiedDetail, qualifiedSubmission]);
 
   const performDriveRsvp = React.useCallback(async () => {
     if (!selectedDrive?.donation_drive_id || !profile?.user_id || !user?.id) {
@@ -1128,40 +1362,22 @@ export function DonorDonationStatusScreen() {
   const createIndependentQrSheet = React.useCallback(({
     submission = qualifiedSubmission,
     detail = qualifiedDetail,
-    screening = qualifiedScreening,
-    qualificationSource = qualifiedDonationRecord?.source || entryPath,
     qrState = moduleData?.independentQrState || null,
   } = {}) => {
-    const resolvedDetail = getLatestSubmissionDetailRecord(submission, detail);
-
     if (!submission || !qrState?.reference) {
       return null;
     }
 
-    const payload = buildIndependentDonationQrPayload({
+    return createDonationQrSheet({
       submission,
-      detail: resolvedDetail,
-      screening,
-      donor: donorIdentity,
-      qualificationSource,
+      detail,
+      logistics: moduleData?.logistics || null,
+      drive: activeDrive || null,
       qrReference: qrState.reference,
-      generatedAt: qrState.generated_at || '',
-      confirmedAt: qrState.activated_at || '',
+      qrStatus: moduleData?.logistics?.shipment_status || submission?.status || 'Ready for shipment',
+      qrLifecycleStatus: qrState.status || 'inactive',
     });
-
-    return {
-      type: 'independent',
-      title: 'Parcel QR',
-      subtitle: 'Attach this QR to the parcel.',
-      helperText: qrState.is_activated
-        ? 'This QR is activated and is now the official QR for your donation flow.'
-        : 'This saved QR stays tied to your current donation flow.',
-      payload,
-      qrReference: qrState.reference,
-      generatedAt: qrState.generated_at || '',
-      qrStatus: qrState.status || 'pending',
-    };
-  }, [donorIdentity, entryPath, moduleData?.independentQrState, qualifiedDetail, qualifiedDonationRecord?.source, qualifiedScreening, qualifiedSubmission]);
+  }, [activeDrive, createDonationQrSheet, moduleData?.independentQrState, moduleData?.logistics, qualifiedDetail, qualifiedSubmission]);
 
   const openIndependentQrSheet = React.useCallback(async ({
     data = null,
@@ -1364,6 +1580,7 @@ export function DonorDonationStatusScreen() {
         subtitle: qrSheet.subtitle,
         helperText: qrSheet.helperText,
         qrPayloadText: qrSheet.payload,
+        details: qrSheet.details || [],
       });
 
       if (qrSharingAvailable) {
@@ -1394,6 +1611,7 @@ export function DonorDonationStatusScreen() {
         subtitle: qrSheet.subtitle,
         helperText: qrSheet.helperText,
         qrPayloadText: qrSheet.payload,
+        details: qrSheet.details || [],
       });
 
       setModuleFeedback({
@@ -1418,6 +1636,66 @@ export function DonorDonationStatusScreen() {
     setQrSheet(null);
   }, []);
 
+  const handleCloseQrScanner = React.useCallback(() => {
+    qrScanLockRef.current = false;
+    setIsActivatingQr(false);
+    setQrScannerError('');
+    setIsQrScannerOpen(false);
+  }, []);
+
+  const handleOpenQrScanner = React.useCallback(() => {
+    if (!activeSubmission?.submission_id || !independentQrState?.reference) {
+      setModuleFeedback({
+        message: 'No saved donation QR is available to scan for this donation flow.',
+        variant: 'info',
+      });
+      return;
+    }
+
+    setSelectedTimelineStage(null);
+    setQrScannerError('');
+    qrScanLockRef.current = false;
+    setIsQrScannerOpen(true);
+  }, [activeSubmission?.submission_id, independentQrState?.reference]);
+
+  const handleRequestQrScannerPermission = React.useCallback(async () => {
+    setQrScannerError('');
+    await requestScanCameraPermission();
+  }, [requestScanCameraPermission]);
+
+  const handleDonationQrScanned = React.useCallback(async (scannedPayload) => {
+    if (qrScanLockRef.current || isActivatingQr) {
+      return;
+    }
+
+    qrScanLockRef.current = true;
+    setIsActivatingQr(true);
+    setQrScannerError('');
+
+    const result = await activateIndependentDonationQrByScan({
+      userId: user?.id,
+      databaseUserId: profile?.user_id || null,
+      submission: activeSubmission,
+      scannedPayload,
+    });
+
+    if (!result.success) {
+      setQrScannerError(result.error || 'The donation QR could not be activated right now.');
+      setIsActivatingQr(false);
+      qrScanLockRef.current = false;
+      return;
+    }
+
+    handleCloseQrScanner();
+    setModuleFeedback({
+      message: result.alreadyActivated
+        ? 'Donation QR is already active.'
+        : 'Donation QR activated. Tracking is now active for shipment.',
+      variant: 'success',
+    });
+    await loadModuleData();
+  }, [activeSubmission, handleCloseQrScanner, isActivatingQr, loadModuleData, profile?.user_id, user?.id]);
+
   const handleUploadParcel = React.useCallback(async () => {
     if (!activeSubmission || !activeDetail) {
       setModuleFeedback({
@@ -1429,7 +1707,7 @@ export function DonorDonationStatusScreen() {
 
     if (!moduleData?.independentQrState?.is_activated || !moduleData?.independentQrState?.reference) {
       setModuleFeedback({
-        message: 'Wait until staff scans and activates your QR before uploading the parcel photo.',
+        message: 'Scan your saved donation QR first to activate donation tracking before uploading the parcel photo.',
         variant: 'info',
       });
       return;
@@ -1449,15 +1727,19 @@ export function DonorDonationStatusScreen() {
     const asset = pickResult.assets[0];
     setIsUploadingParcel(true);
 
-    const qrPayload = buildIndependentDonationQrPayload({
+    const qrPayload = buildDonationTrackingQrPayload({
       submission: activeSubmission,
       detail: activeDetail,
-      screening: activeScreening,
+      logistics: moduleData?.logistics || null,
       donor: donorIdentity,
-      qualificationSource: qualifiedDonationRecord?.source || entryPath,
+      drive: activeDrive || null,
       qrReference: moduleData.independentQrState.reference,
-      generatedAt: moduleData.independentQrState.generated_at,
-      confirmedAt: moduleData.independentQrState.activated_at,
+      trackingStatus: resolveDonationTrackingLabel({
+        submission: activeSubmission,
+        logistics: moduleData?.logistics || null,
+        timelineStage: currentTimelineStage,
+        qrStatus: moduleData.independentQrState.status || '',
+      }),
     });
 
     const result = await saveIndependentDonationParcelLog({
@@ -1492,12 +1774,7 @@ export function DonorDonationStatusScreen() {
       variant: 'success',
     });
     await loadModuleData();
-  }, [activeDetail, activeScreening, activeSubmission, donorIdentity, entryPath, loadModuleData, moduleData?.independentQrState, profile?.user_id, qualifiedDonationRecord?.source, user?.id]);
-
-  const handleViewQrFromStage = React.useCallback(async () => {
-    setSelectedTimelineStage(null);
-    await handleViewCurrentDonationQr();
-  }, [handleViewCurrentDonationQr]);
+  }, [activeDetail, activeDrive, activeSubmission, currentTimelineStage, donorIdentity, loadModuleData, moduleData?.independentQrState, moduleData?.logistics, profile?.user_id, user?.id]);
 
   const handleOpenManualModal = React.useCallback(() => {
     if (hasOngoingDonation) {
@@ -1677,10 +1954,10 @@ export function DonorDonationStatusScreen() {
                         </Text>
                         <Text style={styles.independentBody}>
                           {independentQrState?.is_activated
-                            ? 'Your official active QR is ready to view.'
+                            ? 'Your active donation QR is ready to view.'
                             : independentQrState?.is_pending
-                              ? 'Your saved QR is ready and waiting for staff activation.'
-                              : 'Review agreement, save your QR, then wait for staff activation.'}
+                              ? 'Your saved QR is inactive until you scan it to activate donation tracking.'
+                              : 'Review agreement, save your QR, then scan it to activate donation tracking.'}
                         </Text>
                       </View>
                       <AppIcon name="chevron-right" size="sm" state="muted" />
@@ -1810,17 +2087,29 @@ export function DonorDonationStatusScreen() {
         subtitle={qrSheet?.subtitle || ''}
         helperText={qrSheet?.helperText || ''}
         payload={qrSheet?.payload || ''}
-        statusLabel={formatQrStatusLabel(qrSheet?.qrStatus || '')}
+        qrStatusLabel={formatQrStatusLabel(qrSheet?.qrStatus || '')}
+        donationStatusLabel={qrSheet?.donationStatus || ''}
+        details={qrSheet?.details || []}
         onClose={handleCloseQrSheet}
         onDownload={handleDownloadQr}
         onPrint={handlePrintQr}
-        onNext={qrSheet?.type === 'independent' && qrSheet?.qrStatus === 'activated' ? () => {
+        onNext={qrSheet?.type === 'independent' && formatQrStatusLabel(qrSheet?.qrStatus || '') === 'Active' ? () => {
           handleCloseQrSheet();
           setIsParcelModalOpen(true);
         } : null}
         nextLabel="Continue to upload"
         isDownloading={isDownloadingQr}
         isPrinting={isPrintingQr}
+      />
+
+      <QrScannerModal
+        visible={isQrScannerOpen}
+        hasCameraPermission={hasScanCameraPermission}
+        feedbackMessage={qrScannerError}
+        isActivating={isActivatingQr}
+        onClose={handleCloseQrScanner}
+        onRequestPermission={handleRequestQrScannerPermission}
+        onScanned={handleDonationQrScanned}
       />
 
       <ParcelUploadModal
@@ -1834,8 +2123,13 @@ export function DonorDonationStatusScreen() {
       <StageDetailModal
         visible={Boolean(selectedTimelineStage)}
         stage={selectedTimelineStage}
-        canViewQr={hasActiveQrAction}
-        onViewQr={handleViewQrFromStage}
+        canScanQr={Boolean(
+          activeFlowType === 'independent'
+          && independentQrState?.reference
+          && selectedTimelineStage?.key === 'ready_for_shipment'
+          && !independentQrState?.is_activated
+        )}
+        onScanQr={handleOpenQrScanner}
         onClose={() => setSelectedTimelineStage(null)}
       />
     </DashboardLayout>
@@ -2196,12 +2490,22 @@ const styles = StyleSheet.create({
     maxWidth: 420,
     maxHeight: '88%',
     alignSelf: 'center',
+    overflow: 'hidden',
   },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     gap: theme.spacing.sm,
     marginBottom: theme.spacing.md,
+  },
+  modalContent: {
+    flexShrink: 1,
+  },
+  modalScrollView: {
+    flexShrink: 1,
+  },
+  modalScrollContent: {
+    paddingBottom: theme.spacing.xs,
   },
   modalHeaderCopy: {
     flex: 1,
@@ -2247,10 +2551,13 @@ const styles = StyleSheet.create({
     gap: theme.spacing.sm,
     justifyContent: 'flex-end',
   },
+  qrModalScrollContent: {
+    gap: theme.spacing.md,
+  },
   qrPreviewWrap: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: theme.spacing.md,
+    padding: theme.spacing.md,
     borderRadius: theme.radius.xl,
     backgroundColor: theme.colors.surfaceSoft,
   },
@@ -2265,14 +2572,80 @@ const styles = StyleSheet.create({
     fontWeight: theme.typography.weights.semibold,
     color: theme.colors.textPrimary,
   },
-  qrCountdown: {
+  qrDonationStatus: {
     marginTop: theme.spacing.xs,
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.bodySm,
-    color: theme.colors.brandPrimary,
+    color: theme.colors.textPrimary,
   },
   qrHelper: {
     marginTop: theme.spacing.md,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    color: theme.colors.textSecondary,
+  },
+  qrDetailsCard: {
+    marginTop: theme.spacing.md,
+    padding: theme.spacing.md,
+    borderRadius: theme.radius.xl,
+    backgroundColor: theme.colors.surfaceSoft,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+    gap: theme.spacing.sm,
+  },
+  qrDetailRow: {
+    gap: 4,
+  },
+  qrDetailLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+    color: theme.colors.textSecondary,
+  },
+  qrDetailValue: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textPrimary,
+  },
+  qrScannerStage: {
+    height: 320,
+    borderRadius: theme.radius.xl,
+    overflow: 'hidden',
+    backgroundColor: theme.colors.surfaceSoft,
+  },
+  qrScannerPreview: {
+    flex: 1,
+  },
+  qrScannerPlaceholder: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: theme.spacing.lg,
+    gap: theme.spacing.sm,
+  },
+  qrScannerPlaceholderTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodyMd,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textPrimary,
+  },
+  qrScannerPlaceholderBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textSecondary,
+    textAlign: 'center',
+  },
+  qrScannerError: {
+    marginTop: theme.spacing.md,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    color: theme.colors.textError,
+  },
+  qrScannerHint: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.bodySm,
     color: theme.colors.textSecondary,
@@ -2529,6 +2902,11 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.semantic.bodySm,
     fontWeight: theme.typography.weights.semibold,
     color: theme.colors.textPrimary,
+  },
+  stageActionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.spacing.sm,
   },
   stageEmptyState: {
     borderRadius: theme.radius.lg,

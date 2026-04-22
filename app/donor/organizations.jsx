@@ -228,7 +228,16 @@ export default function DonorOrganizationsRoute() {
   const { user, profile, resolvedTheme } = useAuth();
   const roles = resolveThemeRoles(resolvedTheme);
   const { logout, isLoading: isLoggingOut } = useAuthActions();
-  const { unreadCount } = useNotifications({ role: 'donor', userId: user?.id, databaseUserId: profile?.user_id });
+  const {
+    unreadCount,
+  } = useNotifications({
+    role: 'donor',
+    userId: user?.id,
+    userEmail: user?.email || profile?.email || '',
+    databaseUserId: profile?.user_id,
+    mode: 'badge',
+    liveUpdates: true,
+  });
   const [isLoading, setIsLoading] = React.useState(true);
   const [organizations, setOrganizations] = React.useState([]);
   const [errorMessage, setErrorMessage] = React.useState('');

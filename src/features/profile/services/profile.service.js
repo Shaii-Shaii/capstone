@@ -10,13 +10,23 @@ const normalizeOptionalString = (value) => {
   return typeof value === 'string' ? value.trim() : value;
 };
 
+const normalizeOptionalDate = (value) => {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (typeof value === 'string') {
+    const trimmedValue = value.trim();
+    return trimmedValue ? trimmedValue : null;
+  }
+  return value;
+};
+
 const sanitizeSharedProfileUpdates = (updates = {}) => ({
   first_name: normalizeOptionalString(updates.first_name),
   middle_name: normalizeOptionalString(updates.middle_name),
   last_name: normalizeOptionalString(updates.last_name),
   suffix: normalizeOptionalString(updates.suffix),
   phone: normalizeOptionalString(updates.phone),
-  birthdate: updates.birthdate ?? undefined,
+  birthdate: normalizeOptionalDate(updates.birthdate),
   gender: normalizeOptionalString(updates.gender),
   street: normalizeOptionalString(updates.street),
   barangay: normalizeOptionalString(updates.barangay),
@@ -24,7 +34,7 @@ const sanitizeSharedProfileUpdates = (updates = {}) => ({
   city: normalizeOptionalString(updates.city),
   province: normalizeOptionalString(updates.province),
   country: normalizeOptionalString(updates.country),
-  joined_date: updates.joined_date ?? undefined,
+  joined_date: normalizeOptionalDate(updates.joined_date),
 });
 
 const getTodayDate = () => new Date().toISOString().slice(0, 10);

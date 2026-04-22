@@ -1,3 +1,5 @@
+import { Asset } from 'expo-asset';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { fetchHairSubmissionsByUserId, fetchLatestDonationCertificateByUserId } from './hairSubmission.api';
@@ -23,18 +25,99 @@ const formatCertificateDate = (value) => {
   }
 };
 
-const normalizeCertificateRecord = ({ profile, submission, screening }) => {
-  const donorName = [profile?.first_name, profile?.last_name].filter(Boolean).join(' ').trim() || profile?.email || 'Donor';
+const clampNumber = (value, min, max) => Math.min(max, Math.max(min, value));
+
+export const getCertificateRecipientFontSize = (value = '', { max = 52, min = 32 } = {}) => {
+  const normalizedLength = String(value || '').trim().length;
+  if (!normalizedLength) return max;
+  if (normalizedLength <= 14) return max;
+  return clampNumber(Math.round(max - ((normalizedLength - 14) * 1.2)), min, max);
+};
+
+export const getCertificateOrganizationFontSize = (value = '', { max = 40, min = 22 } = {}) => {
+  const normalizedLength = String(value || '').trim().length;
+  if (!normalizedLength) return max;
+  if (normalizedLength <= 18) return max;
+  return clampNumber(Math.round(max - ((normalizedLength - 18) * 0.7)), min, max);
+};
+
+export const getCertificateMetaValueFontSize = (value = '', { max = 18, min = 11 } = {}) => {
+  const normalizedLength = String(value || '').trim().length;
+  if (!normalizedLength) return max;
+  if (normalizedLength <= 18) return max;
+  return clampNumber(Math.round(max - ((normalizedLength - 18) * 0.35)), min, max);
+};
+
+const templateAsset = Asset.fromModule(require('../assets/images/donivra_certificate_template.png'));
+let templateDataUriPromise = null;
+
+const getCertificateTemplateDataUri = async () => {
+  if (!templateDataUriPromise) {
+    templateDataUriPromise = (async () => {
+      if (!templateAsset.localUri) {
+        await templateAsset.downloadAsync();
+      }
+
+      const resolvedUri = templateAsset.localUri || templateAsset.uri || '';
+      if (!resolvedUri) {
+        throw new Error('The donor certificate template image could not be resolved.');
+      }
+
+      const base64 = await FileSystem.readAsStringAsync(resolvedUri, {
+        encoding: 'base64',
+      });
+
+      if (!base64) {
+        throw new Error('The donor certificate template image could not be loaded.');
+      }
+
+      return `data:image/png;base64,${base64}`;
+    })();
+  }
+
+  return templateDataUriPromise;
+};
+
+export const buildDonorFullName = (profile = null, fallback = '') => (
+  [
+    profile?.first_name,
+    profile?.middle_name,
+    profile?.last_name,
+    profile?.suffix,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim() || fallback
+);
+
+export const buildDonorCertificateModel = ({
+  profile,
+  certificateRow = null,
+  submission = null,
+  screening = null,
+  organizationName = '',
+}) => {
+  const donorName = buildDonorFullName(profile, profile?.email || '');
 
   return {
     donorName,
-    submissionId: submission.submission_id,
-    submissionCode: submission.submission_code || 'Pending submission code',
-    donationDate: submission.created_at,
-    donationDateLabel: formatCertificateDate(submission.created_at),
-    bundleQuantity: submission.bundle_quantity || 0,
-    donationStatus: submission.status || '',
+    certificateId: certificateRow?.certificate_id || certificateRow?.id || null,
+    certificateNumber: certificateRow?.certificate_number || '',
+    certificateType: certificateRow?.certificate_type || 'Certificate of Donation',
+    fileUrl: certificateRow?.file_url || '',
+    issuedAt: certificateRow?.issued_at || submission?.created_at || null,
+    issuedAtLabel: formatCertificateDate(certificateRow?.issued_at || submission?.created_at || ''),
+    remarks: certificateRow?.remarks || '',
+    organizationName: organizationName || '',
+    submissionId: submission?.submission_id || certificateRow?.submission_id || null,
+    submissionCode: submission?.submission_code || certificateRow?.certificate_number || 'Pending submission code',
+    donationDate: submission?.created_at || certificateRow?.issued_at || null,
+    donationDateLabel: formatCertificateDate(submission?.created_at || certificateRow?.issued_at || ''),
+    bundleQuantity: submission?.bundle_quantity || 0,
+    donationStatus: submission?.status || '',
     decision: screening?.decision || '',
+    detectedCondition: screening?.detected_condition || '',
     confidenceScore: screening?.confidence_score ?? null,
     summary: screening?.summary || '',
   };
@@ -73,8 +156,9 @@ export const getLatestQualifiedDonationCertificate = async ({ userId, profile })
       : linkedSubmission?.ai_screenings;
 
     return {
-      certificate: normalizeCertificateRecord({
+      certificate: buildDonorCertificateModel({
         profile,
+        certificateRow: certificateResult.data,
         submission: linkedSubmission || {
           submission_id: certificateResult.data.submission_id,
           submission_code: certificateResult.data.certificate_number || 'Issued certificate',
@@ -94,136 +178,104 @@ export const getLatestQualifiedDonationCertificate = async ({ userId, profile })
   }
 };
 
-export const buildDonorCertificateHtml = (certificate) => {
-  const confidenceText = certificate.confidenceScore != null
-    ? `${Math.round(Number(certificate.confidenceScore) * 100)}%`
-    : 'Not available';
+export const buildDonorCertificateHtml = async (certificate) => {
+  const templateDataUri = await getCertificateTemplateDataUri();
+  const certificateNumber = certificate?.certificateNumber || 'Pending certificate number';
+  const issuedDate = certificate?.issuedAtLabel || formatCertificateDate(certificate?.issuedAt || '');
+  const donorName = String(certificate?.donorName || '').trim();
+  const recipientFontSize = getCertificateRecipientFontSize(donorName);
+  const certificateValueFontSize = getCertificateMetaValueFontSize(certificateNumber, { max: 16, min: 10 });
+  const issuedValueFontSize = getCertificateMetaValueFontSize(issuedDate, { max: 17, min: 11 });
+
+  if (!donorName) {
+    throw new Error('Your donor name is missing from the account profile. Please update your profile before generating a certificate.');
+  }
 
   return `
     <html>
       <head>
         <meta charset="utf-8" />
         <style>
+          @page {
+            size: A4 landscape;
+            margin: 0;
+          }
           body {
             margin: 0;
-            padding: 32px;
             font-family: Georgia, "Times New Roman", serif;
-            background: #f5efe6;
-            color: #2b2118;
+            background: #ffffff;
           }
-          .certificate {
-            border: 4px solid #b77b4f;
-            padding: 44px 38px;
-            background: linear-gradient(180deg, #fffaf3 0%, #f8eee1 100%);
+          .page {
+            width: 1123px;
+            height: 794px;
+            position: relative;
+            overflow: hidden;
+            background-image: url("${templateDataUri}");
+            background-size: cover;
+            background-position: center;
+            background-repeat: no-repeat;
           }
-          .eyebrow {
+          .recipient-block {
+            position: absolute;
+            top: 286px;
+            left: 92px;
+            width: 632px;
+            min-height: 94px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0 18px;
+            box-sizing: border-box;
+          }
+          .name {
             text-align: center;
+            font-size: ${recipientFontSize}px;
+            font-weight: 700;
+            color: #1d1d1f;
+            line-height: 1.04;
+            letter-spacing: 0.2px;
+            word-break: break-word;
+          }
+          .meta-block {
+            position: absolute;
+            top: 150px;
+            right: 262px;
+            width: 208px;
+            padding: 14px 16px 12px;
+            border-radius: 18px;
+            background: rgba(255, 255, 255, 0.92);
+            box-shadow: 0 8px 24px rgba(40, 76, 140, 0.08);
+            box-sizing: border-box;
+          }
+          .meta-label {
+            font-size: 11px;
+            color: #5b7fc7;
             text-transform: uppercase;
-            letter-spacing: 4px;
-            font-size: 12px;
-            color: #8f5c38;
-            margin-bottom: 16px;
+            letter-spacing: 0.8px;
+            margin-bottom: 2px;
           }
-          .title {
-            text-align: center;
-            font-size: 38px;
-            margin: 0 0 12px;
-            color: #5d2f18;
-          }
-          .subtitle {
-            text-align: center;
-            font-size: 17px;
-            margin: 0 0 28px;
-            color: #6e5241;
-          }
-          .recipient {
-            text-align: center;
-            font-size: 32px;
-            margin: 0 0 24px;
-            color: #2b2118;
-          }
-          .body {
-            font-size: 17px;
-            line-height: 1.7;
-            text-align: center;
-            margin: 0 0 28px;
-            color: #4d3b31;
-          }
-          .details {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 20px;
-          }
-          .details td {
-            padding: 10px 0;
-            border-bottom: 1px solid #dfc6ad;
-            font-size: 14px;
-          }
-          .details td:first-child {
-            color: #7b5d49;
-            width: 38%;
-          }
-          .details td:last-child {
-            font-weight: bold;
-            color: #2b2118;
-          }
-          .summary {
-            margin-top: 24px;
-            padding: 18px;
-            background: rgba(183, 123, 79, 0.08);
-            border: 1px solid rgba(183, 123, 79, 0.2);
-            font-size: 14px;
-            color: #5d4638;
-          }
-          .footer {
-            margin-top: 34px;
-            text-align: center;
-            font-size: 13px;
-            color: #7b5d49;
+          .meta-value {
+            font-size: 16px;
+            color: #1f2530;
+            margin-bottom: 10px;
+            line-height: 1.2;
+            word-break: break-word;
+            overflow-wrap: anywhere;
           }
         </style>
       </head>
       <body>
-        <div class="certificate">
-          <div class="eyebrow">Donivra Hair Donation Platform</div>
-          <h1 class="title">Certificate of Appreciation</h1>
-          <p class="subtitle">Presented in recognition of a qualified hair donation milestone.</p>
-          <h2 class="recipient">${escapeHtml(certificate.donorName)}</h2>
-          <p class="body">
-            This certificate recognizes your hair donation submission to Donivra.
-            Your contribution supports patients who need wig assistance and helps move the donation journey forward.
-          </p>
-
-          <table class="details">
-            <tr>
-              <td>Submission code</td>
-              <td>${escapeHtml(certificate.submissionCode)}</td>
-            </tr>
-            <tr>
-              <td>Donation date</td>
-              <td>${escapeHtml(certificate.donationDateLabel)}</td>
-            </tr>
-            <tr>
-              <td>Qualified result</td>
-              <td>${escapeHtml(certificate.decision || 'Qualified')}</td>
-            </tr>
-            <tr>
-              <td>Bundle quantity</td>
-              <td>${escapeHtml(String(certificate.bundleQuantity || 0))}</td>
-            </tr>
-            <tr>
-              <td>AI confidence</td>
-              <td>${escapeHtml(confidenceText)}</td>
-            </tr>
-          </table>
-
-          <div class="summary">
-            <strong>Review summary:</strong>
-            ${escapeHtml(certificate.summary || 'Your submission reached a qualified donation milestone in the current donor review flow.')}
+        <div class="page">
+          <div class="recipient-block">
+            <div class="name">${escapeHtml(donorName)}</div>
           </div>
 
-          <div class="footer">
-            Issued by Donivra on ${escapeHtml(formatCertificateDate(new Date().toISOString()))}
+          <div class="meta-block">
+            <div class="meta-label">Certificate No.</div>
+            <div class="meta-value" style="font-size:${certificateValueFontSize}px;">${escapeHtml(certificateNumber)}</div>
+
+            <div class="meta-label">Issued</div>
+            <div class="meta-value" style="font-size:${issuedValueFontSize}px; margin-bottom:0;">${escapeHtml(issuedDate)}</div>
           </div>
         </div>
       </body>
@@ -232,7 +284,7 @@ export const buildDonorCertificateHtml = (certificate) => {
 };
 
 export const generateDonorCertificatePdf = async (certificate) => {
-  const html = buildDonorCertificateHtml(certificate);
+  const html = await buildDonorCertificateHtml(certificate);
   return await Print.printToFileAsync({
     html,
     base64: false,

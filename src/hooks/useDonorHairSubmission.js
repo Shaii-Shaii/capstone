@@ -252,6 +252,8 @@ const mapImagePickerError = (message = '') => {
 
 const mapAnalysisError = (message = '', extras = {}) => {
   const normalized = message.toLowerCase();
+  const providerRequestAttempted = extras?.providerRequestAttempted === true;
+  const edgeFunctionInvoked = extras?.edgeFunctionInvoked === true;
   const directRetryAfterSeconds = Number(extras?.retryAfterSeconds);
   const retryAfterSeconds = Number.isFinite(directRetryAfterSeconds) && directRetryAfterSeconds > 0
     ? Math.max(1, Math.ceil(directRetryAfterSeconds))
@@ -283,21 +285,58 @@ const mapAnalysisError = (message = '', extras = {}) => {
     return createErrorState('Analysis Was Incomplete', 'The scan did not finish properly. Please try analyzing the photos again.');
   }
 
-  if (normalized.includes('cannot analyze hair right now')) {
+  if (providerRequestAttempted && normalized.includes('cannot analyze hair right now')) {
     return createRetryState('Analysis Busy', 'Cannot analyze hair right now. Please try again later.');
   }
 
   if (
+    providerRequestAttempted
+    && (
     normalized.includes('quota exceeded')
     || normalized.includes('retry in')
     || normalized.includes('rate limit')
     || normalized.includes('too many requests')
     || String(extras?.errorType || '').trim().toLowerCase() === 'quota_exceeded'
+    )
   ) {
     return createRetryState(
       retryAfterSeconds ? 'Please Wait' : 'Analysis Busy',
       'Cannot analyze hair right now. Please try again later.'
     );
+  }
+
+  if (
+    providerRequestAttempted
+    && (
+    normalized.includes('high demand')
+    || normalized.includes('temporarily busy')
+    || normalized.includes('temporarily unavailable')
+    || normalized.includes('service unavailable')
+    || normalized.includes('retry later')
+    || normalized.includes('resource exhausted')
+    || String(extras?.errorType || '').trim().toLowerCase() === 'temporary_unavailable'
+    )
+  ) {
+    return createErrorState(
+      'Analysis Busy',
+      'Hair analysis is temporarily busy right now. Please try again in a moment.'
+    );
+  }
+
+  if (normalized.includes('not configured on the server')) {
+    return createErrorState('Analysis Unavailable', 'Hair analysis is not configured on the server right now. Please try again later.');
+  }
+
+  if (!edgeFunctionInvoked && normalized.includes('could not reach the server')) {
+    return createErrorState('Connection Problem', 'Hair analysis could not reach the server right now. Please try again.');
+  }
+
+  if (!edgeFunctionInvoked && normalized.includes('cannot start hair analysis')) {
+    return createErrorState('Analysis Unavailable', 'Cannot start hair analysis right now. Please try again.');
+  }
+
+  if (edgeFunctionInvoked && !providerRequestAttempted && normalized.includes('could not start on the server')) {
+    return createErrorState('Analysis Unavailable', 'Hair analysis could not start on the server right now. Please try again.');
   }
 
   if (normalized.includes('session has expired') || normalized.includes('sign in again')) {
@@ -693,8 +732,15 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
     latestAnalysisRequestRef.current = requestId;
 
     setIsAnalyzing(true);
+    setAnalysis(null);
     setError(null);
     setSuccessMessage('');
+
+    logAppEvent('donor_hair_submission.analysis', 'Stale-result prevention cleared the previous donor hair analysis before the new Gemini request.', {
+      userId,
+      requestId,
+      hadPreviousAnalysis: Boolean(analysis),
+    });
 
     logAppEvent('donor_hair_submission.analysis', 'Fresh donor hair analysis request started.', {
       userId,
@@ -748,6 +794,9 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
       const mappedError = mapAnalysisError(result.error, {
         errorType: result.errorType || null,
         retryAfterSeconds: result.retryAfterSeconds ?? null,
+        edgeFunctionInvoked: result.edgeFunctionInvoked ?? null,
+        providerRequestAttempted: result.providerRequestAttempted ?? null,
+        providerResponseStatus: result.providerResponseStatus ?? null,
       });
       setError(mappedError);
       logAppEvent('donor_hair_submission.analysis', 'Donor hair analysis request failed.', {
@@ -755,6 +804,9 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
         requestId,
         errorTitle: mappedError.title,
         errorMessage: mappedError.message,
+        edgeFunctionInvoked: result.edgeFunctionInvoked ?? null,
+        providerRequestAttempted: result.providerRequestAttempted ?? null,
+        providerResponseStatus: result.providerResponseStatus ?? null,
       }, 'warn');
       return { success: false, error: mappedError.message };
     }
@@ -769,6 +821,7 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
       renderKeys: [
         'estimated_length',
         'length_assessment',
+        'detected_color',
         'detected_texture',
         'detected_density',
         'detected_condition',
