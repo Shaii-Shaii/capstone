@@ -53,41 +53,65 @@ const STEP_STATE_STYLES = {
   },
 };
 
-function TrackerStep({ step, isLast }) {
+function TrackerStep({ step, isLast, role }) {
   const palette = STEP_STATE_STYLES[step.state] || STEP_STATE_STYLES.upcoming;
+  const isPatient = role === 'patient';
+  const iconName = step.state === 'completed'
+    ? 'success'
+    : step.state === 'current'
+      ? 'clock-time-four-outline'
+      : step.state === 'attention'
+        ? 'error'
+        : 'circle-outline';
+  const iconColor = step.state === 'upcoming' ? theme.colors.textMuted : theme.colors.textInverse;
 
   return (
-    <View style={styles.stepRow}>
-      <View style={styles.rail}>
-        <View style={[styles.stepDot, { backgroundColor: palette.dotColor }]} />
-        {!isLast ? <View style={[styles.stepLine, { backgroundColor: palette.lineColor }]} /> : null}
+    <View style={[styles.stepRow, isPatient ? styles.stepRowPatient : null]}>
+      <View style={[styles.rail, isPatient ? styles.railPatient : null]}>
+        <View
+          style={[
+            styles.stepDot,
+            isPatient ? styles.stepDotPatient : null,
+            isPatient && step.state === 'upcoming' ? styles.stepDotPatientUpcoming : null,
+            { backgroundColor: isPatient && step.state === 'upcoming' ? theme.colors.surfaceSoft : palette.dotColor },
+          ]}
+        >
+          {isPatient ? <AppIcon name={iconName} color={iconColor} size="sm" /> : null}
+        </View>
+        {!isLast ? (
+          <View style={[styles.stepLine, isPatient ? styles.stepLinePatient : null, { backgroundColor: palette.lineColor }]} />
+        ) : null}
       </View>
 
-      <View style={[styles.stepCard, { backgroundColor: palette.cardBackground }]}>
-        <View style={styles.stepTopRow}>
-          <Text style={[styles.stepTitle, { color: palette.titleColor }]}>{step.title}</Text>
-          <View style={styles.stepBadge}>
-            <Text style={styles.stepBadgeText}>{step.label}</Text>
+      <View style={[styles.stepCard, isPatient ? styles.stepCardPatient : null, { backgroundColor: palette.cardBackground }]}>
+        <View style={[styles.stepTopRow, isPatient ? styles.stepTopRowPatient : null]}>
+          <Text numberOfLines={2} style={[styles.stepTitle, { color: palette.titleColor }]}>{step.title}</Text>
+          <View style={[styles.stepBadge, isPatient ? styles.stepBadgePatient : null]}>
+            <Text numberOfLines={1} style={styles.stepBadgeText}>{step.label}</Text>
           </View>
         </View>
-        <Text style={[styles.stepDescription, { color: palette.bodyColor }]}>{step.description}</Text>
+        <Text numberOfLines={isPatient ? 2 : 3} style={[styles.stepDescription, isPatient ? styles.stepDescriptionPatient : null, { color: palette.bodyColor }]}>
+          {step.description}
+        </Text>
       </View>
     </View>
   );
 }
 
-function TrackerEvent({ event }) {
+function TrackerEvent({ event, role }) {
+  const isPatient = role === 'patient';
+
   return (
-    <View style={styles.eventCard}>
+    <View style={[styles.eventCard, isPatient ? styles.eventCardPatient : null]}>
       <View style={styles.eventTopRow}>
-        <Text style={styles.eventTitle}>{event.title}</Text>
+        <Text numberOfLines={1} style={styles.eventTitle}>{event.title}</Text>
         {event.badge ? (
           <View style={styles.eventBadge}>
-            <Text style={styles.eventBadgeText}>{event.badge}</Text>
+            <Text numberOfLines={1} style={styles.eventBadgeText}>{event.badge}</Text>
           </View>
         ) : null}
       </View>
-      <Text style={styles.eventDescription}>{event.description}</Text>
+      <Text numberOfLines={isPatient ? 2 : 4} style={styles.eventDescription}>{event.description}</Text>
       {event.timestamp ? <Text style={styles.eventTimestamp}>{event.timestamp}</Text> : null}
     </View>
   );
@@ -101,18 +125,19 @@ export function ProcessStatusTracker({
   error,
   onRefresh,
 }) {
+  const isPatient = role === 'patient';
   const summaryTone = SUMMARY_TONE_STYLES[tracker?.summary?.tone] || SUMMARY_TONE_STYLES.info;
   const cardVariant = role === 'donor' ? 'donorTint' : 'patientTint';
 
   return (
-    <AppCard variant={cardVariant} radius="xl" padding="lg">
+    <AppCard variant={cardVariant} radius="xl" padding={isPatient ? 'md' : 'lg'}>
       <DashboardSectionHeader
         title={tracker?.title || (role === 'donor' ? 'Donation Status' : 'Wig Request Status')}
-        description={tracker?.subtitle || 'Track the latest progress updates here.'}
+        description={isPatient ? (tracker?.subtitle || 'Track your wig request.') : (tracker?.subtitle || 'Track the latest progress updates here.')}
         style={styles.sectionHeader}
       />
 
-      <View style={styles.headerActions}>
+      <View style={[styles.headerActions, isPatient ? styles.headerActionsPatient : null]}>
         <View style={[styles.summaryPill, { backgroundColor: summaryTone.backgroundColor }]}>
           <AppIcon name="clock-time-four-outline" color={summaryTone.textColor} size="sm" />
           <Text style={[styles.summaryPillText, { color: summaryTone.textColor }]}>
@@ -132,7 +157,7 @@ export function ProcessStatusTracker({
       </View>
 
       {tracker?.summary?.referenceValue ? (
-        <View style={styles.summaryCard}>
+        <View style={[styles.summaryCard, isPatient ? styles.summaryCardPatient : null]}>
           <Text style={styles.summaryRefLabel}>{tracker.summary.referenceLabel}</Text>
           <Text style={styles.summaryRefValue}>{tracker.summary.referenceValue}</Text>
           {tracker.summary.helperText ? <Text style={styles.summaryHelper}>{tracker.summary.helperText}</Text> : null}
@@ -163,6 +188,7 @@ export function ProcessStatusTracker({
             <TrackerStep
               key={step.key}
               step={step}
+              role={role}
               isLast={index === tracker.steps.length - 1}
             />
           ))}
@@ -181,7 +207,7 @@ export function ProcessStatusTracker({
         <View style={styles.eventsWrap}>
           <Text style={styles.eventsTitle}>Recent updates</Text>
           {tracker.events.slice(0, 4).map((event) => (
-            <TrackerEvent key={event.key} event={event} />
+            <TrackerEvent key={event.key} event={event} role={role} />
           ))}
         </View>
       ) : null}
@@ -200,6 +226,10 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: theme.spacing.sm,
     marginBottom: theme.spacing.md,
+  },
+  headerActionsPatient: {
+    alignItems: 'center',
+    marginBottom: theme.spacing.sm,
   },
   summaryPill: {
     flexDirection: 'row',
@@ -222,6 +252,10 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.backgroundPrimary,
     borderWidth: 1,
     borderColor: theme.colors.borderSubtle,
+  },
+  summaryCardPatient: {
+    marginBottom: theme.spacing.sm,
+    paddingVertical: theme.spacing.sm,
   },
   summaryRefLabel: {
     fontFamily: theme.typography.fontFamily,
@@ -250,15 +284,32 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: theme.spacing.sm,
   },
+  stepRowPatient: {
+    gap: theme.spacing.xs,
+  },
   rail: {
     width: 22,
     alignItems: 'center',
+  },
+  railPatient: {
+    width: 30,
   },
   stepDot: {
     width: 12,
     height: 12,
     borderRadius: theme.radius.full,
     marginTop: 10,
+  },
+  stepDotPatient: {
+    width: 24,
+    height: 24,
+    marginTop: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stepDotPatientUpcoming: {
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
   },
   stepLine: {
     width: 2,
@@ -267,12 +318,24 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.full,
     minHeight: 54,
   },
+  stepLinePatient: {
+    minHeight: 42,
+    marginTop: 4,
+  },
   stepCard: {
     flex: 1,
+    minWidth: 0,
     gap: theme.spacing.xs,
     marginBottom: theme.spacing.sm,
     padding: theme.spacing.md,
     borderRadius: theme.radius.lg,
+  },
+  stepCardPatient: {
+    marginBottom: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
   },
   stepTopRow: {
     flexDirection: 'row',
@@ -280,17 +343,26 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     gap: theme.spacing.sm,
   },
+  stepTopRowPatient: {
+    alignItems: 'center',
+  },
   stepTitle: {
     flex: 1,
+    minWidth: 0,
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.body,
     fontWeight: theme.typography.weights.semibold,
   },
   stepBadge: {
+    maxWidth: 132,
     paddingHorizontal: theme.spacing.sm,
     paddingVertical: 5,
     borderRadius: theme.radius.pill,
     backgroundColor: theme.colors.backgroundPrimary,
+  },
+  stepBadgePatient: {
+    maxWidth: 112,
+    paddingVertical: 4,
   },
   stepBadgeText: {
     fontFamily: theme.typography.fontFamily,
@@ -301,6 +373,9 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.bodySm,
     lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+  },
+  stepDescriptionPatient: {
+    lineHeight: theme.typography.semantic.bodySm * 1.35,
   },
   emptyState: {
     alignItems: 'center',
@@ -347,6 +422,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: theme.colors.borderSubtle,
   },
+  eventCardPatient: {
+    paddingVertical: theme.spacing.sm,
+  },
   eventTopRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -355,12 +433,14 @@ const styles = StyleSheet.create({
   },
   eventTitle: {
     flex: 1,
+    minWidth: 0,
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.bodySm,
     fontWeight: theme.typography.weights.semibold,
     color: theme.colors.textPrimary,
   },
   eventBadge: {
+    maxWidth: 120,
     paddingHorizontal: theme.spacing.sm,
     paddingVertical: 4,
     borderRadius: theme.radius.pill,

@@ -84,6 +84,7 @@ const styles = StyleSheet.create({
   },
   copyWrap: {
     flex: 1,
+    minWidth: 0,
     gap: 4,
   },
   topRow: {
@@ -94,6 +95,7 @@ const styles = StyleSheet.create({
   },
   title: {
     flex: 1,
+    minWidth: 0,
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.body,
     fontWeight: theme.typography.weights.semibold,
@@ -113,6 +115,7 @@ const styles = StyleSheet.create({
   },
   message: {
     flex: 1,
+    minWidth: 0,
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.bodySm,
     lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,

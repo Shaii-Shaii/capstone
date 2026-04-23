@@ -212,51 +212,90 @@ const buildPatientTracker = ({ patientDetails, wigRequest, latestAllocation }) =
   const wig = latestAllocation?.wigs || null;
   const releaseStatus = latestAllocation?.release_status || '';
   const currentStatus = releaseStatus || wig?.wig_status || wigRequest?.status || '';
+  const requestStatus = String(wigRequest?.status || '').toLowerCase();
+  const wigStatus = String(wig?.wig_status || '').toLowerCase();
+  const normalizedReleaseStatus = String(releaseStatus || '').toLowerCase();
+  const isApproved = Boolean(
+    wigRequest?.approved_at
+    || ['approved', 'processing', 'in progress', 'allocated', 'ready', 'completed'].some((token) => requestStatus.includes(token))
+  );
+  const hasAllocation = Boolean(latestAllocation?.allocation_id);
+  const hasWig = Boolean(wig?.wig_id || wig?.id);
+  const isSentToHospital = Boolean(
+    latestAllocation?.released_at
+    || ['sent', 'transit', 'released', 'delivered'].some((token) => normalizedReleaseStatus.includes(token))
+  );
+  const isReadyForClaiming = Boolean(
+    ['ready', 'claim', 'received', 'completed'].some((token) => normalizedReleaseStatus.includes(token))
+  );
 
-  const currentIndex = latestAllocation?.released_at || releaseStatus
-    ? 3
-    : wig?.id || latestAllocation?.allocation_id
-      ? 2
-      : wigRequest?.req_id
-        ? 1
-        : 0;
+  const currentIndex = isReadyForClaiming
+    ? 5
+    : isSentToHospital
+      ? 4
+      : hasWig || ['production', 'preparing', 'progress'].some((token) => wigStatus.includes(token))
+        ? 3
+        : hasAllocation
+          ? 2
+          : isApproved || wigRequest?.req_id
+            ? 1
+            : 0;
 
   const steps = [
     {
-      key: 'request',
-      title: 'Request placed',
-      label: normalizeStatusLabel(wigRequest?.status, 'Waiting for request'),
+      key: 'request-submitted',
+      title: 'Request submitted',
+      label: wigRequest?.req_id ? 'Submitted' : 'Waiting for request',
       description: wigRequest?.request_date
         ? `Request date ${formatDateTime(wigRequest.request_date)}`
         : 'Your wig request will appear here after submission.',
       state: getStepState({ index: 0, currentIndex, hasData: Boolean(wigRequest) }),
     },
     {
-      key: 'review',
-      title: 'Preference review',
-      label: normalizeStatusLabel(wigRequest?.status, 'Pending review'),
-      description: wigRequest?.notes
-        || 'The patient request and wig specifications are under review.',
+      key: 'approval',
+      title: isApproved ? 'Request approved' : 'Waiting for approval',
+      label: normalizeStatusLabel(wigRequest?.status, 'Pending approval'),
+      description: isApproved
+        ? `Approved ${formatDateTime(wigRequest?.approved_at || wigRequest?.updated_at)}`
+        : 'The organization will review your wig request.',
       state: getStepState({ index: 1, currentIndex, hasData: Boolean(wigRequest) }),
     },
     {
-      key: 'production',
-      title: 'Wig production',
-      label: normalizeStatusLabel(wig?.wig_status, 'Waiting for wig assignment'),
+      key: 'donor-match',
+      title: 'Looking for wig donor',
+      label: hasAllocation ? 'Donor bundle matched' : 'Matching in progress',
       description: wig?.wig_name
         ? `${wig.wig_name}${wig.wig_code ? ` • ${wig.wig_code}` : ''}`
-        : 'A production update appears here once a wig record is linked to your request.',
-      state: getStepState({ index: 2, currentIndex, hasData: Boolean(wig?.id || latestAllocation?.allocation_id) }),
+        : 'A matching update appears here once a wig is linked to your request.',
+      state: getStepState({ index: 2, currentIndex, hasData: hasAllocation }),
     },
     {
-      key: 'allocation',
-      title: 'Allocation and release',
-      label: normalizeStatusLabel(releaseStatus, 'Not allocated yet'),
+      key: 'preparing',
+      title: 'Preparing wig',
+      label: normalizeStatusLabel(wig?.wig_status, hasWig ? 'Preparing' : 'Waiting for wig record'),
       description: latestAllocation?.notes
         || (latestAllocation?.allocated_at
           ? `Allocated on ${formatDateTime(latestAllocation.allocated_at)}`
-          : 'Allocation and release updates will appear here.'),
-      state: getStepState({ index: 3, currentIndex, hasData: Boolean(latestAllocation?.allocation_id) }),
+          : 'Preparation details appear here after wig production starts.'),
+      state: getStepState({ index: 3, currentIndex, hasData: hasWig }),
+    },
+    {
+      key: 'sent-hospital',
+      title: 'Wig sent to hospital',
+      label: normalizeStatusLabel(releaseStatus, 'Waiting for release'),
+      description: latestAllocation?.released_at
+        ? `Sent on ${formatDateTime(latestAllocation.released_at)}`
+        : latestAllocation?.notes || 'Hospital release details will appear here.',
+      state: getStepState({ index: 4, currentIndex, hasData: isSentToHospital }),
+    },
+    {
+      key: 'ready-claiming',
+      title: 'Ready for claiming',
+      label: isReadyForClaiming ? 'Ready' : 'Not ready yet',
+      description: isReadyForClaiming
+        ? 'Please wait for hospital claiming instructions.'
+        : 'The hospital will update this step once the wig is ready for claiming.',
+      state: getStepState({ index: 5, currentIndex, hasData: isReadyForClaiming }),
     },
   ];
 
@@ -293,7 +332,7 @@ const buildPatientTracker = ({ patientDetails, wigRequest, latestAllocation }) =
   return {
     tracker: {
       title: 'Wig Request Status',
-      subtitle: 'Follow your wig request from patient intake to allocation and release.',
+      subtitle: 'Follow your wig request from submission to hospital claiming.',
       emptyTitle: 'No wig tracking yet',
       emptyDescription: 'Your wig request status will appear here after the first request is saved.',
       summary: {

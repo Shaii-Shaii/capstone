@@ -1,6 +1,6 @@
 import 'react-native-url-polyfill/auto';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { AppState, Platform } from 'react-native';
+import { Platform } from 'react-native';
 import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = (process.env.EXPO_PUBLIC_SUPABASE_URL || '').trim();
@@ -134,7 +134,7 @@ export const supabase = hasSupabaseConfig
   ? createClient(supabaseUrl, supabasePublishableKey, {
       auth: {
         storage: isWeb ? webStorage : AsyncStorage,
-        autoRefreshToken: true,
+        autoRefreshToken: false,
         persistSession: true,
         detectSessionInUrl: false,
       },
@@ -313,9 +313,8 @@ const getSessionSafely = async () => {
 const clearPersistedAuthSession = async () => {
   try {
     await supabase.auth.signOut({ scope: 'local' });
-    return;
   } catch (_error) {
-    // Fall through to storage cleanup below.
+    // Continue to storage cleanup below. A broken refresh token can make signOut fail.
   }
 
   const storage = getAuthStorage();
@@ -456,14 +455,4 @@ if (!hasSupabaseConfig && typeof console !== 'undefined') {
 
 if (hasSupabaseConfig) {
   void sanitizePersistedAuthSession();
-}
-
-if (!isWeb && hasSupabaseConfig) {
-  AppState.addEventListener('change', (state) => {
-    if (state === 'active') {
-      supabase.auth.startAutoRefresh();
-    } else {
-      supabase.auth.stopAutoRefresh();
-    }
-  });
 }

@@ -14,7 +14,10 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { Controller, useForm, useWatch } from 'react-hook-form';
 import { useRouter } from 'expo-router';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as MediaLibrary from 'expo-media-library';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as Sharing from 'expo-sharing';
 import { DashboardLayout } from './DashboardLayout';
 import { DashboardHeader } from '../ui/DashboardHeader';
 import { AppCard } from '../ui/AppCard';
@@ -30,20 +33,7 @@ import { useNotifications } from '../../hooks/useNotifications';
 import { useProcessTracking } from '../../hooks/useProcessTracking';
 import { ProcessStatusTracker } from '../tracking/ProcessStatusTracker';
 import { wigRequestDefaultValues, wigRequestSchema } from '../../features/wigRequest.schema';
-
-const formatRequestDate = (value) => {
-  if (!value) return '';
-
-  try {
-    return new Intl.DateTimeFormat('en-PH', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-    }).format(new Date(value));
-  } catch {
-    return value;
-  }
-};
+import { logAppError } from '../../utils/appErrors';
 
 const buildRecommendationTitle = ({ preview, specification, draftValues }) => (
   preview?.recommended_style_name
@@ -116,123 +106,65 @@ const buildRecommendationOptions = ({ preview, specification, draftValues }) => 
   return fallbackOptions.slice(0, 3);
 };
 
-function RequestDetailsPanel({ control, errors }) {
+const PREFERENCE_GROUPS = [
+  {
+    name: 'preferredLength',
+    title: 'Preferred length',
+    options: ['Short', 'Shoulder length', 'Medium', 'Long'],
+  },
+  {
+    name: 'preferredColor',
+    title: 'Preferred color',
+    options: ['Natural black', 'Dark brown', 'Warm brown', 'Other'],
+  },
+  {
+    name: 'hairTexture',
+    title: 'Texture',
+    options: ['Straight', 'Wavy', 'Curly', 'Soft layers'],
+  },
+  {
+    name: 'capSize',
+    title: 'Cap size',
+    options: ['Small', 'Medium', 'Large', 'Not sure'],
+  },
+  {
+    name: 'stylePreference',
+    title: 'Style preference',
+    options: ['Natural bob', 'Layered waves', 'Soft pixie', 'Classic straight', 'Other'],
+  },
+];
+
+function ChoiceGroup({ control, name, title, options }) {
   return (
-    <View style={styles.detailsPanel}>
-      <Controller
-        control={control}
-        name="preferredColor"
-        render={({ field }) => (
-          <AppInput
-            label="Preferred Color"
-            placeholder="Natural black"
-            variant="filled"
-            value={field.value}
-            onChangeText={field.onChange}
-            onBlur={field.onBlur}
-            error={errors.preferredColor?.message}
-          />
-        )}
-      />
-
-      <Controller
-        control={control}
-        name="preferredLength"
-        render={({ field }) => (
-          <AppInput
-            label="Preferred Length"
-            placeholder="Shoulder length"
-            variant="filled"
-            value={field.value}
-            onChangeText={field.onChange}
-            onBlur={field.onBlur}
-            error={errors.preferredLength?.message}
-          />
-        )}
-      />
-
-      <Controller
-        control={control}
-        name="notes"
-        render={({ field }) => (
-          <AppInput
-            label="Request Notes"
-            placeholder="Comfort notes or extra request details"
-            variant="filled"
-            multiline={true}
-            numberOfLines={4}
-            value={field.value}
-            onChangeText={field.onChange}
-            onBlur={field.onBlur}
-            error={errors.notes?.message}
-            inputStyle={styles.multilineInput}
-          />
-        )}
-      />
-    </View>
-  );
-}
-
-function RequestDetailsSheet({
-  visible,
-  onClose,
-  control,
-  errors,
-}) {
-  const insets = useSafeAreaInsets();
-
-  if (!visible) return null;
-
-  return (
-    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
-      <KeyboardAvoidingView
-        style={styles.sheetKeyboardWrap}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? insets.bottom : 0}
-      >
-        <View style={styles.sheetOverlay}>
-          <Pressable style={styles.sheetBackdrop} onPress={onClose} />
-
-          <AppCard variant="elevated" radius="xl" padding="lg" style={styles.sheetCard}>
-            <View style={styles.sheetHandle} />
-
-            <View style={styles.sheetHeader}>
-              <View>
-                <Text style={styles.sheetTitle}>Request Details</Text>
-                <Text style={styles.sheetBody}>
-                  Add optional wig preferences here, then go back to the camera step.
-                </Text>
-              </View>
-
-              <Pressable onPress={onClose} style={styles.headerIconButton}>
-                <AppIcon name="close" state="muted" />
-              </Pressable>
-            </View>
-
-            <ScrollView
-              style={styles.sheetScroll}
-              contentContainerStyle={[
-                styles.sheetScrollContent,
-                { paddingBottom: insets.bottom + theme.spacing.md },
-              ]}
-              keyboardShouldPersistTaps="handled"
-              keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
-              showsVerticalScrollIndicator={false}
-            >
-              <RequestDetailsPanel control={control} errors={errors} />
-            </ScrollView>
-
-            <View style={[styles.sheetFooter, { paddingBottom: Math.max(insets.bottom, theme.spacing.sm) }]}>
-              <AppButton
-                title="Apply Request Details"
-                onPress={onClose}
-                leading={<AppIcon name="success" state="inverse" />}
-              />
-            </View>
-          </AppCard>
+    <Controller
+      control={control}
+      name={name}
+      render={({ field }) => (
+        <View style={styles.choiceGroup}>
+          <Text style={styles.choiceTitle}>{title}</Text>
+          <View style={styles.choiceWrap}>
+            {options.map((option) => {
+              const isSelected = field.value === option;
+              return (
+                <Pressable
+                  key={`${name}-${option}`}
+                  onPress={() => field.onChange(option)}
+                  style={({ pressed }) => [
+                    styles.choiceChip,
+                    isSelected ? styles.choiceChipSelected : null,
+                    pressed ? styles.choiceChipPressed : null,
+                  ]}
+                >
+                  <Text style={[styles.choiceText, isSelected ? styles.choiceTextSelected : null]}>
+                    {option}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
         </View>
-      </KeyboardAvoidingView>
-    </Modal>
+      )}
+    />
   );
 }
 
@@ -278,8 +210,6 @@ function CaptureModal({
   onCameraReady,
   isCapturingPhoto,
   isPickingReference,
-  isGeneratingPreview,
-  onOpenDetails,
   onClose,
   onUpload,
   onCapture,
@@ -300,9 +230,6 @@ function CaptureModal({
             </View>
 
             <View style={styles.modalHeaderActions}>
-              <Pressable onPress={onOpenDetails} style={styles.headerIconButton}>
-                <AppIcon name="settings" state="muted" />
-              </Pressable>
               <Pressable onPress={onClose} style={styles.headerIconButton}>
                 <AppIcon name="close" state="muted" />
               </Pressable>
@@ -369,16 +296,15 @@ function CaptureModal({
           <View style={styles.modalFooter}>
             <Text style={styles.modalFooterText}>
               {referenceImage?.uri
-                ? 'Front photo ready. Generate the wig preview when your request details are complete.'
-                : 'Use the settings icon for optional request details, then upload or capture one front photo.'}
+                ? 'Front photo ready. Continue to wig preferences next.'
+                : 'Upload or capture one clear front photo.'}
             </Text>
 
             <AppButton
-              title="Generate Wig Preview"
-              loading={isGeneratingPreview}
+              title="Use Photo"
               disabled={!referenceImage?.uri}
               onPress={onGeneratePreview}
-              leading={<AppIcon name="sparkle" state="inverse" />}
+              leading={<AppIcon name="success" state="inverse" />}
             />
           </View>
         </AppCard>
@@ -414,7 +340,7 @@ function WigOptionCard({ option, isActive, onPress, fallbackImageUri }) {
       <Text style={styles.optionNote} numberOfLines={2}>{option.note}</Text>
       <View style={[styles.tryOnButton, isActive ? styles.tryOnButtonActive : null]}>
         <Text style={[styles.tryOnButtonText, isActive ? styles.tryOnButtonTextActive : null]}>
-          {isActive ? 'Selected' : 'Try On'}
+          {isActive ? 'Selected' : 'Select'}
         </Text>
       </View>
     </Pressable>
@@ -439,13 +365,13 @@ function WigPreviewCard({
   return (
     <AppCard variant="elevated" radius="xl" padding="lg" style={styles.resultCard}>
       <View style={styles.resultHeader}>
-        <Text style={styles.resultHeaderTitle}>AI Wig Style Preview</Text>
+        <Text style={styles.resultHeaderTitle}>AI Wig Reference</Text>
       </View>
 
       <View style={styles.resultHero}>
         <View style={styles.resultBadge}>
           <AppIcon name="sparkle" state="muted" size="sm" />
-          <Text style={styles.resultBadgeText}>AI Virtual Try-On Active</Text>
+          <Text style={styles.resultBadgeText}>Reference only</Text>
         </View>
 
         <View style={styles.resultCircleWrap}>
@@ -511,63 +437,6 @@ function WigPreviewCard({
   );
 }
 
-function WigGenerationModal({
-  visible,
-  isGeneratingPreview,
-  frontPhotoUri,
-  generatedImageUri,
-  title,
-  family,
-  summary,
-  onClose,
-}) {
-  if (!visible) return null;
-
-  return (
-    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
-      <View style={styles.modalOverlay}>
-        <Pressable style={styles.modalBackdrop} onPress={onClose} />
-
-        <AppCard variant="elevated" radius="xl" padding="lg" style={styles.generationModalCard}>
-          <View style={styles.modalHeader}>
-            <View style={styles.stepPill}>
-              <Text style={styles.stepPillText}>Wig Generation</Text>
-            </View>
-
-            <Pressable onPress={onClose} style={styles.headerIconButton}>
-              <AppIcon name="close" state="muted" />
-            </Pressable>
-          </View>
-
-          <Text style={styles.generationModalTitle}>AI Wig Preview</Text>
-          <Text style={styles.generationModalBody}>
-            {isGeneratingPreview
-              ? 'Generating a visual wig preview from the submitted front photo.'
-              : 'Review the current wig preview result.'}
-          </Text>
-
-          <View style={styles.generationStage}>
-            {generatedImageUri || frontPhotoUri ? (
-              <Image source={{ uri: generatedImageUri || frontPhotoUri }} style={styles.generationStageImage} />
-            ) : (
-              <View style={styles.generationStagePlaceholder}>
-                <AppIcon name="sparkle" state="active" size="xl" />
-                <Text style={styles.generationStagePlaceholderText}>
-                  {isGeneratingPreview ? 'Generating preview...' : 'No wig preview yet.'}
-                </Text>
-              </View>
-            )}
-          </View>
-
-          <Text style={styles.generationResultTitle}>{title}</Text>
-          <Text style={styles.generationResultFamily}>{family}</Text>
-          <Text style={styles.generationResultSummary}>{summary}</Text>
-        </AppCard>
-      </View>
-    </Modal>
-  );
-}
-
 function WigStyleOptionsSection({
   options,
   frontPhotoUri,
@@ -596,7 +465,7 @@ function WigStyleOptionsSection({
 
       <View style={styles.optionsSectionFooter}>
         <AppButton
-          title="Customize Selected Style"
+          title="Regenerate Options"
           onPress={onCustomize}
           leading={<AppIcon name="sparkle" state="inverse" />}
         />
@@ -605,15 +474,348 @@ function WigStyleOptionsSection({
   );
 }
 
+function RequestFlowModal({
+  visible,
+  step,
+  control,
+  errors,
+  patientName,
+  patientCode,
+  hospitalName,
+  medicalCondition,
+  referenceImage,
+  hasOtherPreference,
+  recommendationOptions,
+  selectedOptionId,
+  onSelectOption,
+  recommendationTitle,
+  recommendationFamily,
+  recommendationSummary,
+  preferredColor,
+  preferredLength,
+  generatedImageUri,
+  hasGeneratedPreview,
+  isPickingReference,
+  isGeneratingPreview,
+  isSavingRequest,
+  onClose,
+  onBackToPatient,
+  onContinueToDetails,
+  onUploadPhoto,
+  onOpenCamera,
+  onGeneratePreview,
+  onSkipPreview,
+  onRegenerate,
+  onDownloadSelected,
+  onSubmitRequest,
+  onViewTimeline,
+}) {
+  const insets = useSafeAreaInsets();
+
+  if (!visible) return null;
+
+  return (
+    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
+      <KeyboardAvoidingView
+        style={styles.flowKeyboardWrap}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? insets.bottom : 0}
+      >
+        <View style={styles.modalOverlay}>
+          <Pressable style={styles.modalBackdrop} onPress={onClose} />
+
+          <AppCard variant="elevated" radius="xl" padding="lg" style={styles.flowCard}>
+            <View style={styles.modalHeader}>
+              <View style={styles.stepPill}>
+                <Text style={styles.stepPillText}>
+                  {step === 'patient' ? 'Step 1'
+                    : step === 'details' ? 'Step 2'
+                    : step === 'summary' ? 'Step 3'
+                    : 'Submitted'}
+                </Text>
+              </View>
+
+              <Pressable onPress={onClose} style={styles.headerIconButton}>
+                <AppIcon name="close" state="muted" />
+              </Pressable>
+            </View>
+
+            <ScrollView
+              style={styles.flowScroll}
+              contentContainerStyle={[
+                styles.flowScrollContent,
+                { paddingBottom: Math.max(insets.bottom, theme.spacing.md) },
+              ]}
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+              showsVerticalScrollIndicator={false}
+            >
+              {step === 'patient' ? (
+                <View style={styles.flowSection}>
+                  <Text style={styles.flowTitle}>Patient details</Text>
+                  <Text style={styles.flowBody}>Review the patient record linked to this account before starting the request.</Text>
+
+                  <View style={styles.previewGrid}>
+                    <View style={styles.previewRow}>
+                      <Text style={styles.previewLabel}>Patient</Text>
+                      <Text style={styles.previewValue}>{patientName || 'Patient account'}</Text>
+                    </View>
+                    <View style={styles.previewRow}>
+                      <Text style={styles.previewLabel}>Patient code</Text>
+                      <Text style={styles.previewValue}>{patientCode || 'Not assigned'}</Text>
+                    </View>
+                    <View style={styles.previewRow}>
+                      <Text style={styles.previewLabel}>Hospital</Text>
+                      <Text style={styles.previewValue}>{hospitalName || 'Not linked'}</Text>
+                    </View>
+                    {medicalCondition ? (
+                      <View style={styles.previewRow}>
+                        <Text style={styles.previewLabel}>Medical condition</Text>
+                        <Text style={styles.previewValue}>{medicalCondition}</Text>
+                      </View>
+                    ) : null}
+                  </View>
+
+                  <Controller
+                    control={control}
+                    name="acceptedTerms"
+                    render={({ field }) => (
+                      <Pressable
+                        accessibilityRole="checkbox"
+                        accessibilityState={{ checked: Boolean(field.value) }}
+                        onPress={() => field.onChange(!field.value)}
+                        style={styles.agreementRow}
+                      >
+                        <View style={[
+                          styles.checkBox,
+                          field.value ? styles.checkBoxActive : null,
+                        ]}>
+                          {field.value ? <AppIcon name="success" state="inverse" size="sm" /> : null}
+                        </View>
+                        <Text style={styles.agreementText}>
+                          I agree that my patient record and uploaded photo may be used by the organization as reference for this wig request.
+                        </Text>
+                      </Pressable>
+                    )}
+                  />
+                  {errors.acceptedTerms?.message ? (
+                    <Text style={styles.fieldError}>{errors.acceptedTerms.message}</Text>
+                  ) : null}
+
+                  <View style={styles.actionRow}>
+                    <AppButton
+                      title="Back"
+                      variant="secondary"
+                      onPress={onClose}
+                      fullWidth={false}
+                      style={styles.actionButton}
+                    />
+                    <AppButton
+                      title="Continue"
+                      onPress={onContinueToDetails}
+                      fullWidth={false}
+                      style={styles.actionButton}
+                    />
+                  </View>
+                </View>
+              ) : null}
+
+              {step === 'details' ? (
+                <View style={styles.flowSection}>
+                  <Text style={styles.flowTitle}>Photo and wig preferences</Text>
+                  <Text style={styles.flowBody}>Add one clear front photo, then choose the closest wig options.</Text>
+
+                  <View style={styles.photoPreviewBox}>
+                    {referenceImage?.uri ? (
+                      <Image source={{ uri: referenceImage.uri }} style={styles.photoPreviewImage} />
+                    ) : (
+                      <View style={styles.photoPlaceholder}>
+                        <AppIcon name="camera" state="active" size="xl" />
+                        <Text style={styles.flowBody}>No front photo yet.</Text>
+                      </View>
+                    )}
+                  </View>
+
+                  <View style={styles.actionRow}>
+                    <AppButton
+                      title="Upload"
+                      variant="secondary"
+                      loading={isPickingReference}
+                      onPress={onUploadPhoto}
+                      fullWidth={false}
+                      style={styles.actionButton}
+                    />
+                    <AppButton
+                      title="Camera"
+                      variant="secondary"
+                      onPress={onOpenCamera}
+                      fullWidth={false}
+                      style={styles.actionButton}
+                    />
+                  </View>
+
+                  {PREFERENCE_GROUPS.map((group) => (
+                    <ChoiceGroup
+                      key={group.name}
+                      control={control}
+                      name={group.name}
+                      title={group.title}
+                      options={group.options}
+                    />
+                  ))}
+
+                  {hasOtherPreference ? (
+                    <Controller
+                      control={control}
+                      name="specialNotes"
+                      render={({ field }) => (
+                        <AppInput
+                          label="Other preference"
+                          placeholder="Add a short custom preference"
+                          variant="filled"
+                          multiline={true}
+                          numberOfLines={3}
+                          value={field.value}
+                          onChangeText={field.onChange}
+                          onBlur={field.onBlur}
+                          error={errors.specialNotes?.message}
+                          inputStyle={styles.multilineInput}
+                        />
+                      )}
+                    />
+                  ) : null}
+
+                  <View style={styles.actionRow}>
+                    <AppButton
+                      title="Back"
+                      variant="secondary"
+                      onPress={onBackToPatient}
+                      fullWidth={false}
+                      style={styles.actionButton}
+                    />
+                    <AppButton
+                      title="Generate with AI"
+                      loading={isGeneratingPreview}
+                      disabled={!referenceImage?.uri}
+                      onPress={onGeneratePreview}
+                      fullWidth={false}
+                      style={styles.actionButton}
+                    />
+                  </View>
+                  <AppButton
+                    title="Skip AI"
+                    variant="secondary"
+                    disabled={!referenceImage?.uri}
+                    onPress={onSkipPreview}
+                  />
+                </View>
+              ) : null}
+
+              {step === 'summary' ? (
+                <View style={styles.flowSection}>
+                  <Text style={styles.flowTitle}>Request summary</Text>
+                  <Text style={styles.flowBody}>Review the uploaded photo and selected wig details before submitting.</Text>
+
+                  <View style={styles.photoPreviewBox}>
+                    {referenceImage?.uri ? (
+                      <Image source={{ uri: referenceImage.uri }} style={styles.photoPreviewImage} />
+                    ) : (
+                      <View style={styles.photoPlaceholder}>
+                        <AppIcon name="image" state="active" size="xl" />
+                        <Text style={styles.flowBody}>No photo attached.</Text>
+                      </View>
+                    )}
+                  </View>
+
+                  {hasGeneratedPreview ? (
+                    <>
+                      <WigPreviewCard
+                        frontPhotoUri={referenceImage?.uri}
+                        generatedImageUri={generatedImageUri}
+                        title={recommendationTitle}
+                        family={recommendationFamily}
+                        summary={recommendationSummary}
+                        preferredColor={preferredColor}
+                        preferredLength={preferredLength}
+                        onSecondaryAction={onOpenCamera}
+                        secondaryActionLabel="Retake Photo"
+                      />
+
+                      {recommendationOptions.length > 1 ? (
+                        <WigStyleOptionsSection
+                          options={recommendationOptions}
+                          frontPhotoUri={referenceImage?.uri}
+                          selectedOptionId={selectedOptionId}
+                          onSelectOption={onSelectOption}
+                          onCustomize={onRegenerate}
+                        />
+                      ) : null}
+                    </>
+                  ) : (
+                    <AppCard variant="subtle" radius="lg" padding="md" style={styles.summaryNoteCard}>
+                      <Text style={styles.summaryNoteTitle}>AI preview skipped</Text>
+                      <Text style={styles.flowBody}>
+                        Your request will use the uploaded photo and selected wig preferences for review.
+                      </Text>
+                    </AppCard>
+                  )}
+
+                  <AppButton
+                    title="Submit Wig Request"
+                    loading={isSavingRequest}
+                    onPress={onSubmitRequest}
+                    leading={<AppIcon name="requests" state="inverse" />}
+                  />
+
+                  {hasGeneratedPreview && generatedImageUri ? (
+                    <AppButton
+                      title="Save Wig Image"
+                      variant="secondary"
+                      onPress={onDownloadSelected}
+                      leading={<AppIcon name="save" state="active" />}
+                    />
+                  ) : null}
+
+                  <AppButton
+                    title={hasGeneratedPreview ? 'Regenerate' : 'Generate AI Preview'}
+                    variant="secondary"
+                    loading={isGeneratingPreview}
+                    onPress={onRegenerate}
+                    leading={<AppIcon name="sparkle" state="active" />}
+                  />
+                </View>
+              ) : null}
+
+              {step === 'waiting' ? (
+                <View style={styles.waitingState}>
+                  <AppIcon name="success" state="active" size="xl" />
+                  <Text style={styles.flowTitle}>Request submitted</Text>
+                  <Text style={styles.flowBody}>Waiting for organization review.</Text>
+                  <AppButton
+                    title="View Timeline"
+                    onPress={onViewTimeline}
+                    leading={<AppIcon name="updates" state="inverse" />}
+                  />
+                </View>
+              ) : null}
+            </ScrollView>
+          </AppCard>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
 export function PatientWigRequestScreen() {
   const router = useRouter();
   const cameraRef = useRef(null);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [isCaptureOpen, setIsCaptureOpen] = useState(false);
-  const [isDetailsOpen, setIsDetailsOpen] = useState(false);
   const [isCapturingPhoto, setIsCapturingPhoto] = useState(false);
-  const [isGenerationModalOpen, setIsGenerationModalOpen] = useState(false);
   const [selectedOptionId, setSelectedOptionId] = useState('');
+  const [isFlowOpen, setIsFlowOpen] = useState(false);
+  const [isTimelineOpen, setIsTimelineOpen] = useState(false);
+  const [flowStep, setFlowStep] = useState('patient');
   const { user, profile, patientProfile } = useAuth();
   const { unreadCount } = useNotifications({ role: 'patient', userId: user?.id, databaseUserId: profile?.user_id });
   const {
@@ -637,14 +839,15 @@ export function PatientWigRequestScreen() {
     isSavingRequest,
     pickReferenceImage,
     saveCapturedReferenceImage,
+    clearPreview,
     generatePreview,
-    regenerateSavedRecommendation,
     saveRequest,
   } = usePatientWigRequest({ userId: user?.id });
 
   const {
     control,
     handleSubmit,
+    setError: setFormError,
     formState: { errors },
   } = useForm({
     resolver: zodResolver(wigRequestSchema),
@@ -657,9 +860,14 @@ export function PatientWigRequestScreen() {
   const lastName = (profile?.last_name || '').trim();
   const avatarUri = profile?.avatar_url || profile?.photo_path || patientProfile?.patient_picture || '';
   const avatarInitials = `${firstName?.[0] || ''}${lastName?.[0] || ''}`.trim();
+  const patientFullName = [profile?.first_name, profile?.middle_name, profile?.last_name, profile?.suffix]
+    .filter(Boolean)
+    .join(' ')
+    .trim();
+  const patientCode = patientProfile?.patient_code || '';
+  const hospitalName = patientProfile?.hospital_name || patientProfile?.hospital?.hospital_name || '';
+  const medicalCondition = patientProfile?.medical_condition || '';
   const hasCameraPermission = Boolean(cameraPermission?.granted);
-  const shouldShowTracker = hasSubmittedRequest && Boolean(tracker || isLoadingTracking || trackingError);
-  const shouldShowRecommendation = Boolean(preview || referenceImage?.uri || latestWigSpecification?.patient_picture || latestWigSpecification?.ai_wig_preview_url);
   const recommendationOptions = useMemo(() => buildRecommendationOptions({
     preview,
     specification: latestWigSpecification,
@@ -687,6 +895,7 @@ export function PatientWigRequestScreen() {
   const preferredColor = latestWigSpecification?.preferred_color || draftValues?.preferredColor || '';
   const preferredLength = latestWigSpecification?.preferred_length || draftValues?.preferredLength || '';
   const generatedImageUri = selectedOption?.generatedImageUri || preview?.generated_image_data_url || latestWigSpecification?.ai_wig_preview_url || '';
+  const hasGeneratedPreview = Boolean(preview);
 
   useEffect(() => {
     setSelectedOptionId(recommendationOptions[0]?.id || '');
@@ -734,25 +943,131 @@ export function PatientWigRequestScreen() {
   };
 
   const handleGeneratePreviewFromModal = handleSubmit(async (values) => {
-    setIsGenerationModalOpen(true);
     const result = await generatePreview(values);
 
     if (result?.success) {
       closeCaptureFlow();
+      setIsFlowOpen(true);
+      setFlowStep('summary');
     }
 
     return result;
   });
 
   const handleSaveRequest = handleSubmit(async (values) => {
+    if (!values.acceptedTerms) {
+      setFormError('acceptedTerms', {
+        type: 'manual',
+        message: 'Please accept the request agreement first.',
+      });
+      return { success: false, error: 'Please accept the request agreement first.' };
+    }
+
     const result = await saveRequest(values, selectedOptionId);
 
     if (result?.success) {
       await refreshTracking();
+      setFlowStep('waiting');
+      setIsTimelineOpen(true);
     }
 
     return result;
   });
+
+  const handleSkipPreview = handleSubmit(async () => {
+    clearPreview();
+    setFlowStep('summary');
+    return { success: true };
+  });
+
+  const openRequestFlow = () => {
+    setFlowStep('patient');
+    setIsFlowOpen(true);
+    setIsTimelineOpen(false);
+  };
+
+  const closeRequestFlow = () => {
+    setIsFlowOpen(false);
+    setFlowStep('patient');
+  };
+
+  const handleContinueToDetails = handleSubmit(async (values) => {
+    if (!values.acceptedTerms) {
+      setFormError('acceptedTerms', {
+        type: 'manual',
+        message: 'Please accept the patient record consent first.',
+      });
+      return { success: false, error: 'Please accept the patient record consent first.' };
+    }
+
+    setFlowStep('details');
+    return { success: true };
+  });
+
+  const handleDownloadSelectedImage = async () => {
+    if (!generatedImageUri) return;
+
+    try {
+      let shareUri = generatedImageUri;
+      if (generatedImageUri.startsWith('data:image/')) {
+        const extension = generatedImageUri.includes('image/png') ? 'png' : 'jpg';
+        const base64 = generatedImageUri.split(',')[1] || '';
+        shareUri = `${FileSystem.cacheDirectory}wig-preview-${Date.now()}.${extension}`;
+        await FileSystem.writeAsStringAsync(shareUri, base64, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+      } else if (/^https?:\/\//i.test(generatedImageUri)) {
+        const extension = generatedImageUri.toLowerCase().includes('.png') ? 'png' : 'jpg';
+        const downloadResult = await FileSystem.downloadAsync(
+          generatedImageUri,
+          `${FileSystem.cacheDirectory}wig-preview-${Date.now()}.${extension}`
+        );
+        shareUri = downloadResult.uri;
+      }
+
+      // Try to save to gallery, but don't block if it fails
+      // (Android Expo media library may request AUDIO permission which isn't needed for images)
+      try {
+        const permission = await MediaLibrary.requestPermissionsAsync();
+        if (permission.granted) {
+          await MediaLibrary.createAssetAsync(shareUri);
+          return;
+        }
+      } catch (mediaLibraryError) {
+        // MediaLibrary may fail on some Android versions due to permission issues
+        // This is not critical - fall through to sharing instead
+        logAppError('patientWigRequest.downloadSelectedImage.gallery', mediaLibraryError, {
+          userId: user?.id,
+          note: 'Gallery save failed, attempting share instead',
+        });
+      }
+
+      // Fallback to sharing (works on all platforms)
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(shareUri, {
+          mimeType: generatedImageUri.includes('image/png') ? 'image/png' : 'image/jpeg',
+          dialogTitle: 'Save wig preview',
+        });
+      }
+    } catch (downloadError) {
+      logAppError('patientWigRequest.downloadSelectedImage', downloadError, { userId: user?.id });
+    }
+  };
+
+  const handleStartPreview = async () => {
+    await openCaptureFlow();
+  };
+
+  const handleUsePhotoFromCapture = () => {
+    closeCaptureFlow();
+    setIsFlowOpen(true);
+    setFlowStep('details');
+  };
+
+  const hasOtherPreference = [
+    draftValues?.preferredColor,
+    draftValues?.stylePreference,
+  ].some((value) => String(value || '').toLowerCase() === 'other');
 
   return (
     <DashboardLayout
@@ -769,7 +1084,7 @@ export function PatientWigRequestScreen() {
           avatarUri={avatarUri}
           variant="patient"
           minimal={true}
-          showAvatar={false}
+          showAvatar={true}
           utilityActions={[
             {
               key: 'notifications',
@@ -805,50 +1120,47 @@ export function PatientWigRequestScreen() {
         />
       ) : null}
 
-      {!hasSubmittedRequest ? (
+      {hasSubmittedRequest ? (
         <AppCard variant="patientTint" radius="xl" padding="lg" style={styles.intakeCard}>
-          <Text style={styles.intakeEyebrow}>Patient Wig Request</Text>
-          <Text style={styles.intakeTitle}>Front Photo First</Text>
+          <Text style={styles.intakeEyebrow}>Current request</Text>
+          <Text style={styles.intakeTitle}>{latestWigRequest?.status || 'Pending review'}</Text>
           <Text style={styles.intakeBody}>
-            Use the capture flow to upload or take one front photo. The request details are tucked behind the settings icon inside that camera module.
+            Your wig request is active. New submissions are disabled until this request is closed.
+          </Text>
+          <View style={styles.actionRow}>
+            <AppButton
+              title={isTimelineOpen ? 'Hide Timeline' : 'View Timeline'}
+              onPress={() => setIsTimelineOpen((current) => !current)}
+              leading={<AppIcon name="updates" state="inverse" />}
+              fullWidth={false}
+              style={styles.actionButton}
+            />
+            <AppButton
+              title="Refresh"
+              variant="secondary"
+              onPress={refreshTracking}
+              loading={isRefreshingTracking}
+              fullWidth={false}
+              style={styles.actionButton}
+            />
+          </View>
+        </AppCard>
+      ) : (
+        <AppCard variant="patientTint" radius="xl" padding="lg" style={styles.intakeCard}>
+          <Text style={styles.intakeEyebrow}>Patient wig request</Text>
+          <Text style={styles.intakeTitle}>Request a wig</Text>
+          <Text style={styles.intakeBody}>
+            Start a guided request. You will choose preferences, add a front photo, and review an AI reference before submitting.
           </Text>
           <AppButton
-            title={referenceImage?.uri ? 'Reopen Capture Flow' : 'Open Capture Flow'}
-            onPress={openCaptureFlow}
-            leading={<AppIcon name="camera" state="inverse" />}
+            title="Request Wig"
+            onPress={openRequestFlow}
+            leading={<AppIcon name="requests" state="inverse" />}
           />
         </AppCard>
-      ) : null}
+      )}
 
-      {!hasSubmittedRequest && shouldShowRecommendation ? (
-        <>
-          <WigPreviewCard
-            frontPhotoUri={referenceImage?.uri}
-            generatedImageUri={generatedImageUri}
-            title={recommendationTitle}
-            family={recommendationFamily}
-            summary={recommendationSummary}
-            preferredColor={preferredColor}
-            preferredLength={preferredLength}
-            onPrimaryAction={handleSaveRequest}
-            primaryActionLabel="Submit Wig Request"
-            primaryActionLoading={isSavingRequest}
-            onSecondaryAction={openCaptureFlow}
-            secondaryActionLabel="Retake Front Photo"
-          />
-          {recommendationOptions.length ? (
-            <WigStyleOptionsSection
-              options={recommendationOptions}
-              frontPhotoUri={referenceImage?.uri}
-              selectedOptionId={selectedOptionId}
-              onSelectOption={setSelectedOptionId}
-              onCustomize={() => setIsGenerationModalOpen(true)}
-            />
-          ) : null}
-        </>
-      ) : null}
-
-      {shouldShowTracker ? (
+      {hasSubmittedRequest && isTimelineOpen ? (
         <ProcessStatusTracker
           role="patient"
           tracker={tracker}
@@ -859,34 +1171,45 @@ export function PatientWigRequestScreen() {
         />
       ) : null}
 
-      {hasSubmittedRequest && shouldShowRecommendation ? (
-        <>
-          <WigPreviewCard
-            frontPhotoUri={referenceImage?.uri}
-            generatedImageUri={generatedImageUri}
-            title={recommendationTitle}
-            family={recommendationFamily}
-            summary={recommendationSummary}
-            preferredColor={preferredColor}
-            preferredLength={preferredLength}
-            requestDate={formatRequestDate(latestWigRequest?.request_date)}
-            onPrimaryAction={regenerateSavedRecommendation}
-            primaryActionLabel="Refresh Wig Preview"
-            primaryActionLoading={isGeneratingPreview}
-            onSecondaryAction={openCaptureFlow}
-            secondaryActionLabel="Open Camera Flow"
-          />
-          {recommendationOptions.length ? (
-            <WigStyleOptionsSection
-              options={recommendationOptions}
-              frontPhotoUri={referenceImage?.uri}
-              selectedOptionId={selectedOptionId}
-              onSelectOption={setSelectedOptionId}
-              onCustomize={() => setIsGenerationModalOpen(true)}
-            />
-          ) : null}
-        </>
-      ) : null}
+      <RequestFlowModal
+        visible={isFlowOpen}
+        step={flowStep}
+        control={control}
+        errors={errors}
+        patientName={patientFullName}
+        patientCode={patientCode}
+        hospitalName={hospitalName}
+        medicalCondition={medicalCondition}
+        referenceImage={referenceImage}
+        hasOtherPreference={hasOtherPreference}
+        recommendationOptions={recommendationOptions}
+        selectedOptionId={selectedOptionId}
+        onSelectOption={setSelectedOptionId}
+        recommendationTitle={recommendationTitle}
+        recommendationFamily={recommendationFamily}
+        recommendationSummary={recommendationSummary}
+        preferredColor={preferredColor}
+        preferredLength={preferredLength}
+        generatedImageUri={generatedImageUri}
+        hasGeneratedPreview={hasGeneratedPreview}
+        isPickingReference={isPickingReference}
+        isGeneratingPreview={isGeneratingPreview}
+        isSavingRequest={isSavingRequest}
+        onClose={closeRequestFlow}
+        onBackToPatient={() => setFlowStep('patient')}
+        onContinueToDetails={handleContinueToDetails}
+        onUploadPhoto={pickReferenceImage}
+        onOpenCamera={handleStartPreview}
+        onGeneratePreview={handleGeneratePreviewFromModal}
+        onSkipPreview={handleSkipPreview}
+        onRegenerate={handleGeneratePreviewFromModal}
+        onDownloadSelected={handleDownloadSelectedImage}
+        onSubmitRequest={handleSaveRequest}
+        onViewTimeline={() => {
+          setIsFlowOpen(false);
+          setIsTimelineOpen(true);
+        }}
+      />
 
       <CaptureModal
         visible={isCaptureOpen}
@@ -896,32 +1219,13 @@ export function PatientWigRequestScreen() {
         onCameraReady={() => {}}
         isCapturingPhoto={isCapturingPhoto}
         isPickingReference={isPickingReference}
-        isGeneratingPreview={isGeneratingPreview}
-        onOpenDetails={() => setIsDetailsOpen(true)}
         onClose={closeCaptureFlow}
         onUpload={pickReferenceImage}
         onCapture={handleCapturePhoto}
-        onGeneratePreview={handleGeneratePreviewFromModal}
+        onGeneratePreview={handleUsePhotoFromCapture}
         onRequestPermission={requestCameraPermission}
       />
 
-      <RequestDetailsSheet
-        visible={isDetailsOpen}
-        onClose={() => setIsDetailsOpen(false)}
-        control={control}
-        errors={errors}
-      />
-
-      <WigGenerationModal
-        visible={isGenerationModalOpen}
-        isGeneratingPreview={isGeneratingPreview}
-        frontPhotoUri={referenceImage?.uri}
-        generatedImageUri={generatedImageUri}
-        title={recommendationTitle}
-        family={recommendationFamily}
-        summary={recommendationSummary}
-        onClose={() => setIsGenerationModalOpen(false)}
-      />
     </DashboardLayout>
   );
 }
@@ -948,6 +1252,105 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.semantic.bodySm,
     lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
     color: theme.colors.textSecondary,
+  },
+  previewGrid: {
+    gap: theme.spacing.sm,
+  },
+  previewRow: {
+    paddingVertical: theme.spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.colors.borderMuted,
+  },
+  previewLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textSecondary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  previewValue: {
+    marginTop: 2,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    color: theme.colors.textPrimary,
+  },
+  actionRow: {
+    flexDirection: 'row',
+    gap: theme.spacing.sm,
+  },
+  actionButton: {
+    flex: 1,
+  },
+  choiceGroup: {
+    gap: theme.spacing.xs,
+  },
+  choiceTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textPrimary,
+  },
+  choiceWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.spacing.xs,
+  },
+  choiceChip: {
+    borderRadius: theme.radius.pill,
+    borderWidth: 1,
+    borderColor: theme.colors.borderMuted,
+    backgroundColor: theme.colors.backgroundPrimary,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+  },
+  choiceChipSelected: {
+    borderColor: theme.colors.brandPrimary,
+    backgroundColor: theme.colors.surfaceSoft,
+  },
+  choiceChipPressed: {
+    opacity: 0.82,
+  },
+  choiceText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    color: theme.colors.textSecondary,
+  },
+  choiceTextSelected: {
+    color: theme.colors.brandPrimary,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  agreementRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+    paddingVertical: theme.spacing.sm,
+  },
+  checkBox: {
+    width: 26,
+    height: 26,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: theme.colors.borderStrong,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.backgroundPrimary,
+  },
+  checkBoxActive: {
+    backgroundColor: theme.colors.brandPrimary,
+    borderColor: theme.colors.brandPrimary,
+  },
+  agreementText: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textPrimary,
+  },
+  fieldError: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    color: theme.colors.textError,
   },
   optionsSectionCard: {
     backgroundColor: theme.colors.backgroundPrimary,
@@ -1188,6 +1591,70 @@ const styles = StyleSheet.create({
     width: '100%',
     alignSelf: 'center',
     maxWidth: theme.layout.contentMaxWidth,
+  },
+  flowKeyboardWrap: {
+    flex: 1,
+  },
+  flowCard: {
+    width: '100%',
+    alignSelf: 'center',
+    maxWidth: theme.layout.contentMaxWidth,
+    maxHeight: '86%',
+  },
+  flowScroll: {
+    flexGrow: 0,
+  },
+  flowScrollContent: {
+    gap: theme.spacing.md,
+  },
+  flowSection: {
+    gap: theme.spacing.md,
+  },
+  flowTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.titleSm,
+    color: theme.colors.textPrimary,
+  },
+  flowBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textSecondary,
+  },
+  photoPreviewBox: {
+    minHeight: 220,
+    borderRadius: theme.radius.xl,
+    overflow: 'hidden',
+    backgroundColor: theme.colors.surfaceSoft,
+    borderWidth: 1,
+    borderColor: theme.colors.borderMuted,
+  },
+  photoPreviewImage: {
+    width: '100%',
+    height: 260,
+  },
+  photoPlaceholder: {
+    minHeight: 220,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.lg,
+  },
+  summaryNoteCard: {
+    gap: theme.spacing.xs,
+    backgroundColor: theme.colors.backgroundPrimary,
+    borderColor: theme.colors.borderMuted,
+  },
+  summaryNoteTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textPrimary,
+  },
+  waitingState: {
+    alignItems: 'center',
+    gap: theme.spacing.md,
+    paddingVertical: theme.spacing.xl,
   },
   generationModalCard: {
     width: '100%',

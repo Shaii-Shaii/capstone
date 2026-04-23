@@ -783,6 +783,11 @@ export const createUserDetails = async ({ systemUserId, details = {} }) => {
     return { data: null, error: new Error('System user ID is required.') };
   }
 
+  const existing = await fetchUserDetailsBySystemUserId(systemUserId);
+  if (existing.data?.user_details_id || existing.error) {
+    return existing;
+  }
+
   const authContext = await ensureMutationAuthContext({
     table: 'user_details',
     operation: 'insert',

@@ -72,7 +72,11 @@ const groupNotificationsByDate = (notifications = []) => {
   return sections;
 };
 
-function DonorNotificationsHeader({ unreadCount, onBackPress, onRefreshPress, isRefreshing }) {
+function DonorNotificationsHeader({ role, unreadCount, onBackPress, onRefreshPress, isRefreshing }) {
+  const subtitle = unreadCount
+    ? `${unreadCount} unread`
+    : (role === 'patient' ? 'Recent patient updates' : 'Recent donor updates');
+
   return (
     <View style={styles.topBar}>
       <Pressable onPress={onBackPress} style={styles.topBarButton}>
@@ -81,9 +85,7 @@ function DonorNotificationsHeader({ unreadCount, onBackPress, onRefreshPress, is
 
       <View style={styles.topBarCopy}>
         <Text style={styles.topBarTitle}>Notifications</Text>
-        <Text style={styles.topBarSubtitle}>
-          {unreadCount ? `${unreadCount} unread` : 'Recent donor updates'}
-        </Text>
+        <Text style={styles.topBarSubtitle}>{subtitle}</Text>
       </View>
 
       <Pressable onPress={onRefreshPress} style={styles.topBarButton}>
@@ -93,19 +95,24 @@ function DonorNotificationsHeader({ unreadCount, onBackPress, onRefreshPress, is
   );
 }
 
-function DonorNotificationsEmptyState() {
+function DonorNotificationsEmptyState({ role }) {
   return (
     <View style={styles.emptyState}>
       <View style={styles.emptyIconWrap}>
         <AppIcon name="notifications" size="lg" state="muted" />
       </View>
       <Text style={styles.emptyTitle}>No notifications yet</Text>
-      <Text style={styles.emptyBody}>Updates about your donations and hair checks will appear here.</Text>
+      <Text style={styles.emptyBody}>
+        {role === 'patient'
+          ? 'Updates about wig requests and hospital review will appear here.'
+          : 'Updates about your donations and hair checks will appear here.'}
+      </Text>
     </View>
   );
 }
 
 function DonorNotificationsContent({
+  role,
   notifications,
   unreadCount,
   isLoadingNotifications,
@@ -186,7 +193,7 @@ function DonorNotificationsContent({
         </View>
       ) : (
         <AppCard variant="default" radius="xl" padding="lg">
-          <DonorNotificationsEmptyState />
+          <DonorNotificationsEmptyState role={role} />
         </AppCard>
       )}
     </>
@@ -236,13 +243,29 @@ export function NotificationCenterScreen({ role }) {
   if (role !== 'donor') {
     return (
       <DashboardLayout
+        showSupportChat={false}
         navItems={navItems}
         activeNavKey="notifications"
         navVariant={role}
         onNavPress={handleNavPress}
+        screenVariant="default"
+        header={(
+          <DonorNotificationsHeader
+            role={role}
+            unreadCount={unreadCount}
+            onBackPress={() => router.back()}
+            onRefreshPress={() => refreshNotifications({ silent: true, force: true })}
+            isRefreshing={isRefreshingNotifications}
+          />
+        )}
       >
-        <AppCard variant="default" radius="xl" padding="lg">
+        <ScrollView
+          style={styles.screenScroll}
+          contentContainerStyle={styles.screenContent}
+          showsVerticalScrollIndicator={false}
+        >
           <DonorNotificationsContent
+            role={role}
             notifications={notifications}
             unreadCount={unreadCount}
             isLoadingNotifications={isLoadingNotifications}
@@ -252,7 +275,7 @@ export function NotificationCenterScreen({ role }) {
             onMarkAllRead={readAllNotifications}
             onNotificationPress={handleNotificationPress}
           />
-        </AppCard>
+        </ScrollView>
       </DashboardLayout>
     );
   }
@@ -267,6 +290,7 @@ export function NotificationCenterScreen({ role }) {
       screenVariant="default"
       header={(
         <DonorNotificationsHeader
+          role={role}
           unreadCount={unreadCount}
           onBackPress={() => router.back()}
           onRefreshPress={() => refreshNotifications({ silent: true, force: true })}
@@ -280,6 +304,7 @@ export function NotificationCenterScreen({ role }) {
         showsVerticalScrollIndicator={false}
       >
         <DonorNotificationsContent
+          role={role}
           notifications={notifications}
           unreadCount={unreadCount}
           isLoadingNotifications={isLoadingNotifications}
@@ -334,14 +359,10 @@ const styles = StyleSheet.create({
     gap: theme.spacing.md,
   },
   actionRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: theme.spacing.md,
+    gap: theme.spacing.sm,
     marginBottom: theme.spacing.md,
   },
   sectionLead: {
-    flex: 1,
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.bodySm,
     color: theme.colors.textSecondary,
@@ -349,7 +370,7 @@ const styles = StyleSheet.create({
   actionButtons: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    justifyContent: 'flex-end',
+    justifyContent: 'flex-start',
     gap: theme.spacing.sm,
   },
   bannerGap: {

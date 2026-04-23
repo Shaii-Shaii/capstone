@@ -3,6 +3,8 @@ import { StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { DashboardLayout } from './DashboardLayout';
 import { DashboardHeader } from '../ui/DashboardHeader';
+import { AppCard } from '../ui/AppCard';
+import { ChatbotSupportPanel } from '../chatbot/ChatbotSupportPanel';
 import { useNotifications } from '../../hooks/useNotifications';
 import { theme } from '../../design-system/theme';
 import { patientDashboardNavItems } from '../../constants/dashboard';
@@ -28,6 +30,7 @@ export function PatientSupportChatScreen() {
       navItems={patientDashboardNavItems}
       activeNavKey="support"
       navVariant="patient"
+      showSupportChat={false}
       onNavPress={handleNavPress}
       header={(
         <DashboardHeader
@@ -38,7 +41,7 @@ export function PatientSupportChatScreen() {
           avatarUri={avatarUri}
           variant="patient"
           minimal={true}
-          showAvatar={false}
+          showAvatar={true}
           utilityActions={[
             {
               key: 'notifications',
@@ -50,16 +53,28 @@ export function PatientSupportChatScreen() {
         />
       )}
     >
-      <View style={styles.helpWrap}>
-        <Text style={styles.helpText}>Use the chat bubble for help.</Text>
-      </View>
+      <AppCard variant="patientTint" radius="xl" padding="md" style={styles.chatCard}>
+        <View style={styles.helpWrap}>
+          <Text style={styles.helpTitle}>Patient adviser</Text>
+          <Text style={styles.helpText}>Ask about wig requests, status updates, and account help.</Text>
+        </View>
+        <ChatbotSupportPanel role="patient" userId={user?.id} variant="screen" />
+      </AppCard>
     </DashboardLayout>
   );
 }
 
 const styles = StyleSheet.create({
+  chatCard: {
+    gap: theme.spacing.md,
+  },
   helpWrap: {
-    paddingVertical: theme.spacing.xs,
+    gap: theme.spacing.xs,
+  },
+  helpTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.titleSm,
+    color: theme.colors.textPrimary,
   },
   helpText: {
     fontFamily: theme.typography.fontFamily,

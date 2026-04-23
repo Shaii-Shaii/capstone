@@ -90,12 +90,16 @@ export const generatePatientWigPreview = async ({ preferences, referenceImage })
     const payload = {
       preferred_color: preferences?.preferredColor?.trim() || '',
       preferred_length: preferences?.preferredLength?.trim() || '',
-      notes: preferences?.notes?.trim() || '',
+      hair_texture: preferences?.hairTexture?.trim() || '',
+      cap_size: preferences?.capSize?.trim() || '',
+      style_preference: preferences?.stylePreference?.trim() || '',
+      notes: preferences?.specialNotes?.trim() || '',
       reference_image: normalizedReferenceImage,
     };
 
     logAppEvent('wigGeneration.invoke', 'Invoking wig preview edge function.', {
       functionName: wigGenerationFunctionName,
+      provider: 'gemini',
       hasReferenceImageDataUrl: Boolean(normalizedReferenceImage.dataUrl),
       hasReferenceImageUrl: Boolean(normalizedReferenceImage.imageUrl),
       payloadKeys: Object.keys(payload),
@@ -126,6 +130,7 @@ export const generatePatientWigPreview = async ({ preferences, referenceImage })
       functionName: wigGenerationFunctionName,
       responseKeys: data ? Object.keys(data) : [],
       previewKeys: previewPayload ? Object.keys(previewPayload) : [],
+      provider: data?.provider || 'gemini',
       hasGeneratedImage: Boolean(preview.generated_image_data_url),
       optionCount: preview.options.length,
     });
@@ -162,6 +167,8 @@ export const generatePatientWigPreview = async ({ preferences, referenceImage })
       ? 'Please upload a clear front photo first.'
       : technicalMessage.includes('invalid jwt')
         ? 'Your session has expired. Please sign in again, then retry the wig preview.'
+        : technicalMessage.includes('not configured') || technicalMessage.includes('google ai api key')
+          ? 'Wig preview is not configured on the server. Please try again later.'
         : technicalMessage.includes('requested function was not found') || technicalMessage.includes('not_found')
           ? 'Wig preview is still being connected on the server. Please try again in a moment.'
           : technicalMessage.includes('incomplete')

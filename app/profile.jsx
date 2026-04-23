@@ -157,8 +157,31 @@ export default function ProfileScreen() {
       })
       .filter((field) => field.value)
   ), [profile]);
-  const overviewRows = useMemo(() => (
-    [
+  const overviewRows = useMemo(() => {
+    if (isPatient) {
+      return [
+        fullName ? { key: 'full_name', label: 'Full name', value: fullName } : null,
+        { key: 'email', label: 'Email', value: user?.email || 'Not available' },
+        { key: 'role', label: 'Account type', value: roleLabel },
+        hospitalProfile?.hospital_name
+          ? { key: 'hospital_name', label: 'Hospital', value: hospitalProfile.hospital_name }
+          : null,
+        patientProfile?.patient_code
+          ? { key: 'patient_code', label: 'Patient code', value: patientProfile.patient_code }
+          : null,
+        patientProfile?.medical_condition
+          ? { key: 'medical_condition', label: 'Medical condition', value: patientProfile.medical_condition }
+          : null,
+        patientProfile?.guardian
+          ? { key: 'guardian', label: 'Guardian', value: patientProfile.guardian }
+          : null,
+        patientProfile?.guardian_contact_number
+          ? { key: 'guardian_contact_number', label: 'Guardian contact', value: patientProfile.guardian_contact_number }
+          : null,
+      ].filter(Boolean);
+    }
+
+    return [
       fullName ? { key: 'full_name', label: 'Full name', value: fullName } : null,
       { key: 'email', label: 'Email', value: user?.email || 'Not available' },
       { key: 'role', label: 'Account type', value: roleLabel },
@@ -210,8 +233,8 @@ export default function ProfileScreen() {
       staffProfile?.assigned_date
         ? { key: 'staff_assigned_date', label: 'Assigned date', value: staffProfile.assigned_date }
         : null,
-    ].filter(Boolean)
-  ), [
+    ].filter(Boolean);
+  }, [
     displayRows,
     fullName,
     hospitalProfile?.barangay,
@@ -221,6 +244,7 @@ export default function ProfileScreen() {
     hospitalProfile?.hospital_name,
     hospitalProfile?.region,
     hospitalProfile?.street,
+    isPatient,
     patientProfile?.hospital_id,
     patientProfile?.date_of_diagnosis,
     patientProfile?.guardian,
@@ -291,10 +315,34 @@ export default function ProfileScreen() {
       },
     ]
   ), [donorProfileReady]);
+  const patientActionItems = useMemo(() => (
+    [
+      {
+        key: 'details',
+        icon: 'profile',
+        title: 'Account Details',
+        description: 'View patient and hospital details.',
+      },
+      {
+        key: 'edit',
+        icon: 'editProfile',
+        title: 'Edit Profile',
+        description: 'Update your personal details.',
+      },
+      {
+        key: 'password',
+        icon: 'changePassword',
+        title: 'Change Password',
+        description: 'Set a new password.',
+      },
+    ]
+  ), []);
   const actionItems = useMemo(() => (
     role === 'donor'
       ? donorActionItems
-      : [
+      : isPatient
+        ? patientActionItems
+        : [
           ...(!isPatient && hasOrganization ? [{
             key: 'organization',
             icon: 'support',
@@ -309,7 +357,7 @@ export default function ProfileScreen() {
           }] : []),
           ...profileActionConfig,
         ]
-  ), [donorActionItems, hasOrganization, isPatient, role, staffProfile?.hospital_id]);
+  ), [donorActionItems, hasOrganization, isPatient, patientActionItems, role, staffProfile?.hospital_id]);
   const passwordStrengthMessage = getPasswordStrengthMessage(watchedNewPassword);
   const passwordStrengthVariant = watchedNewPassword
     ? passwordStrengthMessage === 'Strong password'
@@ -423,6 +471,10 @@ export default function ProfileScreen() {
     }
     if (item.key === 'completeSetup') {
       setMode('edit');
+      return;
+    }
+    if (item.key === 'details') {
+      setMode('details');
       return;
     }
     setMode(item.key === 'edit' ? 'edit' : 'password');
@@ -566,9 +618,11 @@ export default function ProfileScreen() {
             title="Profile"
             subtitle=""
             summary=""
+            avatarInitials={avatarInitials}
+            avatarUri={avatarUri}
             variant={role === 'donor' ? 'donor' : 'patient'}
             minimal={role === 'patient'}
-            showAvatar={false}
+            showAvatar={role === 'patient'}
             utilityActions={role === 'patient' ? [
               {
                 key: 'notifications',
@@ -582,40 +636,54 @@ export default function ProfileScreen() {
       >
         {role === 'donor' ? renderDonorProfileContent() : (
           <>
-            <AppCard variant="patientTint" radius="xl" padding="lg">
-              <DashboardSectionHeader
-                title="Overview"
-                description=""
-                style={styles.sectionHeader}
-              />
+            <AppCard variant="elevated" radius="xl" padding="lg" style={styles.profileHeroCard}>
+              <View style={styles.profileHeroTopRow}>
+                <View style={styles.profileHeroIdentity}>
+                  <View style={styles.profileHeroAvatar}>
+                    {avatarUri ? (
+                      <Image source={{ uri: avatarUri }} style={styles.profileHeroAvatarImage} resizeMode="cover" />
+                    ) : (
+                      <Text style={styles.profileHeroAvatarText}>{(avatarInitials || 'PT').toUpperCase().slice(0, 2)}</Text>
+                    )}
+                  </View>
 
-              <View style={styles.overviewButtonRow}>
+                  <View style={styles.profileHeroCopy}>
+                    <Text numberOfLines={2} style={styles.profileHeroName}>{fullName || 'Patient account'}</Text>
+                    <Text numberOfLines={1} style={styles.profileHeroEmail}>{user?.email || 'No email linked'}</Text>
+                    <View style={styles.profileHeroBadgeRow}>
+                      <View style={styles.profileHeroBadge}>
+                        <Text style={styles.profileHeroBadgeText}>{roleLabel}</Text>
+                      </View>
+                      {patientProfile?.patient_code ? (
+                        <View style={[styles.profileHeroBadge, styles.profileHeroBadgeMuted]}>
+                          <Text style={styles.profileHeroBadgeText}>{patientProfile.patient_code}</Text>
+                        </View>
+                      ) : null}
+                    </View>
+                  </View>
+                </View>
+              </View>
+
+              <View style={styles.profileHeroFooter}>
+                <Text numberOfLines={1} style={styles.profileHeroJoined}>
+                  {hospitalProfile?.hospital_name || 'Hospital link pending'}
+                </Text>
                 <AppButton
                   title="Change Photo"
                   variant="outline"
-                  size="md"
+                  size="sm"
                   fullWidth={false}
                   loading={isUploadingAvatar}
                   leading={<AppIcon name="camera" state="muted" />}
                   onPress={handlePhotoPress}
-                  style={styles.overviewButton}
                 />
-              </View>
-
-              <View style={styles.overviewList}>
-                {overviewRows.map((row) => (
-                  <View key={row.key} style={styles.overviewRow}>
-                    <Text style={styles.overviewLabel}>{row.label}</Text>
-                    <Text style={styles.overviewValue}>{row.value}</Text>
-                  </View>
-                ))}
               </View>
             </AppCard>
 
             <AppCard variant="elevated" radius="xl" padding="lg">
               <DashboardSectionHeader
                 title="Actions"
-                description=""
+                description="Manage your account."
                 style={styles.sectionHeader}
               />
 
@@ -643,6 +711,49 @@ export default function ProfileScreen() {
                 style={[styles.modalCard, { maxHeight: modalMaxHeight }]}
                 contentStyle={styles.modalCardContent}
               >
+                {mode === 'details' ? (
+                  <>
+                    <View style={styles.modalHeaderBlock}>
+                      <DashboardSectionHeader
+                        title="Account Details"
+                        description="Patient and hospital information."
+                        style={styles.sectionHeaderCompact}
+                      />
+                    </View>
+
+                    <ScrollView
+                      style={[styles.modalBodyScroll, { maxHeight: modalMaxHeight - 150 }]}
+                      contentContainerStyle={styles.modalBodyContent}
+                      showsVerticalScrollIndicator={true}
+                    >
+                      <View style={styles.overviewGrid}>
+                        {overviewRows.map((row, index) => (
+                          <View
+                            key={row.key}
+                            style={[
+                              styles.overviewTile,
+                              row.key === 'email' || row.key === 'hospital_name' || index === 0 ? styles.overviewTileWide : null,
+                            ]}
+                          >
+                            <Text style={styles.overviewTileLabel}>{row.label}</Text>
+                            <Text numberOfLines={row.key === 'email' ? 1 : 2} style={styles.overviewTileValue}>{row.value}</Text>
+                          </View>
+                        ))}
+                      </View>
+
+                      <View style={styles.formActions}>
+                        <AppButton
+                          title="Edit Profile"
+                          size="lg"
+                          onPress={() => setMode('edit')}
+                          leading={<AppIcon name="editProfile" state="inverse" />}
+                        />
+                        <AppTextLink title="Close" variant="muted" onPress={handleModalClose} />
+                      </View>
+                    </ScrollView>
+                  </>
+                ) : null}
+
                 {mode === 'edit' ? (
                   <>
                     <View style={styles.modalHeaderBlock}>
@@ -673,7 +784,7 @@ export default function ProfileScreen() {
                     </View>
 
                     <ScrollView
-                      style={styles.modalBodyScroll}
+                      style={[styles.modalBodyScroll, { maxHeight: modalMaxHeight - 230 }]}
                       contentContainerStyle={styles.modalBodyContent}
                       showsVerticalScrollIndicator={true}
                       keyboardShouldPersistTaps="handled"
@@ -819,7 +930,7 @@ export default function ProfileScreen() {
                     </View>
 
                     <ScrollView
-                      style={styles.modalBodyScroll}
+                      style={[styles.modalBodyScroll, { maxHeight: modalMaxHeight - 130 }]}
                       contentContainerStyle={styles.modalBodyContent}
                       showsVerticalScrollIndicator={true}
                       keyboardShouldPersistTaps="handled"
@@ -1228,14 +1339,12 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
   modalCardContent: {
-    flex: 1,
     minHeight: 0,
   },
   modalHeaderBlock: {
     flexShrink: 0,
   },
   modalBodyScroll: {
-    flex: 1,
     minHeight: 0,
   },
   modalBodyContent: {

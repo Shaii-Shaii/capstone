@@ -68,6 +68,7 @@ export const DashboardLayout = ({
     : insets.bottom + (isCompactScreen ? theme.spacing.lg : theme.spacing.xl);
   const chatLauncherRight = theme.spacing.md;
   const isCenteredChatModal = chatModalPresentation === 'centered';
+  const resolvedScreenVariant = navVariant === 'patient' ? 'default' : screenVariant;
   const chatBubblePosition = React.useRef(new RNAnimated.ValueXY({ x: 0, y: 0 })).current;
   const chatBubbleResponder = React.useRef(
     PanResponder.create({
@@ -92,7 +93,7 @@ export const DashboardLayout = ({
 
   return (
     <ScreenContainer
-      variant={screenVariant}
+      variant={resolvedScreenVariant}
       scrollable={false}
       safeArea
       contentStyle={[

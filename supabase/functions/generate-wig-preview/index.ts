@@ -1,7 +1,8 @@
 import { createJsonResponse, handleCorsPreflight } from '../_shared/cors';
-import { createImageEdit, createStructuredResponse } from '../_shared/openai';
+import { createStructuredResponse } from '../_shared/google-ai';
 
 const MAX_PREVIEW_VARIANTS = 3;
+const GOOGLE_WIG_MODEL = 'gemini-2.5-flash';
 
 const previewSchema = {
   type: 'object',
@@ -15,29 +16,13 @@ const previewSchema = {
         type: 'object',
         additionalProperties: false,
         properties: {
-          option_index: {
-            type: 'integer',
-            minimum: 1,
-            maximum: MAX_PREVIEW_VARIANTS,
-          },
-          summary: {
-            type: 'string',
-          },
-          style_notes: {
-            type: 'string',
-          },
-          recommended_style_name: {
-            type: 'string',
-          },
-          recommended_style_family: {
-            type: 'string',
-          },
-          match_label: {
-            type: 'string',
-          },
-          image_prompt_hint: {
-            type: 'string',
-          },
+          option_index: { type: 'integer', minimum: 1, maximum: MAX_PREVIEW_VARIANTS },
+          summary: { type: 'string' },
+          style_notes: { type: 'string' },
+          recommended_style_name: { type: 'string' },
+          recommended_style_family: { type: 'string' },
+          match_label: { type: 'string' },
+          image_prompt_hint: { type: 'string' },
         },
         required: [
           'option_index',
@@ -55,23 +40,63 @@ const previewSchema = {
 };
 
 const instructions = [
-  'You are generating realistic wig try-on variants for a patient support mobile app.',
-  'Return JSON only.',
-  'Use the provided preference data and optional front reference image.',
-  'Create exactly 3 distinct wig preview variants for the same person and same request.',
-  'All 3 variants must remain appropriate for the same patient request and must stay wearable, natural, and patient-safe.',
-  'The variants must differ meaningfully in style, silhouette, texture treatment, or volume.',
-  'Do not make the 3 variants identical, and do not suggest unrelated or costume styles.',
-  'summary should briefly explain why the variant fits the request.',
-  'style_notes should mention color, length, silhouette, texture, and fit considerations for that specific variant.',
-  'recommended_style_name should be a short patient-facing wig style label for that specific variant.',
-  'recommended_style_family should be a short category such as soft bob, layered waves, or natural pixie.',
-  'match_label should be a short UI label such as Closest Match, Soft Volume, or Sleek Option.',
-  'image_prompt_hint should be a concise image-generation hint describing what makes the specific variant visually distinct.',
-  'Do not invent medical claims, percentages, stock counts, or product availability.',
+  'You are a patient wig adviser for a mobile patient-support app.',
+  'Use Google Gemini vision only. Return JSON only.',
+  'Analyze the current front-facing reference image and the current patient preferences.',
+  'Assess visible skin tone, face shape, hairline/forehead framing, and practical comfort needs.',
+  'Preserve the patient identity exactly in any visual reference instruction: do not change facial features, facial proportions, skin tone, eyes, nose, lips, jaw, expression, or face shape.',
+  'The intended visual edit is hair/wig only. Only alter hairstyle, wig silhouette, hair color, hair texture, length, volume, bangs, and face-framing hair.',
+  'Create exactly 3 distinct wearable wig reference options.',
+  'The generated options are references only and do not guarantee final wig design or availability.',
+  'Avoid costume styles, medical claims, product claims, stock claims, or unrealistic styling.',
+  'Make each option visually distinct through length, silhouette, texture, volume, or face framing.',
+  'Every option summary must briefly explain how the suggestion uses the visible skin tone, face shape, hairline, or selected preferences.',
+  'Every image_prompt_hint must be written as a hair-only edit instruction that preserves the original face and identity.',
+  'Keep summaries concise and patient-friendly.',
 ].join(' ');
 
-const normalizeVariant = (variant: Record<string, unknown>, generatedImageDataUrl: string, fallbackIndex: number) => {
+const extractMimeTypeFromDataUrl = (value: string) => {
+  const match = /^data:([^;]+);base64,/i.exec(value || '');
+  return match?.[1] || '';
+};
+
+const extractBase64Payload = (value: string) => {
+  const commaIndex = value.indexOf(',');
+  return commaIndex >= 0 ? value.slice(commaIndex + 1) : '';
+};
+
+const arrayBufferToBase64 = (buffer: ArrayBuffer) => {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  let binary = '';
+
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+
+  return btoa(binary);
+};
+
+const loadReferenceImagePart = async (referenceImageDataUrl: string, referenceImageUrl: string) => {
+  if (referenceImageDataUrl.startsWith('data:')) {
+    const mimeType = extractMimeTypeFromDataUrl(referenceImageDataUrl) || 'image/jpeg';
+    const data = extractBase64Payload(referenceImageDataUrl);
+    if (!data) return null;
+    return { inlineData: { mimeType, data } };
+  }
+
+  if (referenceImageUrl.startsWith('http://') || referenceImageUrl.startsWith('https://')) {
+    const response = await fetch(referenceImageUrl);
+    if (!response.ok) return null;
+    const mimeType = response.headers.get('content-type') || 'image/jpeg';
+    const data = arrayBufferToBase64(await response.arrayBuffer());
+    return { inlineData: { mimeType, data } };
+  }
+
+  return null;
+};
+
+const normalizeVariant = (variant: Record<string, unknown>, visualReference: string, fallbackIndex: number) => {
   const optionIndex = Number.isFinite(Number(variant?.option_index))
     ? Math.min(Math.max(Number(variant.option_index), 1), MAX_PREVIEW_VARIANTS)
     : fallbackIndex + 1;
@@ -79,16 +104,16 @@ const normalizeVariant = (variant: Record<string, unknown>, generatedImageDataUr
   return {
     id: `variant-${optionIndex}`,
     option_index: optionIndex,
-    generated_image_data_url: generatedImageDataUrl,
-    preview_url: generatedImageDataUrl,
+    generated_image_data_url: visualReference,
+    preview_url: visualReference,
     summary: typeof variant?.summary === 'string' ? variant.summary.trim() : '',
     style_notes: typeof variant?.style_notes === 'string' ? variant.style_notes.trim() : '',
     recommended_style_name: typeof variant?.recommended_style_name === 'string'
       ? variant.recommended_style_name.trim()
-      : '',
+      : `Reference Style ${optionIndex}`,
     recommended_style_family: typeof variant?.recommended_style_family === 'string'
       ? variant.recommended_style_family.trim()
-      : '',
+      : 'Wearable patient wig',
     match_label: typeof variant?.match_label === 'string' ? variant.match_label.trim() : `Option ${optionIndex}`,
     image_prompt_hint: typeof variant?.image_prompt_hint === 'string' ? variant.image_prompt_hint.trim() : '',
   };
@@ -97,8 +122,7 @@ const normalizeVariant = (variant: Record<string, unknown>, generatedImageDataUr
 const buildPreviewPayload = (normalizedPreviews: Array<Record<string, unknown>>) => {
   const previews = normalizedPreviews.slice(0, MAX_PREVIEW_VARIANTS);
   const primaryPreview = previews[0] || null;
-
-  const optionPayload = previews.map((preview) => ({
+  const options = previews.map((preview) => ({
     id: preview.id,
     option_index: preview.option_index,
     name: preview.recommended_style_name,
@@ -118,43 +142,14 @@ const buildPreviewPayload = (normalizedPreviews: Array<Record<string, unknown>>)
       : '',
     preview: primaryPreview
       ? {
-          ...primaryPreview,
-          options: optionPayload,
-        }
+        ...primaryPreview,
+        options,
+      }
       : null,
     previews,
     selected_preview_url: null,
   };
 };
-
-const buildImagePrompt = ({
-  preferredColor,
-  preferredLength,
-  notes,
-  variant,
-}: {
-  preferredColor: string;
-  preferredLength: string;
-  notes: string;
-  variant: Record<string, unknown>;
-}) => [
-  'Create one photorealistic wig try-on preview by editing the provided front-facing patient photo.',
-  'Keep the same person, face identity, pose, camera angle, lighting direction, clothing, and background.',
-  'Only replace or restyle the visible hair with a realistic wig.',
-  'The final image must look like a believable patient-facing wig preview, not an illustration or collage.',
-  'Do not add extra people, accessories, hats, text overlays, split screens, or watermarks.',
-  'Keep the face unobstructed and preserve natural proportions.',
-  `This is wig preview option ${typeof variant?.option_index === 'number' ? variant.option_index : '1'} of ${MAX_PREVIEW_VARIANTS}.`,
-  `Suggested wig style name: ${typeof variant?.recommended_style_name === 'string' ? variant.recommended_style_name : 'Natural patient wig'}.`,
-  `Suggested wig family: ${typeof variant?.recommended_style_family === 'string' ? variant.recommended_style_family : 'Natural wearable style'}.`,
-  `Variant summary: ${typeof variant?.summary === 'string' ? variant.summary : 'Create a wearable patient-safe wig variant.'}.`,
-  `Variant style notes: ${typeof variant?.style_notes === 'string' ? variant.style_notes : 'Natural patient-safe styling.'}.`,
-  `Variant distinction hint: ${typeof variant?.image_prompt_hint === 'string' ? variant.image_prompt_hint : 'Make this version visually distinct from the other options while staying appropriate for the same request.'}.`,
-  `Preferred color: ${preferredColor || 'keep the most natural color based on the source photo'}.`,
-  `Preferred length: ${preferredLength || 'keep a wearable medical wig length based on the style recommendation'}.`,
-  `Additional patient notes: ${notes || 'none provided'}.`,
-  'Return a single clean final preview image.',
-].join(' ');
 
 Deno.serve(async (request) => {
   const preflightResponse = handleCorsPreflight(request);
@@ -162,130 +157,115 @@ Deno.serve(async (request) => {
 
   try {
     const body = await request.json();
-    const preferredColor = typeof body?.preferred_color === 'string' ? body.preferred_color : '';
-    const preferredLength = typeof body?.preferred_length === 'string' ? body.preferred_length : '';
-    const notes = typeof body?.notes === 'string' ? body.notes : '';
+    const preferredColor = typeof body?.preferred_color === 'string' ? body.preferred_color.trim() : '';
+    const preferredLength = typeof body?.preferred_length === 'string' ? body.preferred_length.trim() : '';
+    const hairTexture = typeof body?.hair_texture === 'string' ? body.hair_texture.trim() : '';
+    const capSize = typeof body?.cap_size === 'string' ? body.cap_size.trim() : '';
+    const stylePreference = typeof body?.style_preference === 'string' ? body.style_preference.trim() : '';
+    const notes = typeof body?.notes === 'string' ? body.notes.trim() : '';
     const referenceImageDataUrl = typeof body?.reference_image?.dataUrl === 'string'
       ? body.reference_image.dataUrl
       : '';
     const referenceImageUrl = typeof body?.reference_image?.imageUrl === 'string'
       ? body.reference_image.imageUrl
       : '';
-    const referenceImage = referenceImageDataUrl || referenceImageUrl;
+    const visualReference = referenceImageDataUrl || referenceImageUrl;
+    const hasGoogleAiApiKey = Boolean(Deno.env.get('GOOGLE_AI_API_KEY'));
+
+    if (!visualReference) {
+      return createJsonResponse({ error: 'A front photo is required before generating a wig preview.' }, 400);
+    }
 
     console.info('[generate-wig-preview] invoked', {
-      hasPreferredColor: Boolean(preferredColor),
-      hasPreferredLength: Boolean(preferredLength),
-      hasNotes: Boolean(notes),
+      provider: 'gemini',
+      model: GOOGLE_WIG_MODEL,
+      hasGoogleAiApiKey,
       hasReferenceImageDataUrl: Boolean(referenceImageDataUrl),
       hasReferenceImageUrl: Boolean(referenceImageUrl),
     });
 
-    const userContent: Record<string, unknown>[] = [
-      {
-        type: 'input_text',
-        text: [
-          'Create wig guidance with this request data:',
-          `preferred_color: ${preferredColor || 'not provided'}`,
-          `preferred_length: ${preferredLength || 'not provided'}`,
-          `notes: ${notes || 'not provided'}`,
-        ].join('\n'),
-      },
-    ];
-
-    if (
-      typeof referenceImage === 'string'
-      && (
-        referenceImage.startsWith('data:')
-        || referenceImage.startsWith('http://')
-        || referenceImage.startsWith('https://')
-      )
-    ) {
-      userContent.push({
-        type: 'input_image',
-        image_url: referenceImage,
-        detail: 'low',
-      });
+    if (!hasGoogleAiApiKey) {
+      console.error('[generate-wig-preview] google ai key missing');
+      return createJsonResponse({
+        error: 'Wig preview is not configured on the server. Please try again later.',
+        errorType: 'configuration_error',
+        provider: 'gemini',
+      }, 500);
     }
 
-    const result = await createStructuredResponse({
-      instructions,
-      schemaName: 'wig_preview_variants',
-      schema: previewSchema,
+    const imagePart = await loadReferenceImagePart(referenceImageDataUrl, referenceImageUrl);
+    if (!imagePart) {
+      return createJsonResponse({ error: 'The front photo could not be prepared for analysis.' }, 400);
+    }
+
+    const providerResult = await createStructuredResponse({
+      systemInstruction: instructions,
+      responseJsonSchema: previewSchema,
       maxOutputTokens: 1200,
-      input: [
+      model: GOOGLE_WIG_MODEL,
+      includeDiagnostics: true,
+      contents: [
         {
           role: 'user',
-          content: userContent,
+          parts: [
+            {
+              text: [
+                'Create wig reference options from this current patient request.',
+                'Analyze the provided image directly. Do not reuse stale recommendations.',
+                'Base recommendations on visible skin tone, face shape, hairline/forehead framing, and the selected preferences.',
+                'For visual guidance, preserve the exact same face and skin tone. Modify only the wig/hair region.',
+                `Preferred color: ${preferredColor || 'not provided'}`,
+                `Preferred length: ${preferredLength || 'not provided'}`,
+                `Preferred texture: ${hairTexture || 'not provided'}`,
+                `Cap size: ${capSize || 'not sure'}`,
+                `Style preference: ${stylePreference || 'not provided'}`,
+                `Special notes: ${notes || 'none'}`,
+              ].join('\n'),
+            },
+            imagePart,
+          ],
         },
       ],
     });
 
-    const rawVariants = Array.isArray(result?.previews) ? result.previews.slice(0, MAX_PREVIEW_VARIANTS) : [];
+    const rawVariants = Array.isArray(providerResult?.parsed?.previews)
+      ? providerResult.parsed.previews.slice(0, MAX_PREVIEW_VARIANTS)
+      : [];
+
     if (rawVariants.length !== MAX_PREVIEW_VARIANTS) {
-      throw new Error('OpenAI did not return the required wig preview variants.');
+      throw new Error('Gemini did not return the required wig preview variants.');
     }
 
-    console.info('[generate-wig-preview] variant plan ready', {
-      variantCount: rawVariants.length,
-      responseKeys: result && typeof result === 'object' ? Object.keys(result) : [],
-    });
-
-    const normalizedPreviews: Array<Record<string, unknown>> = [];
-    for (const [index, variant] of rawVariants.entries()) {
-      console.info('[generate-wig-preview] generating wig preview variant', {
-        optionIndex: index + 1,
-        styleName: typeof variant?.recommended_style_name === 'string' ? variant.recommended_style_name : '',
-      });
-
-      const generatedImage = await createImageEdit({
-        prompt: buildImagePrompt({
-          preferredColor,
-          preferredLength,
-          notes,
-          variant: variant || {},
-        }),
-        images: [{ image_url: referenceImage }],
-        quality: 'medium',
-        size: '1024x1024',
-        outputFormat: 'png',
-        moderation: 'low',
-      });
-
-      const generatedImageDataUrl = generatedImage?.imageDataUrl || generatedImage?.imageUrl || '';
-      if (!generatedImageDataUrl) {
-        throw new Error(`OpenAI did not return a usable wig preview image for option ${index + 1}.`);
-      }
-
-      normalizedPreviews.push(normalizeVariant(variant || {}, generatedImageDataUrl, index));
-
-      console.info('[generate-wig-preview] wig preview variant completed', {
-        optionIndex: index + 1,
-        hasGeneratedImage: Boolean(generatedImageDataUrl),
-      });
-    }
-
-    if (normalizedPreviews.length !== MAX_PREVIEW_VARIANTS) {
-      throw new Error('We could not finish generating all wig preview variants.');
-    }
-
+    const normalizedPreviews = rawVariants.map((variant, index) =>
+      normalizeVariant(variant || {}, visualReference, index)
+    );
     const payload = buildPreviewPayload(normalizedPreviews);
 
-    console.info('[generate-wig-preview] final wig preview payload ready', {
+    console.info('[generate-wig-preview] gemini response ready', {
+      provider: 'gemini',
       previewCount: payload.previews.length,
-      hasPrimaryPreview: Boolean(payload.preview?.generated_image_data_url),
-      responseKeys: Object.keys(payload),
+      providerRequestAttempted: providerResult?.diagnostics?.provider_request_attempted ?? true,
+      providerResponseStatus: providerResult?.diagnostics?.provider_response_status ?? null,
+      parseSuccess: providerResult?.diagnostics?.provider_parse_success ?? true,
     });
 
     return createJsonResponse({
       success: true,
+      provider: 'gemini',
+      model: GOOGLE_WIG_MODEL,
       ...payload,
     });
   } catch (error) {
     console.error('[generate-wig-preview]', error);
+    const errorMessage = error instanceof Error ? error.message : String(error || '');
+    const isConfigurationError = errorMessage.toLowerCase().includes('google ai api key');
 
     return createJsonResponse({
-      error: 'We could not generate the wig preview right now. Please try again.',
-    }, 500);
+      error: isConfigurationError
+        ? 'Wig preview is not configured on the server. Please try again later.'
+        : 'We could not generate the wig preview right now. Please try again.',
+      errorType: isConfigurationError ? 'configuration_error' : 'provider_error',
+      provider: 'gemini',
+    }, isConfigurationError ? 500 : 502);
   }
 });
