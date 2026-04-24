@@ -8,7 +8,6 @@ export const AuthHeader = ({
   subtitle,
   eyebrow,
   style,
-  backLabel,
   onBackPress,
   minimal = false,
   resolvedTheme = null,
@@ -28,30 +27,19 @@ export const AuthHeader = ({
   }, [resolvedTheme?.logoIcon]);
 
   return (
-    <View style={[styles.container, style]}>
+    <View style={[styles.container, minimal ? styles.containerMinimal : null, style]}>
       {onBackPress ? (
-        <Pressable onPress={onBackPress} style={({ pressed }) => [styles.backButton, pressed ? styles.backButtonPressed : null]}>
-          <View style={styles.backIconShell}>
+        <Pressable
+          onPress={onBackPress}
+          style={({ pressed }) => [styles.backButton, pressed ? styles.backButtonPressed : null]}
+        >
+          <View style={[styles.backIconShell, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
             <AppIcon name="arrowLeft" size="sm" state={iconState} />
           </View>
         </Pressable>
       ) : null}
 
-      {minimal ? (
-        <View style={styles.minimalIdentityShell}>
-          <View style={styles.identityRow}>
-            {logoSource ? (
-              <Image source={logoSource} style={styles.logoImageMinimal} resizeMode="contain" onError={() => setImageFailed(true)} />
-            ) : null}
-
-            <View style={styles.identityCopy}>
-              <Text style={[styles.brandName, { color: titleColor, fontFamily: resolvedTheme?.secondaryFontFamily || theme.typography.fontFamilyDisplay }]}>
-                {brandName}
-              </Text>
-            </View>
-          </View>
-        </View>
-      ) : (
+      {!minimal ? (
         <View style={styles.visualRow}>
           <View style={styles.identityRow}>
             {logoSource ? (
@@ -73,14 +61,25 @@ export const AuthHeader = ({
             </View>
           ) : null}
         </View>
-      )}
+      ) : null}
 
-      <View style={styles.copyBlock}>
-        <Text style={[styles.title, { color: titleColor, fontFamily: resolvedTheme?.secondaryFontFamily || theme.typography.fontFamilyDisplay }]}>
+      {minimal ? (
+        <View style={styles.minimalIdentityShell}>
+          {logoSource ? (
+            <Image source={logoSource} style={styles.logoImageMinimal} resizeMode="contain" onError={() => setImageFailed(true)} />
+          ) : null}
+          <Text style={[styles.brandName, styles.brandNameMinimal, { color: titleColor, fontFamily: resolvedTheme?.secondaryFontFamily || theme.typography.fontFamilyDisplay }]}>
+            {brandName}
+          </Text>
+        </View>
+      ) : null}
+
+      <View style={[styles.copyBlock, minimal ? styles.copyBlockMinimal : null]}>
+        <Text style={[styles.title, minimal ? styles.titleMinimal : null, { color: titleColor, fontFamily: resolvedTheme?.secondaryFontFamily || theme.typography.fontFamilyDisplay }]}>
           {title}
         </Text>
         {subtitle ? (
-          <Text style={[styles.subtitle, { color: subtitleColor, fontFamily: resolvedTheme?.fontFamily || theme.typography.fontFamily }]}>
+          <Text style={[styles.subtitle, minimal ? styles.subtitleMinimal : null, { color: subtitleColor, fontFamily: resolvedTheme?.fontFamily || theme.typography.fontFamily }]}>
             {subtitle}
           </Text>
         ) : null}
@@ -91,23 +90,30 @@ export const AuthHeader = ({
 
 const styles = StyleSheet.create({
   container: {
-    marginBottom: theme.spacing.sm,
+    marginBottom: theme.spacing.lg,
+  },
+  containerMinimal: {
+    alignItems: 'center',
   },
   backButton: {
     alignSelf: 'flex-start',
-    marginBottom: theme.spacing.md,
+    marginBottom: theme.spacing.lg,
   },
   backButtonPressed: {
     opacity: 0.76,
   },
   backIconShell: {
-    width: 28,
-    height: 28,
+    width: 40,
+    height: 40,
     alignItems: 'center',
     justifyContent: 'center',
+    borderRadius: theme.radius.full,
+    borderWidth: 1,
   },
   minimalIdentityShell: {
-    marginBottom: theme.spacing.sm,
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+    marginBottom: theme.spacing.lg,
   },
   visualRow: {
     flexDirection: 'row',
@@ -129,12 +135,16 @@ const styles = StyleSheet.create({
     height: 46,
   },
   logoImageMinimal: {
-    width: 42,
-    height: 42,
+    width: 72,
+    height: 72,
   },
   brandName: {
     fontSize: theme.typography.compact.bodyLg,
     lineHeight: theme.typography.compact.bodyLg * theme.typography.lineHeights.tight,
+  },
+  brandNameMinimal: {
+    fontSize: theme.typography.compact.titleSm,
+    lineHeight: theme.typography.compact.titleSm * theme.typography.lineHeights.tight,
   },
   eyebrowPill: {
     paddingHorizontal: theme.spacing.sm,
@@ -152,13 +162,29 @@ const styles = StyleSheet.create({
     marginTop: theme.spacing.sm,
     gap: theme.spacing.xs,
   },
+  copyBlockMinimal: {
+    width: '100%',
+    alignItems: 'center',
+    marginTop: 0,
+    gap: theme.spacing.sm,
+  },
   title: {
     fontSize: theme.typography.compact.titleLg,
     lineHeight: theme.typography.compact.titleLg * theme.typography.lineHeights.tight,
+  },
+  titleMinimal: {
+    textAlign: 'center',
+    fontSize: 28,
+    lineHeight: 34,
   },
   subtitle: {
     maxWidth: 320,
     fontSize: theme.typography.semantic.bodySm,
     lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+  },
+  subtitleMinimal: {
+    textAlign: 'center',
+    maxWidth: 280,
+    fontSize: theme.typography.compact.bodySm,
   },
 });

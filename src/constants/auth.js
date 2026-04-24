@@ -2,10 +2,10 @@ export const roleAuthConfig = {
   signup: {
     label: 'signup',
     signup: {
-      title: 'Create account',
+      title: 'Sign up',
       subtitle: '',
       eyebrow: '',
-      buttonText: 'Create account',
+      buttonText: 'Sign up',
       footerQuestion: 'Already have an account?',
       footerLink: 'Log in',
     },

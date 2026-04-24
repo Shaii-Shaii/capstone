@@ -3,24 +3,16 @@ import { StyleSheet, View, useWindowDimensions } from 'react-native';
 import { ScreenContainer } from '../ui/ScreenContainer';
 import { theme } from '../../design-system/theme';
 
-export const AuthScreenLayout = ({ children, cardStyle, role = 'donor', resolvedTheme = null }) => {
+export const AuthScreenLayout = ({ children, cardStyle }) => {
   const { height } = useWindowDimensions();
   const isShortScreen = height < theme.layout.shortScreenHeight;
   const isCompactScreen = height < theme.layout.compactScreenHeight;
-  const heroColors =
-    resolvedTheme
-      ? [resolvedTheme.primaryColor || theme.colors.heroFrom, resolvedTheme.secondaryColor || theme.colors.heroTo]
-      : role === 'patient'
-        ? [theme.colors.dashboardPatientFrom, theme.colors.dashboardPatientTo]
-        : [theme.colors.heroFrom, theme.colors.heroTo];
 
   return (
     <ScreenContainer
       scrollable={true}
       safeArea={true}
       variant="auth"
-      heroColors={heroColors}
-      authHeroImageUri={resolvedTheme?.loginBackgroundPhoto || ''}
       contentStyle={isCompactScreen ? styles.screenContentCompact : styles.screenContent}
     >
       <View
@@ -53,31 +45,33 @@ export const authLayoutStyles = StyleSheet.create({
 const styles = StyleSheet.create({
   screenContent: {
     flexGrow: 1,
-    justifyContent: 'flex-start',
+    justifyContent: 'center',
     paddingBottom: theme.spacing.section,
   },
   screenContentCompact: {
     flexGrow: 1,
     justifyContent: 'flex-start',
-    paddingBottom: theme.spacing.xl,
+    paddingBottom: theme.spacing.section,
   },
   container: {
     flex: 1,
-    justifyContent: 'flex-start',
-    paddingTop: theme.spacing.lg,
-    paddingBottom: theme.spacing.sm,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingTop: theme.spacing.md,
+    paddingBottom: theme.spacing.md,
   },
   containerCompact: {
+    justifyContent: 'flex-start',
     paddingTop: theme.spacing.sm,
-    paddingBottom: theme.spacing.xs,
+    paddingBottom: theme.spacing.sm,
   },
   containerDense: {
     paddingTop: theme.spacing.xs,
-    paddingBottom: 0,
+    paddingBottom: theme.spacing.sm,
   },
   shell: {
     width: '100%',
     alignSelf: 'center',
-    maxWidth: 372,
+    maxWidth: 356,
   },
 });

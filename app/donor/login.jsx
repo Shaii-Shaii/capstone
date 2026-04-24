@@ -9,7 +9,7 @@ import { useRoleAuthFlow } from '../../src/hooks/useRoleAuthFlow';
 
 export default function DonorLoginScreen() {
   const router = useRouter();
-  const { config, handleLogin, isLoading, loginError, clearLoginError, resolvedTheme } = useRoleAuthFlow('donor');
+  const { config, handleLogin, handleGoogleAuth, isLoading, activeAuthAction, loginError, clearLoginError, resolvedTheme } = useRoleAuthFlow('donor');
 
   return (
     <AuthScreenLayout role="donor" resolvedTheme={resolvedTheme}>
@@ -27,11 +27,13 @@ export default function DonorLoginScreen() {
         <LoginForm
           onSubmit={handleLogin}
           isLoading={isLoading}
+          activeAuthAction={activeAuthAction}
           onForgotPassword={() => router.push('/auth/forgot-password')}
           buttonText={config.login.buttonText}
           submitError={loginError}
           onFieldEdit={clearLoginError}
           resolvedTheme={resolvedTheme}
+          onGooglePress={handleGoogleAuth}
         />
       </View>
 

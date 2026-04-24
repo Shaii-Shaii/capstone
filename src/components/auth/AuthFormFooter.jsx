@@ -22,14 +22,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
-    marginTop: theme.spacing.lg,
+    marginTop: theme.spacing.xl,
     gap: theme.spacing.xs,
     flexWrap: 'wrap',
-    paddingTop: theme.spacing.sm,
+    paddingTop: theme.spacing.md,
   },
   questionText: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.bodySm,
     color: theme.colors.textSecondary,
-  }
+  },
 });

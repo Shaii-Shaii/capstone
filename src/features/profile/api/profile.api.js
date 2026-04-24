@@ -638,10 +638,12 @@ export const ensureSystemUserRecord = async ({ authUserId, email, role }) => {
   const existing = await fetchSystemUserByAuthUserId(authUserId);
   if (existing.data?.user_id || existing.error) {
     if (existing.data?.user_id) {
-      logAppEvent('profile.bootstrap.system_user_found', 'Using existing users row for authenticated account.', {
+      logAppEvent('profile.bootstrap.system_user_found_by_auth_user_id', 'Using existing users row found by auth_user_id.', {
         table: 'users',
         authUserId,
         systemUserId: existing.data.user_id,
+        email: existing.data.email || email || null,
+        role: existing.data.role || null,
       }, 'info');
     }
     return existing;
@@ -654,6 +656,15 @@ export const ensureSystemUserRecord = async ({ authUserId, email, role }) => {
     }
 
     if (existingByEmail.data?.user_id) {
+      logAppEvent('profile.bootstrap.system_user_found_by_email', 'Using existing users row found by email.', {
+        table: 'users',
+        authUserId,
+        previousAuthUserId: existingByEmail.data.auth_user_id || null,
+        systemUserId: existingByEmail.data.user_id,
+        email,
+        role: existingByEmail.data.role || null,
+      }, 'info');
+
       const linkResult = await linkSystemUserToAuthUserId({
         userId: existingByEmail.data.user_id,
         authUserId,
@@ -662,11 +673,13 @@ export const ensureSystemUserRecord = async ({ authUserId, email, role }) => {
       });
 
       if (!linkResult.error) {
-        logAppEvent('profile.bootstrap.system_user_linked', 'Linked existing users row to authenticated account.', {
+        logAppEvent('profile.bootstrap.system_user_linked', 'Linked or updated existing users row to authenticated account.', {
           table: 'users',
           authUserId,
           systemUserId: existingByEmail.data.user_id,
           matchedBy: 'email',
+          email,
+          role: linkResult.data?.role || existingByEmail.data.role || role || null,
         }, 'info');
         return linkResult;
       }
@@ -685,6 +698,8 @@ export const ensureSystemUserRecord = async ({ authUserId, email, role }) => {
         table: 'users',
         authUserId,
         systemUserId: createResult.data.user_id,
+        email: createResult.data.email || email || null,
+        role: createResult.data.role || role || null,
       }, 'info');
     }
     return createResult;

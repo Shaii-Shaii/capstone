@@ -23,6 +23,11 @@ export const PasswordInput = ({
   variant = 'default',
   disabled = false,
   style,
+  inputStyle,
+  labelStyle: labelStyleOverride,
+  shellStyle: shellStyleOverride,
+  helperTextStyle: helperTextStyleOverride,
+  errorTextStyle: errorTextStyleOverride,
   ...props
 }) => {
   const { resolvedTheme } = useAuth();
@@ -93,7 +98,7 @@ export const PasswordInput = ({
   return (
     <AnimatedView style={[styles.container, style]}>
       {label ? (
-        <Animated.Text style={[styles.label, labelStyle]}>
+        <Animated.Text style={[styles.label, labelStyle, labelStyleOverride]}>
           {label}
         </Animated.Text>
       ) : null}
@@ -101,6 +106,7 @@ export const PasswordInput = ({
         style={[
           styles.inputContainer,
           shellStyle,
+          shellStyleOverride,
           {
             backgroundColor: disabled
               ? theme.colors.surfaceDisabled
@@ -115,6 +121,7 @@ export const PasswordInput = ({
           style={[
             styles.input,
             { color: disabled ? theme.colors.textDisabled : primaryTextColor },
+            inputStyle,
           ]}
           placeholderTextColor={mutedTextColor}
           secureTextEntry={isSecure}
@@ -136,11 +143,11 @@ export const PasswordInput = ({
         </AnimatedPressable>
       </AnimatedView>
       {error ? (
-        <Animated.Text style={styles.errorText}>
+        <Animated.Text style={[styles.errorText, errorTextStyleOverride]}>
           {error}
         </Animated.Text>
       ) : helperText ? (
-        <Animated.Text style={[styles.helperText, { color: secondaryTextColor }]}>
+        <Animated.Text style={[styles.helperText, { color: secondaryTextColor }, helperTextStyleOverride]}>
           {helperText}
         </Animated.Text>
       ) : null}

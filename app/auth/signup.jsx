@@ -13,7 +13,9 @@ export default function SignupScreen() {
   const {
     config,
     handleSignup,
+    handleGoogleAuth,
     isLoading,
+    activeAuthAction,
     signupError,
     clearSignupError,
     resolvedTheme,
@@ -37,11 +39,12 @@ export default function SignupScreen() {
           schema={unifiedSignupSchema}
           onSubmit={handleSignup}
           isLoading={isLoading}
+          activeAuthAction={activeAuthAction}
           buttonText={config.signup.buttonText}
           submitError={signupError}
           onFieldEdit={clearSignupError}
           resolvedTheme={resolvedTheme}
-          onGooglePress={undefined}
+          onGooglePress={handleGoogleAuth}
         />
       </View>
 

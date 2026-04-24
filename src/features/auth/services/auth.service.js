@@ -26,6 +26,16 @@ const signupErrorCodes = {
   unexpected: 'UNEXPECTED_ERROR',
 };
 
+const googleAuthErrorCodes = {
+  cancelled: 'GOOGLE_AUTH_CANCELLED',
+  sessionMissing: 'GOOGLE_SESSION_MISSING',
+  bootstrapFailed: 'GOOGLE_BOOTSTRAP_FAILED',
+  network: 'NETWORK_ERROR',
+  unexpected: 'UNEXPECTED_ERROR',
+};
+
+const APP_SCHEME = 'donivra';
+
 const normalizeVisualValue = (value) => {
   if (typeof value !== 'string') return '';
   return value.trim();
@@ -113,6 +123,27 @@ const getFriendlySignupError = (error) => {
   }
 
   return buildUserFacingSignupError('Something went wrong. Please try again.');
+};
+
+const getFriendlyGoogleAuthError = (error) => {
+  const msg = String(error?.message || '').trim();
+  const normalized = msg.toLowerCase();
+
+  if (normalized.includes('cancel') || normalized.includes('dismiss')) {
+    return buildUserFacingLoginError('', googleAuthErrorCodes.cancelled);
+  }
+
+  if (isNetworkErrorMessage(normalized)) {
+    return buildUserFacingLoginError(
+      'We could not connect to Google right now. Please check your internet and try again.',
+      googleAuthErrorCodes.network
+    );
+  }
+
+  return buildUserFacingLoginError(
+    'Google sign-in could not be completed. Please try again.',
+    googleAuthErrorCodes.unexpected
+  );
 };
 
 const validateSystemUserAccount = (systemUser) => {
@@ -377,6 +408,142 @@ export const register = async (email, password, additionalData = {}) => {
   }
 };
 
+export const continueWithGoogle = async ({ role = 'tentative' } = {}) => {
+  let authUserId = '';
+  let authEmail = '';
+
+  try {
+    logAppEvent('auth.google.start', 'Google auth started.', {
+      requestedRole: role || null,
+    });
+
+    const { data: authData, error, cancelled } = await AuthAPI.signInWithGoogle();
+    if (cancelled) {
+      logAppEvent('auth.google.cancelled', 'Google auth was cancelled by the user.', {}, 'info');
+      return {
+        user: null,
+        session: null,
+        profile: null,
+        role: null,
+        cancelled: true,
+        error: null,
+      };
+    }
+
+    if (error) throw getFriendlyGoogleAuthError(error);
+
+    const session = authData?.session || null;
+    const user = authData?.user || session?.user || null;
+    authUserId = user?.id || '';
+    authEmail = user?.email || '';
+
+    logAppEvent('auth.google.success', 'Google auth returned an authenticated session.', {
+      authUserId: authUserId || null,
+      email: authEmail || null,
+    });
+
+    if (!session?.access_token || !authUserId) {
+      throw buildUserFacingLoginError(
+        'Google sign-in could not create a valid session. Please try again.',
+        googleAuthErrorCodes.sessionMissing
+      );
+    }
+
+    let ensureResult = await ensureProfileInfrastructure({
+      authUserId,
+      email: authEmail || null,
+      role: role || null,
+    });
+
+    if (ensureResult.error) {
+      logAppError('auth.google.bootstrap_retry', ensureResult.error, {
+        authUserId,
+        email: authEmail || null,
+      });
+
+      ensureResult = await ensureProfileInfrastructure({
+        authUserId,
+        email: authEmail || null,
+        role: role || null,
+      });
+    }
+
+    if (ensureResult.error || !ensureResult.data?.user_id) {
+      const bootstrapError = ensureResult.error || new Error(authMessages.roleNotFound);
+      logAppError('auth.google.bootstrap_failed', bootstrapError, {
+        authUserId,
+        email: authEmail || null,
+      });
+      await AuthAPI.logoutUser();
+      throw buildUserFacingLoginError(
+        'Google sign-in worked, but your app profile could not be prepared. Please try again.',
+        googleAuthErrorCodes.bootstrapFailed
+      );
+    }
+
+    const accountStateError = validateSystemUserAccount(ensureResult.data);
+    if (accountStateError) {
+      await AuthAPI.logoutUser();
+      throw accountStateError;
+    }
+
+    await writeAuditLog({
+      authUserId,
+      databaseUserId: ensureResult.data.user_id,
+      userEmail: authEmail || '',
+      action: 'auth.google',
+      description: `User continued with Google as ${ensureResult.data.role || 'an onboarding account'}.`,
+      resource: 'auth',
+      status: 'success',
+    });
+
+    logAppEvent('auth.google.redirect_delegate', 'Google auth bootstrap succeeded; routing delegated to role/onboarding redirect.', {
+      authUserId,
+      databaseUserId: ensureResult.data.user_id,
+      email: authEmail || null,
+      role: ensureResult.data.role || null,
+    });
+
+    return {
+      user,
+      session,
+      profile: ensureResult.data,
+      role: ensureResult.data.role || null,
+      cancelled: false,
+      error: null,
+    };
+  } catch (error) {
+    if (authUserId) {
+      await AuthAPI.logoutUser();
+    }
+
+    logAppError('auth.google', error, {
+      authUserId: authUserId || null,
+      email: authEmail || null,
+      errorCode: error?.code || null,
+    });
+
+    await writeAuditLog({
+      authUserId,
+      userEmail: authEmail || '',
+      action: 'auth.google',
+      description: error.message || 'Google auth failed.',
+      resource: 'auth',
+      status: 'failed',
+    });
+
+    return {
+      user: null,
+      session: null,
+      profile: null,
+      role: null,
+      cancelled: error?.code === googleAuthErrorCodes.cancelled,
+      error: error.message || 'Google sign-in could not be completed. Please try again.',
+      errorCode: error.code,
+    };
+  }
+};
+
 export const getResolvedSystemTheme = async () => {
   try {
     logAppEvent('auth.theme', 'Resolving login theme from database settings.', {
@@ -580,7 +747,7 @@ export const getCurrentSessionStatus = async () => {
 
 export const sendPasswordReset = async (email) => {
   try {
-    const redirectTo = Linking.createURL('/auth/reset-password');
+    const redirectTo = Linking.createURL('/auth/reset-password', { scheme: APP_SCHEME });
     const { error } = await AuthAPI.sendPasswordResetEmail({ email, redirectTo });
     if (error) throw getFriendlyError(error);
     return { success: true, error: null };

@@ -38,6 +38,11 @@ export const useAuthActions = () => {
     (email, password, additionalData) => handleAuthAction(AuthService.register, email, password, additionalData),
     []
   );
+
+  const continueWithGoogle = useCallback(
+    (options) => handleAuthAction(AuthService.continueWithGoogle, options),
+    []
+  );
   
   const logout = useCallback(() => handleAuthAction(AuthService.logout), []);
   
@@ -61,6 +66,7 @@ export const useAuthActions = () => {
     error,
     login,
     register,
+    continueWithGoogle,
     logout,
     getCurrentSessionStatus,
     sendPasswordReset,

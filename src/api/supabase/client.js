@@ -86,10 +86,13 @@ const createFallbackStorageBucket = () => ({
 const createFallbackSupabaseClient = () => ({
   auth: {
     signInWithPassword: async () => ({ data: { user: null, session: null }, error: createSupabaseConfigError() }),
+    signInWithOAuth: async () => ({ data: { url: null, provider: null }, error: createSupabaseConfigError() }),
     signUp: async () => ({ data: { user: null, session: null }, error: createSupabaseConfigError() }),
     signOut: async () => ({ error: createSupabaseConfigError() }),
     getSession: async () => ({ data: { session: null }, error: createSupabaseConfigError() }),
     refreshSession: async () => ({ data: { session: null }, error: createSupabaseConfigError() }),
+    setSession: async () => ({ data: { user: null, session: null }, error: createSupabaseConfigError() }),
+    exchangeCodeForSession: async () => ({ data: { user: null, session: null }, error: createSupabaseConfigError() }),
     resetPasswordForEmail: async () => ({ data: null, error: createSupabaseConfigError() }),
     updateUser: async () => ({ data: { user: null }, error: createSupabaseConfigError() }),
     verifyOtp: async () => ({ data: { user: null, session: null }, error: createSupabaseConfigError() }),

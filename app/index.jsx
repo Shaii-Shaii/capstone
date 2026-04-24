@@ -13,14 +13,16 @@ import { AppTextLink } from '../src/components/ui/AppTextLink';
 import { OtpInput } from '../src/components/ui/OtpInput';
 import { DatePickerField } from '../src/components/ui/DatePickerField';
 import { AddressOptionSheet, AddressSelectField, SignupAddressSection } from '../src/components/auth/SignupAddressSection';
+import { GoogleAuthButton } from '../src/components/auth/GoogleAuthButton';
 import { useAuth } from '../src/providers/AuthProvider';
+import { useRoleAuthFlow } from '../src/hooks/useRoleAuthFlow';
 import {
   completePostLoginOnboarding,
   getPatientLinkPreview,
 } from '../src/features/profile/services/profile.service';
 import { patientOnboardingSchema } from '../src/features/profile/profile.schema';
 import { guardianRelationshipOptions, profileGenderOptions } from '../src/constants/profile';
-import { resolveBrandLogoSource, theme } from '../src/design-system/theme';
+import { resolveBrandLogoSource, resolveThemeRoles, theme } from '../src/design-system/theme';
 
 const normalizePatientCode = (value) => value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
 const IMAGE_MEDIA_TYPES = ['images'];
@@ -179,7 +181,9 @@ function LoadingState() {
 function PublicLanding() {
   const router = useRouter();
   const { resolvedTheme } = useAuth();
-  const heroTitle = 'Welcome';
+  const { handleGoogleAuth, isLoading, activeAuthAction, googleError, clearGoogleError } = useRoleAuthFlow('access');
+  const roles = resolveThemeRoles(resolvedTheme);
+  const heroTitle = resolvedTheme?.brandName || 'Donivra';
   const heroSubtitle = 'Where Hair Becomes Hope';
 
   const navigateWithHaptic = async (path) => {
@@ -196,43 +200,78 @@ function PublicLanding() {
     >
       <View style={styles.centeredContainer}>
         <View style={styles.landingCard}>
-          <BrandLogo resolvedTheme={resolvedTheme} plain={true} />
+          <View style={styles.landingBrandCluster}>
+            <BrandLogo resolvedTheme={resolvedTheme} plain={true} />
 
-          <View style={styles.landingCopyBlock}>
-            <Text
-              style={[
-                styles.landingTitle,
-                resolvedTheme?.primaryTextColor ? { color: resolvedTheme.primaryTextColor } : null,
-                resolvedTheme?.secondaryFontFamily ? { fontFamily: resolvedTheme.secondaryFontFamily } : null,
-              ]}
-            >
-              {heroTitle}
-            </Text>
-            <Text
-              style={[
-                styles.landingSubtitle,
-                resolvedTheme?.secondaryTextColor ? { color: resolvedTheme.secondaryTextColor } : null,
-              ]}
-            >
-              {heroSubtitle}
-            </Text>
+            <View style={styles.landingCopyBlock}>
+              <Text
+                style={[
+                  styles.landingTitle,
+                  resolvedTheme?.primaryTextColor ? { color: resolvedTheme.primaryTextColor } : null,
+                  resolvedTheme?.secondaryFontFamily ? { fontFamily: resolvedTheme.secondaryFontFamily } : null,
+                ]}
+              >
+                {heroTitle}
+              </Text>
+              <Text
+                style={[
+                  styles.landingSubtitle,
+                  resolvedTheme?.secondaryTextColor ? { color: resolvedTheme.secondaryTextColor } : null,
+                ]}
+              >
+                {heroSubtitle}
+              </Text>
+            </View>
           </View>
 
           <View style={styles.landingActionStack}>
             <AppButton
-              title="Login"
-              variant="primary"
+              title="Log in"
+              variant="outline"
               size="lg"
-              onPress={() => navigateWithHaptic('/auth/access')}
+              style={styles.landingButtonPrimary}
+              textStyle={styles.landingButtonText}
+              textColorOverride={roles.primaryActionText}
+              backgroundColorOverride={roles.primaryActionBackground}
+              borderColorOverride={roles.primaryActionBackground}
+              disabled={isLoading}
+              onPress={() => {
+                clearGoogleError();
+                return navigateWithHaptic('/auth/access');
+              }}
               enableHaptics={true}
             />
             <AppButton
-              title="Register"
-              variant="secondary"
+              title="Sign up"
+              variant="outline"
               size="lg"
-              onPress={() => navigateWithHaptic('/auth/signup')}
+              style={styles.landingButtonSecondary}
+              textStyle={styles.landingButtonText}
+              textColorOverride={roles.secondaryActionText}
+              backgroundColorOverride={roles.defaultCardBackground}
+              borderColorOverride={roles.defaultCardBorder}
+              disabled={isLoading}
+              onPress={() => {
+                clearGoogleError();
+                return navigateWithHaptic('/auth/signup');
+              }}
               enableHaptics={true}
             />
+
+            <View style={styles.landingDividerRow}>
+              <View style={[styles.landingDividerLine, { backgroundColor: roles.defaultCardBorder }]} />
+              <Text style={[styles.landingDividerText, { color: roles.bodyText }]}>or</Text>
+              <View style={[styles.landingDividerLine, { backgroundColor: roles.defaultCardBorder }]} />
+            </View>
+
+            <GoogleAuthButton
+              mode="continue"
+              disabled={isLoading}
+              loading={isLoading && activeAuthAction === 'google'}
+              onPress={handleGoogleAuth}
+            />
+
+            {googleError ? <Text style={styles.landingErrorText}>{googleError}</Text> : null}
           </View>
         </View>
       </View>
@@ -1094,41 +1133,82 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: theme.spacing.xl,
-    paddingVertical: theme.spacing.xl,
+    paddingHorizontal: theme.spacing.xxl,
+    paddingTop: theme.spacing.xxxxl,
+    paddingBottom: theme.spacing.giant,
   },
   landingCard: {
-    flex: 1,
     width: '100%',
-    maxWidth: 360,
+    maxWidth: 356,
     alignItems: 'center',
     justifyContent: 'center',
+    gap: theme.spacing.xxxl,
+  },
+  landingBrandCluster: {
+    width: '100%',
+    alignItems: 'center',
     gap: theme.spacing.xl,
   },
   landingCopyBlock: {
     width: '100%',
     alignItems: 'center',
-    gap: theme.spacing.xs,
+    gap: theme.spacing.sm,
   },
   landingTitle: {
     textAlign: 'center',
     fontFamily: theme.typography.fontFamilyDisplay,
-    fontSize: theme.typography.semantic.title,
-    lineHeight: theme.typography.semantic.title * theme.typography.lineHeights.tight,
+    fontSize: 34,
+    lineHeight: 38,
     color: theme.colors.textPrimary,
   },
   landingSubtitle: {
     textAlign: 'center',
     fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.compact.bodySm,
-    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
     color: theme.colors.textSecondary,
-    maxWidth: 220,
+    maxWidth: 240,
   },
   landingActionStack: {
     width: '100%',
+    gap: theme.spacing.md,
+  },
+  landingButtonPrimary: {
+    minHeight: 52,
+    borderRadius: 22,
+  },
+  landingButtonSecondary: {
+    minHeight: 52,
+    borderRadius: 22,
+  },
+  landingButtonText: {
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  landingDividerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: theme.spacing.sm,
-    marginTop: theme.spacing.md,
+    marginVertical: theme.spacing.xs,
+  },
+  landingDividerLine: {
+    flex: 1,
+    height: 1,
+  },
+  landingDividerText: {
+    minWidth: 24,
+    textAlign: 'center',
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    textTransform: 'lowercase',
+  },
+  landingErrorText: {
+    textAlign: 'center',
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textError,
+    marginTop: theme.spacing.xs,
   },
   content: {
     width: '100%',
@@ -1151,8 +1231,8 @@ const styles = StyleSheet.create({
     height: 68,
   },
   logoPlain: {
-    width: 114,
-    height: 114,
+    width: 104,
+    height: 104,
   },
   brandName: {
     fontFamily: theme.typography.fontFamilyDisplay,

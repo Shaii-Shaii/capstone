@@ -18,12 +18,14 @@
         "monochromeImage": "./src/assets/images/donivra_logo_no_text.png"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.anonymous.donivra"
     },
     "androidStatusBar": {
       "hidden": true,
       "translucent": true,
-      "barStyle": "light-content"
+      "barStyle": "light-content",
+      "backgroundColor": "#f4f1f1"
     },
     "androidNavigationBar": {
       "visible": "sticky-immersive",

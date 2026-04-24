@@ -1,20 +1,21 @@
 import React from 'react';
-import { View, StyleSheet, Text, Pressable } from 'react-native';
+import { View, StyleSheet, Text } from 'react-native';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { AppInput } from '../ui/AppInput';
 import { PasswordInput } from '../ui/PasswordInput';
 import { AppButton } from '../ui/AppButton';
 import { AppTextLink } from '../ui/AppTextLink';
-import { AppIcon } from '../ui/AppIcon';
+import { GoogleAuthButton } from './GoogleAuthButton';
 import { loginSchema } from '../../features/auth/validators/auth.schema';
-import { theme, resolveThemeRoles } from '../../design-system/theme';
+import { resolveThemeRoles, theme } from '../../design-system/theme';
 
 export const LoginForm = ({
   onSubmit,
   isLoading,
+  activeAuthAction = '',
   onForgotPassword,
-  buttonText = 'Login',
+  buttonText = 'Log in',
   submitError = '',
   onFieldEdit,
   resolvedTheme,
@@ -29,22 +30,16 @@ export const LoginForm = ({
     },
   });
   const roles = resolveThemeRoles(resolvedTheme);
-  const showGoogleOption = true;
   const isGoogleAvailable = typeof onGooglePress === 'function';
+  const isSubmitLoading = isLoading && activeAuthAction === 'login';
+  const isGoogleLoading = isLoading && activeAuthAction === 'google';
 
   return (
     <View style={styles.container}>
       {submitError ? (
-        <View style={styles.submitErrorWrap}>
-          <View style={styles.submitErrorContent}>
-            <View style={styles.submitErrorIconWrap}>
-              <AppIcon name="error" state="danger" size="sm" />
-            </View>
-            <Text style={[styles.submitErrorText, { color: theme.colors.textError }]}>
-              {submitError}
-            </Text>
-          </View>
-        </View>
+        <Text style={styles.submitErrorText}>
+          {submitError}
+        </Text>
       ) : null}
 
       <View style={styles.fieldGroup}>
@@ -54,13 +49,12 @@ export const LoginForm = ({
           render={({ field: { onChange, onBlur, value } }) => (
             <AppInput
               label="Email"
-              placeholder="Enter your email"
+              placeholder="Your email"
               keyboardType="email-address"
               autoCapitalize="none"
               autoCorrect={false}
               textContentType="emailAddress"
               autoComplete="email"
-              variant="filled"
               onBlur={onBlur}
               onChangeText={(nextValue) => {
                 onFieldEdit?.();
@@ -69,6 +63,10 @@ export const LoginForm = ({
               value={value}
               error={errors.email?.message}
               disabled={isLoading}
+              style={styles.field}
+              labelStyle={[styles.fieldLabel, { color: roles.headingText }]}
+              shellStyle={[styles.fieldShell, { borderColor: roles.defaultCardBorder, backgroundColor: roles.defaultCardBackground }]}
+              inputStyle={[styles.fieldInput, { color: roles.headingText }]}
             />
           )}
         />
@@ -79,10 +77,9 @@ export const LoginForm = ({
           render={({ field: { onChange, onBlur, value } }) => (
             <PasswordInput
               label="Password"
-              placeholder="Enter your password"
+              placeholder="Your password"
               textContentType="password"
               autoComplete="password"
-              variant="filled"
               onBlur={onBlur}
               onChangeText={(nextValue) => {
                 onFieldEdit?.();
@@ -91,6 +88,10 @@ export const LoginForm = ({
               value={value}
               error={errors.password?.message}
               disabled={isLoading}
+              style={styles.field}
+              labelStyle={[styles.fieldLabel, { color: roles.headingText }]}
+              shellStyle={[styles.fieldShell, { borderColor: roles.defaultCardBorder, backgroundColor: roles.defaultCardBackground }]}
+              inputStyle={[styles.fieldInput, { color: roles.headingText }]}
             />
           )}
         />
@@ -101,41 +102,10 @@ export const LoginForm = ({
           title="Forgot password?"
           onPress={onForgotPassword}
           style={styles.forgotPasswordLink}
-          textStyle={styles.forgotPasswordText}
+          textStyle={[styles.forgotPasswordText, { color: roles.bodyText }]}
           variant="muted"
         />
       </View>
-
-      {showGoogleOption ? (
-        <View style={styles.altSection}>
-          <View style={styles.dividerRow}>
-            <View style={[styles.dividerLine, { backgroundColor: roles.defaultCardBorder }]} />
-            <Text style={[styles.dividerText, { color: resolvedTheme?.secondaryTextColor || theme.colors.textMuted }]}>
-              or continue with
-            </Text>
-            <View style={[styles.dividerLine, { backgroundColor: roles.defaultCardBorder }]} />
-          </View>
-
-          <Pressable
-            disabled={!isGoogleAvailable || isLoading}
-            onPress={onGooglePress}
-            style={({ pressed }) => [
-              styles.googleButton,
-              {
-                backgroundColor: roles.pageBackground,
-                borderColor: roles.defaultCardBorder,
-              },
-              pressed && isGoogleAvailable && !isLoading ? styles.googleButtonPressed : null,
-              (!isGoogleAvailable || isLoading) ? styles.googleButtonDisabled : null,
-            ]}
-          >
-            <View style={styles.googleBadge}>
-              <AppIcon name="google" state="default" size="md" />
-            </View>
-            <Text style={[styles.googleButtonText, { color: roles.headingText }]}>Continue with Google</Text>
-          </Pressable>
-        </View>
-      ) : null}
 
       <AppButton
         title={buttonText}
@@ -143,11 +113,32 @@ export const LoginForm = ({
           onFieldEdit?.();
           return onSubmit(values);
         })}
-        loading={isLoading}
+        loading={isSubmitLoading}
+        disabled={isLoading}
+        variant="outline"
         size="lg"
         enableHaptics={true}
         style={styles.submitBtn}
+        textStyle={styles.submitBtnText}
+        textColorOverride={roles.primaryActionText}
+        backgroundColorOverride={roles.primaryActionBackground}
+        borderColorOverride={roles.primaryActionBackground}
       />
+
+      <View style={styles.altSection}>
+        <View style={styles.dividerRow}>
+          <View style={[styles.dividerLine, { backgroundColor: roles.defaultCardBorder }]} />
+          <Text style={[styles.dividerText, { color: roles.bodyText }]}>or</Text>
+          <View style={[styles.dividerLine, { backgroundColor: roles.defaultCardBorder }]} />
+        </View>
+
+        <GoogleAuthButton
+          mode="continue"
+          disabled={!isGoogleAvailable || isLoading}
+          loading={isGoogleLoading}
+          onPress={onGooglePress}
+        />
+      </View>
     </View>
   );
 };
@@ -155,43 +146,58 @@ export const LoginForm = ({
 const styles = StyleSheet.create({
   container: {
     width: '100%',
-    gap: theme.spacing.sm,
   },
   fieldGroup: {
-    gap: theme.spacing.xs,
+    gap: 0,
   },
-  submitErrorWrap: {
-    marginBottom: theme.spacing.xs,
+  field: {
+    marginBottom: theme.spacing.md,
   },
-  submitErrorContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.spacing.xs,
+  fieldLabel: {
+    fontSize: theme.typography.compact.bodySm,
+    color: theme.colors.textPrimary,
   },
-  submitErrorIconWrap: {
-    alignItems: 'center',
-    justifyContent: 'center',
+  fieldShell: {
+    borderRadius: 20,
+    shadowColor: 'transparent',
+    shadowOpacity: 0,
+    shadowRadius: 0,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 0,
+  },
+  fieldInput: {
+    fontSize: theme.typography.semantic.bodySm,
   },
   submitErrorText: {
-    flex: 1,
+    marginBottom: theme.spacing.md,
+    textAlign: 'center',
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.bodySm,
     lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
-    fontWeight: theme.typography.weights.medium,
+    color: theme.colors.textError,
   },
   metaRow: {
     alignItems: 'flex-end',
-    marginTop: -2,
+    marginTop: -4,
+    marginBottom: theme.spacing.md,
   },
   forgotPasswordLink: {
     paddingVertical: theme.spacing.xs,
   },
   forgotPasswordText: {
-    fontSize: theme.typography.semantic.bodySm,
+    fontSize: theme.typography.compact.bodySm,
+  },
+  submitBtn: {
+    minHeight: 52,
+    borderRadius: 22,
+  },
+  submitBtnText: {
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.semibold,
   },
   altSection: {
     gap: theme.spacing.md,
-    marginTop: theme.spacing.xs,
+    marginTop: theme.spacing.lg,
   },
   dividerRow: {
     flexDirection: 'row',
@@ -203,40 +209,10 @@ const styles = StyleSheet.create({
     height: 1,
   },
   dividerText: {
+    minWidth: 24,
+    textAlign: 'center',
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.caption,
     textTransform: 'lowercase',
-  },
-  googleButton: {
-    minHeight: 54,
-    borderWidth: 1,
-    borderRadius: theme.radius.xl,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: theme.spacing.sm,
-    paddingHorizontal: theme.spacing.lg,
-  },
-  googleButtonPressed: {
-    opacity: 0.82,
-  },
-  googleButtonDisabled: {
-    opacity: 0.6,
-  },
-  googleBadge: {
-    width: 32,
-    height: 32,
-    borderRadius: theme.radius.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: theme.colors.backgroundPrimary,
-  },
-  googleButtonText: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.body,
-    fontWeight: theme.typography.weights.semibold,
-  },
-  submitBtn: {
-    marginTop: theme.spacing.sm,
   },
 });

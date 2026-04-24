@@ -1,4 +1,14 @@
+import * as Linking from 'expo-linking';
+import * as WebBrowser from 'expo-web-browser';
 import { supabase } from '../../../api/supabase/client';
+
+const APP_SCHEME = 'donivra';
+
+try {
+  WebBrowser.maybeCompleteAuthSession();
+} catch (_error) {
+  // The helper is web-only in practice; ignore unsupported platform noise.
+}
 
 /**
  * Low-level Supabase Auth calls
@@ -17,6 +27,126 @@ export const registerWithEmail = async ({ email, password, metadata }) => {
       data: metadata,
     },
   });
+};
+
+const getGoogleRedirectUrl = () => Linking.createURL('/', { scheme: APP_SCHEME });
+
+const extractAuthParamsFromUrl = (url) => {
+  const params = {};
+
+  if (!url || typeof url !== 'string') {
+    return params;
+  }
+
+  try {
+    const parsedUrl = new URL(url);
+    parsedUrl.searchParams.forEach((value, key) => {
+      params[key] = value;
+    });
+
+    const hash = parsedUrl.hash?.startsWith('#') ? parsedUrl.hash.slice(1) : parsedUrl.hash;
+    if (hash) {
+      const hashParams = new URLSearchParams(hash);
+      hashParams.forEach((value, key) => {
+        params[key] = value;
+      });
+    }
+  } catch (_error) {
+    const queryLike = url.split('?')[1] || url.split('#')[1] || '';
+    const safeParams = new URLSearchParams(queryLike);
+    safeParams.forEach((value, key) => {
+      params[key] = value;
+    });
+  }
+
+  return params;
+};
+
+const createSessionFromOAuthRedirect = async (url) => {
+  const params = extractAuthParamsFromUrl(url);
+
+  if (params.error || params.error_code) {
+    return {
+      data: { session: null, user: null },
+      error: new Error(params.error_description || params.error || params.error_code),
+    };
+  }
+
+  if (params.code) {
+    const result = await supabase.auth.exchangeCodeForSession(params.code);
+    return {
+      data: {
+        session: result.data?.session || null,
+        user: result.data?.user || result.data?.session?.user || null,
+      },
+      error: result.error || null,
+    };
+  }
+
+  if (params.access_token && params.refresh_token) {
+    const result = await supabase.auth.setSession({
+      access_token: params.access_token,
+      refresh_token: params.refresh_token,
+    });
+
+    return {
+      data: {
+        session: result.data?.session || null,
+        user: result.data?.user || result.data?.session?.user || null,
+      },
+      error: result.error || null,
+    };
+  }
+
+  const sessionResult = await supabase.auth.getSession();
+  return {
+    data: {
+      session: sessionResult.data?.session || null,
+      user: sessionResult.data?.session?.user || null,
+    },
+    error: sessionResult.error || null,
+  };
+};
+
+export const signInWithGoogle = async () => {
+  const redirectTo = getGoogleRedirectUrl();
+  const { data, error } = await supabase.auth.signInWithOAuth({
+    provider: 'google',
+    options: {
+      redirectTo,
+      skipBrowserRedirect: true,
+    },
+  });
+
+  if (error) {
+    return { data: { session: null, user: null }, error, cancelled: false };
+  }
+
+  if (!data?.url) {
+    return {
+      data: { session: null, user: null },
+      error: new Error('Google sign-in could not be started.'),
+      cancelled: false,
+    };
+  }
+
+  const authResult = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
+  if (authResult.type === 'cancel' || authResult.type === 'dismiss') {
+    return { data: { session: null, user: null }, error: null, cancelled: true };
+  }
+
+  if (authResult.type !== 'success' || !authResult.url) {
+    return {
+      data: { session: null, user: null },
+      error: new Error('Google sign-in did not return a valid session.'),
+      cancelled: false,
+    };
+  }
+
+  return {
+    ...(await createSessionFromOAuthRedirect(authResult.url)),
+    cancelled: false,
+  };
 };
 
 export const logoutUser = async () => {
