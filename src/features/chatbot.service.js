@@ -110,10 +110,14 @@ const matchesTopic = (text, topics) => {
 
 const normalizeAiReply = (data) => {
   const replyText = data?.reply?.text || data?.text || '';
+  const rawProducts = Array.isArray(data?.reply?.products) ? data.reply.products : [];
+  const rawMapLinks = Array.isArray(data?.reply?.map_links) ? data.reply.map_links : [];
 
   return {
     text: replyText.trim(),
     source: data?.reply?.source || data?.source || 'ai',
+    products: rawProducts.filter((p) => p?.name),
+    mapLinks: rawMapLinks.filter((l) => l?.url && l?.label),
     attachments: Array.isArray(data?.reply?.attachments) ? data.reply.attachments : [],
     actions: Array.isArray(data?.reply?.actions) ? data.reply.actions : [],
   };
@@ -481,10 +485,15 @@ export const loadChatbotBootstrap = async ({ userId, role }) => {
       messages = buildBootstrapConversation(settings);
     }
 
+    const faqQuickSuggestions = faqs
+      .slice(0, 6)
+      .map((faq) => faq.question)
+      .filter(Boolean);
+
     return {
       settings,
       faqs,
-      quickSuggestions: settings.quickSuggestions || [],
+      quickSuggestions: faqQuickSuggestions.length ? faqQuickSuggestions : (settings.quickSuggestions || []),
       conversationId,
       messages,
       error: null,
@@ -530,7 +539,7 @@ export const resolveChatbotReply = async ({
   }));
 
   try {
-    return await invokeChatbotAiReply({
+    const reply = await invokeChatbotAiReply({
       role,
       text: trimmedText,
       faqs,
@@ -538,6 +547,19 @@ export const resolveChatbotReply = async ({
       recentMessages,
       supportContext,
     });
+
+    // Merge profile-based map links from support context into reply actions
+    if (supportContext.mapLinks?.length) {
+      const profileMapActions = buildMapActions(supportContext.mapLinks);
+      reply.actions = [...(reply.actions || []), ...profileMapActions];
+    }
+    // Merge AI-generated map links
+    if (reply.mapLinks?.length) {
+      const aiMapActions = buildMapActions(reply.mapLinks);
+      reply.actions = [...(reply.actions || []), ...aiMapActions];
+    }
+
+    return reply;
   } catch (error) {
     const errorMessage = (await extractFunctionErrorMessage(error)).toLowerCase();
 

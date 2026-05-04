@@ -40,6 +40,12 @@
     "plugins": [
       "expo-router",
       [
+        "react-native-vision-camera",
+        {
+          "cameraPermissionText": "Donivra needs camera access to scan your face and hair for donation screening."
+        }
+      ],
+      [
         "expo-splash-screen",
         {
           "image": "./src/assets/images/donivra_logo_no_text.png",

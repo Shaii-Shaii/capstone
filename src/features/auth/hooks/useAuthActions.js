@@ -51,6 +51,11 @@ export const useAuthActions = () => {
     []
   );
 
+  const recoverSessionFromAuthUrl = useCallback(
+    (url) => handleAuthAction(AuthService.recoverSessionFromAuthUrl, url),
+    []
+  );
+
   const sendPasswordReset = useCallback(
     (email) => handleAuthAction(AuthService.sendPasswordReset, email),
     []
@@ -69,6 +74,7 @@ export const useAuthActions = () => {
     continueWithGoogle,
     logout,
     getCurrentSessionStatus,
+    recoverSessionFromAuthUrl,
     sendPasswordReset,
     updatePassword,
     clearError: () => setError(null)

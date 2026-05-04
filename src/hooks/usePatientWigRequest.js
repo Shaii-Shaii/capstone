@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Platform } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { generatePatientWigPreview } from '../features/wigGeneration.service';
 import {
@@ -359,9 +360,11 @@ export const usePatientWigRequest = ({ userId }) => {
       setError(null);
       setSuccessMessage('');
 
-      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!permission.granted) {
-        throw new Error('Please allow photo library access to attach your front photo.');
+      if (Platform.OS !== 'android') {
+        const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (!permission.granted) {
+          throw new Error('Please allow photo library access to attach your front photo.');
+        }
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({

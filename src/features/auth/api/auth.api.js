@@ -108,6 +108,8 @@ const createSessionFromOAuthRedirect = async (url) => {
   };
 };
 
+export const createSessionFromAuthUrl = async (url) => createSessionFromOAuthRedirect(url);
+
 export const signInWithGoogle = async () => {
   const redirectTo = getGoogleRedirectUrl();
   const { data, error } = await supabase.auth.signInWithOAuth({

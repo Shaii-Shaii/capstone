@@ -207,20 +207,17 @@ export const DashboardLayout = ({
                   {!isCenteredChatModal ? <View style={styles.chatModalHandle} /> : null}
 
                   <View style={styles.chatModalHeader}>
-                    <View style={styles.chatModalTitleWrap}>
-                      <View style={styles.chatModalBotRow}>
-                        <View style={styles.chatModalBotAvatarWrap}>
-                          <Image source={chatbotIcon} style={styles.chatModalBotAvatar} resizeMode="contain" />
-                        </View>
-                        <View style={styles.chatModalBotCopy}>
-                          <Text style={styles.chatModalEyebrow}>{resolvedTheme?.brandName ? `${resolvedTheme.brandName} AI` : 'AI Assistant'}</Text>
-                          <Text style={styles.chatModalTitle}>
-                            {chatRole === 'donor' ? 'Donation Support' : 'Patient Support'}
-                          </Text>
-                          <View style={styles.chatModalStatusRow}>
-                            <View style={styles.chatModalStatusDot} />
-                            <Text style={styles.chatModalStatusText}>Online now</Text>
-                          </View>
+                    <View style={styles.chatModalBotRow}>
+                      <View style={styles.chatModalBotAvatarWrap}>
+                        <Image source={chatbotIcon} style={styles.chatModalBotAvatar} resizeMode="contain" />
+                      </View>
+                      <View style={styles.chatModalBotCopy}>
+                        <Text style={styles.chatModalBotName}>
+                          {resolvedTheme?.brandName ? `${resolvedTheme.brandName} AI` : 'Donivra AI'}
+                        </Text>
+                        <View style={styles.chatModalStatusRow}>
+                          <View style={styles.chatModalStatusDot} />
+                          <Text style={styles.chatModalStatusText}>Online</Text>
                         </View>
                       </View>
                     </View>
@@ -362,50 +359,40 @@ const styles = StyleSheet.create({
     gap: theme.spacing.sm,
     marginBottom: theme.spacing.xs,
     paddingHorizontal: theme.spacing.sm,
+    paddingTop: theme.spacing.xs,
   },
   chatModalHandle: {
     alignSelf: 'center',
-    width: 42,
+    width: 36,
     height: 4,
     borderRadius: theme.radius.full,
     backgroundColor: theme.colors.borderStrong,
-    opacity: 0.45,
+    opacity: 0.35,
     marginTop: theme.spacing.xs,
     marginBottom: theme.spacing.sm,
-  },
-  chatModalTitleWrap: {
-    flex: 1,
   },
   chatModalBotRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.spacing.sm,
+    flex: 1,
   },
   chatModalBotAvatarWrap: {
-    width: 40,
-    height: 40,
+    width: 38,
+    height: 38,
     borderRadius: theme.radius.full,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: theme.colors.surfaceSoft,
   },
   chatModalBotAvatar: {
-    width: 28,
-    height: 28,
+    width: 26,
+    height: 26,
   },
   chatModalBotCopy: {
-    flex: 1,
     gap: 2,
   },
-  chatModalEyebrow: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: 11,
-    fontWeight: theme.typography.weights.semibold,
-    color: theme.colors.actionPrimary,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  chatModalTitle: {
+  chatModalBotName: {
     fontFamily: theme.typography.fontFamilyDisplay,
     fontSize: theme.typography.semantic.bodyLg,
     color: theme.colors.textPrimary,
@@ -413,11 +400,11 @@ const styles = StyleSheet.create({
   chatModalStatusRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 5,
   },
   chatModalStatusDot: {
-    width: 8,
-    height: 8,
+    width: 7,
+    height: 7,
     borderRadius: theme.radius.full,
     backgroundColor: '#56c271',
   },
@@ -427,8 +414,8 @@ const styles = StyleSheet.create({
     color: theme.colors.textSecondary,
   },
   chatCloseButton: {
-    width: 32,
-    height: 32,
+    width: 30,
+    height: 30,
     borderRadius: theme.radius.full,
     alignItems: 'center',
     justifyContent: 'center',

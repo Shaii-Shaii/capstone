@@ -444,7 +444,12 @@ export const createStructuredResponse = async ({
   temperature = 0.45,
   includeDiagnostics = false,
 }: GenerateStructuredContentParams) => {
-  const apiKey = Deno.env.get('GOOGLE_AI_API_KEY');
+  const apiKey = (
+    Deno.env.get('GOOGLE_AI_API_KEY')
+    || Deno.env.get('GEMINI_API_KEY')
+    || Deno.env.get('GOOGLE_API_KEY')
+    || ''
+  ).trim();
   const endpoint = `${GOOGLE_AI_API_URL}/${model}:generateContent`;
   const diagnostics: GoogleAiDiagnostics = {
     provider: 'gemini',

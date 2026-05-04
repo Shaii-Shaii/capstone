@@ -6,66 +6,54 @@ export function ChatQuickSuggestions({ suggestions, onSelect, disabled }) {
   if (!suggestions?.length) return null;
 
   return (
-    <>
-      <Text style={styles.title}>Quick prompts</Text>
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.row}
-      >
-        {suggestions.map((suggestion) => (
-          <Pressable
-            key={suggestion}
-            disabled={disabled}
-            onPress={() => onSelect(suggestion)}
-            style={({ pressed }) => [
-              styles.chip,
-              disabled ? styles.chipDisabled : null,
-              pressed ? styles.chipPressed : null,
-            ]}
-          >
-            <Text style={styles.chipText}>{suggestion}</Text>
-          </Pressable>
-        ))}
-      </ScrollView>
-    </>
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={styles.row}
+    >
+      {suggestions.map((suggestion) => (
+        <Pressable
+          key={suggestion}
+          disabled={disabled}
+          onPress={() => onSelect(suggestion)}
+          style={({ pressed }) => [
+            styles.chip,
+            disabled ? styles.chipDisabled : null,
+            pressed ? styles.chipPressed : null,
+          ]}
+        >
+          <Text style={styles.chipText} numberOfLines={1}>{suggestion}</Text>
+        </Pressable>
+      ))}
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  title: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: 11,
-    color: theme.colors.textMuted,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-    marginBottom: 8,
-  },
   row: {
     gap: theme.spacing.xs,
-    paddingBottom: 2,
-    paddingRight: theme.spacing.xs,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: theme.spacing.xs,
   },
   chip: {
-    minHeight: 34,
-    maxWidth: 180,
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: 8,
+    maxWidth: 200,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: 7,
     borderRadius: theme.radius.pill,
-    backgroundColor: '#f8eef0',
+    backgroundColor: '#fff',
     borderWidth: 1,
     borderColor: theme.colors.brandPrimaryMuted,
   },
   chipDisabled: {
-    opacity: 0.6,
+    opacity: 0.5,
   },
   chipPressed: {
     backgroundColor: '#f4e2e7',
-    transform: [{ scale: 0.98 }],
+    transform: [{ scale: 0.97 }],
   },
   chipText: {
     fontFamily: theme.typography.fontFamily,
-    fontSize: 13,
+    fontSize: 12,
     color: theme.colors.brandPrimary,
     fontWeight: theme.typography.weights.medium,
   },

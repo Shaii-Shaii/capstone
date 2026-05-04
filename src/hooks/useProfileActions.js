@@ -286,7 +286,7 @@ export const useProfileActions = () => {
         platform: Platform.OS,
       });
 
-      if (Platform.OS !== 'web') {
+      if (Platform.OS !== 'web' && Platform.OS !== 'android') {
         const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
         if (!permission.granted) {
           return { success: false, error: 'Please allow photo library access to choose a profile image.' };

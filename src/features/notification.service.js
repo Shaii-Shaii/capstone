@@ -128,7 +128,7 @@ const buildDriveNotification = (drive) => {
     return buildNotification({
       dedupeKey: `${notificationTypes.driveRsvpReminder}:${drive.donation_drive_id}`,
       type: notificationTypes.driveRsvpReminder,
-      title: 'Drive RSVP reminder',
+      title: 'Drive reminder',
       message: `${drive.event_title || 'Donation drive'} starts ${formatDriveWindowLabel(drive)}.`,
       createdAt: drive.updated_at || drive.start_date || new Date().toISOString(),
       referenceType: 'donation_drive',

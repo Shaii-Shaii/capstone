@@ -745,6 +745,20 @@ export const getCurrentSessionStatus = async () => {
   }
 };
 
+export const recoverSessionFromAuthUrl = async (url) => {
+  try {
+    if (!url) {
+      return { session: null, error: null };
+    }
+
+    const { data, error } = await AuthAPI.createSessionFromAuthUrl(url);
+    if (error) throw getFriendlyError(error);
+    return { session: data?.session || null, user: data?.user || null, error: null };
+  } catch (error) {
+    return { session: null, user: null, error: error.message };
+  }
+};
+
 export const sendPasswordReset = async (email) => {
   try {
     const redirectTo = Linking.createURL('/auth/reset-password', { scheme: APP_SCHEME });

@@ -1,6 +1,5 @@
 import React from 'react';
 import { ActivityIndicator, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 import { DashboardLayout } from './DashboardLayout';
@@ -10,49 +9,29 @@ import { AppIcon } from '../ui/AppIcon';
 import { AppInput } from '../ui/AppInput';
 import { StatusBanner } from '../ui/StatusBanner';
 import { DonorTopBar } from '../donor/DonorTopBar';
-import { DonorCertificatePreview } from '../donor/DonorCertificatePreview';
 import { donorDashboardNavItems } from '../../constants/dashboard';
 import { useAuth } from '../../providers/AuthProvider';
 import { useNotifications } from '../../hooks/useNotifications';
 import { useAuthActions } from '../../features/auth/hooks/useAuthActions';
-import { useDonorCertificate } from '../../hooks/useDonorCertificate';
 import {
   fetchDonationDrivePreview,
   joinOrganizationMembership,
 } from '../../features/donorHome.api';
 import {
-  activateIndependentDonationQrByScan,
+  buildDriveInvitationQrPayload,
   buildDonationTrackingQrPayload,
   buildQrImageUrl,
-  ensureIndependentDonationQr,
-  generateDonationQrPdf,
   getDonorDonationsModuleData,
-  getIndependentDonationQrState,
-  isQrSharingSupported,
-  printDonationQrPdf,
   saveDriveDonationParticipation,
-  saveIndependentDonationParcelLog,
   saveManualDonationQualification,
-  shareDonationQrPdf,
 } from '../../features/donorDonations.service';
+import { buildProfileCompletionMeta } from '../../features/profile/services/profile.service';
 import { resolveThemeRoles, theme } from '../../design-system/theme';
-
-const AGREEMENT_COPY = [
-  'Donation is voluntary.',
-  'You will handle shipping.',
-  'The parcel goes to Hair for Hope.',
-  'Attach the QR to the parcel.',
-  'Scan the QR to activate donation tracking.',
-];
-
-const MANUAL_ENTRY_PATHS = {
-  ai: 'ai',
-  manual: 'manual',
-};
 
 const MANUAL_FORM_DEFAULTS = {
   lengthValue: '',
   lengthUnit: 'in',
+  bundleQuantity: '1',
   treated: 'no',
   colored: 'no',
   trimmed: 'no',
@@ -100,93 +79,6 @@ const formatDriveDate = (startDate, endDate) => {
   if (!end) return formatter.format(start);
   return `${formatter.format(start)} - ${formatter.format(end)}`;
 };
-
-const buildDonorIdentity = ({ profile, user }) => ({
-  databaseUserId: profile?.user_id || null,
-  name: [profile?.first_name, profile?.last_name].filter(Boolean).join(' ').trim() || user?.email || 'Donor',
-  email: user?.email || profile?.email || '',
-});
-
-const getLatestSubmissionDetailRecord = (submission = null, fallbackDetail = null) => (
-  [...(submission?.submission_details || [])]
-    .sort((left, right) => (
-      new Date(right?.updated_at || right?.created_at || 0).getTime()
-      - new Date(left?.updated_at || left?.created_at || 0).getTime()
-    ))[0] || fallbackDetail || null
-);
-
-const formatQrStatusLabel = (status = '') => {
-  const normalized = String(status || '').trim().toLowerCase();
-  if (!normalized) return 'Inactive';
-  if (['active', 'activated'].includes(normalized)) return 'Active';
-  if (['inactive', 'pending', 'expired'].includes(normalized)) return 'Inactive';
-  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
-};
-
-const formatDonationSourceLabel = (value = '') => {
-  const normalized = String(value || '').trim().toLowerCase();
-  if (!normalized) return 'Not available';
-  if (normalized === 'manual_donor_details') return 'Manual donor entry';
-  if (normalized === 'independent_donation') return 'Independent donation';
-  if (normalized === 'drive_donation') return 'Donation drive';
-  return normalized
-    .split(/[_\s]+/)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
-    .join(' ');
-};
-
-const formatDonationValue = (value, fallback = 'Not available') => {
-  if (value == null) return fallback;
-  const normalized = String(value).trim();
-  return normalized || fallback;
-};
-
-const resolveDonationTrackingLabel = ({
-  submission = null,
-  logistics = null,
-  timelineStage = null,
-  qrStatus = '',
-} = {}) => (
-  timelineStage?.label
-  || timelineStage?.statusLabel
-  || logistics?.shipment_status
-  || submission?.status
-  || qrStatus
-  || 'Pending'
-);
-
-const buildDonationQrDetails = ({
-  submission = null,
-  detail = null,
-  logistics = null,
-  drive = null,
-  donorName = '',
-  trackingLabel = '',
-  qrLifecycleStatus = '',
-} = {}) => (
-  [
-    { label: 'Donation code', value: submission?.submission_code || 'Pending donation code' },
-    { label: 'Donor name', value: donorName || '' },
-    { label: 'QR status', value: qrLifecycleStatus || '' },
-    { label: 'Donation source', value: formatDonationSourceLabel(submission?.donation_source || '') },
-    { label: 'Donation status', value: formatQrStatusLabel(submission?.status || '') },
-    { label: 'Hair length', value: detail?.declared_length != null && detail?.declared_length !== '' ? String(detail.declared_length) : '' },
-    { label: 'Hair color', value: detail?.declared_color || '' },
-    { label: 'Hair texture', value: detail?.declared_texture || '' },
-    { label: 'Hair density', value: detail?.declared_density || '' },
-    { label: 'Hair condition', value: detail?.declared_condition || '' },
-    { label: 'Current tracking status', value: trackingLabel || '' },
-    { label: 'Shipment status', value: logistics?.shipment_status || '' },
-    { label: 'Drive', value: drive?.event_title || '' },
-    { label: 'Organization', value: drive?.organization_name || '' },
-  ]
-    .filter((item) => String(item.value || '').trim().length > 0)
-    .map((item) => ({
-      ...item,
-      value: formatDonationValue(item.value),
-    }))
-);
 
 function SectionTitle({ eyebrow, title, body }) {
   return (
@@ -244,6 +136,16 @@ function ModalShell({
   );
 }
 
+function ModuleHeader({ eyebrow, title, body, roles }) {
+  return (
+    <View style={styles.moduleHeader}>
+      {eyebrow ? <Text style={[styles.moduleEyebrow, { color: roles.primaryActionBackground }]}>{eyebrow}</Text> : null}
+      <Text style={[styles.moduleTitle, { color: roles.headingText }]}>{title}</Text>
+      {body ? <Text style={[styles.moduleBody, { color: roles.bodyText }]}>{body}</Text> : null}
+    </View>
+  );
+}
+
 function EntryCard({
   icon,
   title,
@@ -255,7 +157,7 @@ function EntryCard({
 }) {
   return (
     <Pressable onPress={onPress} disabled={disabled} style={({ pressed }) => [styles.entryCardPressable, pressed ? styles.pressableActive : null]}>
-      <AppCard variant="default" radius="xl" padding="md" style={[styles.entryCard, active ? styles.entryCardActive : null, disabled ? styles.entryCardDisabled : null]}>
+      <View style={[styles.entryCard, active ? styles.entryCardActive : null, disabled ? styles.entryCardDisabled : null]}>
         <View style={styles.entryCardTop}>
           <View style={styles.entryIconWrap}>
             <AppIcon name={icon} size="sm" state="active" />
@@ -266,60 +168,101 @@ function EntryCard({
           </View>
         </View>
         <AppButton title={actionLabel} variant={active ? 'primary' : 'outline'} fullWidth={false} onPress={onPress} disabled={disabled} />
-      </AppCard>
+      </View>
     </Pressable>
   );
 }
 
-function DriveCarouselCard({ drive, onPress, disabled = false }) {
+function DonationHeroModule({ roles, isProfileComplete, isEligibilityFresh, isReady, hasOngoingDonation }) {
+  const title = !isProfileComplete
+    ? 'Finish your donor profile.'
+    : !isEligibilityFresh
+      ? 'Check your hair readiness.'
+      : hasOngoingDonation
+        ? 'Donation is in progress.'
+        : isReady
+          ? 'Ready to join a donation drive.'
+          : 'Donation details are next.';
+  const body = !isProfileComplete
+    ? 'Complete your profile before requesting a hair donation.'
+    : !isEligibilityFresh
+      ? 'A recent hair eligibility result is required before continuing.'
+      : hasOngoingDonation
+        ? 'Track the current donation before starting another one.'
+        : isReady
+          ? 'Your hair eligibility and donation details are saved.'
+          : 'Save your hair length, bundle count, and photo to generate your donation QR.';
+
   return (
-    <Pressable onPress={() => onPress?.(drive)} disabled={disabled} style={({ pressed }) => [styles.driveCardPressable, pressed ? styles.pressableActive : null]}>
-      <AppCard variant="default" radius="xl" padding="md" style={[styles.driveCard, disabled ? styles.entryCardDisabled : null]}>
-        <View style={styles.driveCardTop}>
-          {drive?.organization_logo_url ? (
-            <Image source={{ uri: drive.organization_logo_url }} style={styles.driveCardLogo} resizeMode="cover" />
-          ) : (
-            <View style={styles.driveCardLogoFallback}>
-              <AppIcon name="organization" size="sm" state="active" />
-            </View>
-          )}
-          <View style={styles.driveCardMeta}>
-            <Text numberOfLines={2} style={styles.driveCardTitle}>{drive?.event_title || 'Donation drive'}</Text>
-            <Text numberOfLines={1} style={styles.driveCardText}>{drive?.organization_name || 'Organization'}</Text>
-            <Text numberOfLines={1} style={styles.driveCardText}>{formatDriveDate(drive?.start_date, drive?.end_date)}</Text>
-            <Text numberOfLines={1} style={styles.driveCardText}>{drive?.location_label || drive?.address_label || 'Location to follow'}</Text>
-          </View>
+    <View style={[styles.donationHeroModule, { backgroundColor: roles.supportCardBackground, borderColor: roles.supportCardBorder }]}>
+      <View style={[styles.heroBadge, { backgroundColor: roles.primaryActionBackground }]}>
+        <Text style={[styles.heroBadgeText, { color: roles.primaryActionText }]}>Donation Readiness</Text>
+      </View>
+      <Text style={[styles.heroTitle, { color: roles.headingText }]}>{title}</Text>
+      <Text style={[styles.heroBody, { color: roles.bodyText }]}>{body}</Text>
+    </View>
+  );
+}
+
+function ProfilePendingModule({ roles, completionMeta, onManageProfile }) {
+  const missingItems = (completionMeta?.missingFieldLabels || []).slice(0, 3);
+  const items = missingItems.length ? missingItems : ['Profile details'];
+
+  return (
+    <View style={styles.moduleBlock}>
+      <View style={styles.pendingHeaderRow}>
+        <ModuleHeader
+          eyebrow="Pending items"
+          title="Complete your account setup"
+          body="These details are required before a donation request."
+          roles={roles}
+        />
+        <View style={[styles.stepsPill, { backgroundColor: roles.tertiaryAccentBackground }]}>
+          <Text style={[styles.stepsPillText, { color: roles.tertiaryAccentText }]}>{items.length} left</Text>
         </View>
-        <AppButton title="View drive" fullWidth={false} onPress={() => onPress?.(drive)} disabled={disabled} />
-      </AppCard>
-    </Pressable>
+      </View>
+
+      <View style={styles.moduleList}>
+        {items.map((label, index) => (
+          <Pressable
+            key={`${label}-${index}`}
+            onPress={onManageProfile}
+            style={({ pressed }) => [
+              styles.moduleListRow,
+              { borderBottomColor: roles.defaultCardBorder, opacity: pressed ? 0.82 : 1 },
+            ]}
+          >
+            <View style={[styles.moduleIconWrap, { backgroundColor: roles.iconPrimarySurface }]}>
+              <AppIcon name={index === 0 ? 'profile' : index === 1 ? 'location' : 'editProfile'} size="sm" color={roles.iconPrimaryColor} />
+            </View>
+            <View style={styles.moduleRowCopy}>
+              <Text style={[styles.moduleRowTitle, { color: roles.headingText }]}>{label}</Text>
+              <Text style={[styles.moduleRowBody, { color: roles.bodyText }]}>Add this information in your profile.</Text>
+            </View>
+            <AppIcon name="chevronRight" size="sm" color={roles.metaText} />
+          </Pressable>
+        ))}
+      </View>
+
+      <View style={styles.moduleActionRow}>
+        <AppButton title="Complete Profile" fullWidth={false} onPress={onManageProfile} />
+      </View>
+    </View>
   );
 }
 
 function DonationHistoryCard({ item }) {
   return (
-    <AppCard variant="default" radius="xl" padding="md" style={styles.historyCard}>
-      <Text style={styles.historyTitle}>{item?.submission_code || 'Donation record'}</Text>
-      <Text style={styles.historyMeta}>{item?.date_label || 'Date unavailable'}</Text>
-      <Text style={styles.historyMeta}>{item?.donation_source === 'manual_donor_details' ? 'Manual donor entry' : 'Hair analysis entry'}</Text>
-      <Text style={styles.historyMeta}>{item?.bundle_quantity ? `${item.bundle_quantity} bundle${item.bundle_quantity === 1 ? '' : 's'}` : 'Bundle count unavailable'}</Text>
-    </AppCard>
-  );
-}
-
-function DonationLogCard({ event }) {
-  return (
-    <AppCard variant="default" radius="xl" padding="md" style={styles.logCard}>
-      <View style={styles.logHeaderRow}>
-        <Text style={styles.logTitle}>{event?.title || 'Donation update'}</Text>
-        {event?.badge ? <Text style={styles.logBadge}>{event.badge}</Text> : null}
+    <View style={styles.historyRow}>
+      <View style={styles.historyIconWrap}>
+        <AppIcon name="donations" size="sm" state="active" />
       </View>
-      <Text style={styles.logDescription}>{event?.description || 'A donation update was recorded.'}</Text>
-      {event?.imageUrl ? (
-        <Image source={{ uri: event.imageUrl }} style={styles.logImage} resizeMode="cover" />
-      ) : null}
-      {event?.timestamp ? <Text style={styles.logTimestamp}>{event.timestamp}</Text> : null}
-    </AppCard>
+      <View style={styles.historyCopy}>
+        <Text numberOfLines={1} style={styles.historyTitle}>{item?.submission_code || 'Donation record'}</Text>
+        <Text numberOfLines={1} style={styles.historyMeta}>{item?.date_label || 'Date unavailable'}</Text>
+      </View>
+      <Text style={styles.historyMeta}>{item?.bundle_quantity ? `${item.bundle_quantity} bundle${item.bundle_quantity === 1 ? '' : 's'}` : 'No bundle count'}</Text>
+    </View>
   );
 }
 
@@ -373,197 +316,6 @@ function DriveListItem({ drive, onPress }) {
   );
 }
 
-function TimelinePreview({ stages, onOpenStage }) {
-  return (
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.timelineScrollContent}>
-      {stages.map((stage, index) => (
-        <View key={stage.key} style={styles.timelineNodeWrap}>
-          {index > 0 ? <View style={[styles.timelineConnector, stage.state === 'completed' ? styles.timelineConnectorCompleted : null]} /> : null}
-          <Pressable onPress={() => onOpenStage?.(stage)} style={({ pressed }) => [styles.timelineNodePressable, pressed ? styles.pressableActive : null]}>
-            <View style={[
-              styles.timelineDot,
-              stage.state === 'completed' ? styles.timelineDotDone : stage.state === 'current' ? styles.timelineDotCurrent : styles.timelineDotWaiting,
-            ]} />
-            <View style={[styles.timelineCard, stage.state === 'current' ? styles.timelineCardCurrent : null]}>
-              <Text numberOfLines={2} style={styles.timelineCardTitle}>{stage.label}</Text>
-              <Text style={styles.timelineCardStatus}>
-                {stage.progressLabel || (stage.state === 'completed' ? 'Complete' : stage.state === 'current' ? 'Ongoing' : 'On waiting')}
-              </Text>
-            </View>
-          </Pressable>
-        </View>
-      ))}
-    </ScrollView>
-  );
-}
-
-function StageDetailModal({
-  visible,
-  stage,
-  onClose,
-  onScanQr,
-  canScanQr = false,
-}) {
-  const parcelImages = (stage?.parcelImages || stage?.images || []).filter((image) => image?.signed_url);
-  const stageStatus = stage?.progressLabel
-    || (stage?.state === 'completed' ? 'Complete' : stage?.state === 'current' ? 'Ongoing' : 'On waiting');
-
-  return (
-    <ModalShell
-      visible={visible}
-      title={stage?.label || 'Timeline stage'}
-      subtitle={stageStatus}
-      onClose={onClose}
-    >
-      <View style={styles.stageDetailBody}>
-        {stage?.savedNote ? <Text style={styles.stageDetailText}>{stage.savedNote}</Text> : null}
-        {stage?.timestampLabel ? <Text style={styles.stageDetailTimestamp}>{stage.timestampLabel}</Text> : null}
-        <View style={styles.stageSection}>
-          <Text style={styles.stageSectionLabel}>Parcel photo</Text>
-          {parcelImages.length ? (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.stageImageRow}>
-              {parcelImages.map((image) => (
-                <Image
-                  key={image.image_id || image.file_path}
-                  source={{ uri: image.signed_url }}
-                  style={styles.stageImage}
-                  resizeMode="cover"
-                />
-              ))}
-            </ScrollView>
-          ) : (
-            <View style={styles.stageEmptyState}>
-              <Text style={styles.stageEmptyText}>No parcel photo uploaded yet.</Text>
-            </View>
-          )}
-        </View>
-        {canScanQr ? (
-          <View style={styles.stageActionRow}>
-            <AppButton title="Scan QR" fullWidth={false} onPress={onScanQr} />
-          </View>
-        ) : null}
-      </View>
-    </ModalShell>
-  );
-}
-
-function QrModal({
-  visible,
-  title,
-  subtitle,
-  helperText,
-  payload,
-  qrStatusLabel,
-  donationStatusLabel,
-  details = [],
-  onClose,
-  onDownload,
-  onPrint,
-  onNext,
-  nextLabel = 'Next',
-  isDownloading,
-  isPrinting,
-}) {
-  if (!visible || !payload) return null;
-
-  return (
-    <ModalShell
-      visible={visible}
-      title={title}
-      subtitle={subtitle}
-      onClose={onClose}
-      scrollContent
-      contentContainerStyle={styles.qrModalScrollContent}
-      footer={(
-        <View style={styles.qrActionWrap}>
-          <AppButton title="Print" variant="outline" fullWidth={false} onPress={onPrint} loading={isPrinting} />
-          <AppButton title="Download PDF" fullWidth={false} onPress={onDownload} loading={isDownloading} />
-          {onNext ? <AppButton title={nextLabel} fullWidth={false} onPress={onNext} /> : null}
-        </View>
-      )}
-    >
-      <View style={styles.qrPreviewWrap}>
-        <Image source={{ uri: buildQrImageUrl(payload, 420) }} style={styles.qrPreviewImage} resizeMode="contain" />
-      </View>
-      {qrStatusLabel ? <Text style={styles.qrStatus}>QR status: {qrStatusLabel}</Text> : null}
-      {donationStatusLabel ? <Text style={styles.qrDonationStatus}>Donation status: {donationStatusLabel}</Text> : null}
-      {helperText ? <Text style={styles.qrHelper}>{helperText}</Text> : null}
-      {details.length ? (
-        <View style={styles.qrDetailsCard}>
-          {details.map((item) => (
-            <View key={`${item.label}-${item.value}`} style={styles.qrDetailRow}>
-              <Text style={styles.qrDetailLabel}>{item.label}</Text>
-              <Text style={styles.qrDetailValue}>{item.value}</Text>
-            </View>
-          ))}
-        </View>
-      ) : null}
-    </ModalShell>
-  );
-}
-
-function QrScannerModal({
-  visible,
-  hasCameraPermission,
-  feedbackMessage,
-  isActivating,
-  onClose,
-  onRequestPermission,
-  onScanned,
-}) {
-  if (!visible) return null;
-
-  return (
-    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
-      <View style={styles.modalOverlay}>
-        <Pressable style={styles.modalBackdrop} onPress={onClose} />
-        <AppCard variant="elevated" radius="xl" padding="lg" style={styles.modalCard}>
-          <View style={styles.modalHeader}>
-            <View style={styles.modalHeaderCopy}>
-              <Text style={styles.modalTitle}>Scan donation QR</Text>
-              <Text style={styles.modalBody}>Scan the saved QR for your current donation to activate tracking.</Text>
-            </View>
-            <Pressable onPress={onClose} style={styles.modalCloseButton}>
-              <AppIcon name="close" state="muted" />
-            </Pressable>
-          </View>
-
-          <View style={styles.qrScannerStage}>
-            {hasCameraPermission ? (
-              <CameraView
-                style={styles.qrScannerPreview}
-                facing="back"
-                barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
-                onBarcodeScanned={isActivating ? undefined : ({ data }) => onScanned?.(data || '')}
-              />
-            ) : (
-              <View style={styles.qrScannerPlaceholder}>
-                <AppIcon name="camera" state="active" size="xl" />
-                <Text style={styles.qrScannerPlaceholderTitle}>Camera access needed</Text>
-                <Text style={styles.qrScannerPlaceholderBody}>
-                  Allow camera access so the app can scan your saved donation QR.
-                </Text>
-              </View>
-            )}
-          </View>
-
-          {feedbackMessage ? <Text style={styles.qrScannerError}>{feedbackMessage}</Text> : null}
-
-          <View style={styles.inlineActions}>
-            {!hasCameraPermission ? (
-              <AppButton title="Allow Camera" fullWidth={false} onPress={onRequestPermission} />
-            ) : (
-              <Text style={styles.qrScannerHint}>
-                {isActivating ? 'Activating donation QR...' : 'Point the camera at your saved donation QR.'}
-              </Text>
-            )}
-          </View>
-        </AppCard>
-      </View>
-    </Modal>
-  );
-}
-
 function MembershipRequiredModal({
   visible,
   drive,
@@ -587,7 +339,7 @@ function MembershipRequiredModal({
     >
       {feedback?.message ? <StatusBanner message={feedback.message} variant={feedback.variant} style={styles.inlineBanner} /> : null}
       <Text style={styles.modalBody}>
-        Join this organization first to RSVP for its donation drive.
+        Join this organization first to view its donation drive details.
       </Text>
     </ModalShell>
   );
@@ -604,7 +356,6 @@ function DriveBrowserModal({
   onBack,
   onSelectDrive,
   onRsvp,
-  onViewQr,
 }) {
   const isDetailView = Boolean(selectedDrive);
 
@@ -618,15 +369,11 @@ function DriveBrowserModal({
         <View style={styles.inlineActions}>
           {isDetailView ? <AppButton title="Back" variant="outline" fullWidth={false} onPress={onBack} /> : null}
           <AppButton title="Close" variant="outline" fullWidth={false} onPress={onClose} />
-          {isDetailView && selectedDrive?.registration?.qr?.is_valid ? (
-            <AppButton title="View QR" variant="outline" fullWidth={false} onPress={onViewQr} />
-          ) : null}
           {isDetailView ? (
             <AppButton
-              title={selectedDrive?.registration?.qr?.is_valid ? 'Show my QR' : 'RSVP'}
+              title={selectedDrive?.registration ? 'View QR' : 'Join drive'}
               fullWidth={false}
-              onPress={selectedDrive?.registration?.qr?.is_valid ? onViewQr : onRsvp}
-              disabled={Boolean(selectedDrive?.registration?.qr?.is_activated)}
+              onPress={onRsvp}
               loading={isSubmittingRsvp}
             />
           ) : null}
@@ -665,11 +412,7 @@ function DriveBrowserModal({
             <Text style={styles.driveDetailMeta}>{formatDriveDate(selectedDrive?.start_date, selectedDrive?.end_date)}</Text>
             <Text style={styles.driveDetailMeta}>{selectedDrive?.address_label || selectedDrive?.location_label || 'Location to follow'}</Text>
             <Text style={styles.driveDetailMeta}>
-              {selectedDrive?.registration?.qr?.is_activated
-                ? 'QR activated for this drive'
-                : selectedDrive?.registration?.qr?.is_pending
-                  ? 'Saved QR is ready for this drive.'
-                  : selectedDrive?.membership?.is_active ? 'Organization member' : 'Membership required before RSVP'}
+              {selectedDrive?.membership?.is_active ? 'Organization member' : 'Join organization first'}
             </Text>
           </View>
 
@@ -682,64 +425,202 @@ function DriveBrowserModal({
   );
 }
 
-function AgreementModal({ visible, accepted, onToggle, onClose, onContinue }) {
+function DriveQrModal({ visible, drive, payload, onClose }) {
+  if (!visible || !payload) return null;
+
   return (
     <ModalShell
       visible={visible}
-      title="Independent donation"
-      subtitle="Review the agreement first."
+      title="Drive QR"
+      subtitle={drive?.event_title || 'Donation drive registration'}
       onClose={onClose}
-      footer={(
-        <View style={styles.inlineActions}>
-          <AppButton title="Cancel" variant="outline" fullWidth={false} onPress={onClose} />
-          <AppButton title="Generate QR" fullWidth={false} onPress={onContinue} disabled={!accepted} />
-        </View>
-      )}
     >
-      <View style={styles.agreementList}>
-        {AGREEMENT_COPY.map((item) => (
-          <View key={item} style={styles.agreementRow}>
-            <View style={styles.agreementDot} />
-            <Text style={styles.agreementText}>{item}</Text>
-          </View>
-        ))}
+      <View style={styles.driveQrWrap}>
+        <Image source={{ uri: buildQrImageUrl(payload, 320) }} style={styles.driveQrImage} resizeMode="contain" />
       </View>
-
-      <Pressable onPress={onToggle} style={styles.checkboxRow}>
-        <View style={[styles.checkboxBox, accepted ? styles.checkboxBoxActive : null]}>
-          <AppIcon name={accepted ? 'checkbox-marked' : 'checkbox-blank-outline'} state={accepted ? 'inverse' : 'muted'} />
-        </View>
-        <Text style={styles.checkboxLabel}>I understand and agree.</Text>
-      </Pressable>
+      <Text style={styles.driveQrText}>
+        This QR uses your Donation_Drive_Registrations record for this drive.
+      </Text>
     </ModalShell>
   );
 }
 
-function ParcelUploadModal({
-  visible,
-  feedback,
-  isUploading,
-  onClose,
-  onUpload,
-}) {
+function DonationQrModal({ visible, payload, onClose }) {
+  if (!payload) return null;
+
   return (
     <ModalShell
       visible={visible}
-      title="Upload parcel photo"
-      subtitle="Add the packed parcel photo before shipment."
+      title="Donation QR Code"
+      subtitle="Attach this QR to the hair donation package."
       onClose={onClose}
-      footer={(
-        <View style={styles.inlineActions}>
-          <AppButton title="Close" variant="outline" fullWidth={false} onPress={onClose} />
-          <AppButton title={isUploading ? 'Uploading...' : 'Upload photo'} fullWidth={false} onPress={onUpload} loading={isUploading} />
-        </View>
-      )}
     >
-      {feedback?.message ? <StatusBanner message={feedback.message} variant={feedback.variant} style={styles.inlineBanner} /> : null}
-      <Text style={styles.modalBody}>
-        Upload a clear photo of the packed parcel before shipment. This becomes your first shipment log.
+      <View style={styles.driveQrWrap}>
+        <Image source={{ uri: buildQrImageUrl(payload, 320) }} style={styles.driveQrImage} resizeMode="contain" />
+      </View>
+      <Text style={styles.driveQrText}>
+        This QR uses the saved Hair_Submissions and Hair_Submission_Details records.
       </Text>
     </ModalShell>
+  );
+}
+
+function HairEligibilityGate({ hasLatestScreening, latestLabel, onCheckHair }) {
+  return (
+    <View style={styles.moduleBlock}>
+      <SectionTitle
+        eyebrow="Hair eligibility"
+        title="Hair eligibility check required"
+        body={hasLatestScreening
+          ? `Your latest hair eligibility check is older than one month${latestLabel ? ` (${latestLabel})` : ''}.`
+          : 'Complete CheckHair before requesting to donate.'}
+      />
+      <View style={styles.gateActionRow}>
+        <AppButton title="Go to Hair Eligibility" fullWidth={false} onPress={onCheckHair} />
+      </View>
+    </View>
+  );
+}
+
+function EligibilityResultModule({
+  roles,
+  decision,
+  condition,
+  screening,
+  latestLabel,
+  donationReady,
+  onOpenDetails,
+  onRecheck,
+}) {
+  return (
+    <View style={[styles.readinessModule, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
+      <View style={styles.readinessTop}>
+        <View>
+          <Text style={[styles.readinessTitle, { color: roles.headingText }]}>{decision || 'Eligible result available'}</Text>
+          <Text style={[styles.readinessMeta, { color: roles.bodyText }]}>{latestLabel ? `Analyzed ${latestLabel}` : 'Hair check saved'}</Text>
+        </View>
+        <View style={[styles.readinessIconWrap, { backgroundColor: roles.iconPrimarySurface }]}>
+          <AppIcon name={donationReady ? 'success' : 'checkHair'} color={roles.iconPrimaryColor} />
+        </View>
+      </View>
+
+      <View style={styles.readinessGrid}>
+        <View style={[styles.readinessMetric, { backgroundColor: roles.supportCardBackground }]}>
+          <View style={styles.metricLabelRow}>
+            <Text style={[styles.metricLabel, { color: roles.bodyText }]}>Hair Length</Text>
+            <AppIcon name="ruler" size="sm" color={roles.primaryActionBackground} />
+          </View>
+          <Text style={[styles.metricValue, { color: roles.headingText }]}>{screening?.estimated_length ? `${screening.estimated_length} in` : 'Not recorded'}</Text>
+        </View>
+        <View style={[styles.readinessMetric, { backgroundColor: roles.supportCardBackground }]}>
+          <View style={styles.metricLabelRow}>
+            <Text style={[styles.metricLabel, { color: roles.bodyText }]}>Condition</Text>
+            <AppIcon name="leaf" size="sm" color={roles.primaryActionBackground} />
+          </View>
+          <Text style={[styles.metricValue, { color: roles.headingText }]}>{condition || 'Not recorded'}</Text>
+        </View>
+      </View>
+
+      <View style={styles.primaryActionStack}>
+        <AppButton title={donationReady ? 'Update Donation Details' : 'Continue with Donation'} onPress={onOpenDetails} />
+        <AppButton title="Re-check Hair" variant="outline" onPress={onRecheck} />
+      </View>
+    </View>
+  );
+}
+
+function NextStepModule({ roles, donationReady, hasDrives, onOpenDetails }) {
+  return (
+    <View style={[styles.nextStepModule, { backgroundColor: roles.supportCardBackground }]}>
+      <ModuleHeader
+        eyebrow="Next step"
+        title={donationReady ? 'Choose a drive to join' : 'Save donation details'}
+        body={donationReady
+          ? hasDrives ? 'Open a drive module below to review the event and generate your registration QR.' : 'Your donation details are ready. New drives will appear here.'
+          : 'Add the hair length, bundle count, and donation photo before joining a drive.'}
+        roles={roles}
+      />
+      {!donationReady ? (
+        <View style={styles.moduleActionRow}>
+          <AppButton title="Open Donation Details" fullWidth={false} onPress={onOpenDetails} />
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function DriveModule({ roles, drives, donationReady, onOpenDrive }) {
+  return (
+    <View style={styles.moduleBlock}>
+      <ModuleHeader
+        eyebrow="Donation drives"
+        title="Available drive modules"
+        body={donationReady ? 'Select one drive to review details and join.' : 'Save donation details first to unlock drive joining.'}
+        roles={roles}
+      />
+
+      {drives?.length ? (
+        <View style={styles.driveModuleList}>
+          {drives.map((drive) => (
+            <Pressable
+              key={drive.donation_drive_id}
+              onPress={() => onOpenDrive?.(drive)}
+              disabled={!donationReady}
+              style={({ pressed }) => [
+                styles.driveModuleRow,
+                {
+                  backgroundColor: roles.defaultCardBackground,
+                  borderColor: roles.defaultCardBorder,
+                  opacity: !donationReady ? 0.56 : pressed ? 0.84 : 1,
+                },
+              ]}
+            >
+              {drive?.organization_logo_url ? (
+                <Image source={{ uri: drive.organization_logo_url }} style={styles.driveModuleLogo} resizeMode="cover" />
+              ) : (
+                <View style={[styles.driveModuleLogo, styles.driveModuleLogoFallback, { backgroundColor: roles.iconPrimarySurface }]}>
+                  <AppIcon name="organization" size="sm" color={roles.iconPrimaryColor} />
+                </View>
+              )}
+              <View style={styles.driveModuleCopy}>
+                <Text numberOfLines={1} style={[styles.driveModuleTitle, { color: roles.headingText }]}>{drive?.event_title || 'Donation drive'}</Text>
+                <Text numberOfLines={1} style={[styles.driveModuleText, { color: roles.bodyText }]}>{drive?.organization_name || 'Organization'}</Text>
+                <Text numberOfLines={1} style={[styles.driveModuleText, { color: roles.metaText }]}>{formatDriveDate(drive?.start_date, drive?.end_date)}</Text>
+              </View>
+              <AppIcon name="chevronRight" size="sm" color={roles.metaText} />
+            </Pressable>
+          ))}
+        </View>
+      ) : (
+        <View style={[styles.infoModule, { backgroundColor: roles.supportCardBackground }]}>
+          <AppIcon name="calendar" color={roles.iconPrimaryColor} />
+          <Text style={[styles.infoModuleText, { color: roles.bodyText }]}>No active drives right now.</Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
+function CurrentDonationModule({ roles, flowLabel, statusLabel }) {
+  return (
+    <View style={[styles.nextStepModule, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
+      <ModuleHeader
+        eyebrow="Current donation"
+        title="Donation in progress"
+        body="Complete or wait for the current donation process before starting another one."
+        roles={roles}
+      />
+      <View style={styles.currentStatusGrid}>
+        <View style={[styles.currentStatusTile, { backgroundColor: roles.supportCardBackground }]}>
+          <Text style={[styles.sourceSummaryLabel, { color: roles.metaText }]}>Current flow</Text>
+          <Text style={[styles.sourceSummaryValue, { color: roles.headingText }]}>{flowLabel}</Text>
+        </View>
+        <View style={[styles.currentStatusTile, { backgroundColor: roles.supportCardBackground }]}>
+          <Text style={[styles.sourceSummaryLabel, { color: roles.metaText }]}>Current status</Text>
+          <Text style={[styles.sourceSummaryValue, { color: roles.headingText }]}>{statusLabel}</Text>
+        </View>
+      </View>
+    </View>
   );
 }
 
@@ -758,9 +639,11 @@ function ManualEntryModal({
   return (
     <ModalShell
       visible={visible}
-      title="Manual donor entry"
-      subtitle="Save donor hair details for screening."
+      title="Donation details"
+      subtitle="Save the hair length, bundle count, and donation photo."
       onClose={onClose}
+      scrollContent
+      contentContainerStyle={styles.manualModalScroll}
       footer={(
         <View style={styles.inlineActions}>
           <AppButton title="Close" variant="outline" fullWidth={false} onPress={onClose} />
@@ -768,8 +651,7 @@ function ManualEntryModal({
         </View>
       )}
     >
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.manualModalScroll}>
-        {feedback?.message ? <StatusBanner message={feedback.message} variant={feedback.variant} style={styles.inlineBanner} /> : null}
+      {feedback?.message ? <StatusBanner message={feedback.message} variant={feedback.variant} style={styles.inlineBanner} /> : null}
 
         <View style={styles.manualFormRow}>
           <View style={styles.manualLengthWrap}>
@@ -793,6 +675,16 @@ function ManualEntryModal({
             />
           </View>
         </View>
+
+        <AppInput
+          label="Number of bundles"
+          required
+          value={form.bundleQuantity}
+          onChangeText={(value) => onChangeField('bundleQuantity', value.replace(/[^0-9]/g, ''))}
+          keyboardType="number-pad"
+          placeholder="1"
+          error={errors.bundleQuantity}
+        />
 
         <ChoiceField label="Treated" value={form.treated} options={YES_NO_OPTIONS} onChange={(value) => onChangeField('treated', value)} />
         <ChoiceField label="Colored" value={form.colored} options={YES_NO_OPTIONS} onChange={(value) => onChangeField('colored', value)} />
@@ -820,7 +712,6 @@ function ManualEntryModal({
 
           {errors.photo ? <Text style={styles.manualPhotoError}>{errors.photo}</Text> : null}
         </View>
-      </ScrollView>
     </ModalShell>
   );
 }
@@ -840,22 +731,10 @@ export function DonorDonationStatusScreen() {
     mode: 'badge',
     liveUpdates: true,
   });
-  const {
-    certificate,
-    generatedFileUri,
-    isGeneratingCertificate,
-    isSharingAvailable,
-    certificateError,
-    generateCertificate,
-    shareCertificate,
-  } = useDonorCertificate({ userId: user?.id, profile: { ...profile, email: user?.email || '' } });
-
   const [moduleData, setModuleData] = React.useState(null);
   const [isLoading, setIsLoading] = React.useState(true);
   const [screenError, setScreenError] = React.useState('');
   const [moduleFeedback, setModuleFeedback] = React.useState({ message: '', variant: 'info' });
-  const [entryPath, setEntryPath] = React.useState(null);
-
   const [isManualModalOpen, setIsManualModalOpen] = React.useState(false);
   const [manualForm, setManualForm] = React.useState(MANUAL_FORM_DEFAULTS);
   const [manualFormErrors, setManualFormErrors] = React.useState({});
@@ -867,32 +746,12 @@ export function DonorDonationStatusScreen() {
   const [isLoadingDrivePreview, setIsLoadingDrivePreview] = React.useState(false);
   const [driveFeedback, setDriveFeedback] = React.useState({ message: '', variant: 'info' });
   const [isSubmittingRsvp, setIsSubmittingRsvp] = React.useState(false);
+  const [driveQrPayload, setDriveQrPayload] = React.useState('');
+  const [donationQrPayload, setDonationQrPayload] = React.useState('');
   const [isMembershipPromptOpen, setIsMembershipPromptOpen] = React.useState(false);
   const [membershipFeedback, setMembershipFeedback] = React.useState({ message: '', variant: 'info' });
   const [isJoiningOrganization, setIsJoiningOrganization] = React.useState(false);
 
-  const [isAgreementOpen, setIsAgreementOpen] = React.useState(false);
-  const [agreementAccepted, setAgreementAccepted] = React.useState(false);
-  const [isParcelModalOpen, setIsParcelModalOpen] = React.useState(false);
-  const [isUploadingParcel, setIsUploadingParcel] = React.useState(false);
-
-  const [qrSheet, setQrSheet] = React.useState(null);
-  const [isDownloadingQr, setIsDownloadingQr] = React.useState(false);
-  const [isPrintingQr, setIsPrintingQr] = React.useState(false);
-  const [qrSharingAvailable, setQrSharingAvailable] = React.useState(false);
-  const [scanCameraPermission, requestScanCameraPermission] = useCameraPermissions();
-  const [isQrScannerOpen, setIsQrScannerOpen] = React.useState(false);
-  const [isActivatingQr, setIsActivatingQr] = React.useState(false);
-  const [qrScannerError, setQrScannerError] = React.useState('');
-
-  const [selectedTimelineStage, setSelectedTimelineStage] = React.useState(null);
-
-  const donorIdentity = React.useMemo(
-    () => buildDonorIdentity({ profile, user }),
-    [profile, user]
-  );
-  const qrOpenTimerRef = React.useRef(null);
-  const qrScanLockRef = React.useRef(false);
   const avatarInitials = `${profile?.first_name?.[0] || ''}${profile?.last_name?.[0] || ''}`.trim();
 
   const loadModuleData = React.useCallback(async () => {
@@ -920,122 +779,65 @@ export function DonorDonationStatusScreen() {
     loadModuleData();
   }, [loadModuleData]);
 
-  React.useEffect(() => {
-    let isMounted = true;
-
-    const loadQrSharing = async () => {
-      const supported = await isQrSharingSupported();
-      if (isMounted) {
-        setQrSharingAvailable(supported);
-      }
-    };
-
-    loadQrSharing();
-
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
-  React.useEffect(() => {
-    return () => {
-      if (qrOpenTimerRef.current) {
-        clearTimeout(qrOpenTimerRef.current);
-        qrOpenTimerRef.current = null;
-      }
-    };
-  }, []);
-
-  const showQrSheet = React.useCallback((nextQrSheet, deferMs = 0) => {
-    if (!nextQrSheet) {
-      return;
-    }
-
-    if (qrOpenTimerRef.current) {
-      clearTimeout(qrOpenTimerRef.current);
-      qrOpenTimerRef.current = null;
-    }
-
-    if (deferMs > 0) {
-      qrOpenTimerRef.current = setTimeout(() => {
-        setQrSheet(nextQrSheet);
-        qrOpenTimerRef.current = null;
-      }, deferMs);
-      return;
-    }
-
-    setQrSheet(nextQrSheet);
-  }, []);
-
-  React.useEffect(() => {
-    if (moduleData?.isAiEligible) {
-      if (!entryPath) {
-        setEntryPath(MANUAL_ENTRY_PATHS.ai);
-      }
-      return;
-    }
-
-    if (!entryPath || entryPath === MANUAL_ENTRY_PATHS.ai) {
-      setEntryPath(MANUAL_ENTRY_PATHS.manual);
-    }
-  }, [entryPath, moduleData?.isAiEligible]);
-
+  const donorProfileCompletionMeta = React.useMemo(() => buildProfileCompletionMeta({
+    photo_path: profile?.photo_path || profile?.avatar_url || '',
+    first_name: profile?.first_name || '',
+    last_name: profile?.last_name || '',
+    birthdate: profile?.birthdate || '',
+    gender: profile?.gender || '',
+    contact_number: profile?.contact_number || profile?.phone || '',
+    street: profile?.street || '',
+    barangay: profile?.barangay || '',
+    city: profile?.city || '',
+    province: profile?.province || '',
+    region: profile?.region || '',
+    country: profile?.country || 'Philippines',
+  }), [
+    profile?.avatar_url,
+    profile?.barangay,
+    profile?.birthdate,
+    profile?.city,
+    profile?.contact_number,
+    profile?.country,
+    profile?.first_name,
+    profile?.gender,
+    profile?.last_name,
+    profile?.phone,
+    profile?.photo_path,
+    profile?.province,
+    profile?.region,
+    profile?.street,
+  ]);
+  const isDonorProfileComplete = donorProfileCompletionMeta.isComplete;
   const latestAnalysisDecision = moduleData?.latestScreening?.decision || '';
   const latestAnalysisCondition = moduleData?.latestScreening?.detected_condition || '';
-  const latestAiDonation = moduleData?.latestAiDonation || null;
+  const latestScreeningCreatedAt = moduleData?.latestScreening?.created_at || '';
+  const latestScreeningLabel = latestScreeningCreatedAt ? formatDriveDate(latestScreeningCreatedAt) : '';
+  const isHairEligibilityFresh = Boolean(
+    latestScreeningCreatedAt
+    && Date.now() - new Date(latestScreeningCreatedAt).getTime() <= 30 * 24 * 60 * 60 * 1000
+  );
   const latestManualDonation = moduleData?.latestManualDonation || null;
-  const selectedDonationRecord = entryPath === MANUAL_ENTRY_PATHS.manual
-    ? latestManualDonation
-    : latestAiDonation;
-  const selectedPathIsQualified = Boolean(selectedDonationRecord?.qualification?.isQualified);
-  const fallbackQualifiedRecord = latestManualDonation?.qualification?.isQualified
-    ? latestManualDonation
-    : latestAiDonation?.qualification?.isQualified
-      ? latestAiDonation
-      : null;
-  const qualifiedDonationRecord = selectedPathIsQualified ? selectedDonationRecord : fallbackQualifiedRecord;
+  const manualDetailsCreatedAt = latestManualDonation?.created_at || latestManualDonation?.submission?.created_at || '';
+  const hasDonationDetailsAfterEligibility = Boolean(
+    latestManualDonation?.qualification?.isQualified
+    && manualDetailsCreatedAt
+    && latestScreeningCreatedAt
+    && new Date(manualDetailsCreatedAt).getTime() >= new Date(latestScreeningCreatedAt).getTime()
+  );
+  const qualifiedDonationRecord = hasDonationDetailsAfterEligibility ? latestManualDonation : null;
   const qualifiedSubmission = qualifiedDonationRecord?.submission || null;
   const qualifiedDetail = qualifiedDonationRecord?.detail || null;
-  const qualifiedScreening = qualifiedDonationRecord?.screening || null;
   const activeSubmission = moduleData?.latestSubmission || qualifiedSubmission || null;
-  const activeDetail = moduleData?.latestDetail || getLatestSubmissionDetailRecord(activeSubmission, qualifiedDetail);
-  const activeQualificationSource = selectedPathIsQualified
-    ? qualifiedDonationRecord?.source || ''
-    : moduleData?.activeQualificationSource || '';
-  const donationReady = Boolean(qualifiedDonationRecord?.qualification?.isQualified);
+  const donationReady = Boolean(isHairEligibilityFresh && qualifiedDonationRecord?.qualification?.isQualified);
   const aiPathReady = Boolean(moduleData?.isAiEligible);
-  const independentQrState = moduleData?.independentQrState || null;
   const hasOngoingDonation = Boolean(moduleData?.hasOngoingDonation);
   const activeFlowType = moduleData?.activeFlowType || '';
-  const activeDrive = moduleData?.activeDrive || null;
-  const activeQrState = moduleData?.activeQrState || null;
   const ongoingDonationMessage = moduleData?.ongoingDonationMessage || 'You already have an ongoing donation. Please complete or wait for the current donation process to finish before starting a new one.';
-  const hasTimelinePreview = Boolean(
-    activeSubmission?.submission_id
-    && moduleData?.timelineStages?.length
-  );
-  const hasTimelineLog = Boolean(
-    activeSubmission?.submission_id
-    && moduleData?.timelineEvents?.length
-  );
-  const hasActiveQrAction = Boolean(
-    hasOngoingDonation
-    && (
-      activeFlowType === 'drive'
-        ? activeDrive?.registration?.registration_id
-        : activeQrState?.reference
-    )
-  );
-  const currentTimelineStage = moduleData?.timelineStages?.find((stage) => stage?.state === 'current')
-    || [...(moduleData?.timelineStages || [])].reverse().find((stage) => stage?.state === 'completed')
-    || null;
   const currentFlowLabel = activeFlowType === 'drive'
     ? 'Donation drive'
-    : activeFlowType === 'independent'
-      ? 'Independent donation'
-      : 'Donation in progress';
-  const currentStatusLabel = currentTimelineStage?.label || formatQrStatusLabel(activeQrState?.status || '') || 'In progress';
-  const hasScanCameraPermission = Boolean(scanCameraPermission?.granted);
+    : 'Donation in progress';
+  const currentStatusLabel = activeSubmission?.status || 'In progress';
 
   const handleNavPress = React.useCallback((item) => {
     if (!item.route || item.route === '/donor/status') return;
@@ -1083,36 +885,17 @@ export function DonorDonationStatusScreen() {
     }));
   }, []);
 
-  const handleUseLatestAnalysis = React.useCallback(() => {
-    if (hasOngoingDonation) {
-      setModuleFeedback({
-        message: ongoingDonationMessage,
-        variant: 'info',
-      });
-      return;
-    }
-
-    if (!aiPathReady) {
-      setModuleFeedback({
-        message: 'No eligible saved hair analysis is ready. Use manual donor entry instead.',
-        variant: 'info',
-      });
-      return;
-    }
-
-    setEntryPath(MANUAL_ENTRY_PATHS.ai);
-    setModuleFeedback({
-      message: 'Latest eligible hair analysis selected.',
-      variant: 'success',
-    });
-  }, [aiPathReady, hasOngoingDonation, ongoingDonationMessage]);
-
   const handleSaveManualDetails = React.useCallback(async () => {
     const nextErrors = {};
     const numericLength = Number(manualForm.lengthValue);
+    const numericBundleQuantity = Number.parseInt(manualForm.bundleQuantity, 10);
 
     if (!Number.isFinite(numericLength) || numericLength <= 0) {
       nextErrors.lengthValue = 'Enter the current hair length using numbers only.';
+    }
+
+    if (!Number.isInteger(numericBundleQuantity) || numericBundleQuantity <= 0) {
+      nextErrors.bundleQuantity = 'Enter at least 1 bundle.';
     }
 
     if (!manualPhoto) {
@@ -1131,6 +914,7 @@ export function DonorDonationStatusScreen() {
       manualDetails: {
         length_value: numericLength,
         length_unit: manualForm.lengthUnit,
+        bundle_quantity: numericBundleQuantity,
         treated: manualForm.treated,
         colored: manualForm.colored,
         trimmed: manualForm.trimmed,
@@ -1150,15 +934,21 @@ export function DonorDonationStatusScreen() {
       return;
     }
 
-    setEntryPath(MANUAL_ENTRY_PATHS.manual);
     setIsManualModalOpen(false);
     setManualFeedback({ message: '', variant: 'info' });
     setModuleFeedback({
       message: result.canProceed
-        ? 'Manual donor details saved. Donation options are ready.'
+        ? 'Donation details saved. Attach the generated QR to the package.'
         : result.qualification?.reason || 'Manual donor details were saved, but they do not qualify yet.',
       variant: result.canProceed ? 'success' : 'info',
     });
+    if (result.canProceed) {
+      setDonationQrPayload(buildDonationTrackingQrPayload({
+        submission: result.submission,
+        detail: result.detail,
+        trackingStatus: result.submission?.status || result.detail?.status || '',
+      }));
+    }
 
     await loadModuleData();
   }, [loadModuleData, manualForm, manualPhoto, moduleData?.latestDonationRequirement, profile?.user_id, user?.id]);
@@ -1181,141 +971,6 @@ export function DonorDonationStatusScreen() {
       setSelectedDrive(result.data);
     }
   }, [profile?.user_id]);
-
-  const createDonationQrSheet = React.useCallback(({
-    submission = null,
-    detail = null,
-    logistics = null,
-    drive = null,
-    qrReference = '',
-    qrStatus = '',
-    qrLifecycleStatus = '',
-  } = {}) => {
-    if (!submission?.submission_id) {
-      return null;
-    }
-
-    const resolvedDetail = getLatestSubmissionDetailRecord(submission, detail);
-    const trackingLabel = resolveDonationTrackingLabel({
-      submission,
-      logistics,
-      timelineStage: currentTimelineStage,
-      qrStatus,
-    });
-    const formattedQrLifecycleStatus = formatQrStatusLabel(qrLifecycleStatus);
-
-    return {
-      type: 'donation',
-      title: 'Donation QR',
-      subtitle: 'This QR is linked to your donation details.',
-      helperText: formattedQrLifecycleStatus === 'Active'
-        ? 'Show or attach this QR for your donation tracking.'
-        : 'Scan QR to activate donation tracking for this donation.',
-      payload: buildDonationTrackingQrPayload({
-        submission,
-        detail: resolvedDetail,
-        logistics,
-        donor: donorIdentity,
-        drive,
-        qrReference,
-        trackingStatus: trackingLabel,
-      }),
-      qrStatus: qrLifecycleStatus || '',
-      donationStatus: trackingLabel,
-      details: buildDonationQrDetails({
-        submission,
-        detail: resolvedDetail,
-        logistics,
-        drive,
-        donorName: donorIdentity?.name || '',
-        trackingLabel,
-        qrLifecycleStatus: formattedQrLifecycleStatus,
-      }),
-    };
-  }, [currentTimelineStage, donorIdentity]);
-
-  const buildDriveQrSheet = React.useCallback((drive, registration) => {
-    const nextQrSheet = createDonationQrSheet({
-      submission: activeSubmission || qualifiedSubmission,
-      detail: activeDetail || qualifiedDetail,
-      logistics: moduleData?.logistics || null,
-      drive,
-      qrReference: registration?.registration_id ? `RSVP-${registration.registration_id}` : activeSubmission?.submission_code || '',
-      qrStatus: moduleData?.logistics?.shipment_status || activeSubmission?.status || registration?.qr?.status || 'inactive',
-      qrLifecycleStatus: registration?.qr?.status || 'inactive',
-    });
-
-    if (!nextQrSheet) {
-      setModuleFeedback({
-        message: 'No saved donation QR is available for this drive record yet.',
-        variant: 'info',
-      });
-      return;
-    }
-
-    setQrSheet(nextQrSheet);
-  }, [activeDetail, activeSubmission, createDonationQrSheet, moduleData?.logistics, qualifiedDetail, qualifiedSubmission]);
-
-  const performDriveRsvp = React.useCallback(async () => {
-    if (!selectedDrive?.donation_drive_id || !profile?.user_id || !user?.id) {
-      setDriveFeedback({ message: 'Your donor account is required before sending an RSVP.', variant: 'info' });
-      return;
-    }
-
-    if (!qualifiedSubmission?.submission_id || !qualifiedDetail?.submission_detail_id) {
-      setDriveFeedback({ message: 'Save a donation entry first before joining a drive.', variant: 'info' });
-      return;
-    }
-
-    setIsSubmittingRsvp(true);
-    const result = await saveDriveDonationParticipation({
-      userId: user.id,
-      databaseUserId: profile.user_id,
-      drive: selectedDrive,
-      submission: qualifiedSubmission,
-      detail: qualifiedDetail,
-      qualificationSource: qualifiedDonationRecord?.source || entryPath,
-    });
-    setIsSubmittingRsvp(false);
-
-    if (result.error) {
-      setDriveFeedback({ message: 'RSVP could not be saved right now.', variant: 'error' });
-      return;
-    }
-
-    const nextDrive = {
-      ...selectedDrive,
-      registration: result.registration,
-      can_rsvp: false,
-    };
-    setSelectedDrive(nextDrive);
-    setDriveFeedback({
-      message: result.alreadyRegistered ? 'RSVP already saved.' : 'RSVP saved.',
-      variant: 'success',
-    });
-    buildDriveQrSheet(nextDrive, result.registration);
-    await loadModuleData();
-  }, [buildDriveQrSheet, entryPath, loadModuleData, profile?.user_id, qualifiedDetail, qualifiedDonationRecord?.source, qualifiedSubmission, selectedDrive, user?.id]);
-
-  const handleDriveRsvp = React.useCallback(async () => {
-    if (!selectedDrive) return;
-
-    if (hasOngoingDonation) {
-      setDriveFeedback({
-        message: ongoingDonationMessage,
-        variant: 'info',
-      });
-      return;
-    }
-
-    if (selectedDrive.organization_id && !selectedDrive.membership?.is_active) {
-      setMembershipFeedback({ message: '', variant: 'info' });
-      setIsMembershipPromptOpen(true);
-      return;
-    }
-
-    await performDriveRsvp();
-  }, [hasOngoingDonation, ongoingDonationMessage, performDriveRsvp, selectedDrive]);
 
   const handleJoinOrganization = React.useCallback(async () => {
     if (!selectedDrive?.organization_id || !profile?.user_id) {
@@ -1347,436 +1002,102 @@ export function DonorDonationStatusScreen() {
     }
 
     setMembershipFeedback({
-      message: result.alreadyMember ? 'You are already a member.' : 'Organization joined. You can continue to RSVP.',
+      message: result.alreadyMember ? 'You are already a member.' : 'Organization joined.',
       variant: 'success',
     });
     setIsMembershipPromptOpen(false);
-    await performDriveRsvp();
-  }, [performDriveRsvp, profile?.user_id, selectedDrive]);
+  }, [profile?.user_id, selectedDrive]);
 
-  const handleViewDriveQr = React.useCallback(() => {
-    if (!selectedDrive?.registration) return;
-    buildDriveQrSheet(selectedDrive, selectedDrive.registration);
-  }, [buildDriveQrSheet, selectedDrive]);
+  const handleDriveRsvp = React.useCallback(async () => {
+    if (!selectedDrive) return;
 
-  const createIndependentQrSheet = React.useCallback(({
-    submission = qualifiedSubmission,
-    detail = qualifiedDetail,
-    qrState = moduleData?.independentQrState || null,
-  } = {}) => {
-    if (!submission || !qrState?.reference) {
-      return null;
-    }
-
-    return createDonationQrSheet({
-      submission,
-      detail,
-      logistics: moduleData?.logistics || null,
-      drive: activeDrive || null,
-      qrReference: qrState.reference,
-      qrStatus: moduleData?.logistics?.shipment_status || submission?.status || 'Ready for shipment',
-      qrLifecycleStatus: qrState.status || 'inactive',
-    });
-  }, [activeDrive, createDonationQrSheet, moduleData?.independentQrState, moduleData?.logistics, qualifiedDetail, qualifiedSubmission]);
-
-  const openIndependentQrSheet = React.useCallback(async ({
-    data = null,
-    submission = null,
-    detail = null,
-    screening = null,
-    qualificationSource = '',
-    qrState = null,
-    openAfterClose = false,
-  } = {}) => {
-    const sourceData = data || await loadModuleData();
-    const resolvedSubmission = submission || sourceData?.latestSubmission || qualifiedSubmission || null;
-    const resolvedDetail = getLatestSubmissionDetailRecord(
-      resolvedSubmission,
-      detail || sourceData?.latestDetail || qualifiedDetail,
-    );
-    const resolvedQrState = qrState
-      || sourceData?.independentQrState
-      || moduleData?.independentQrState
-      || getIndependentDonationQrState({
-        submission: resolvedSubmission,
-        logistics: sourceData?.logistics || moduleData?.logistics || null,
-        trackingEntries: sourceData?.trackingEntries || moduleData?.trackingEntries || [],
-      })
-      || null;
-    const nextQrSheet = createIndependentQrSheet({
-      submission: resolvedSubmission,
-      detail: resolvedDetail,
-      screening: screening || sourceData?.activeScreening || qualifiedScreening,
-      qualificationSource: qualificationSource || sourceData?.activeQualificationSource || qualifiedDonationRecord?.source || entryPath,
-      qrState: resolvedQrState,
-    });
-
-    if (!nextQrSheet) {
-      return false;
-    }
-
-    showQrSheet(nextQrSheet, openAfterClose ? 260 : 0);
-
-    return true;
-  }, [
-    createIndependentQrSheet,
-    entryPath,
-    loadModuleData,
-    moduleData?.logistics,
-    moduleData?.independentQrState,
-    moduleData?.trackingEntries,
-    qualifiedDetail,
-    qualifiedDonationRecord?.source,
-    qualifiedScreening,
-    qualifiedSubmission,
-    showQrSheet,
-  ]);
-
-  const buildIndependentQrSheet = React.useCallback(async () => {
-    const didOpenQr = await openIndependentQrSheet();
-    if (!didOpenQr) {
-      setModuleFeedback({
-        message: 'No saved QR is ready yet for this donation flow.',
-        variant: 'info',
-      });
-    }
-  }, [openIndependentQrSheet]);
-
-  const handleViewCurrentDonationQr = React.useCallback(async () => {
-    if (!hasOngoingDonation) {
+    if (selectedDrive?.registration?.registration_id) {
+      setDriveQrPayload(buildDriveInvitationQrPayload({
+        drive: selectedDrive,
+        registration: selectedDrive.registration,
+      }));
       return;
     }
 
-    if (activeFlowType === 'drive' && activeDrive?.registration?.registration_id) {
-      buildDriveQrSheet(activeDrive, activeDrive.registration);
-      return;
-    }
-
-    if (activeFlowType === 'independent' && independentQrState?.reference) {
-      await buildIndependentQrSheet();
-      return;
-    }
-
-    setModuleFeedback({
-      message: 'No saved QR is available for the current donation yet.',
-      variant: 'info',
-    });
-  }, [
-    activeDrive,
-    activeFlowType,
-    buildDriveQrSheet,
-    buildIndependentQrSheet,
-    hasOngoingDonation,
-    independentQrState?.reference,
-  ]);
-
-  const handleAgreementContinue = React.useCallback(async () => {
-    if (hasOngoingDonation && !qualifiedSubmission?.submission_id) {
-      setModuleFeedback({
+    if (hasOngoingDonation) {
+      setDriveFeedback({
         message: ongoingDonationMessage,
         variant: 'info',
       });
-      setIsAgreementOpen(false);
       return;
     }
 
-    setIsAgreementOpen(false);
-    const result = await ensureIndependentDonationQr({
-      userId: user?.id,
+    if (!selectedDrive?.membership?.is_active) {
+      setMembershipFeedback({ message: '', variant: 'info' });
+      setIsMembershipPromptOpen(true);
+      return;
+    }
+
+    if (!user?.id || !profile?.user_id || !qualifiedSubmission?.submission_id || !qualifiedDetail?.submission_detail_id) {
+      setDriveFeedback({
+        message: 'A qualified donor entry is required before joining a drive.',
+        variant: 'info',
+      });
+      return;
+    }
+
+    setIsSubmittingRsvp(true);
+    const result = await saveDriveDonationParticipation({
+      userId: user.id,
+      databaseUserId: profile.user_id,
+      drive: selectedDrive,
       submission: qualifiedSubmission,
-      databaseUserId: profile?.user_id || null,
+      detail: qualifiedDetail,
+      qualificationSource: qualifiedDonationRecord?.source || 'manual',
     });
+    setIsSubmittingRsvp(false);
 
-    if (!result.success) {
-      setModuleFeedback({
-        message: result.error || 'A QR could not be prepared right now.',
-        variant: 'error',
-      });
+    if (result.error || !result.success) {
+      setDriveFeedback({ message: result.error || 'Drive join could not be saved right now.', variant: 'error' });
       return;
     }
 
-    const openSavedQrFromResult = async ({ refreshedData = null } = {}) => {
-      const didOpenQr = await openIndependentQrSheet({
-        data: refreshedData,
-        submission: result.submission || activeSubmission || qualifiedSubmission,
-        detail: qualifiedDetail,
-        screening: qualifiedScreening,
-        qualificationSource: qualifiedDonationRecord?.source || entryPath,
-        qrState: result.qrState || null,
-        openAfterClose: true,
-      });
-
-      if (didOpenQr) {
-        return true;
+    const refreshed = await fetchDonationDrivePreview(selectedDrive.donation_drive_id, profile.user_id);
+    if (refreshed.data) {
+      setSelectedDrive(refreshed.data);
+      if (refreshed.data?.registration?.registration_id) {
+        setDriveQrPayload(buildDriveInvitationQrPayload({
+          drive: refreshed.data,
+          registration: refreshed.data.registration,
+        }));
       }
-
-      if (!result.qrState?.reference) {
-        return false;
-      }
-
-      const fallbackSubmission = result.submission
-        || refreshedData?.latestSubmission
-        || activeSubmission
-        || qualifiedSubmission
-        || null;
-      const fallbackSheet = createIndependentQrSheet({
-        submission: fallbackSubmission,
-        detail: getLatestSubmissionDetailRecord(
-          fallbackSubmission,
-          qualifiedDetail || refreshedData?.latestDetail || moduleData?.latestDetail || null,
-        ),
-        screening: qualifiedScreening || refreshedData?.activeScreening || moduleData?.activeScreening || null,
-        qualificationSource: qualifiedDonationRecord?.source || refreshedData?.activeQualificationSource || entryPath,
-        qrState: result.qrState
-          || refreshedData?.independentQrState
-          || moduleData?.independentQrState
-          || null,
-      });
-
-      if (!fallbackSheet) {
-        return false;
-      }
-
-      showQrSheet(fallbackSheet, 260);
-      return true;
-    };
-
-    if (result.submission) {
-      const refreshedData = await loadModuleData();
-      const didOpenQr = await openSavedQrFromResult({ refreshedData });
-
-      if (!didOpenQr) {
-        setModuleFeedback({
-          message: 'QR is saved, but it could not be displayed right now.',
-          variant: 'error',
-        });
-        return;
-      }
-    } else {
-      const didOpenQr = await openSavedQrFromResult();
-
-      if (!didOpenQr) {
-        setModuleFeedback({
-          message: 'QR is saved, but it could not be displayed right now.',
-          variant: 'error',
-        });
-        return;
-      }
+    } else if (result.registration?.registration_id) {
+      setDriveQrPayload(buildDriveInvitationQrPayload({
+        drive: selectedDrive,
+        registration: result.registration,
+      }));
     }
 
-    setModuleFeedback({
-      message: result.reused ? 'Your saved QR was loaded.' : 'Your QR was saved and is ready to view.',
-      variant: 'success',
-    });
-  }, [activeSubmission, createIndependentQrSheet, entryPath, hasOngoingDonation, loadModuleData, moduleData?.activeScreening, moduleData?.independentQrState, moduleData?.latestDetail, ongoingDonationMessage, openIndependentQrSheet, profile?.user_id, qualifiedDetail, qualifiedDonationRecord?.source, qualifiedScreening, qualifiedSubmission, showQrSheet, user?.id]);
-
-  const handleDownloadQr = React.useCallback(async () => {
-    if (!qrSheet?.payload) return;
-
-    setIsDownloadingQr(true);
-    try {
-      const file = await generateDonationQrPdf({
-        title: qrSheet.title,
-        subtitle: qrSheet.subtitle,
-        helperText: qrSheet.helperText,
-        qrPayloadText: qrSheet.payload,
-        details: qrSheet.details || [],
-      });
-
-      if (qrSharingAvailable) {
-        await shareDonationQrPdf(file.uri);
-      }
-
-      setModuleFeedback({
-        message: qrSharingAvailable ? 'QR PDF is ready to save or share.' : `QR PDF generated at ${file.uri}.`,
-        variant: 'success',
-      });
-    } catch (error) {
-      setModuleFeedback({
-        message: error.message || 'Unable to save the QR PDF right now.',
-        variant: 'error',
-      });
-    } finally {
-      setIsDownloadingQr(false);
-    }
-  }, [qrSheet, qrSharingAvailable]);
-
-  const handlePrintQr = React.useCallback(async () => {
-    if (!qrSheet?.payload) return;
-
-    setIsPrintingQr(true);
-    try {
-      await printDonationQrPdf({
-        title: qrSheet.title,
-        subtitle: qrSheet.subtitle,
-        helperText: qrSheet.helperText,
-        qrPayloadText: qrSheet.payload,
-        details: qrSheet.details || [],
-      });
-
-      setModuleFeedback({
-        message: 'QR is ready to print.',
-        variant: 'success',
-      });
-    } catch (error) {
-      setModuleFeedback({
-        message: error.message || 'Unable to open the print view right now.',
-        variant: 'error',
-      });
-    } finally {
-      setIsPrintingQr(false);
-    }
-  }, [qrSheet]);
-
-  const handleCloseQrSheet = React.useCallback(() => {
-    if (qrOpenTimerRef.current) {
-      clearTimeout(qrOpenTimerRef.current);
-      qrOpenTimerRef.current = null;
-    }
-    setQrSheet(null);
-  }, []);
-
-  const handleCloseQrScanner = React.useCallback(() => {
-    qrScanLockRef.current = false;
-    setIsActivatingQr(false);
-    setQrScannerError('');
-    setIsQrScannerOpen(false);
-  }, []);
-
-  const handleOpenQrScanner = React.useCallback(() => {
-    if (!activeSubmission?.submission_id || !independentQrState?.reference) {
-      setModuleFeedback({
-        message: 'No saved donation QR is available to scan for this donation flow.',
-        variant: 'info',
-      });
-      return;
-    }
-
-    setSelectedTimelineStage(null);
-    setQrScannerError('');
-    qrScanLockRef.current = false;
-    setIsQrScannerOpen(true);
-  }, [activeSubmission?.submission_id, independentQrState?.reference]);
-
-  const handleRequestQrScannerPermission = React.useCallback(async () => {
-    setQrScannerError('');
-    await requestScanCameraPermission();
-  }, [requestScanCameraPermission]);
-
-  const handleDonationQrScanned = React.useCallback(async (scannedPayload) => {
-    if (qrScanLockRef.current || isActivatingQr) {
-      return;
-    }
-
-    qrScanLockRef.current = true;
-    setIsActivatingQr(true);
-    setQrScannerError('');
-
-    const result = await activateIndependentDonationQrByScan({
-      userId: user?.id,
-      databaseUserId: profile?.user_id || null,
-      submission: activeSubmission,
-      scannedPayload,
-    });
-
-    if (!result.success) {
-      setQrScannerError(result.error || 'The donation QR could not be activated right now.');
-      setIsActivatingQr(false);
-      qrScanLockRef.current = false;
-      return;
-    }
-
-    handleCloseQrScanner();
-    setModuleFeedback({
-      message: result.alreadyActivated
-        ? 'Donation QR is already active.'
-        : 'Donation QR activated. Tracking is now active for shipment.',
-      variant: 'success',
-    });
+    setDriveFeedback({ message: result.alreadyRegistered ? 'Drive registration loaded.' : 'Drive joined.', variant: 'success' });
     await loadModuleData();
-  }, [activeSubmission, handleCloseQrScanner, isActivatingQr, loadModuleData, profile?.user_id, user?.id]);
-
-  const handleUploadParcel = React.useCallback(async () => {
-    if (!activeSubmission || !activeDetail) {
-      setModuleFeedback({
-        message: 'A qualified donation entry is required before parcel logging.',
-        variant: 'error',
-      });
-      return;
-    }
-
-    if (!moduleData?.independentQrState?.is_activated || !moduleData?.independentQrState?.reference) {
-      setModuleFeedback({
-        message: 'Scan your saved donation QR first to activate donation tracking before uploading the parcel photo.',
-        variant: 'info',
-      });
-      return;
-    }
-
-    const pickResult = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      quality: 0.72,
-      base64: true,
-    });
-
-    if (pickResult.canceled || !pickResult.assets?.length) {
-      return;
-    }
-
-    const asset = pickResult.assets[0];
-    setIsUploadingParcel(true);
-
-    const qrPayload = buildDonationTrackingQrPayload({
-      submission: activeSubmission,
-      detail: activeDetail,
-      logistics: moduleData?.logistics || null,
-      donor: donorIdentity,
-      drive: activeDrive || null,
-      qrReference: moduleData.independentQrState.reference,
-      trackingStatus: resolveDonationTrackingLabel({
-        submission: activeSubmission,
-        logistics: moduleData?.logistics || null,
-        timelineStage: currentTimelineStage,
-        qrStatus: moduleData.independentQrState.status || '',
-      }),
-    });
-
-    const result = await saveIndependentDonationParcelLog({
-      userId: user?.id,
-      databaseUserId: profile?.user_id || null,
-      submission: activeSubmission,
-      detail: activeDetail,
-      qrState: moduleData?.independentQrState || null,
-      photo: {
-        uri: asset.uri,
-        base64: asset.base64 || '',
-        mimeType: asset.mimeType || 'image/jpeg',
-        fileName: asset.fileName || '',
-      },
-      qrPayloadText: qrPayload,
-    });
-
-    setIsUploadingParcel(false);
-
-    if (!result.success) {
-      setModuleFeedback({
-        message: result.error || 'Unable to save the parcel log.',
-        variant: 'error',
-      });
-      return;
-    }
-
-    setIsParcelModalOpen(false);
-    setQrSheet(null);
-    setModuleFeedback({
-      message: 'Parcel image uploaded. Timeline is now active.',
-      variant: 'success',
-    });
-    await loadModuleData();
-  }, [activeDetail, activeDrive, activeSubmission, currentTimelineStage, donorIdentity, loadModuleData, moduleData?.independentQrState, moduleData?.logistics, profile?.user_id, user?.id]);
+  }, [
+    hasOngoingDonation,
+    loadModuleData,
+    ongoingDonationMessage,
+    profile?.user_id,
+    qualifiedDetail,
+    qualifiedDonationRecord?.source,
+    qualifiedSubmission,
+    selectedDrive,
+    user?.id,
+  ]);
 
   const handleOpenManualModal = React.useCallback(() => {
+    if (!isDonorProfileComplete) {
+      router.navigate('/profile');
+      return;
+    }
+
+    if (!isHairEligibilityFresh) {
+      router.navigate('/donor/donations');
+      return;
+    }
+
     if (hasOngoingDonation) {
       setModuleFeedback({
         message: ongoingDonationMessage,
@@ -1787,9 +1108,7 @@ export function DonorDonationStatusScreen() {
 
     setManualFeedback({ message: '', variant: 'info' });
     setIsManualModalOpen(true);
-  }, [hasOngoingDonation, ongoingDonationMessage]);
-
-  const latestCertificateEmail = user?.email || profile?.email || '';
+  }, [hasOngoingDonation, isDonorProfileComplete, isHairEligibilityFresh, ongoingDonationMessage, router]);
 
   return (
     <DashboardLayout
@@ -1815,211 +1134,120 @@ export function DonorDonationStatusScreen() {
     >
       {screenError ? <StatusBanner message={screenError} variant="info" /> : null}
       {moduleFeedback.message ? <StatusBanner message={moduleFeedback.message} variant={moduleFeedback.variant} /> : null}
-      {certificateError && certificate ? <StatusBanner message={certificateError} variant="info" /> : null}
 
       {isLoading ? (
-        <AppCard variant="default" radius="xl" padding="lg">
+        <View style={[styles.loadingModule, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
           <View style={styles.loadingState}>
             <ActivityIndicator color={resolvedTheme?.primaryColor || theme.colors.brandPrimary} />
             <Text style={[styles.loadingText, { color: roles.bodyText }]}>Loading donations</Text>
           </View>
-        </AppCard>
+        </View>
       ) : (
-        <>
-          {hasOngoingDonation ? (
-            <View style={styles.ongoingSummaryStrip}>
-              <View style={styles.ongoingSummaryTop}>
-                <View style={styles.ongoingSummaryCopy}>
-                  <Text style={styles.ongoingSummaryTitle}>Current donation in progress</Text>
-                  <Text style={styles.ongoingSummaryCaption}>Tracking is active for your saved donation flow.</Text>
-                </View>
-                {hasActiveQrAction ? (
-                  <AppButton title="View my QR" variant="outline" fullWidth={false} onPress={handleViewCurrentDonationQr} />
-                ) : null}
-              </View>
-              <View style={styles.ongoingSummaryMetaRow}>
-                <View style={styles.ongoingSummaryMetaBlock}>
-                  <Text style={styles.sourceSummaryLabel}>Current flow</Text>
-                  <Text style={styles.sourceSummaryValue}>{currentFlowLabel}</Text>
-                </View>
-                <View style={styles.ongoingSummaryMetaBlock}>
-                  <Text style={styles.sourceSummaryLabel}>Current status</Text>
-                  <Text style={styles.sourceSummaryValue}>{currentStatusLabel}</Text>
-                </View>
-              </View>
-            </View>
+        <View style={styles.donationPage}>
+          <DonationHeroModule
+            roles={roles}
+            isProfileComplete={isDonorProfileComplete}
+            isEligibilityFresh={isHairEligibilityFresh}
+            isReady={donationReady}
+            hasOngoingDonation={hasOngoingDonation}
+          />
+          {!isDonorProfileComplete ? (
+            <ProfilePendingModule
+              roles={roles}
+              completionMeta={donorProfileCompletionMeta}
+              onManageProfile={() => router.navigate('/profile')}
+            />
+          ) : !isHairEligibilityFresh ? (
+            <HairEligibilityGate
+              hasLatestScreening={Boolean(moduleData?.latestScreening)}
+              latestLabel={latestScreeningLabel}
+              onCheckHair={() => router.navigate('/donor/donations')}
+            />
+          ) : hasOngoingDonation ? (
+            <CurrentDonationModule
+              roles={roles}
+              flowLabel={currentFlowLabel}
+              statusLabel={currentStatusLabel}
+            />
           ) : (
-            <AppCard variant="default" radius="xl" padding="lg">
-              <>
+            <>
+              <EligibilityResultModule
+                roles={roles}
+                decision={latestAnalysisDecision}
+                condition={latestAnalysisCondition}
+                screening={moduleData?.latestScreening}
+                latestLabel={latestScreeningLabel}
+                donationReady={donationReady}
+                onOpenDetails={handleOpenManualModal}
+                onRecheck={() => router.navigate('/donor/donations')}
+              />
+
+              <NextStepModule
+                roles={roles}
+                donationReady={donationReady}
+                hasDrives={Boolean(moduleData?.drives?.length)}
+                onOpenDetails={handleOpenManualModal}
+              />
+              {false ? (
+                <>
                 <SectionTitle
-                  eyebrow="Donation entry"
-                  title={donationReady ? 'Donation source ready' : 'Choose entry'}
+                  eyebrow="Hair eligibility result"
+                  title={latestAnalysisDecision || 'Eligible result available'}
                   body={
                     moduleData?.latestScreening
-                      ? `${latestAnalysisDecision || 'Latest result available'}${latestAnalysisCondition ? ` • ${latestAnalysisCondition}` : ''}`
-                      : 'Use the latest result or enter details manually.'
+                      ? `${latestAnalysisCondition || 'Hair check saved'}${latestScreeningLabel ? ` • ${latestScreeningLabel}` : ''}`
+                      : 'Complete CheckHair before requesting to donate.'
                   }
                 />
 
                 <View style={styles.entryGrid}>
                   <EntryCard
-                    icon="checkHair"
-                    title="Use latest hair analysis"
-                    body={aiPathReady ? 'Use the latest eligible saved result.' : 'No eligible saved result right now.'}
-                    actionLabel={aiPathReady && entryPath === MANUAL_ENTRY_PATHS.ai ? 'Selected' : aiPathReady ? 'Use analysis' : 'Not ready'}
-                    onPress={handleUseLatestAnalysis}
-                    disabled={!aiPathReady || hasOngoingDonation}
-                    active={entryPath === MANUAL_ENTRY_PATHS.ai && aiPathReady}
-                  />
-                  <EntryCard
                     icon="donations"
-                    title="Manual donor entry"
-                    body="Open the donor details module and save a current photo."
-                    actionLabel="Open manual entry"
+                    title="Continue with donation details"
+                    body="Enter hair length, number of bundles, and a donation photo."
+                    actionLabel={donationReady ? 'Update details' : 'Open details'}
                     onPress={handleOpenManualModal}
                     disabled={hasOngoingDonation}
-                    active={entryPath === MANUAL_ENTRY_PATHS.manual}
+                    active={donationReady}
+                  />
+                  <EntryCard
+                    icon="checkHair"
+                    title="Re-check hair eligibility"
+                    body="Run CheckHair again if you want a newer eligibility result."
+                    actionLabel="Re-check"
+                    onPress={() => router.navigate('/donor/donations')}
+                    disabled={hasOngoingDonation}
+                    active={false}
                   />
                 </View>
 
                 <View style={styles.sourceSummary}>
-                  <Text style={styles.sourceSummaryLabel}>Active source</Text>
+                  <Text style={styles.sourceSummaryLabel}>Eligibility source</Text>
                   <Text style={styles.sourceSummaryValue}>
-                    {donationReady
-                      ? activeQualificationSource === 'manual'
-                        ? 'Manual donor details'
-                        : 'Latest hair analysis'
-                      : entryPath === MANUAL_ENTRY_PATHS.manual
-                        ? 'Manual donor entry'
-                        : 'Latest hair analysis'}
+                    {aiPathReady ? 'Latest hair analysis within one month' : 'Hair analysis result saved'}
                   </Text>
                 </View>
-              </>
-            </AppCard>
+                </>
+              ) : null}
+            </>
           )}
 
-          {!hasOngoingDonation ? (
-            <>
-              <View style={styles.contentSection}>
-                <SectionTitle
-                  eyebrow="Donation drives"
-                  title="Join a drive"
-                  body={donationReady ? 'Open a drive card to view details and RSVP.' : 'Finish donor entry first to join a drive.'}
-                />
-
-                {moduleData?.drives?.length ? (
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.driveCarouselContent}>
-                    {moduleData.drives.map((drive) => (
-                      <DriveCarouselCard
-                        key={drive.donation_drive_id}
-                        drive={drive}
-                        onPress={handleOpenDrive}
-                        disabled={!donationReady}
-                      />
-                    ))}
-                  </ScrollView>
-                ) : (
-                  <AppCard variant="default" radius="xl" padding="md">
-                    <Text style={styles.emptyText}>No active drives right now.</Text>
-                  </AppCard>
-                )}
-              </View>
-
-              <View style={styles.contentSection}>
-                <SectionTitle
-                  eyebrow="Independent donation"
-                  title="Donate independently"
-                  body={donationReady ? 'Agreement, QR, then parcel upload.' : 'Finish donor entry first to continue.'}
-                />
-
-                <Pressable
-                  onPress={async () => {
-                    if (independentQrState?.show_my_qr) {
-                      await buildIndependentQrSheet();
-                      return;
-                    }
-                    setIsAgreementOpen(true);
-                  }}
-                  disabled={!donationReady}
-                  style={({ pressed }) => [styles.independentPressable, pressed ? styles.pressableActive : null]}
-                >
-                  <AppCard variant="default" radius="xl" padding="md" style={[styles.independentCard, !donationReady ? styles.entryCardDisabled : null]}>
-                    <View style={styles.independentCardRow}>
-                      <View style={styles.independentIconWrap}>
-                        <AppIcon name="truck-delivery-outline" size="sm" state="active" />
-                      </View>
-                      <View style={styles.independentCopy}>
-                        <Text style={styles.independentTitle}>
-                          {independentQrState?.show_my_qr ? 'Show my QR' : 'I want to donate independently'}
-                        </Text>
-                        <Text style={styles.independentBody}>
-                          {independentQrState?.is_activated
-                            ? 'Your active donation QR is ready to view.'
-                            : independentQrState?.is_pending
-                              ? 'Your saved QR is inactive until you scan it to activate donation tracking.'
-                              : 'Review agreement, save your QR, then scan it to activate donation tracking.'}
-                        </Text>
-                      </View>
-                      <AppIcon name="chevron-right" size="sm" state="muted" />
-                    </View>
-                    {independentQrState?.show_my_qr ? (
-                      <View style={styles.ongoingQrAction}>
-                        <AppButton title="View my QR" variant="outline" fullWidth={false} onPress={() => { void buildIndependentQrSheet(); }} />
-                      </View>
-                    ) : null}
-                  </AppCard>
-                </Pressable>
-              </View>
-            </>
-          ) : null}
-
-          {(hasTimelinePreview || hasTimelineLog) ? (
-            <AppCard variant="default" radius="xl" padding="lg" style={styles.contentSection}>
-              <SectionTitle
-                eyebrow="Timeline"
-                title="Donation progress"
-                body={hasTimelinePreview ? 'Tap a stage for details.' : 'Latest donation activity from your current saved record.'}
-              />
-
-              {hasTimelinePreview ? (
-                <TimelinePreview stages={moduleData.timelineStages} onOpenStage={setSelectedTimelineStage} />
-              ) : null}
-
-              {hasTimelineLog ? (
-                <View style={styles.logList}>
-                  {moduleData.timelineEvents.map((event) => (
-                    <DonationLogCard key={event.key} event={event} />
-                  ))}
-                </View>
-              ) : null}
-            </AppCard>
-          ) : null}
-
-          {certificate ? (
-            <AppCard variant="default" radius="xl" padding="lg" style={styles.contentSection}>
-              <SectionTitle
-                eyebrow="Certificate"
-                title="Certificate available"
-                body={`Your certificate is ready${latestCertificateEmail ? ` and can be shared from ${latestCertificateEmail}.` : '.'}`}
-              />
-
-              <DonorCertificatePreview
-                certificate={certificate}
-                isGenerating={isGeneratingCertificate}
-                isSharingAvailable={isSharingAvailable}
-                generatedFileUri={generatedFileUri}
-                onGenerate={generateCertificate}
-                onShare={shareCertificate}
-              />
-            </AppCard>
+          {isDonorProfileComplete && isHairEligibilityFresh && !hasOngoingDonation ? (
+            <DriveModule
+              roles={roles}
+              drives={moduleData?.drives || []}
+              donationReady={donationReady}
+              onOpenDrive={handleOpenDrive}
+            />
           ) : null}
 
           {moduleData?.completedDonationHistory?.length ? (
             <View style={styles.contentSection}>
-              <SectionTitle
+              <ModuleHeader
                 eyebrow="Donation history"
                 title="Completed donations"
                 body="Past completed donation records."
+                roles={roles}
               />
               <View style={styles.historyList}>
                 {moduleData.completedDonationHistory.map((item) => (
@@ -2028,7 +1256,7 @@ export function DonorDonationStatusScreen() {
               </View>
             </View>
           ) : null}
-        </>
+        </View>
       )}
 
       <ManualEntryModal
@@ -2061,7 +1289,6 @@ export function DonorDonationStatusScreen() {
         }}
         onSelectDrive={handleOpenDrive}
         onRsvp={handleDriveRsvp}
-        onViewQr={handleViewDriveQr}
       />
 
       <MembershipRequiredModal
@@ -2073,70 +1300,30 @@ export function DonorDonationStatusScreen() {
         onJoin={handleJoinOrganization}
       />
 
-      <AgreementModal
-        visible={isAgreementOpen}
-        accepted={agreementAccepted}
-        onToggle={() => setAgreementAccepted((current) => !current)}
-        onClose={() => setIsAgreementOpen(false)}
-        onContinue={handleAgreementContinue}
+      <DriveQrModal
+        visible={Boolean(driveQrPayload)}
+        drive={selectedDrive}
+        payload={driveQrPayload}
+        onClose={() => setDriveQrPayload('')}
       />
 
-      <QrModal
-        visible={Boolean(qrSheet)}
-        title={qrSheet?.title || ''}
-        subtitle={qrSheet?.subtitle || ''}
-        helperText={qrSheet?.helperText || ''}
-        payload={qrSheet?.payload || ''}
-        qrStatusLabel={formatQrStatusLabel(qrSheet?.qrStatus || '')}
-        donationStatusLabel={qrSheet?.donationStatus || ''}
-        details={qrSheet?.details || []}
-        onClose={handleCloseQrSheet}
-        onDownload={handleDownloadQr}
-        onPrint={handlePrintQr}
-        onNext={qrSheet?.type === 'independent' && formatQrStatusLabel(qrSheet?.qrStatus || '') === 'Active' ? () => {
-          handleCloseQrSheet();
-          setIsParcelModalOpen(true);
-        } : null}
-        nextLabel="Continue to upload"
-        isDownloading={isDownloadingQr}
-        isPrinting={isPrintingQr}
-      />
-
-      <QrScannerModal
-        visible={isQrScannerOpen}
-        hasCameraPermission={hasScanCameraPermission}
-        feedbackMessage={qrScannerError}
-        isActivating={isActivatingQr}
-        onClose={handleCloseQrScanner}
-        onRequestPermission={handleRequestQrScannerPermission}
-        onScanned={handleDonationQrScanned}
-      />
-
-      <ParcelUploadModal
-        visible={isParcelModalOpen}
-        feedback={moduleFeedback}
-        isUploading={isUploadingParcel}
-        onClose={() => setIsParcelModalOpen(false)}
-        onUpload={handleUploadParcel}
-      />
-
-      <StageDetailModal
-        visible={Boolean(selectedTimelineStage)}
-        stage={selectedTimelineStage}
-        canScanQr={Boolean(
-          activeFlowType === 'independent'
-          && independentQrState?.reference
-          && selectedTimelineStage?.key === 'ready_for_shipment'
-          && !independentQrState?.is_activated
-        )}
-        onScanQr={handleOpenQrScanner}
-        onClose={() => setSelectedTimelineStage(null)}
+      <DonationQrModal
+        visible={Boolean(donationQrPayload)}
+        payload={donationQrPayload}
+        onClose={() => setDonationQrPayload('')}
       />
     </DashboardLayout>
   );
 }
 
 const styles = StyleSheet.create({
+  donationPage: {
+    gap: theme.spacing.lg,
+  },
+  loadingModule: {
+    borderRadius: theme.radius.xxl,
+    borderWidth: 1,
+  },
   loadingState: {
     minHeight: 220,
     alignItems: 'center',
@@ -2170,8 +1357,274 @@ const styles = StyleSheet.create({
     lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
     color: theme.colors.textSecondary,
   },
+  moduleBlock: {
+    gap: theme.spacing.md,
+  },
+  moduleHeader: {
+    gap: theme.spacing.xs,
+  },
+  moduleEyebrow: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: 5,
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.brandPrimaryMuted,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.bold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.7,
+  },
+  moduleTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.titleSm,
+  },
+  moduleBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+  },
+  donationHeroModule: {
+    borderRadius: theme.radius.xxl,
+    borderWidth: 1,
+    padding: theme.spacing.lg,
+    gap: theme.spacing.md,
+  },
+  heroBadge: {
+    alignSelf: 'flex-start',
+    borderRadius: theme.radius.full,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: 6,
+  },
+  heroBadgeText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.bold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.7,
+  },
+  heroTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.title,
+    lineHeight: theme.typography.semantic.title * 1.16,
+  },
+  heroBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    lineHeight: theme.typography.semantic.body * theme.typography.lineHeights.relaxed,
+  },
+  pendingHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: theme.spacing.md,
+  },
+  stepsPill: {
+    borderRadius: theme.radius.full,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: 6,
+  },
+  stepsPillText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.bold,
+    textTransform: 'uppercase',
+  },
+  moduleList: {
+    gap: 0,
+  },
+  moduleListRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.md,
+    minHeight: 72,
+    borderBottomWidth: 1,
+  },
+  moduleIconWrap: {
+    width: 42,
+    height: 42,
+    borderRadius: theme.radius.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  moduleRowCopy: {
+    flex: 1,
+    gap: 3,
+  },
+  moduleRowTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  moduleRowBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+  },
+  moduleActionRow: {
+    alignItems: 'flex-start',
+  },
+  readinessModule: {
+    borderRadius: theme.radius.xxl,
+    borderWidth: 1,
+    padding: theme.spacing.lg,
+    gap: theme.spacing.lg,
+  },
+  readinessTop: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: theme.spacing.md,
+  },
+  readinessTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+  },
+  readinessMeta: {
+    marginTop: 4,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+  },
+  readinessIconWrap: {
+    width: 52,
+    height: 52,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  readinessGrid: {
+    gap: theme.spacing.md,
+  },
+  readinessMetric: {
+    borderRadius: theme.radius.xl,
+    padding: theme.spacing.md,
+    gap: theme.spacing.sm,
+  },
+  metricLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+  },
+  metricLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+  },
+  metricValue: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.titleSm,
+  },
+  primaryActionStack: {
+    gap: theme.spacing.sm,
+  },
+  nextStepModule: {
+    borderRadius: theme.radius.xxl,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+    padding: theme.spacing.lg,
+    gap: theme.spacing.md,
+  },
+  driveModuleList: {
+    gap: theme.spacing.sm,
+  },
+  driveModuleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.md,
+    minHeight: 82,
+    padding: theme.spacing.md,
+    borderRadius: theme.radius.xl,
+    borderWidth: 1,
+  },
+  driveModuleLogo: {
+    width: 48,
+    height: 48,
+    borderRadius: theme.radius.lg,
+  },
+  driveModuleLogoFallback: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  driveModuleCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 3,
+  },
+  driveModuleTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  driveModuleText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+  },
+  infoModule: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+    borderRadius: theme.radius.xl,
+    padding: theme.spacing.md,
+  },
+  infoModuleText: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+  },
+  currentStatusGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.spacing.md,
+  },
+  currentStatusTile: {
+    flex: 1,
+    minWidth: 140,
+    borderRadius: theme.radius.xl,
+    padding: theme.spacing.md,
+    gap: 4,
+  },
   entryGrid: {
     gap: theme.spacing.md,
+  },
+  cardPressed: {
+    opacity: 0.82,
+  },
+  profileGateCard: {
+    borderRadius: theme.radius.xl,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+    backgroundColor: theme.colors.surfaceElevated,
+    padding: theme.spacing.lg,
+  },
+  profileGateTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.md,
+  },
+  profileGateIcon: {
+    width: 46,
+    height: 46,
+    borderRadius: theme.radius.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.brandPrimaryMuted,
+  },
+  profileGateCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  profileGateTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    color: theme.colors.textPrimary,
+  },
+  profileGateBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    color: theme.colors.textSecondary,
+  },
+  gateActionRow: {
+    marginTop: theme.spacing.md,
+    flexDirection: 'row',
   },
   contentSection: {
     marginTop: theme.spacing.lg,
@@ -2323,41 +1776,32 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.semantic.bodySm,
     color: theme.colors.textSecondary,
   },
-  independentPressable: {
-    borderRadius: theme.radius.xl,
+  historyList: {
+    gap: 0,
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.borderSubtle,
   },
-  independentCard: {
-    gap: theme.spacing.sm,
-  },
-  independentCardRow: {
+  historyRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.spacing.sm,
+    minHeight: 68,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.borderSubtle,
+    paddingVertical: theme.spacing.sm,
   },
-  independentIconWrap: {
-    width: 40,
-    height: 40,
-    borderRadius: 14,
+  historyIconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: theme.radius.lg,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: theme.colors.brandPrimaryMuted,
   },
-  independentCopy: {
+  historyCopy: {
     flex: 1,
-    gap: 4,
-  },
-  independentTitle: {
-    fontFamily: theme.typography.fontFamilyDisplay,
-    fontSize: theme.typography.semantic.body,
-    color: theme.colors.textPrimary,
-  },
-  independentBody: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    color: theme.colors.textSecondary,
-  },
-  historyList: {
-    gap: theme.spacing.md,
+    minWidth: 0,
+    gap: 2,
   },
   historyCard: {
     gap: theme.spacing.xs,
@@ -2372,114 +1816,12 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.semantic.bodySm,
     color: theme.colors.textSecondary,
   },
-  logList: {
-    gap: theme.spacing.md,
-    marginTop: theme.spacing.md,
-  },
-  logCard: {
-    gap: theme.spacing.sm,
-  },
-  logHeaderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    gap: theme.spacing.sm,
-  },
-  logTitle: {
-    flex: 1,
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.body,
-    fontWeight: theme.typography.weights.semibold,
-    color: theme.colors.textPrimary,
-  },
-  logBadge: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.caption,
-    color: theme.colors.brandPrimary,
-  },
-  logDescription: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
-    color: theme.colors.textSecondary,
-  },
-  logImage: {
-    width: '100%',
-    height: 180,
-    borderRadius: theme.radius.lg,
-    backgroundColor: theme.colors.surfaceSoft,
-  },
-  logTimestamp: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.caption,
-    color: theme.colors.textMuted,
-  },
-  timelineScrollContent: {
-    alignItems: 'center',
-    paddingRight: theme.spacing.md,
-  },
-  timelineNodeWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  timelineConnector: {
-    width: 18,
-    height: 2,
-    marginHorizontal: theme.spacing.xs,
-    backgroundColor: theme.colors.borderSubtle,
-  },
-  timelineConnectorCompleted: {
-    backgroundColor: theme.colors.brandPrimary,
-  },
-  timelineNodePressable: {
-    alignItems: 'center',
-    gap: theme.spacing.sm,
-  },
-  timelineDot: {
-    width: 14,
-    height: 14,
-    borderRadius: theme.radius.full,
-  },
-  timelineDotDone: {
-    backgroundColor: theme.colors.brandPrimary,
-  },
-  timelineDotCurrent: {
-    backgroundColor: theme.colors.brandPrimary,
-    borderWidth: 3,
-    borderColor: theme.colors.brandPrimaryMuted,
-  },
-  timelineDotWaiting: {
-    backgroundColor: theme.colors.borderStrong,
-  },
-  timelineCard: {
-    width: 126,
-    minHeight: 74,
-    padding: theme.spacing.sm,
-    borderRadius: theme.radius.lg,
-    backgroundColor: theme.colors.surfaceSoft,
-    borderWidth: 1,
-    borderColor: theme.colors.borderSubtle,
-    justifyContent: 'space-between',
-  },
-  timelineCardCurrent: {
-    borderColor: theme.colors.brandPrimary,
-    backgroundColor: theme.colors.brandPrimaryMuted,
-  },
-  timelineCardTitle: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    fontWeight: theme.typography.weights.semibold,
-    color: theme.colors.textPrimary,
-  },
-  timelineCardStatus: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.caption,
-    color: theme.colors.textMuted,
-  },
   modalOverlay: {
     flex: 1,
     justifyContent: 'center',
-    padding: theme.spacing.lg,
+    paddingHorizontal: theme.spacing.md,
+    paddingTop: theme.spacing.lg,
+    paddingBottom: theme.spacing.xxl,
     backgroundColor: theme.colors.overlay,
   },
   modalBackdrop: {
@@ -2488,7 +1830,7 @@ const styles = StyleSheet.create({
   modalCard: {
     width: '100%',
     maxWidth: 420,
-    maxHeight: '88%',
+    maxHeight: '82%',
     alignSelf: 'center',
     overflow: 'hidden',
   },
@@ -2500,12 +1842,14 @@ const styles = StyleSheet.create({
   },
   modalContent: {
     flexShrink: 1,
+    minHeight: 0,
   },
   modalScrollView: {
     flexShrink: 1,
+    minHeight: 0,
   },
   modalScrollContent: {
-    paddingBottom: theme.spacing.xs,
+    paddingBottom: theme.spacing.md,
   },
   modalHeaderCopy: {
     flex: 1,
@@ -2532,6 +1876,9 @@ const styles = StyleSheet.create({
   },
   modalFooter: {
     marginTop: theme.spacing.md,
+    paddingTop: theme.spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.borderSubtle,
   },
   inlineBanner: {
     marginBottom: theme.spacing.md,
@@ -2545,109 +1892,22 @@ const styles = StyleSheet.create({
     gap: theme.spacing.sm,
     justifyContent: 'flex-end',
   },
-  qrActionWrap: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: theme.spacing.sm,
-    justifyContent: 'flex-end',
-  },
-  qrModalScrollContent: {
-    gap: theme.spacing.md,
-  },
-  qrPreviewWrap: {
+  driveQrWrap: {
     alignItems: 'center',
     justifyContent: 'center',
     padding: theme.spacing.md,
     borderRadius: theme.radius.xl,
     backgroundColor: theme.colors.surfaceSoft,
   },
-  qrPreviewImage: {
+  driveQrImage: {
     width: 240,
     height: 240,
   },
-  qrStatus: {
+  driveQrText: {
     marginTop: theme.spacing.md,
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    fontWeight: theme.typography.weights.semibold,
-    color: theme.colors.textPrimary,
-  },
-  qrDonationStatus: {
-    marginTop: theme.spacing.xs,
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    color: theme.colors.textPrimary,
-  },
-  qrHelper: {
-    marginTop: theme.spacing.md,
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    color: theme.colors.textSecondary,
-  },
-  qrDetailsCard: {
-    marginTop: theme.spacing.md,
-    padding: theme.spacing.md,
-    borderRadius: theme.radius.xl,
-    backgroundColor: theme.colors.surfaceSoft,
-    borderWidth: 1,
-    borderColor: theme.colors.borderSubtle,
-    gap: theme.spacing.sm,
-  },
-  qrDetailRow: {
-    gap: 4,
-  },
-  qrDetailLabel: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.caption,
-    fontWeight: theme.typography.weights.semibold,
-    textTransform: 'uppercase',
-    letterSpacing: 0.3,
-    color: theme.colors.textSecondary,
-  },
-  qrDetailValue: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.bodySm,
     lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
-    color: theme.colors.textPrimary,
-  },
-  qrScannerStage: {
-    height: 320,
-    borderRadius: theme.radius.xl,
-    overflow: 'hidden',
-    backgroundColor: theme.colors.surfaceSoft,
-  },
-  qrScannerPreview: {
-    flex: 1,
-  },
-  qrScannerPlaceholder: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: theme.spacing.lg,
-    gap: theme.spacing.sm,
-  },
-  qrScannerPlaceholderTitle: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodyMd,
-    fontWeight: theme.typography.weights.semibold,
-    color: theme.colors.textPrimary,
-  },
-  qrScannerPlaceholderBody: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
-    color: theme.colors.textSecondary,
-    textAlign: 'center',
-  },
-  qrScannerError: {
-    marginTop: theme.spacing.md,
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    color: theme.colors.textError,
-  },
-  qrScannerHint: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
     color: theme.colors.textSecondary,
   },
   driveListWrap: {
@@ -2737,28 +1997,6 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.semantic.bodySm,
     color: theme.colors.textSecondary,
   },
-  agreementList: {
-    gap: theme.spacing.sm,
-  },
-  agreementRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: theme.spacing.sm,
-  },
-  agreementDot: {
-    width: 8,
-    height: 8,
-    marginTop: 6,
-    borderRadius: theme.radius.full,
-    backgroundColor: theme.colors.brandPrimary,
-  },
-  agreementText: {
-    flex: 1,
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
-    color: theme.colors.textSecondary,
-  },
   checkboxRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -2783,7 +2021,7 @@ const styles = StyleSheet.create({
     color: theme.colors.textPrimary,
   },
   manualModalScroll: {
-    paddingBottom: theme.spacing.sm,
+    paddingBottom: theme.spacing.lg,
   },
   choiceField: {
     marginBottom: theme.spacing.md,
@@ -2879,57 +2117,6 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.compact.caption,
     color: theme.colors.textError,
     fontWeight: theme.typography.weights.medium,
-  },
-  stageDetailBody: {
-    gap: theme.spacing.md,
-  },
-  stageDetailText: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
-    color: theme.colors.textPrimary,
-  },
-  stageDetailTimestamp: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.caption,
-    color: theme.colors.textMuted,
-  },
-  stageSection: {
-    gap: theme.spacing.sm,
-  },
-  stageSectionLabel: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    fontWeight: theme.typography.weights.semibold,
-    color: theme.colors.textPrimary,
-  },
-  stageActionRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: theme.spacing.sm,
-  },
-  stageEmptyState: {
-    borderRadius: theme.radius.lg,
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.lg,
-    backgroundColor: theme.colors.surfaceSoft,
-    borderWidth: 1,
-    borderColor: theme.colors.borderSubtle,
-  },
-  stageEmptyText: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
-    color: theme.colors.textSecondary,
-  },
-  stageImageRow: {
-    gap: theme.spacing.sm,
-  },
-  stageImage: {
-    width: 112,
-    height: 112,
-    borderRadius: theme.radius.lg,
-    backgroundColor: theme.colors.surfaceSoft,
   },
   emptyText: {
     fontFamily: theme.typography.fontFamily,

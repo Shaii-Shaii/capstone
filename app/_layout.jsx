@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Image, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Image, StyleSheet, Text, View } from 'react-native';
 import { Slot } from 'expo-router';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { StatusBar } from 'expo-status-bar';
@@ -7,30 +7,52 @@ import { AuthProvider, useAuth } from '../src/providers/AuthProvider';
 import { useRoleRedirect } from '../src/hooks/useRoleRedirect';
 import { resolveBrandLogoSource, theme } from '../src/design-system/theme';
 
-const SPLASH_DURATION_MS = 1000;
+const SPLASH_DURATION_MS = 2000;
 
 function LaunchSplash({ resolvedTheme }) {
   const [imageFailed, setImageFailed] = useState(false);
   const logoSource = resolveBrandLogoSource(resolvedTheme, imageFailed);
+  const bgColor = resolvedTheme?.backgroundColor || theme.colors.backgroundCanvas;
+  const textColor = resolvedTheme?.primaryTextColor || theme.colors.textPrimary;
+  const subtitleColor = resolvedTheme?.secondaryTextColor || theme.colors.textSecondary;
+  const loaderColor = resolvedTheme?.primaryColor || theme.colors.brandPrimarySoft;
+  const brandName = resolvedTheme?.brandName || 'Donivra';
+  const tagline = resolvedTheme?.brandTagline || 'Hair donation, reimagined.';
 
   useEffect(() => {
     setImageFailed(false);
   }, [resolvedTheme?.logoIcon]);
 
   return (
-    <View style={[styles.splashScreen, resolvedTheme?.backgroundColor ? { backgroundColor: resolvedTheme.backgroundColor } : null]}>
-      <Image source={logoSource} style={styles.splashLogo} resizeMode="contain" onError={() => setImageFailed(true)} />
-      {resolvedTheme?.brandName ? (
-        <Text
-          style={[
-            styles.splashBrand,
-            resolvedTheme?.primaryTextColor ? { color: resolvedTheme.primaryTextColor } : null,
-            resolvedTheme?.secondaryFontFamily ? { fontFamily: resolvedTheme.secondaryFontFamily } : null,
-          ]}
-        >
-          {resolvedTheme.brandName}
-        </Text>
-      ) : null}
+    <View style={[styles.splashScreen, { backgroundColor: bgColor }]}>
+      <View style={styles.splashLogoContainer}>
+        <Image
+          source={logoSource}
+          style={styles.splashLogo}
+          resizeMode="contain"
+          onError={() => setImageFailed(true)}
+        />
+      </View>
+
+      <Text
+        style={[
+          styles.splashBrand,
+          { color: textColor },
+          resolvedTheme?.secondaryFontFamily ? { fontFamily: resolvedTheme.secondaryFontFamily } : null,
+        ]}
+      >
+        {brandName}
+      </Text>
+
+      <Text style={[styles.splashTagline, { color: subtitleColor }]}>
+        {tagline}
+      </Text>
+
+      <ActivityIndicator
+        style={styles.splashLoader}
+        color={loaderColor}
+        size="small"
+      />
     </View>
   );
 }
@@ -79,10 +101,23 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: theme.spacing.lg,
   },
+  splashLogoContainer: {
+    width: 96,
+    height: 96,
+    borderRadius: 24,
+    backgroundColor: theme.colors.backgroundPrimary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: theme.spacing.xl,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 4,
+  },
   splashLogo: {
-    width: 88,
-    height: 88,
-    marginBottom: theme.spacing.md,
+    width: 60,
+    height: 60,
   },
   splashBrand: {
     fontFamily: theme.typography.fontFamilyDisplay,
@@ -90,5 +125,15 @@ const styles = StyleSheet.create({
     lineHeight: theme.typography.semantic.titleSm * theme.typography.lineHeights.tight,
     color: theme.colors.textPrimary,
     textAlign: 'center',
+    marginBottom: theme.spacing.xs,
+  },
+  splashTagline: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    color: theme.colors.textSecondary,
+    textAlign: 'center',
+  },
+  splashLoader: {
+    marginTop: theme.spacing.xxxl,
   },
 });

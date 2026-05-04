@@ -1,14 +1,17 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { DashboardLayout } from '../../src/components/layout/DashboardLayout';
 import { DashboardHeader } from '../../src/components/ui/DashboardHeader';
-import { AppCard } from '../../src/components/ui/AppCard';
+import { AppButton } from '../../src/components/ui/AppButton';
 import { AppIcon } from '../../src/components/ui/AppIcon';
-import { DashboardSectionHeader } from '../../src/components/ui/DashboardSectionHeader';
 import { donorDashboardNavItems } from '../../src/constants/dashboard';
-import { fetchHairSubmissionsByUserId } from '../../src/features/hairSubmission.api';
-import { theme } from '../../src/design-system/theme';
+import {
+  fetchHairBundleTrackingHistory,
+  fetchHairSubmissionLogisticsBySubmissionId,
+  fetchHairSubmissionsByUserId,
+} from '../../src/features/hairSubmission.api';
+import { resolveThemeRoles, theme } from '../../src/design-system/theme';
 import { useAuth } from '../../src/providers/AuthProvider';
 
 const formatDateLabel = (value) => {
@@ -19,6 +22,8 @@ const formatDateLabel = (value) => {
       month: 'short',
       day: 'numeric',
       year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
     }).format(new Date(value));
   } catch {
     return String(value);
@@ -30,48 +35,230 @@ const formatLengthLabel = (value) => {
   return `${value} in`;
 };
 
-function HistoryCard({ item }) {
+const formatDonationSource = (value = '') => {
+  const normalized = String(value || '').replace(/[_-]/g, ' ').trim();
+  if (!normalized) return 'Donation';
+  return normalized.replace(/\b\w/g, (letter) => letter.toUpperCase());
+};
+
+const getLatestDetail = (submission) => (
+  [...(submission?.submission_details || [])]
+    .sort((left, right) => new Date(right?.created_at || 0).getTime() - new Date(left?.created_at || 0).getTime())[0] || null
+);
+
+const makeDetailRows = (rows = []) => (
+  rows
+    .filter((row) => row?.value !== null && row?.value !== undefined && String(row.value).trim() !== '')
+    .map((row) => ({ ...row, value: String(row.value) }))
+);
+
+const buildHairAnalysisRows = (submissions = []) => (
+  submissions.flatMap((submission) => {
+    const latestDetail = getLatestDetail(submission);
+
+    return (submission.ai_screenings || []).map((screening) => ({
+      id: `analysis-${screening.ai_screening_id || screening.id || submission.submission_id}`,
+      type: 'analysis',
+      icon: 'checkHair',
+      title: screening.detected_condition || screening.decision || 'Hair analysis saved',
+      subtitle: submission.submission_code || 'Saved hair check',
+      status: 'Hair Analysis',
+      date: screening.created_at || submission.created_at || '',
+      dateLabel: formatDateLabel(screening.created_at || submission.created_at),
+      description: screening.summary || 'Hair eligibility result was saved.',
+      detailsTitle: 'Hair Analysis Details',
+      details: makeDetailRows([
+        { label: 'Submission Code', value: submission.submission_code },
+        { label: 'Decision', value: screening.decision },
+        { label: 'Detected Condition', value: screening.detected_condition },
+        { label: 'Estimated Length', value: formatLengthLabel(screening.estimated_length) },
+        { label: 'Detected Color', value: screening.detected_color || latestDetail?.declared_color },
+        { label: 'Detected Texture', value: screening.detected_texture || latestDetail?.declared_texture },
+        { label: 'Detected Density', value: screening.detected_density || latestDetail?.declared_density },
+        { label: 'Confidence Score', value: screening.confidence_score },
+        { label: 'Summary', value: screening.summary },
+        { label: 'Visible Damage Notes', value: screening.visible_damage_notes },
+      ]),
+    }));
+  })
+);
+
+const buildDonationRows = (submissions = [], donationContextBySubmissionId = new Map()) => (
+  submissions.flatMap((submission) => {
+    const latestDetail = getLatestDetail(submission);
+    const context = donationContextBySubmissionId.get(submission.submission_id) || {};
+    const baseDetails = [
+      { label: 'Submission Code', value: submission.submission_code },
+      { label: 'Donation Source', value: formatDonationSource(submission.donation_source) },
+      { label: 'Submission Status', value: submission.status },
+      { label: 'Bundle Quantity', value: submission.bundle_quantity },
+      { label: 'Delivery Method', value: submission.delivery_method },
+      { label: 'Donation Drive ID', value: submission.donation_drive_id },
+      { label: 'Organization ID', value: submission.organization_id },
+      { label: 'Declared Length', value: latestDetail?.declared_length ? formatLengthLabel(latestDetail.declared_length) : '' },
+      { label: 'Declared Color', value: latestDetail?.declared_color },
+      { label: 'Declared Density', value: latestDetail?.declared_density },
+      { label: 'Donor Notes', value: submission.donor_notes },
+    ];
+    const rows = [];
+
+    if (submission.status || submission.donation_source || submission.donation_drive_id) {
+      rows.push({
+        id: `donation-submission-${submission.submission_id}`,
+        type: 'donation',
+        icon: 'donations',
+        title: submission.status || 'Donation status saved',
+        subtitle: submission.submission_code || 'Donation record',
+        status: formatDonationSource(submission.donation_source),
+        date: submission.updated_at || submission.created_at || '',
+        dateLabel: formatDateLabel(submission.updated_at || submission.created_at),
+        description: 'Donation submission record was updated.',
+        detailsTitle: 'Donation Status Details',
+        details: makeDetailRows(baseDetails),
+      });
+    }
+
+    if (context.logistics?.shipment_status || context.logistics?.received_at) {
+      rows.push({
+        id: `donation-logistics-${context.logistics.submission_logistics_id || submission.submission_id}`,
+        type: 'donation',
+        icon: 'truck-delivery-outline',
+        title: context.logistics.shipment_status || 'Logistics updated',
+        subtitle: submission.submission_code || 'Donation logistics',
+        status: 'Logistics',
+        date: context.logistics.updated_at || context.logistics.created_at || submission.updated_at || '',
+        dateLabel: formatDateLabel(context.logistics.updated_at || context.logistics.created_at || submission.updated_at),
+        description: context.logistics.notes || 'Donation logistics were updated.',
+        detailsTitle: 'Donation Logistics Details',
+        details: makeDetailRows([
+          ...baseDetails,
+          { label: 'Logistics Type', value: context.logistics.logistics_type },
+          { label: 'Shipment Status', value: context.logistics.shipment_status },
+          { label: 'Courier Name', value: context.logistics.courier_name },
+          { label: 'Tracking Number', value: context.logistics.tracking_number },
+          { label: 'Pickup Schedule Date', value: context.logistics.pickup_schedule_date },
+          { label: 'Received At', value: context.logistics.received_at ? formatDateLabel(context.logistics.received_at) : '' },
+          { label: 'Notes', value: context.logistics.notes },
+        ]),
+      });
+    }
+
+    (context.trackingEntries || []).forEach((entry) => {
+      rows.push({
+        id: `donation-tracking-${entry.tracking_id || entry.id}`,
+        type: 'donation',
+        icon: 'timeline-check-outline',
+        title: entry.title || entry.status || 'Donation update',
+        subtitle: submission.submission_code || 'Donation tracking',
+        status: entry.status || 'Status Update',
+        date: entry.updated_at || submission.updated_at || '',
+        dateLabel: formatDateLabel(entry.updated_at || submission.updated_at),
+        description: entry.description || 'Donation tracking status was updated.',
+        detailsTitle: 'Donation Tracking Details',
+        details: makeDetailRows([
+          ...baseDetails,
+          { label: 'Tracking Status', value: entry.status },
+          { label: 'Tracking Title', value: entry.title },
+          { label: 'Description', value: entry.description },
+          { label: 'Updated At', value: entry.updated_at ? formatDateLabel(entry.updated_at) : '' },
+        ]),
+      });
+    });
+
+    return rows;
+  })
+);
+
+function HistoryRow({ item, roles, onViewDetails }) {
+  const isDonation = item.type === 'donation';
+
   return (
-    <AppCard variant="elevated" radius="xl" padding="lg">
-      <View style={styles.historyHeader}>
-        <View style={styles.historyIconWrap}>
-          <AppIcon name="checkHair" state="active" />
-        </View>
-        <View style={styles.historyCopy}>
-          <Text style={styles.historyTitle}>{item.conditionLabel}</Text>
-          <Text style={styles.historyMeta}>{item.meta}</Text>
-        </View>
+    <View style={[styles.historyRow, { borderBottomColor: roles.defaultCardBorder }]}>
+      <View
+        style={[
+          styles.historyIconWrap,
+          { backgroundColor: isDonation ? roles.iconAccentSurface : roles.iconPrimarySurface },
+        ]}
+      >
+        <AppIcon
+          name={item.icon}
+          size="sm"
+          color={isDonation ? roles.iconAccentColor : roles.iconPrimaryColor}
+        />
       </View>
 
-      <View style={styles.historyStats}>
-        <View style={styles.statChip}>
-          <Text style={styles.statLabel}>Length</Text>
-          <Text style={styles.statValue}>{item.lengthLabel}</Text>
+      <View style={styles.historyCopy}>
+        <View style={styles.historyTitleRow}>
+          <Text numberOfLines={1} style={[styles.historyTitle, { color: roles.headingText }]}>{item.title}</Text>
+          <Text style={[styles.historyStatus, { color: roles.primaryActionBackground }]}>{item.status}</Text>
         </View>
-        <View style={styles.statChip}>
-          <Text style={styles.statLabel}>Color</Text>
-          <Text style={styles.statValue}>{item.colorLabel}</Text>
-        </View>
-        <View style={styles.statChip}>
-          <Text style={styles.statLabel}>Density</Text>
-          <Text style={styles.statValue}>{item.densityLabel}</Text>
-        </View>
+        <Text numberOfLines={1} style={[styles.historyMeta, { color: roles.bodyText }]}>{item.subtitle}</Text>
+        <Text numberOfLines={1} style={[styles.historyDate, { color: roles.metaText }]}>{item.dateLabel}</Text>
       </View>
 
-      {item.summary ? <Text style={styles.summaryText}>{item.summary}</Text> : null}
-      {item.damageNotes ? <Text style={styles.damageText}>{item.damageNotes}</Text> : null}
-    </AppCard>
+      <Pressable
+        onPress={() => onViewDetails(item)}
+        style={({ pressed }) => [
+          styles.viewDetailsButton,
+          {
+            borderColor: roles.defaultCardBorder,
+            backgroundColor: roles.pageBackground,
+            opacity: pressed ? 0.78 : 1,
+          },
+        ]}
+      >
+        <Text style={[styles.viewDetailsText, { color: roles.primaryActionBackground }]}>View details</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+function HistoryDetailsModal({ item, roles, onClose }) {
+  return (
+    <Modal transparent visible={Boolean(item)} animationType="fade" onRequestClose={onClose}>
+      <View style={styles.modalOverlay}>
+        <Pressable style={styles.modalBackdrop} onPress={onClose} />
+        <View style={[styles.modalSheet, { backgroundColor: roles.pageBackground, borderColor: roles.defaultCardBorder }]}>
+          <View style={styles.modalHeader}>
+            <View style={[styles.modalIconWrap, { backgroundColor: roles.iconPrimarySurface }]}>
+              <AppIcon name={item?.icon || 'profile'} color={roles.iconPrimaryColor} />
+            </View>
+            <View style={styles.modalTitleWrap}>
+              <Text style={[styles.modalTitle, { color: roles.headingText }]}>{item?.detailsTitle || 'History Details'}</Text>
+              <Text style={[styles.modalSubtitle, { color: roles.bodyText }]}>{item?.dateLabel || ''}</Text>
+            </View>
+          </View>
+
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.detailList}>
+            {item?.description ? (
+              <Text style={[styles.detailDescription, { color: roles.bodyText }]}>{item.description}</Text>
+            ) : null}
+
+            {(item?.details || []).map((row) => (
+              <View key={`${item.id}-${row.label}`} style={[styles.detailRow, { borderBottomColor: roles.defaultCardBorder }]}>
+                <Text style={[styles.detailLabel, { color: roles.metaText }]}>{row.label}</Text>
+                <Text style={[styles.detailValue, { color: roles.headingText }]}>{row.value}</Text>
+              </View>
+            ))}
+          </ScrollView>
+
+          <AppButton title="Close" fullWidth={false} onPress={onClose} />
+        </View>
+      </View>
+    </Modal>
   );
 }
 
 export default function DonorHairHistoryScreen() {
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, resolvedTheme } = useAuth();
+  const roles = resolveThemeRoles(resolvedTheme);
   const [state, setState] = useState({
     isLoading: true,
     error: '',
     history: [],
   });
+  const [selectedHistory, setSelectedHistory] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -92,42 +279,54 @@ export default function DonorHairHistoryScreen() {
         error: '',
       }));
 
-      const result = await fetchHairSubmissionsByUserId(user.id, 24);
+      const result = await fetchHairSubmissionsByUserId(user.id, 32);
       if (cancelled) return;
 
       if (result.error) {
         setState({
           isLoading: false,
-          error: result.error.message || 'Unable to load your hair analysis history right now.',
+          error: result.error.message || 'Unable to load your history right now.',
           history: [],
         });
         return;
       }
 
-      const history = (result.data || [])
-        .flatMap((submission) => (
-          (submission.ai_screenings || []).map((screening) => ({
-            id: screening.ai_screening_id || screening.id || `${submission.submission_id}-${screening.created_at}`,
-            conditionLabel: screening.detected_condition || screening.decision || 'Hair analysis saved',
-            meta: [
-              submission.submission_code || 'Saved submission',
-              formatDateLabel(screening.created_at || submission.created_at),
-            ].filter(Boolean).join(' | '),
-            lengthLabel: formatLengthLabel(screening.estimated_length),
-            colorLabel: screening.detected_color || 'Not recorded',
-            densityLabel: screening.detected_density || 'Not recorded',
-            summary: screening.summary || '',
-            damageNotes: screening.visible_damage_notes || '',
-            createdAt: screening.created_at || submission.created_at || '',
-          }))
-        ))
-        .sort((left, right) => (
-          new Date(right.createdAt || 0).getTime() - new Date(left.createdAt || 0).getTime()
-        ));
+      const submissions = result.data || [];
+      const donationContextResults = await Promise.all(submissions.map(async (submission) => {
+        const latestDetail = getLatestDetail(submission);
+        const [logisticsResult, trackingResult] = await Promise.all([
+          fetchHairSubmissionLogisticsBySubmissionId(submission.submission_id),
+          fetchHairBundleTrackingHistory({
+            submissionId: submission.submission_id,
+            submissionDetailId: latestDetail?.submission_detail_id || null,
+            limit: 8,
+          }),
+        ]);
+
+        return [
+          submission.submission_id,
+          {
+            logistics: logisticsResult.data || null,
+            trackingEntries: trackingResult.data || [],
+            error: logisticsResult.error || trackingResult.error || null,
+          },
+        ];
+      }));
+      if (cancelled) return;
+
+      const donationContextBySubmissionId = new Map(donationContextResults);
+      const history = [
+        ...buildHairAnalysisRows(submissions),
+        ...buildDonationRows(submissions, donationContextBySubmissionId),
+      ].sort((left, right) => (
+        new Date(right.date || 0).getTime() - new Date(left.date || 0).getTime()
+      ));
+
+      const contextError = donationContextResults.map(([, context]) => context.error).find(Boolean);
 
       setState({
         isLoading: false,
-        error: '',
+        error: contextError?.message || '',
         history,
       });
     };
@@ -155,142 +354,155 @@ export default function DonorHairHistoryScreen() {
       onNavPress={handleNavPress}
       header={(
         <DashboardHeader
-          title="Hair Analysis History"
+          title="History"
           subtitle=""
           variant="donor"
           showAvatar={false}
         />
       )}
     >
-      <AppCard variant="elevated" radius="xl" padding="lg">
+      <View style={styles.headerBlock}>
         <Pressable style={styles.backRow} onPress={() => router.back()}>
-          <AppIcon name="arrowLeft" state="muted" />
-          <Text style={styles.backText}>Back</Text>
+          <AppIcon name="arrowLeft" color={roles.metaText} />
+          <Text style={[styles.backText, { color: roles.bodyText }]}>Back</Text>
         </Pressable>
 
-        <DashboardSectionHeader
-          title="Saved Hair Checks"
-          description="Your previous donor hair analysis results."
-          style={styles.sectionHeader}
-        />
+        <Text style={[styles.pageTitle, { color: roles.headingText }]}>Activity History</Text>
+        <Text style={[styles.pageSubtitle, { color: roles.bodyText }]}>
+          Hair analysis logs and hair donation status updates.
+        </Text>
+      </View>
 
-        {state.isLoading ? (
-          <View style={styles.stateWrap}>
-            <ActivityIndicator color={theme.colors.brandPrimary} />
-            <Text style={styles.stateText}>Loading hair analysis history...</Text>
+      {state.isLoading ? (
+        <View style={styles.stateWrap}>
+          <ActivityIndicator color={roles.primaryActionBackground || theme.colors.brandPrimary} />
+          <Text style={[styles.stateText, { color: roles.bodyText }]}>Loading history...</Text>
+        </View>
+      ) : state.error && !historyRows.length ? (
+        <View style={styles.stateWrap}>
+          <Text style={[styles.stateText, { color: roles.bodyText }]}>{state.error}</Text>
+        </View>
+      ) : historyRows.length ? (
+        <View style={styles.historyList}>
+          {state.error ? <Text style={[styles.inlineError, { color: roles.bodyText }]}>{state.error}</Text> : null}
+          {historyRows.map((item) => (
+            <HistoryRow
+              key={String(item.id)}
+              item={item}
+              roles={roles}
+              onViewDetails={setSelectedHistory}
+            />
+          ))}
+        </View>
+      ) : (
+        <View style={styles.emptyState}>
+          <View style={[styles.emptyIconWrap, { backgroundColor: roles.iconPrimarySurface }]}>
+            <AppIcon name="history" color={roles.iconPrimaryColor} />
           </View>
-        ) : state.error ? (
-          <View style={styles.stateWrap}>
-            <Text style={styles.stateText}>{state.error}</Text>
-          </View>
-        ) : historyRows.length ? (
-          <View style={styles.list}>
-            {historyRows.map((item) => (
-              <HistoryCard key={String(item.id)} item={item} />
-            ))}
-          </View>
-        ) : (
-          <View style={styles.emptyState}>
-            <View style={styles.emptyIconWrap}>
-              <AppIcon name="checkHair" state="muted" />
-            </View>
-            <Text style={styles.emptyTitle}>No hair analysis history yet</Text>
-            <Text style={styles.emptyMessage}>Saved hair analysis results will appear here after you complete a hair check.</Text>
-          </View>
-        )}
-      </AppCard>
+          <Text style={[styles.emptyTitle, { color: roles.headingText }]}>No history yet</Text>
+          <Text style={[styles.emptyMessage, { color: roles.bodyText }]}>
+            Hair analysis logs and donation updates will appear here once available.
+          </Text>
+        </View>
+      )}
+
+      <HistoryDetailsModal
+        item={selectedHistory}
+        roles={roles}
+        onClose={() => setSelectedHistory(null)}
+      />
     </DashboardLayout>
   );
 }
 
 const styles = StyleSheet.create({
+  headerBlock: {
+    gap: theme.spacing.xs,
+    marginBottom: theme.spacing.md,
+  },
   backRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.spacing.xs,
-    marginBottom: theme.spacing.md,
+    alignSelf: 'flex-start',
+    marginBottom: theme.spacing.sm,
   },
   backText: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.bodySm,
-    color: theme.colors.textSecondary,
   },
-  sectionHeader: {
-    marginBottom: theme.spacing.md,
+  pageTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.titleSm,
   },
-  list: {
-    gap: theme.spacing.md,
+  pageSubtitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
   },
-  historyHeader: {
+  historyList: {
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.borderSubtle,
+  },
+  historyRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: theme.spacing.md,
-    marginBottom: theme.spacing.md,
+    gap: theme.spacing.sm,
+    minHeight: 86,
+    paddingVertical: theme.spacing.sm,
+    borderBottomWidth: 1,
   },
   historyIconWrap: {
-    width: 42,
-    height: 42,
-    borderRadius: theme.radius.full,
+    width: 40,
+    height: 40,
+    borderRadius: theme.radius.lg,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: theme.colors.brandPrimaryMuted,
   },
   historyCopy: {
     flex: 1,
-    gap: 2,
+    minWidth: 0,
+    gap: 3,
+  },
+  historyTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.xs,
   },
   historyTitle: {
+    flex: 1,
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.body,
     fontWeight: theme.typography.weights.semibold,
-    color: theme.colors.textPrimary,
+  },
+  historyStatus: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.semibold,
   },
   historyMeta: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.bodySm,
-    color: theme.colors.textSecondary,
   },
-  historyStats: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: theme.spacing.sm,
-    marginBottom: theme.spacing.md,
+  historyDate: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
   },
-  statChip: {
-    minWidth: 96,
-    gap: 4,
-    paddingHorizontal: theme.spacing.sm,
-    paddingVertical: theme.spacing.sm,
-    borderRadius: theme.radius.lg,
-    backgroundColor: theme.colors.surfaceSoft,
+  viewDetailsButton: {
     borderWidth: 1,
-    borderColor: theme.colors.borderSubtle,
+    borderRadius: theme.radius.full,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: 7,
   },
-  statLabel: {
+  viewDetailsText: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.caption,
     fontWeight: theme.typography.weights.semibold,
-    color: theme.colors.textSecondary,
-    textTransform: 'uppercase',
-    letterSpacing: 0.3,
   },
-  statValue: {
+  inlineError: {
+    paddingVertical: theme.spacing.sm,
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.bodySm,
-    color: theme.colors.textPrimary,
-  },
-  summaryText: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
-    color: theme.colors.textPrimary,
-  },
-  damageText: {
-    marginTop: theme.spacing.sm,
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
-    color: theme.colors.textSecondary,
   },
   stateWrap: {
     alignItems: 'center',
@@ -302,7 +514,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.bodySm,
-    color: theme.colors.textSecondary,
   },
   emptyState: {
     alignItems: 'center',
@@ -313,22 +524,87 @@ const styles = StyleSheet.create({
   emptyIconWrap: {
     width: 46,
     height: 46,
-    borderRadius: theme.radius.full,
+    borderRadius: theme.radius.lg,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: theme.colors.surfaceSoft,
   },
   emptyTitle: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.body,
     fontWeight: theme.typography.weights.semibold,
-    color: theme.colors.textPrimary,
   },
   emptyMessage: {
     textAlign: 'center',
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.bodySm,
     lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
-    color: theme.colors.textSecondary,
+  },
+  modalOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: theme.colors.overlay,
+  },
+  modalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  modalSheet: {
+    maxHeight: '82%',
+    borderTopLeftRadius: theme.radius.xxl,
+    borderTopRightRadius: theme.radius.xxl,
+    borderWidth: 1,
+    paddingHorizontal: theme.spacing.lg,
+    paddingTop: theme.spacing.lg,
+    paddingBottom: theme.spacing.xl,
+    gap: theme.spacing.md,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.md,
+  },
+  modalIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: theme.radius.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalTitleWrap: {
+    flex: 1,
+    gap: 3,
+  },
+  modalTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+  },
+  modalSubtitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+  },
+  detailList: {
+    paddingBottom: theme.spacing.md,
+  },
+  detailDescription: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+    marginBottom: theme.spacing.md,
+  },
+  detailRow: {
+    gap: 4,
+    paddingVertical: theme.spacing.sm,
+    borderBottomWidth: 1,
+  },
+  detailLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+  },
+  detailValue: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
   },
 });

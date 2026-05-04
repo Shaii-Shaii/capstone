@@ -49,35 +49,40 @@ const donationDriveRegistrationSelect = `
   registration_id:Registration_ID,
   donation_drive_id:Donation_Drive_ID,
   user_id:User_ID,
-  organization_id:Organization_ID,
   registration_status:Registration_Status,
   attendance_status:Attendance_Status,
   registered_at:Registered_At,
-  updated_at:Updated_At
+  updated_at:Updated_At,
+  attendance_marked_at:Attendance_Marked_At
 `;
 
 const normalizeRegistrationStatus = (value = '') => String(value || '').trim().toLowerCase();
+const getStartOfTodayIso = () => {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return today.toISOString();
+};
+
+const getDriveCompareDate = (drive) => drive?.end_date || drive?.start_date || null;
+
+const isUpcomingDrive = (drive) => {
+  const compareDate = getDriveCompareDate(drive);
+  if (!compareDate) return false;
+  return new Date(compareDate).getTime() >= new Date(getStartOfTodayIso()).getTime();
+};
 
 const resolveDriveQrState = (row) => {
-  const registrationStatus = normalizeRegistrationStatus(row?.registration_status);
   const attendanceStatus = normalizeRegistrationStatus(row?.attendance_status);
-  const generatedAt = row?.registered_at || row?.updated_at || null;
-  const isActivated = (
-    ['activated', 'active', 'approved', 'used', 'scanned', 'participated', 'attended'].includes(registrationStatus)
-    || ['marked', 'attended', 'present', 'checked in', 'checked-in'].includes(attendanceStatus)
-  );
-  const isPending = Boolean(row?.registration_id) && !isActivated;
+  const hasRegistration = Boolean(row?.registration_id);
+  const isUsed = Boolean(row?.attendance_marked_at)
+    || ['marked', 'attended', 'present', 'checked in', 'checked-in'].includes(attendanceStatus);
 
   return {
-    state: isActivated ? 'activated' : isPending ? 'pending' : 'missing',
-    generated_at: generatedAt,
-    expires_at: null,
-    activated_at: isActivated ? (row?.updated_at || row?.registered_at || null) : null,
-    is_pending: isPending,
-    is_expired: false,
-    is_activated: isActivated,
-    can_regenerate: false,
-    is_valid: Boolean(row?.registration_id),
+    state: isUsed ? 'used' : hasRegistration ? 'registered' : 'missing',
+    generated_at: row?.registered_at || row?.updated_at || null,
+    used_at: isUsed ? (row?.attendance_marked_at || row?.updated_at || row?.registered_at || null) : null,
+    is_used: isUsed,
+    is_valid: hasRegistration && !isUsed,
   };
 };
 
@@ -141,11 +146,11 @@ const normalizeDonationDriveRegistration = (row) => ({
   registration_id: row?.registration_id || null,
   donation_drive_id: row?.donation_drive_id || null,
   user_id: row?.user_id || null,
-  organization_id: row?.organization_id || null,
   registration_status: row?.registration_status || '',
   attendance_status: row?.attendance_status || '',
   registered_at: row?.registered_at || null,
   updated_at: row?.updated_at || null,
+  attendance_marked_at: row?.attendance_marked_at || null,
   qr: resolveDriveQrState(row),
 });
 
@@ -190,7 +195,7 @@ const normalizeDonationDrive = (row, organization = null, registration = null, m
   membership: membership || null,
   requires_membership: Boolean(row?.organization_id),
   is_member: Boolean(membership?.is_active),
-  can_rsvp: !registration,
+  can_join: !registration,
 });
 
 const sortByNewestTimestamp = (rows = [], timestampFields = []) => (
@@ -223,7 +228,7 @@ const findExistingDriveRegistration = async (driveId, databaseUserId) => {
     .order('Updated_At', { ascending: false });
 
   if (result.error) {
-    logAppError('donor_home.rsvp.lookup', result.error, {
+    logAppError('donor_home.drive_registration.lookup', result.error, {
       table: donationDriveRegistrationsTable,
       driveId,
       databaseUserId,
@@ -237,7 +242,7 @@ const findExistingDriveRegistration = async (driveId, databaseUserId) => {
 
   const normalizedRows = (result.data || []).map(normalizeDonationDriveRegistration);
   if (normalizedRows.length > 1) {
-    logAppEvent('donor_home.rsvp.lookup.duplicate', 'Multiple drive registrations found for the same donor.', {
+    logAppEvent('donor_home.drive_registration.lookup.duplicate', 'Multiple drive registrations found for the same donor.', {
       table: donationDriveRegistrationsTable,
       driveId,
       databaseUserId,
@@ -392,6 +397,67 @@ export const fetchDonationDriveRegistrationsByUserId = async (databaseUserId) =>
   return {
     data: (result.data || []).map(normalizeDonationDriveRegistration),
     error: null,
+  };
+};
+
+export const createDonationDriveRegistration = async ({
+  driveId,
+  databaseUserId,
+}) => {
+  if (!driveId || !databaseUserId) {
+    return {
+      data: null,
+      error: new Error('Donation drive and donor account are required before joining a drive.'),
+      alreadyRegistered: false,
+    };
+  }
+
+  const existingResult = await findExistingDriveRegistration(driveId, databaseUserId);
+  if (existingResult.error) {
+    return {
+      data: null,
+      error: existingResult.error,
+      alreadyRegistered: false,
+    };
+  }
+
+  if (existingResult.data?.registration_id) {
+    return {
+      data: existingResult.data,
+      error: null,
+      alreadyRegistered: true,
+    };
+  }
+
+  const insertResult = await supabase
+    .from(donationDriveRegistrationsTable)
+    .insert({
+      Donation_Drive_ID: driveId,
+      User_ID: databaseUserId,
+      Registration_Status: 'Approved',
+      Attendance_Status: 'Not Marked',
+    })
+    .select(donationDriveRegistrationSelect)
+    .maybeSingle();
+
+  if (insertResult.error) {
+    logAppError('donor_home.drive_registration.create', insertResult.error, {
+      table: donationDriveRegistrationsTable,
+      driveId,
+      databaseUserId,
+    });
+
+    return {
+      data: null,
+      error: insertResult.error,
+      alreadyRegistered: false,
+    };
+  }
+
+  return {
+    data: normalizeDonationDriveRegistration(insertResult.data),
+    error: null,
+    alreadyRegistered: false,
   };
 };
 
@@ -711,71 +777,6 @@ export const fetchDonationDriveDetail = async (driveId, databaseUserId = null) =
   fetchDonationDrivePreview(driveId, databaseUserId)
 );
 
-export const createDonationDriveRsvp = async ({
-  driveId,
-  databaseUserId,
-  organizationId = null,
-}) => {
-  if (!driveId || !databaseUserId) {
-    return {
-      data: null,
-      error: new Error('Drive RSVP requires the drive and donor account.'),
-    };
-  }
-
-  const existingResult = await findExistingDriveRegistration(driveId, databaseUserId);
-  if (existingResult.data) {
-    return {
-      data: existingResult.data,
-      error: null,
-      alreadyRegistered: true,
-      regenerated: false,
-    };
-  }
-
-  logAppEvent('donor_home.rsvp.create', 'Creating donation drive RSVP.', {
-    table: donationDriveRegistrationsTable,
-    driveId,
-    databaseUserId,
-    organizationId,
-  });
-
-  const insertResult = await supabase
-    .from(donationDriveRegistrationsTable)
-    .insert({
-      Donation_Drive_ID: driveId,
-      User_ID: databaseUserId,
-      Organization_ID: organizationId || null,
-      Registration_Status: 'Pending QR',
-      Attendance_Status: 'Not Marked',
-    })
-    .select(donationDriveRegistrationSelect)
-    .maybeSingle();
-
-  if (insertResult.error) {
-    logAppError('donor_home.rsvp.create', insertResult.error, {
-      table: donationDriveRegistrationsTable,
-      driveId,
-      databaseUserId,
-      organizationId,
-    });
-
-    return {
-      data: null,
-      error: insertResult.error,
-      alreadyRegistered: false,
-      regenerated: false,
-    };
-  }
-
-  return {
-    data: normalizeDonationDriveRegistration(insertResult.data),
-    error: null,
-    alreadyRegistered: false,
-    regenerated: false,
-  };
-};
-
 export const fetchOrganizationPreview = async (organizationId, databaseUserId = null, driveLimit = 3) => {
   if (!organizationId) {
     return {
@@ -802,7 +803,7 @@ export const fetchOrganizationPreview = async (organizationId, databaseUserId = 
       .eq('Organization_ID', organizationId)
       .not('Start_Date', 'is', null)
       .order('Start_Date', { ascending: true })
-      .limit(driveLimit),
+      .limit(Math.max(driveLimit, 24)),
   ]);
 
   if (organizationResult.error) {
@@ -845,19 +846,23 @@ export const fetchOrganizationPreview = async (organizationId, databaseUserId = 
     registrationsResult.data.get(row?.donation_drive_id) || null,
     membership
   ));
+  const upcomingDrives = drives.filter(isUpcomingDrive);
+  const pastDrives = drives.filter((drive) => !isUpcomingDrive(drive));
 
   return {
     data: {
       ...organization,
       membership,
       drives,
+      upcoming_drives: upcomingDrives,
+      past_drives: pastDrives,
       short_overview: buildShortOverview(`${organization.organization_type || ''} ${organization.location_label || ''}`.trim(), 100),
     },
     error: organizationResult.error || drivesResult.error || membershipResult.error || registrationsResult.error,
   };
 };
 
-export const fetchOrganizationsWithDrives = async (limit = 24, driveLimitPerOrganization = 3) => {
+export const fetchOrganizationsWithDrives = async (limit = 24, driveLimitPerOrganization = 3, databaseUserId = null) => {
   const organizationsResult = await fetchFeaturedOrganizations(limit);
   const organizations = organizationsResult.data || [];
   const organizationIds = organizations.map((item) => item.organization_id).filter(Boolean);
@@ -899,14 +904,25 @@ export const fetchOrganizationsWithDrives = async (limit = 24, driveLimitPerOrga
     drivesByOrganizationId.set(row?.organization_id, currentRows);
   });
 
+  const membershipsResult = await fetchOrganizationMembershipsByUserId(databaseUserId);
+  const membershipByOrganizationId = new Map(
+    (membershipsResult.data || []).map((membership) => [membership.organization_id, membership])
+  );
+
   return {
-    data: organizations.map((organization) => ({
-      ...organization,
-      drives: (drivesByOrganizationId.get(organization.organization_id) || [])
-        .slice(0, driveLimitPerOrganization)
-        .map((row) => normalizeDonationDrive(row, organization)),
-    })),
-    error: organizationsResult.error || drivesResult.error,
+    data: organizations.map((organization) => {
+      const membership = membershipByOrganizationId.get(organization.organization_id) || null;
+
+      return {
+        ...organization,
+        membership,
+        drives: (drivesByOrganizationId.get(organization.organization_id) || [])
+          .filter(isUpcomingDrive)
+          .slice(0, driveLimitPerOrganization)
+          .map((row) => normalizeDonationDrive(row, organization, null, membership)),
+      };
+    }),
+    error: organizationsResult.error || drivesResult.error || membershipsResult.error,
   };
 };
 
@@ -939,13 +955,15 @@ export const fetchRelevantDonationDriveUpdates = async ({
     };
   }
 
+  const today = getStartOfTodayIso();
   const [organizationDrivesResult, registeredDrivesResult] = await Promise.all([
     organizationIds.length
       ? supabase
           .from(donationDriveRequestsTable)
           .select(donationDriveSelect)
           .in('Organization_ID', organizationIds)
-          .order('Updated_At', { ascending: false })
+          .not('Start_Date', 'is', null)
+          .order('Start_Date', { ascending: true })
           .limit(limit)
       : Promise.resolve({ data: [], error: null }),
     driveIds.length
@@ -963,6 +981,7 @@ export const fetchRelevantDonationDriveUpdates = async ({
       table: donationDriveRequestsTable,
       organizationIds,
       databaseUserId,
+      startDateFrom: today,
     });
   }
 
@@ -976,7 +995,7 @@ export const fetchRelevantDonationDriveUpdates = async ({
 
   const rawDrives = [...(organizationDrivesResult.data || []), ...(registeredDrivesResult.data || [])];
   const uniqueDrives = new Map();
-  rawDrives.forEach((row) => {
+  rawDrives.filter(isUpcomingDrive).forEach((row) => {
     const driveId = row?.donation_drive_id;
     if (!driveId) return;
     const existing = uniqueDrives.get(driveId);

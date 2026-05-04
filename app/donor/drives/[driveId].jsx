@@ -19,7 +19,7 @@ import { donorDashboardNavItems } from '../../../src/constants/dashboard';
 import { useNotifications } from '../../../src/hooks/useNotifications';
 import { useAuth } from '../../../src/providers/AuthProvider';
 import {
-  createDonationDriveRsvp,
+  createDonationDriveRegistration,
   fetchDonationDriveDetail,
   fetchDonationDrivePreview,
   joinOrganizationMembership,
@@ -27,10 +27,7 @@ import {
 import {
   buildDriveInvitationQrPayload,
   buildQrImageUrl,
-  generateDonationQrPdf,
   getDonorDonationsModuleData,
-  isQrSharingSupported,
-  shareDonationQrPdf,
 } from '../../../src/features/donorDonations.service';
 import { resolveThemeRoles, theme } from '../../../src/design-system/theme';
 
@@ -81,7 +78,7 @@ function DriveMembershipPrompt({
           <Text style={[styles.modalEyebrow, { color: roles.metaText }]}>Membership required</Text>
           <Text style={[styles.modalTitle, { color: roles.headingText }]}>Join organization first</Text>
           <Text style={[styles.modalBody, { color: roles.bodyText }]}>
-            {drive?.organization_name || 'This organization'} requires membership before you can RSVP for its donation drive.
+            {drive?.organization_name || 'This organization'} requires membership before viewing its donation drive.
           </Text>
           {feedbackMessage ? (
             <StatusBanner variant={feedbackVariant || 'info'} message={feedbackMessage} style={styles.modalBanner} />
@@ -89,51 +86,6 @@ function DriveMembershipPrompt({
           <View style={styles.modalActions}>
             <AppButton title="Cancel" variant="ghost" fullWidth={false} onPress={onClose} />
             <AppButton title={isJoining ? 'Joining...' : 'Join organization'} fullWidth={false} onPress={onJoin} loading={isJoining} />
-          </View>
-        </AppCard>
-      </View>
-    </Modal>
-  );
-}
-
-function DriveQrModal({
-  visible,
-  payload,
-  title,
-  subtitle,
-  helperText,
-  isSaving,
-  onClose,
-  onSave,
-}) {
-  const { resolvedTheme } = useAuth();
-  const roles = resolveThemeRoles(resolvedTheme);
-
-  return (
-    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
-      <View style={styles.modalOverlay}>
-        <Pressable style={styles.modalBackdrop} onPress={onClose} />
-        <AppCard variant="elevated" radius="xl" padding="lg" style={styles.modalCard}>
-          <View style={styles.modalHeader}>
-            <View style={styles.modalHeaderCopy}>
-              <Text style={[styles.modalEyebrow, { color: roles.metaText }]}>Drive QR</Text>
-              <Text style={[styles.modalTitle, { color: roles.headingText }]}>{title}</Text>
-              {subtitle ? (
-                <Text style={[styles.modalBody, { color: roles.bodyText }]}>{subtitle}</Text>
-              ) : null}
-            </View>
-            <Pressable onPress={onClose} style={[styles.modalCloseButton, { backgroundColor: roles.supportCardBackground, borderColor: roles.supportCardBorder }]}>
-              <AppIcon name="close" state="muted" />
-            </Pressable>
-          </View>
-          <View style={styles.qrWrap}>
-            <Image source={{ uri: buildQrImageUrl(payload, 420) }} style={styles.qrImage} resizeMode="contain" />
-          </View>
-          {helperText ? (
-            <Text style={[styles.qrHelper, { color: roles.metaText }]}>{helperText}</Text>
-          ) : null}
-          <View style={styles.modalActions}>
-            <AppButton title="Save QR" fullWidth={false} onPress={onSave} loading={isSaving} />
           </View>
         </AppCard>
       </View>
@@ -153,28 +105,20 @@ export default function DonorDriveDetailRoute() {
   const [errorMessage, setErrorMessage] = React.useState('');
   const [feedbackMessage, setFeedbackMessage] = React.useState('');
   const [feedbackVariant, setFeedbackVariant] = React.useState('info');
-  const [isSubmittingRsvp, setIsSubmittingRsvp] = React.useState(false);
   const [isJoiningOrganization, setIsJoiningOrganization] = React.useState(false);
   const [isMembershipPromptOpen, setIsMembershipPromptOpen] = React.useState(false);
   const [membershipFeedback, setMembershipFeedback] = React.useState({ message: '', variant: 'info' });
-  const [qrSheet, setQrSheet] = React.useState(null);
-  const [qrSharingAvailable, setQrSharingAvailable] = React.useState(false);
-  const [isSavingQr, setIsSavingQr] = React.useState(false);
+  const [isSubmittingRsvp, setIsSubmittingRsvp] = React.useState(false);
+  const [driveQrPayload, setDriveQrPayload] = React.useState('');
   const [donationFlowState, setDonationFlowState] = React.useState({
     hasOngoingDonation: false,
     ongoingDonationMessage: '',
+    hasRecentHairEligibility: false,
   });
 
   const firstName = profile?.first_name || '';
   const lastName = profile?.last_name || '';
   const avatarInitials = `${firstName?.[0] || ''}${lastName?.[0] || ''}`.trim();
-  const donorIdentity = React.useMemo(() => ({
-    user_id: profile?.user_id || null,
-    first_name: profile?.first_name || '',
-    last_name: profile?.last_name || '',
-    email: profile?.email || user?.email || '',
-  }), [profile?.email, profile?.first_name, profile?.last_name, profile?.user_id, user?.email]);
-
   const loadDrive = React.useCallback(async () => {
     if (!driveId) {
       setErrorMessage('Drive details are not available right now.');
@@ -202,6 +146,10 @@ export default function DonorDriveDetailRoute() {
     setDonationFlowState({
       hasOngoingDonation: Boolean(donationModuleResult.hasOngoingDonation),
       ongoingDonationMessage: donationModuleResult.ongoingDonationMessage || '',
+      hasRecentHairEligibility: Boolean(
+        donationModuleResult.latestScreening?.created_at
+        && Date.now() - new Date(donationModuleResult.latestScreening.created_at).getTime() <= 30 * 24 * 60 * 60 * 1000
+      ),
     });
     setIsLoading(false);
   }, [driveId, profile?.user_id, user?.id]);
@@ -210,97 +158,100 @@ export default function DonorDriveDetailRoute() {
     loadDrive();
   }, [loadDrive]);
 
-  React.useEffect(() => {
-    let isMounted = true;
-
-    const checkQrSharing = async () => {
-      const available = await isQrSharingSupported();
-      if (isMounted) {
-        setQrSharingAvailable(available);
-      }
-    };
-
-    checkQrSharing();
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
   const hasOngoingDonation = Boolean(donationFlowState.hasOngoingDonation);
   const ongoingDonationMessage = donationFlowState.ongoingDonationMessage
     || 'You already have an ongoing donation. Please complete or wait for the current donation process to finish before starting a new one.';
+  const hasRecentHairEligibility = Boolean(donationFlowState.hasRecentHairEligibility);
 
-  const buildDriveQrSheet = React.useCallback((nextDrive, registration) => {
-    const payload = buildDriveInvitationQrPayload({
-      drive: nextDrive,
-      registration,
-      donor: donorIdentity,
-    });
-
-    setQrSheet({
-      title: 'Drive invitation QR',
-      subtitle: 'Present this QR at the donation drive.',
-      helperText: registration?.qr?.is_activated
-        ? 'This QR is activated and stays official for this drive registration.'
-        : 'This saved QR stays tied to your current drive registration.',
-      payload,
-    });
-  }, [donorIdentity]);
-
-  const performDriveRsvp = React.useCallback(async () => {
-    if (!drive?.donation_drive_id || !profile?.user_id) {
-      setFeedbackMessage('Your donor account is required before sending an RSVP.');
-      setFeedbackVariant('info');
-      return;
-    }
-
-    setIsSubmittingRsvp(true);
-    setFeedbackMessage('');
-
-    const result = await createDonationDriveRsvp({
-      driveId: drive.donation_drive_id,
-      databaseUserId: profile.user_id,
-      organizationId: drive.organization_id || null,
-    });
-
-    setIsSubmittingRsvp(false);
-
-    if (result.error) {
-      setFeedbackMessage('RSVP could not be saved right now. Please try again.');
-      setFeedbackVariant('error');
-      return;
-    }
-
+  const refreshDriveRegistration = React.useCallback(async () => {
+    if (!drive?.donation_drive_id || !profile?.user_id) return null;
     const refreshed = await fetchDonationDrivePreview(drive.donation_drive_id, profile.user_id);
-    const nextDrive = refreshed.data || {
-      ...drive,
-      registration: result.data,
-      can_rsvp: false,
-    };
+    if (refreshed.data) {
+      setDrive(refreshed.data);
+      return refreshed.data;
+    }
+    return null;
+  }, [drive?.donation_drive_id, profile?.user_id]);
 
-    setDrive(nextDrive);
-    setFeedbackMessage(result.alreadyRegistered ? 'RSVP already saved.' : 'RSVP saved.');
-    setFeedbackVariant('success');
-    buildDriveQrSheet(nextDrive, nextDrive.registration || result.data);
-  }, [buildDriveQrSheet, drive, profile?.user_id]);
-
-  const handleRsvp = React.useCallback(async () => {
+  const handleStartCheckHair = React.useCallback(() => {
     if (!drive) return;
 
-    if (hasOngoingDonation && !drive.registration) {
+    if (hasOngoingDonation) {
       setFeedbackMessage(ongoingDonationMessage);
       setFeedbackVariant('info');
       return;
     }
 
-    if (drive.organization_id && !drive.membership?.is_active && !drive.registration) {
+    if (drive.organization_id && !drive.membership?.is_active) {
       setMembershipFeedback({ message: '', variant: 'info' });
       setIsMembershipPromptOpen(true);
       return;
     }
 
-    await performDriveRsvp();
-  }, [drive, hasOngoingDonation, ongoingDonationMessage, performDriveRsvp]);
+    router.navigate('/donor/donations');
+  }, [drive, hasOngoingDonation, ongoingDonationMessage, router]);
+
+  const handleDriveRsvp = React.useCallback(async () => {
+    if (!drive?.donation_drive_id) return;
+
+    if (!hasRecentHairEligibility) {
+      setFeedbackMessage('Please complete CheckHair first. Hair eligibility must be assessed within the last month before joining this event.');
+      setFeedbackVariant('info');
+      router.navigate('/donor/donations');
+      return;
+    }
+
+    if (hasOngoingDonation && !drive.registration?.registration_id) {
+      setFeedbackMessage(ongoingDonationMessage);
+      setFeedbackVariant('info');
+      return;
+    }
+
+    if (drive.organization_id && !drive.membership?.is_active) {
+      setMembershipFeedback({ message: '', variant: 'info' });
+      setIsMembershipPromptOpen(true);
+      return;
+    }
+
+    if (drive.registration?.registration_id) {
+      setDriveQrPayload(buildDriveInvitationQrPayload({ drive, registration: drive.registration }));
+      return;
+    }
+
+    if (!profile?.user_id) {
+      setFeedbackMessage('Your donor account is required before joining this event.');
+      setFeedbackVariant('info');
+      return;
+    }
+
+    setIsSubmittingRsvp(true);
+    const result = await createDonationDriveRegistration({
+      driveId: drive.donation_drive_id,
+      databaseUserId: profile.user_id,
+    });
+    setIsSubmittingRsvp(false);
+
+    if (result.error || !result.data?.registration_id) {
+      setFeedbackMessage(result.error?.message || 'Event RSVP could not be saved right now.');
+      setFeedbackVariant('error');
+      return;
+    }
+
+    const refreshedDrive = await refreshDriveRegistration();
+    const nextDrive = refreshedDrive || drive;
+    const registration = refreshedDrive?.registration || result.data;
+    setDriveQrPayload(buildDriveInvitationQrPayload({ drive: nextDrive, registration }));
+    setFeedbackMessage(result.alreadyRegistered ? 'Event QR loaded.' : 'Event RSVP saved. Present this QR on event day.');
+    setFeedbackVariant('success');
+  }, [
+    drive,
+    hasOngoingDonation,
+    hasRecentHairEligibility,
+    ongoingDonationMessage,
+    profile?.user_id,
+    refreshDriveRegistration,
+    router,
+  ]);
 
   const handleJoinOrganization = React.useCallback(async () => {
     if (!drive?.organization_id || !profile?.user_id) {
@@ -332,43 +283,11 @@ export default function DonorDriveDetailRoute() {
     }
 
     setMembershipFeedback({
-      message: result.alreadyMember ? 'You are already a member.' : 'Organization joined. You can continue to RSVP.',
+      message: result.alreadyMember ? 'You are already a member.' : 'Organization joined.',
       variant: 'success',
     });
     setIsMembershipPromptOpen(false);
-    await performDriveRsvp();
-  }, [drive, performDriveRsvp, profile?.user_id]);
-
-  const handleViewQr = React.useCallback(() => {
-    if (!drive?.registration) return;
-    buildDriveQrSheet(drive, drive.registration);
-  }, [buildDriveQrSheet, drive]);
-
-  const handleSaveQr = React.useCallback(async () => {
-    if (!qrSheet?.payload) return;
-
-    setIsSavingQr(true);
-    try {
-      const file = await generateDonationQrPdf({
-        title: qrSheet.title,
-        subtitle: qrSheet.subtitle,
-        helperText: qrSheet.helperText,
-        qrPayloadText: qrSheet.payload,
-      });
-
-      if (qrSharingAvailable) {
-        await shareDonationQrPdf(file.uri);
-      }
-
-      setFeedbackMessage(qrSharingAvailable ? 'QR PDF is ready to save or share.' : `QR PDF generated at ${file.uri}.`);
-      setFeedbackVariant('success');
-    } catch (error) {
-      setFeedbackMessage(error.message || 'Unable to save the QR right now.');
-      setFeedbackVariant('error');
-    } finally {
-      setIsSavingQr(false);
-    }
-  }, [qrSheet, qrSharingAvailable]);
+  }, [drive, profile?.user_id]);
 
   const handleNavPress = (item) => {
     if (!item.route) return;
@@ -435,7 +354,7 @@ export default function DonorDriveDetailRoute() {
               </View>
               <View style={styles.titleCopy}>
                 <Text style={[styles.statusText, { color: roles.metaText }]}>
-                  {drive.registration ? 'RSVP saved' : (drive.status || 'Upcoming')}
+                  {drive.status || 'Upcoming'}
                 </Text>
                 <Text style={[styles.driveTitle, { color: roles.headingText }]}>{drive.event_title}</Text>
               </View>
@@ -447,39 +366,32 @@ export default function DonorDriveDetailRoute() {
               <DetailMetaRow icon="location" text={drive.address_label || drive.location_label} />
               <DetailMetaRow
                 icon="organization"
-                text={drive.registration
-                  ? drive.registration?.qr?.is_activated
-                    ? 'QR activated for this drive.'
-                    : drive.registration?.qr?.is_pending
-                      ? 'Saved QR is ready for this drive.'
-                      : 'Drive RSVP already saved.'
-                  : drive.membership?.is_active
-                    ? 'Organization membership is active.'
-                    : 'Membership required before RSVP.'}
+                text={drive.membership?.is_active
+                  ? 'Organization membership is active.'
+                  : 'Join organization to continue.'}
               />
             </View>
 
             <View style={styles.actionRow}>
-              {drive.registration?.qr?.is_valid ? (
-                <AppButton
-                  title="Show my QR"
-                  fullWidth={false}
-                  onPress={handleViewQr}
-                  style={styles.rsvpButton}
-                />
-              ) : (
-                <AppButton
-                  title="RSVP"
-                  fullWidth={false}
-                  onPress={handleRsvp}
-                  disabled={hasOngoingDonation}
-                  loading={isSubmittingRsvp}
-                  style={styles.rsvpButton}
-                />
-              )}
+              <AppButton
+                title={drive.organization_id && !drive.membership?.is_active
+                  ? 'Join organization'
+                  : hasRecentHairEligibility
+                    ? (drive.registration?.registration_id ? 'View Event QR' : 'RSVP and Generate QR')
+                    : 'Start CheckHair'}
+                fullWidth={false}
+                onPress={drive.organization_id && !drive.membership?.is_active
+                  ? () => setIsMembershipPromptOpen(true)
+                  : hasRecentHairEligibility
+                    ? handleDriveRsvp
+                    : handleStartCheckHair}
+                loading={isSubmittingRsvp}
+                disabled={hasOngoingDonation && !drive.registration?.registration_id}
+                style={styles.primaryActionButton}
+              />
             </View>
 
-            {hasOngoingDonation && !drive.registration ? (
+            {hasOngoingDonation ? (
               <Text style={[styles.guardText, { color: roles.metaText }]}>
                 {ongoingDonationMessage}
               </Text>
@@ -490,6 +402,18 @@ export default function DonorDriveDetailRoute() {
             <AppCard variant="default" radius="xl" padding="lg">
               <Text style={[styles.sectionTitle, { color: roles.headingText }]}>Overview</Text>
               <Text style={[styles.overviewText, { color: roles.bodyText }]}>{drive.event_overview}</Text>
+            </AppCard>
+          ) : null}
+
+          {driveQrPayload ? (
+            <AppCard variant="default" radius="xl" padding="lg">
+              <Text style={[styles.sectionTitle, { color: roles.headingText }]}>Event entry QR</Text>
+              <View style={styles.qrWrap}>
+                <Image source={{ uri: buildQrImageUrl(driveQrPayload, 320) }} style={styles.qrImage} resizeMode="contain" />
+              </View>
+              <Text style={[styles.qrHelper, { color: roles.bodyText }]}>
+                This QR is generated from your Donation_Drive_Registrations record for this event. Staff will scan it at the donation site.
+              </Text>
             </AppCard>
           ) : null}
         </>
@@ -510,16 +434,6 @@ export default function DonorDriveDetailRoute() {
         onJoin={handleJoinOrganization}
       />
 
-      <DriveQrModal
-        visible={Boolean(qrSheet)}
-        title={qrSheet?.title || ''}
-        subtitle={qrSheet?.subtitle || ''}
-        helperText={qrSheet?.helperText || ''}
-        payload={qrSheet?.payload || ''}
-        isSaving={isSavingQr}
-        onClose={() => setQrSheet(null)}
-        onSave={handleSaveQr}
-      />
     </DashboardLayout>
   );
 }
@@ -597,7 +511,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: theme.spacing.sm,
   },
-  rsvpButton: {
+  primaryActionButton: {
     alignSelf: 'flex-start',
   },
   guardText: {

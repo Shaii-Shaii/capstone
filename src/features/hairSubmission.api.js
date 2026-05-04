@@ -70,6 +70,11 @@ const aiScreeningSelect = `
   detected_condition:Detected_Condition,
   visible_damage_notes:Visible_Damage_Notes,
   confidence_score:Confidence_Score,
+  shine_level:Shine_Level,
+  frizz_level:Frizz_Level,
+  dryness_level:Dryness_Level,
+  oiliness_level:Oiliness_Level,
+  damage_level:Damage_Level,
   decision:Decision,
   summary:Summary,
   created_at:Created_At
@@ -241,6 +246,11 @@ const normalizeAiScreening = (row) => ({
   detected_condition: row?.detected_condition || '',
   visible_damage_notes: row?.visible_damage_notes || '',
   confidence_score: row?.confidence_score ?? null,
+  shine_level: row?.shine_level ?? null,
+  frizz_level: row?.frizz_level ?? null,
+  dryness_level: row?.dryness_level ?? null,
+  oiliness_level: row?.oiliness_level ?? null,
+  damage_level: row?.damage_level ?? null,
   decision: row?.decision || '',
   summary: row?.summary || '',
   created_at: row?.created_at || null,
@@ -527,7 +537,7 @@ export const createAiScreening = async (payload) => {
     table: aiScreeningsTable,
     phase: 'create',
     filters: { Submission_ID: payload?.submission_id },
-    columns: ['Submission_ID', 'Estimated_Length', 'Detected_Color', 'Detected_Texture', 'Detected_Density', 'Detected_Condition', 'Visible_Damage_Notes', 'Confidence_Score', 'Decision', 'Summary'],
+    columns: ['Submission_ID', 'Estimated_Length', 'Detected_Color', 'Detected_Texture', 'Detected_Density', 'Detected_Condition', 'Visible_Damage_Notes', 'Confidence_Score', 'Shine_Level', 'Frizz_Level', 'Dryness_Level', 'Oiliness_Level', 'Damage_Level', 'Decision', 'Summary'],
   });
 
   const result = await supabase
@@ -541,6 +551,11 @@ export const createAiScreening = async (payload) => {
       Detected_Condition: payload?.detected_condition || null,
       Visible_Damage_Notes: payload?.visible_damage_notes || null,
       Confidence_Score: payload?.confidence_score ?? null,
+      Shine_Level: payload?.shine_level ?? null,
+      Frizz_Level: payload?.frizz_level ?? null,
+      Dryness_Level: payload?.dryness_level ?? null,
+      Oiliness_Level: payload?.oiliness_level ?? null,
+      Damage_Level: payload?.damage_level ?? null,
       Decision: payload?.decision || null,
       Summary: payload?.summary || null,
     }])

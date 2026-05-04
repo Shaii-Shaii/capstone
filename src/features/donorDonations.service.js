@@ -16,7 +16,7 @@ import {
   updateHairSubmissionLogisticsById,
   uploadHairSubmissionImage,
 } from './hairSubmission.api';
-import { createDonationDriveRsvp, fetchDonationDrivePreview, fetchUpcomingDonationDrives } from './donorHome.api';
+import { createDonationDriveRegistration, fetchDonationDrivePreview, fetchUpcomingDonationDrives } from './donorHome.api';
 import { hairSubmissionStorageBucket } from './hairSubmission.constants';
 import { buildImmediateNotificationEvents, recordNotifications } from './notification.service';
 import { notificationTypes } from './notification.constants';
@@ -584,6 +584,7 @@ const buildManualDonationNotes = ({ manualDetails = {}, evaluation = null }) => 
   [
     MANUAL_DONATION_NOTE_MARKER,
     `Length entered: ${manualDetails?.length_value || '-'} ${normalizeLengthUnit(manualDetails?.length_unit)}`,
+    `Bundle quantity: ${Math.max(1, Number.parseInt(manualDetails?.bundle_quantity, 10) || 1)}`,
     `Treated: ${normalizeYesNoChoice(manualDetails?.treated) ? 'Yes' : 'No'}`,
     `Colored: ${normalizeYesNoChoice(manualDetails?.colored) ? 'Yes' : 'No'}`,
     `Trimmed: ${normalizeYesNoChoice(manualDetails?.trimmed) ? 'Yes' : 'No'}`,
@@ -1040,20 +1041,26 @@ const getParcelImagesWithUrls = async (detail) => {
   }));
 };
 
-export const buildDriveInvitationQrPayload = ({ drive, registration, donor }) => (
+export const buildDriveInvitationQrPayload = ({ drive, registration }) => (
   JSON.stringify({
-    type: 'drive_invitation',
-    qr_reference: registration?.registration_id ? `DRV-${registration.registration_id}-${registration?.registered_at || ''}` : '',
-    registration_id: registration?.registration_id || null,
-    donation_drive_id: drive?.donation_drive_id || null,
-    organization_id: drive?.organization_id || null,
-    donor_user_id: donor?.databaseUserId || donor?.user_id || null,
-    donor_name: donor?.name || [donor?.first_name, donor?.last_name].filter(Boolean).join(' ').trim() || '',
-    registered_at: registration?.registered_at || new Date().toISOString(),
-    generated_at: registration?.registered_at || new Date().toISOString(),
-    expires_at: '',
-    activated_at: registration?.qr?.activated_at || '',
-    qr_status: registration?.qr?.status || 'pending',
+    Registration_ID: registration?.registration_id || null,
+    Donation_Drive_ID: registration?.donation_drive_id || drive?.donation_drive_id || null,
+    User_ID: registration?.user_id || null,
+    Registration_Status: registration?.registration_status || '',
+    Attendance_Status: registration?.attendance_status || '',
+    Registered_At: registration?.registered_at || '',
+    Updated_At: registration?.updated_at || '',
+    Attendance_Marked_At: registration?.attendance_marked_at || '',
+    Event_Title: drive?.event_title || '',
+    Start_Date: drive?.start_date || '',
+    End_Date: drive?.end_date || '',
+    Street: drive?.street || '',
+    Barangay: drive?.barangay || '',
+    City: drive?.city || '',
+    Province: drive?.province || '',
+    Country: drive?.country || '',
+    Organization_ID: drive?.organization_id || null,
+    Organization_Name: drive?.organization_name || '',
   })
 );
 
@@ -1061,31 +1068,28 @@ export const buildIndependentDonationQrPayload = ({
   submission,
   detail,
   screening,
-  donor,
-  qualificationSource = '',
-  qrReference = '',
-  generatedAt = '',
-  confirmedAt = '',
 }) => (
   JSON.stringify({
-    type: 'independent_parcel_tracking',
-    qr_reference: qrReference || '',
-    submission_id: submission?.submission_id || null,
-    submission_code: submission?.submission_code || '',
-    submission_detail_id: detail?.submission_detail_id || null,
-    donor_user_id: donor?.databaseUserId || null,
-    donor_name: donor?.name || '',
-    donor_email: donor?.email || '',
-    qualification_source: qualificationSource || (screening ? 'latest_hair_analysis' : MANUAL_DONATION_SOURCE),
-    latest_analysis_decision: screening?.decision || '',
-    latest_analysis_condition: screening?.detected_condition || '',
-    declared_length: detail?.declared_length ?? null,
-    declared_color: detail?.declared_color || '',
-    declared_density: detail?.declared_density || '',
-    declared_texture: detail?.declared_texture || '',
-    generated_at: generatedAt || new Date().toISOString(),
-    expires_at: '',
-    activated_at: confirmedAt || '',
+    Submission_ID: submission?.submission_id || null,
+    User_ID: submission?.user_id || null,
+    Donation_Drive_ID: submission?.donation_drive_id || null,
+    Organization_ID: submission?.organization_id || null,
+    Delivery_Method: submission?.delivery_method || '',
+    Pickup_Request: submission?.pickup_request ?? false,
+    Submission_Code: submission?.submission_code || '',
+    Donation_Source: submission?.donation_source || '',
+    Bundle_Quantity: submission?.bundle_quantity || null,
+    Status: submission?.status || '',
+    Submission_Detail_ID: detail?.submission_detail_id || null,
+    Bundle_Number: detail?.bundle_number || null,
+    Declared_Length: detail?.declared_length ?? null,
+    Declared_Color: detail?.declared_color || '',
+    Declared_Texture: detail?.declared_texture || '',
+    Declared_Density: detail?.declared_density || '',
+    Declared_Condition: detail?.declared_condition || '',
+    AI_Screening_ID: screening?.ai_screening_id || null,
+    Decision: screening?.decision || '',
+    Detected_Condition: screening?.detected_condition || '',
   })
 );
 
@@ -1093,72 +1097,77 @@ export const buildDonationTrackingQrPayload = ({
   submission = null,
   detail = null,
   logistics = null,
-  donor = null,
   drive = null,
-  qrReference = '',
   trackingStatus = '',
 } = {}) => {
   const lines = [
-    'DONIVRA Donation QR',
-    `Donation Code: ${submission?.submission_code || 'Pending donation code'}`,
+    `Submission_ID: ${submission?.submission_id || ''}`,
+    `Submission_Code: ${submission?.submission_code || 'Pending donation code'}`,
   ];
 
-  if (donor?.name) {
-    lines.push(`Donor: ${donor.name}`);
+  if (submission?.user_id) {
+    lines.push(`User_ID: ${submission.user_id}`);
   }
 
   const donationSource = formatDonationSourceLabel(submission?.donation_source || '');
   if (donationSource) {
-    lines.push(`Donation Source: ${donationSource}`);
+    lines.push(`Donation_Source: ${donationSource}`);
   }
 
   const donationStatus = formatDonationStatusLabel(submission?.status || '');
   if (donationStatus) {
-    lines.push(`Donation Status: ${donationStatus}`);
+    lines.push(`Status: ${donationStatus}`);
   }
 
+  if (detail?.submission_detail_id) {
+    lines.push(`Submission_Detail_ID: ${detail.submission_detail_id}`);
+  }
   if (detail?.declared_length != null && detail?.declared_length !== '') {
-    lines.push(`Hair Length: ${detail.declared_length}`);
+    lines.push(`Declared_Length: ${detail.declared_length}`);
   }
   if (detail?.declared_texture) {
-    lines.push(`Hair Texture: ${detail.declared_texture}`);
+    lines.push(`Declared_Texture: ${detail.declared_texture}`);
   }
   if (detail?.declared_density) {
-    lines.push(`Hair Density: ${detail.declared_density}`);
+    lines.push(`Declared_Density: ${detail.declared_density}`);
   }
   if (detail?.declared_condition) {
-    lines.push(`Hair Condition: ${detail.declared_condition}`);
+    lines.push(`Declared_Condition: ${detail.declared_condition}`);
   }
   if (detail?.declared_color) {
-    lines.push(`Hair Color: ${detail.declared_color}`);
+    lines.push(`Declared_Color: ${detail.declared_color}`);
   }
   if (detail?.bundle_number != null) {
-    lines.push(`Bundle Number: ${detail.bundle_number}`);
+    lines.push(`Bundle_Number: ${detail.bundle_number}`);
   } else if (submission?.bundle_quantity) {
-    lines.push(`Bundle Count: ${submission.bundle_quantity}`);
+    lines.push(`Bundle_Quantity: ${submission.bundle_quantity}`);
   }
 
   if (trackingStatus) {
-    lines.push(`Current Tracking: ${trackingStatus}`);
+    lines.push(`Hair_Bundle_Tracking_History.Status: ${trackingStatus}`);
   }
 
   const shipmentStatus = formatDonationStatusLabel(logistics?.shipment_status || '');
   if (shipmentStatus && shipmentStatus !== trackingStatus) {
-    lines.push(`Shipment Status: ${shipmentStatus}`);
+    if (logistics?.submission_logistics_id) {
+      lines.push(`Submission_Logistics_ID: ${logistics.submission_logistics_id}`);
+    }
+    lines.push(`Shipment_Status: ${shipmentStatus}`);
   }
 
+  if (drive?.donation_drive_id) {
+    lines.push(`Donation_Drive_ID: ${drive.donation_drive_id}`);
+  }
   if (drive?.event_title) {
-    lines.push(`Drive: ${drive.event_title}`);
+    lines.push(`Event_Title: ${drive.event_title}`);
+  }
+  if (submission?.organization_id || drive?.organization_id) {
+    lines.push(`Organization_ID: ${submission?.organization_id || drive?.organization_id}`);
   }
   if (drive?.organization_name) {
-    lines.push(`Organization: ${drive.organization_name}`);
+    lines.push(`Organization_Name: ${drive.organization_name}`);
   }
 
-  if (qrReference) {
-    lines.push(`Donation QR Ref: ${qrReference}`);
-  }
-
-  lines.push('This QR is linked to your hair donation details.');
   return lines.join('\n');
 };
 
@@ -1170,11 +1179,12 @@ const getDonationQrPayloadValue = (payloadText = '', label = '') => {
 };
 
 const parseDonationTrackingQrPayload = (payloadText = '') => ({
-  submission_code: getDonationQrPayloadValue(payloadText, 'Donation Code'),
-  donor_name: getDonationQrPayloadValue(payloadText, 'Donor'),
-  donation_source: getDonationQrPayloadValue(payloadText, 'Donation Source'),
-  donation_status: getDonationQrPayloadValue(payloadText, 'Donation Status'),
-  qr_reference: getDonationQrPayloadValue(payloadText, 'Donation QR Ref'),
+  submission_id: getDonationQrPayloadValue(payloadText, 'Submission_ID'),
+  submission_code: getDonationQrPayloadValue(payloadText, 'Submission_Code'),
+  user_id: getDonationQrPayloadValue(payloadText, 'User_ID'),
+  donation_source: getDonationQrPayloadValue(payloadText, 'Donation_Source'),
+  donation_status: getDonationQrPayloadValue(payloadText, 'Status'),
+  donation_drive_id: getDonationQrPayloadValue(payloadText, 'Donation_Drive_ID'),
 });
 
 const renderDonationQrDetailsHtml = (details = []) => (
@@ -1881,13 +1891,13 @@ export const activateIndependentDonationQrByScan = async ({
   }
 
   const scannedQr = parseDonationTrackingQrPayload(scannedPayload);
-  if (!scannedQr.qr_reference || !scannedQr.submission_code) {
+  if (!scannedQr.submission_code) {
     return { success: false, error: 'The scanned code is not a valid Donivra donation QR.' };
   }
 
   if (
-    scannedQr.qr_reference !== currentMetadata.reference
-    || scannedQr.submission_code !== submission.submission_code
+    scannedQr.submission_code !== submission.submission_code
+    || (scannedQr.submission_id && Number(scannedQr.submission_id) !== Number(submission.submission_id))
   ) {
     return { success: false, error: 'The scanned QR does not match your current donation.' };
   }
@@ -1918,6 +1928,7 @@ export const saveManualDonationQualification = async ({
     manualDetails,
     donationRequirement,
   });
+  const bundleQuantity = Math.max(1, Number.parseInt(manualDetails?.bundle_quantity, 10) || 1);
   const submissionNotes = buildManualDonationNotes({ manualDetails, evaluation });
   const uploadPayload = await getPhotoUploadPayload(photo);
 
@@ -1926,7 +1937,7 @@ export const saveManualDonationQualification = async ({
     database_user_id: databaseUserId,
     submission_code: createDonationSubmissionCode('MAN'),
     donation_source: MANUAL_DONATION_SOURCE,
-    bundle_quantity: 1,
+    bundle_quantity: bundleQuantity,
     donor_notes: submissionNotes,
     status: evaluation.isQualified ? 'Qualified' : 'Needs improvement',
   });
@@ -2035,8 +2046,7 @@ export const saveDriveDonationParticipation = async ({
   if (!userId || !databaseUserId) {
     return {
       success: false,
-      error: 'Your donor account is required before joining a donation drive.',
-      registration: null,
+      error: 'Your donor account is required before selecting a donation drive.',
       submission: null,
     };
   }
@@ -2044,23 +2054,7 @@ export const saveDriveDonationParticipation = async ({
   if (!drive?.donation_drive_id || !submission?.submission_id || !detail?.submission_detail_id) {
     return {
       success: false,
-      error: 'A saved donation entry is required before joining a donation drive.',
-      registration: null,
-      submission: null,
-    };
-  }
-
-  const rsvpResult = await createDonationDriveRsvp({
-    driveId: drive.donation_drive_id,
-    databaseUserId,
-    organizationId: drive.organization_id || null,
-  });
-
-  if (rsvpResult.error || !rsvpResult.data?.registration_id) {
-    return {
-      success: false,
-      error: rsvpResult.error?.message || 'RSVP could not be saved right now.',
-      registration: null,
+      error: 'A saved donation entry is required before selecting a donation drive.',
       submission: null,
     };
   }
@@ -2070,10 +2064,24 @@ export const saveDriveDonationParticipation = async ({
     [
       'Donation path: drive donation.',
       qualificationSource ? `Qualification source: ${qualificationSource}.` : '',
-      drive?.event_title ? `Drive RSVP saved for ${drive.event_title}.` : 'Drive RSVP saved.',
+      drive?.event_title ? `Donation drive selected: ${drive.event_title}.` : 'Donation drive selected.',
     ],
-    parseQrMetadata(submission?.donor_notes || ''),
+    null,
   );
+
+  const registrationResult = await createDonationDriveRegistration({
+    driveId: drive.donation_drive_id,
+    databaseUserId,
+  });
+
+  if (registrationResult.error || !registrationResult.data?.registration_id) {
+    return {
+      success: false,
+      error: registrationResult.error?.message || 'Drive registration could not be saved.',
+      submission: null,
+      registration: null,
+    };
+  }
 
   const submissionResult = await updateHairSubmissionById(submission.submission_id, {
     donation_drive_id: drive.donation_drive_id,
@@ -2082,21 +2090,20 @@ export const saveDriveDonationParticipation = async ({
     pickup_request: false,
     donation_source: DRIVE_DONATION_SOURCE,
     donor_notes: nextSubmissionNotes,
-    status: rsvpResult.data?.qr?.is_activated ? 'Drive RSVP Activated' : 'Drive RSVP Pending',
+    status: 'Donation drive selected',
   });
 
   if (submissionResult.error || !submissionResult.data?.submission_id) {
     return {
       success: false,
       error: submissionResult.error?.message || 'Drive participation could not be linked to the donation submission.',
-      registration: null,
       submission: null,
+      registration: registrationResult.data,
     };
   }
 
   const shouldTrackDriveParticipation = (
-    !rsvpResult.alreadyRegistered
-    || submission?.donation_drive_id !== drive.donation_drive_id
+    submission?.donation_drive_id !== drive.donation_drive_id
     || String(submission?.donation_source || '').trim().toLowerCase() !== DRIVE_DONATION_SOURCE
   );
 
@@ -2104,9 +2111,9 @@ export const saveDriveDonationParticipation = async ({
     const trackingResult = await createHairBundleTrackingEntry({
       submission_id: submissionResult.data.submission_id,
       submission_detail_id: detail.submission_detail_id,
-      status: rsvpResult.data?.qr?.is_activated ? 'Drive RSVP Activated' : 'Drive RSVP Pending',
-      title: 'Drive RSVP saved',
-      description: `The donor joined ${drive?.event_title || 'the selected drive'} and the RSVP is now saved.`,
+      status: 'Donation drive selected',
+      title: 'Donation drive selected',
+      description: `The donor selected ${drive?.event_title || 'the selected drive'} for this donation.`,
       changed_by: databaseUserId,
     });
 
@@ -2114,8 +2121,8 @@ export const saveDriveDonationParticipation = async ({
       return {
         success: false,
         error: trackingResult.error.message || 'Unable to save the drive participation timeline update.',
-        registration: null,
         submission: null,
+        registration: registrationResult.data,
       };
     }
 
@@ -2123,9 +2130,9 @@ export const saveDriveDonationParticipation = async ({
       userId,
       notifications: [
         buildDonationNotification({
-          dedupeKey: `${notificationTypes.logisticsUpdated}:${submissionResult.data.submission_id}:drive-rsvp:${rsvpResult.data.registration_id}`,
-          title: 'Drive RSVP saved',
-          message: `Your RSVP for ${drive?.event_title || 'the donation drive'} was saved successfully.`,
+          dedupeKey: `${notificationTypes.logisticsUpdated}:${submissionResult.data.submission_id}:drive-selected:${drive.donation_drive_id}`,
+          title: 'Donation drive selected',
+          message: `${drive?.event_title || 'The donation drive'} was linked to your donation.`,
           createdAt: new Date().toISOString(),
           referenceId: submissionResult.data.submission_id,
         }),
@@ -2135,9 +2142,9 @@ export const saveDriveDonationParticipation = async ({
 
   return {
     success: true,
-    registration: rsvpResult.data,
     submission: submissionResult.data,
-    alreadyRegistered: rsvpResult.alreadyRegistered,
+    registration: registrationResult.data,
+    alreadyRegistered: registrationResult.alreadyRegistered,
     regenerated: false,
   };
 };

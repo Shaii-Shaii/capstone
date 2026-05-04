@@ -44,6 +44,11 @@ const normalizeAnalysis = (data) => ({
   detected_condition: data?.detected_condition || '',
   visible_damage_notes: data?.visible_damage_notes || '',
   confidence_score: data?.confidence_score ?? null,
+  shine_level: data?.shine_level ?? null,
+  frizz_level: data?.frizz_level ?? null,
+  dryness_level: data?.dryness_level ?? null,
+  oiliness_level: data?.oiliness_level ?? null,
+  damage_level: data?.damage_level ?? null,
   decision: data?.decision || '',
   summary: data?.summary || '',
   length_assessment: data?.length_assessment || '',
@@ -62,9 +67,54 @@ const hasStructuredAnalysisContent = (analysis) => Boolean(
   || (Array.isArray(analysis?.recommendations) && analysis.recommendations.length)
 );
 
-const isGeminiProviderMarker = (value) => {
+const isSupportedAiProviderMarker = (value) => {
   const normalized = String(value || '').trim().toLowerCase();
-  return normalized === 'gemini' || normalized === 'google-gemini';
+  return normalized === 'gemini' || normalized === 'google-ai' || normalized === 'openai';
+};
+
+const resolvePhotoQualityIssueMessage = (analysis = {}) => {
+  const rawMessage = String(analysis?.invalid_image_reason || '').trim();
+  const normalized = rawMessage.toLowerCase();
+  const missingViews = Array.isArray(analysis?.missing_views) ? analysis.missing_views.filter(Boolean) : [];
+  const isPlaceholderMessage = !rawMessage || ['n/a', 'na', 'none', 'null', 'not applicable'].includes(normalized);
+
+  if (missingViews.length) {
+    return `Photos incomplete. Please retake or add these required views: ${missingViews.join(', ')}.`;
+  }
+
+  if (analysis?.is_hair_detected === false) {
+    return isPlaceholderMessage
+      ? 'We could not reliably analyze the photos. Please retake them in bright light with one person visible and your hair clearly centered.'
+      : rawMessage;
+  }
+
+  if (isPlaceholderMessage) return '';
+
+  if (normalized.includes('too dark') || normalized.includes('dark') || normalized.includes('underexposed')) {
+    return 'The photo looks too dark. Please move near bright indirect light and retake it.';
+  }
+
+  if (normalized.includes('no person') || normalized.includes('no human')) {
+    return 'We could not detect a person in the photo. Please retake it with your hair clearly visible.';
+  }
+
+  if (normalized.includes('multiple subject') || normalized.includes('multiple people') || normalized.includes('more than one')) {
+    return 'Multiple subjects detected. Please retake the photo with only one person in the frame.';
+  }
+
+  if (normalized.includes('accessor') || normalized.includes('hat') || normalized.includes('cap') || normalized.includes('clip') || normalized.includes('headband')) {
+    return 'Accessories detected. Please remove hats, headbands, clips, or anything covering the hair, then retake the photo.';
+  }
+
+  if (normalized.includes('blur') || normalized.includes('not clear') || normalized.includes('unclear')) {
+    return 'Photos are not clear enough. Please retake them with a steady camera and good lighting.';
+  }
+
+  if (normalized.includes('background') || normalized.includes('distracting') || normalized.includes('clutter')) {
+    return 'The background makes the analysis harder. Please retake the photo against a plain, uncluttered background.';
+  }
+
+  return rawMessage;
 };
 
 const optimizeWebImageForAnalysis = async (image) => {
@@ -433,11 +483,11 @@ export const analyzeHairPhotos = async ({
     }
 
     if (functionResult.data?.provider_request_attempted === false) {
-      throw new Error('Hair analysis did not reach Gemini.');
+      throw new Error('Hair analysis did not reach the AI provider.');
     }
 
     if (functionResult.data?.provider_parse_success === false) {
-      throw new Error('Gemini returned a response that could not be parsed.');
+      throw new Error('The AI provider returned a response that could not be parsed.');
     }
 
     const normalizedAnalysis = normalizeAnalysis({
@@ -445,7 +495,18 @@ export const analyzeHairPhotos = async ({
       recommendations: analysisPayload?.recommendations || functionResult.data?.recommendations || [],
     });
 
-    logAppEvent('hairAnalysis.invoke', 'Hair analysis fields preserved from Gemini response.', {
+    const photoQualityIssueMessage = resolvePhotoQualityIssueMessage(normalizedAnalysis);
+    if (photoQualityIssueMessage) {
+      throw buildStructuredAnalysisError(photoQualityIssueMessage, {
+        errorType: 'photo_quality',
+        edgeFunctionInvoked: true,
+        providerRequestAttempted: functionResult.data?.provider_request_attempted ?? true,
+        providerResponseStatus: functionResult.data?.provider_response_status ?? null,
+        providerParseSuccess: functionResult.data?.provider_parse_success ?? null,
+      });
+    }
+
+    logAppEvent('hairAnalysis.invoke', 'Hair analysis fields preserved from AI provider response.', {
       functionName: hairAnalysisFunctionName,
       usedAiSummary: Boolean(normalizedAnalysis.summary),
       usedAiLengthAssessment: Boolean(normalizedAnalysis.length_assessment),
@@ -467,7 +528,7 @@ export const analyzeHairPhotos = async ({
     logAppEvent('hairAnalysis.invoke', 'Hair analysis response validated.', {
       functionName: hairAnalysisFunctionName,
       providerMarker,
-      providerMarkerRecognized: isGeminiProviderMarker(providerMarker),
+      providerMarkerRecognized: isSupportedAiProviderMarker(providerMarker),
       edgeFunctionInvoked: functionResult.data?.edge_function_invoked ?? null,
       providerRequestAttempted: functionResult.data?.provider_request_attempted ?? null,
       providerResponseStatus: functionResult.data?.provider_response_status ?? null,
@@ -475,7 +536,7 @@ export const analyzeHairPhotos = async ({
       usedStructuredAnalysisValidation: true,
     });
 
-    if (!isGeminiProviderMarker(providerMarker)) {
+    if (!isSupportedAiProviderMarker(providerMarker)) {
       throw new Error('Hair analysis returned an unexpected AI provider response.');
     }
 
@@ -522,24 +583,29 @@ export const analyzeHairPhotos = async ({
       };
 
       if (isRateLimitError) {
-        logAppEvent('hairAnalysis.analyzeHairPhotos', 'Gemini request returned a retryable quota or rate-limit response.', {
+        logAppEvent('hairAnalysis.analyzeHairPhotos', 'AI provider request returned a retryable quota or rate-limit response.', {
           ...logContext,
           message: Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
             ? `Cannot analyze hair, please try again in ${retryAfterSeconds} seconds.`
             : 'Cannot analyze hair right now. Please try again later.',
         }, 'warn');
       } else if (isTemporaryBusyError) {
-        logAppEvent('hairAnalysis.analyzeHairPhotos', 'Gemini request returned a temporary-unavailable response.', {
+        logAppEvent('hairAnalysis.analyzeHairPhotos', 'AI provider request returned a temporary-unavailable response.', {
           ...logContext,
           message: 'Hair analysis is temporarily busy right now. Please try again in a moment.',
         }, 'warn');
+      } else if (errorType === 'photo_quality') {
+        logAppEvent('hairAnalysis.analyzeHairPhotos', 'AI provider marked the uploaded photos as unsuitable for reliable analysis.', {
+          ...logContext,
+          message: resolvedMessage || 'Photo quality did not meet the analysis requirements.',
+        }, 'info');
       } else if (!edgeFunctionInvoked) {
         logAppEvent('hairAnalysis.analyzeHairPhotos', 'Hair analysis invoke failed before the edge function was reached.', {
           ...logContext,
           message: resolvedMessage || 'Hair analysis could not reach the server function.',
         }, 'warn');
       } else if (!providerRequestAttempted) {
-        logAppEvent('hairAnalysis.analyzeHairPhotos', 'Hair analysis failed on the server before Gemini was called.', {
+        logAppEvent('hairAnalysis.analyzeHairPhotos', 'Hair analysis failed on the server before the AI provider was called.', {
           ...logContext,
           message: resolvedMessage || 'Hair analysis failed before the provider request started.',
         }, 'warn');
@@ -596,6 +662,10 @@ export const analyzeHairPhotos = async ({
               ? resolvedMessage
             : technicalMessage.includes('invalid json') || technicalMessage.includes('could not be parsed')
               ? 'The AI response could not be read properly. Please try the hair analysis again.'
+            : errorType === 'photo_quality'
+              ? ['n/a', 'na', 'none', 'null', 'not applicable'].includes(technicalMessage.trim())
+                ? 'We could not reliably analyze the photos. Please retake them in bright light with one person visible and your hair clearly centered.'
+                : resolvedMessage
             : technicalMessage.includes('incomplete')
               ? 'Hair analysis could not be completed right now.'
               : 'Hair analysis could not be completed right now.';

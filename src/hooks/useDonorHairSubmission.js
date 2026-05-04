@@ -285,6 +285,51 @@ const mapAnalysisError = (message = '', extras = {}) => {
     return createErrorState('Analysis Was Incomplete', 'The scan did not finish properly. Please try analyzing the photos again.');
   }
 
+  if (
+    normalized.includes('photos incomplete')
+    || normalized.includes('required views')
+    || normalized.includes('more hair views')
+  ) {
+    return createErrorState('Photos Incomplete', message);
+  }
+
+  if (
+    normalized.includes('too dark')
+    || normalized.includes('bright indirect light')
+    || normalized.includes('underexposed')
+  ) {
+    return createErrorState('Lighting Too Dark', 'The photo looks too dark. Please move near bright indirect light and retake it.');
+  }
+
+  if (
+    normalized.includes('could not detect a person')
+    || normalized.includes('no person')
+    || normalized.includes('no human')
+  ) {
+    return createErrorState('Person Not Detected', 'We could not detect a person in the photo. Please retake it with your hair clearly visible.');
+  }
+
+  if (normalized.includes('multiple subjects') || normalized.includes('multiple subject')) {
+    return createErrorState('Multiple Subjects Detected', 'Multiple subjects detected. One subject is needed. Please retake the photo with only one person in frame.');
+  }
+
+  if (
+    normalized.includes('accessories detected')
+    || normalized.includes('remove hats')
+    || normalized.includes('headbands')
+    || normalized.includes('clips')
+  ) {
+    return createErrorState('Accessories Detected', 'Accessories detected. Please remove hats, headbands, clips, or anything covering the hair, then retake the photo.');
+  }
+
+  if (
+    normalized.includes('background makes')
+    || normalized.includes('plain, uncluttered')
+    || normalized.includes('distracting background')
+  ) {
+    return createErrorState('Background Too Busy', 'The background makes the analysis harder. Please retake the photo against a plain, uncluttered background.');
+  }
+
   if (providerRequestAttempted && normalized.includes('cannot analyze hair right now')) {
     return createRetryState('Analysis Busy', 'Cannot analyze hair right now. Please try again later.');
   }
@@ -345,6 +390,10 @@ const mapAnalysisError = (message = '', extras = {}) => {
 
   if (normalized.includes('could not be read')) {
     return createErrorState('Photo Could Not Be Read', 'One of the uploaded photos could not be processed. Please upload or retake that hair view again.');
+  }
+
+  if (String(extras?.errorType || '').trim().toLowerCase() === 'photo_quality') {
+    return createErrorState('Retake Photos', message || 'Please retake the photos in bright light with one person visible and your hair clearly centered.');
   }
 
   if (normalized.includes('does not represent a valid image')) {
@@ -590,15 +639,17 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
         viewKey: hairAnalysisRequiredViews[slotIndex]?.key || null,
       });
 
-      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      logAppEvent('donor_hair_submission.photo_picker', 'Upload permission resolved for hair photo slot.', {
-        userId,
-        slotIndex,
-        granted: permission.granted,
-      });
+      if (Platform.OS !== 'android') {
+        const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        logAppEvent('donor_hair_submission.photo_picker', 'Upload permission resolved for hair photo slot.', {
+          userId,
+          slotIndex,
+          granted: permission.granted,
+        });
 
-      if (!permission.granted) {
-        throw new Error('Please allow photo library access to upload hair images.');
+        if (!permission.granted) {
+          throw new Error('Please allow photo library access to upload hair images.');
+        }
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
@@ -799,6 +850,7 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
         providerResponseStatus: result.providerResponseStatus ?? null,
       });
       setError(mappedError);
+      const isPhotoQualityError = String(result.errorType || '').trim().toLowerCase() === 'photo_quality';
       logAppEvent('donor_hair_submission.analysis', 'Donor hair analysis request failed.', {
         userId,
         requestId,
@@ -807,7 +859,7 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
         edgeFunctionInvoked: result.edgeFunctionInvoked ?? null,
         providerRequestAttempted: result.providerRequestAttempted ?? null,
         providerResponseStatus: result.providerResponseStatus ?? null,
-      }, 'warn');
+      }, isPhotoQualityError ? 'info' : 'warn');
       return { success: false, error: mappedError.message };
     }
 

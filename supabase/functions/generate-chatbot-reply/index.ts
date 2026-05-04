@@ -9,27 +9,56 @@ const replySchema = {
       type: 'object',
       additionalProperties: false,
       properties: {
-        text: {
-          type: 'string',
+        text: { type: 'string' },
+        source: { type: 'string', enum: ['ai'] },
+        products: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              name: { type: 'string' },
+              description: { type: 'string' },
+              where_to_buy: { type: 'string' },
+              price_range: { type: 'string' },
+              search_url: { type: 'string' },
+            },
+            required: ['name', 'description', 'where_to_buy', 'price_range', 'search_url'],
+          },
         },
-        source: {
-          type: 'string',
-          enum: ['ai'],
+        map_links: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              label: { type: 'string' },
+              url: { type: 'string' },
+            },
+            required: ['label', 'url'],
+          },
         },
       },
-      required: ['text', 'source'],
+      required: ['text', 'source', 'products', 'map_links'],
     },
   },
   required: ['reply'],
 };
 
 const instructions = [
-  'You are Donivra AI inside a mobile app for donors and patients.',
-  'Return JSON only.',
-  'Answer only with information supported by the provided FAQs, settings, and recent conversation.',
-  'Do not invent policies, statuses, contact details, medical claims, or database values.',
-  'If the answer is not supported by the provided context, say that the app does not have a saved answer for that yet and suggest contacting support.',
-  'Keep the reply concise, clear, and user-facing.',
+  'You are Donivra AI, a warm and helpful hair donation assistant inside the StrandShare mobile app for donors and patients in the Philippines.',
+  'Always reply in English.',
+  'Use 1-2 fitting emojis naturally in your reply (not forced or excessive) to make the response feel friendly and personal.',
+  'Keep replies concise — 2-4 sentences unless the user explicitly asks for more detail.',
+  'Answer only based on the provided FAQs, user context, and recent conversation.',
+  'Do not invent policies, statuses, contact details, medical claims, or database values not in the provided context.',
+  'If the user asks about hair care products or what to use for their hair condition: suggest up to 3 real hair care products available in the Philippines (at Watsons, SM, Robinsons, Lazada.ph, or Shopee.ph).',
+  'For product suggestions, include: a real product name available in PH (e.g. "Pantene Pro-V Moisture Boost Shampoo"), a short one-sentence description of what it does, where to buy (e.g. "Watsons, SM, Shopee.ph"), typical price range in PHP (e.g. "₱180–₱350"), and a Shopee.ph search URL built as https://shopee.ph/search?keyword=<url-encoded-product-name>.',
+  'Choose products appropriate for the detected hair condition from the user context (e.g. moisturizing products for dry hair, strengthening products for damaged hair, clarifying for oily hair).',
+  'For non-product queries, return an empty products array.',
+  'If the user asks about salon locations, nearby drop-offs, or how to get somewhere: include helpful Google Maps search links in map_links (e.g. https://www.google.com/maps/search/?api=1&query=hair+salon+near+manila). For all other queries, return an empty map_links array.',
+  'If the answer is not supported by the provided context, say warmly that you do not have that information yet and suggest contacting support.',
+  'Return JSON only per the provided schema.',
 ].join(' ');
 
 Deno.serve(async (request) => {
@@ -60,7 +89,7 @@ Deno.serve(async (request) => {
       instructions,
       schemaName: 'chatbot_reply',
       schema: replySchema,
-      maxOutputTokens: 500,
+      maxOutputTokens: 900,
       input: [
         {
           role: 'user',
@@ -73,7 +102,6 @@ Deno.serve(async (request) => {
                 settings: {
                   welcomeMessage: settings?.welcomeMessage || '',
                   fallbackMessage: settings?.fallbackMessage || '',
-                  quickSuggestions: Array.isArray(settings?.quickSuggestions) ? settings.quickSuggestions : [],
                 },
                 faqs: faqs.map((faq) => ({
                   question: faq?.question || '',
@@ -94,7 +122,8 @@ Deno.serve(async (request) => {
 
     console.info('[generate-chatbot-reply] openai result ready', {
       hasReply: Boolean(result?.reply?.text),
-      responseKeys: result && typeof result === 'object' ? Object.keys(result) : [],
+      productCount: Array.isArray(result?.reply?.products) ? result.reply.products.length : 0,
+      mapLinkCount: Array.isArray(result?.reply?.map_links) ? result.reply.map_links.length : 0,
     });
 
     return createJsonResponse(result);

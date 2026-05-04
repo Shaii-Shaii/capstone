@@ -1,12 +1,11 @@
 import React from 'react';
-import { Image, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { theme } from '../../design-system/theme';
 import chatbotIcon from '../../assets/images/chatbot_icon.png';
 import { useAuth } from '../../providers/AuthProvider';
 
 const formatTime = (value) => {
   if (!value) return '';
-
   try {
     return new Intl.DateTimeFormat('en-PH', {
       hour: 'numeric',
@@ -21,7 +20,6 @@ function AttachmentPreview({ attachment }) {
   if (attachment?.uri) {
     return <Image source={{ uri: attachment.uri }} style={styles.attachmentImage} resizeMode="cover" />;
   }
-
   return (
     <View style={styles.attachmentFallback}>
       <Text numberOfLines={2} style={styles.attachmentFallbackText}>
@@ -31,11 +29,42 @@ function AttachmentPreview({ attachment }) {
   );
 }
 
+function ProductCard({ product }) {
+  const handlePress = () => {
+    if (product?.search_url) {
+      Linking.openURL(product.search_url).catch(() => null);
+    }
+  };
+
+  return (
+    <Pressable
+      onPress={handlePress}
+      style={({ pressed }) => [styles.productCard, pressed ? styles.productCardPressed : null]}
+    >
+      <View style={styles.productCardHeader}>
+        <Text style={styles.productCardEmoji}>🧴</Text>
+        <Text numberOfLines={2} style={styles.productCardName}>{product.name}</Text>
+      </View>
+      <Text numberOfLines={3} style={styles.productCardDesc}>{product.description}</Text>
+      <View style={styles.productCardMeta}>
+        <Text style={styles.productCardPrice}>{product.price_range}</Text>
+      </View>
+      <Text numberOfLines={1} style={styles.productCardStore}>📍 {product.where_to_buy}</Text>
+      {product.search_url ? (
+        <View style={styles.productCardShopRow}>
+          <Text style={styles.productCardShopLink}>Shop now →</Text>
+        </View>
+      ) : null}
+    </Pressable>
+  );
+}
+
 export function ChatMessageBubble({ message }) {
   const { resolvedTheme } = useAuth();
   const isUser = message.sender === 'user';
   const attachments = Array.isArray(message.attachments) ? message.attachments : [];
   const actions = Array.isArray(message.actions) ? message.actions : [];
+  const products = Array.isArray(message.products) ? message.products : [];
   const timestamp = formatTime(message.createdAt);
   const assistantLabel = resolvedTheme?.brandName ? `${resolvedTheme.brandName} AI` : 'AI Assistant';
 
@@ -67,10 +96,10 @@ export function ChatMessageBubble({ message }) {
 
           {actions.length ? (
             <View style={styles.actionRow}>
-              {actions.slice(0, 3).map((action) => (
+              {actions.slice(0, 4).map((action) => (
                 <Pressable
                   key={action.id || action.label}
-                  onPress={() => action?.url ? Linking.openURL(action.url) : null}
+                  onPress={() => action?.url ? Linking.openURL(action.url).catch(() => null) : null}
                   style={({ pressed }) => [
                     styles.actionChip,
                     pressed ? styles.actionChipPressed : null,
@@ -82,6 +111,18 @@ export function ChatMessageBubble({ message }) {
             </View>
           ) : null}
         </View>
+
+        {!isUser && products.length ? (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.productScroll}
+          >
+            {products.map((product, index) => (
+              <ProductCard key={`product-${index}-${product.name}`} product={product} />
+            ))}
+          </ScrollView>
+        ) : null}
 
         <Text style={[styles.timestamp, isUser ? styles.timestampUser : null]}>
           {timestamp || (isUser ? 'You' : 'Assistant')}
@@ -108,7 +149,7 @@ const styles = StyleSheet.create({
   assistantAvatarWrap: {
     width: 28,
     height: 28,
-    marginTop: 10,
+    marginTop: 14,
     borderRadius: theme.radius.full,
     alignItems: 'center',
     justifyContent: 'center',
@@ -117,13 +158,13 @@ const styles = StyleSheet.create({
     borderColor: theme.colors.borderSubtle,
   },
   assistantAvatar: {
-    width: 22,
-    height: 22,
+    width: 20,
+    height: 20,
   },
   contentColumn: {
     flexShrink: 1,
-    maxWidth: '82%',
-    gap: 3,
+    maxWidth: '85%',
+    gap: 4,
   },
   contentColumnUser: {
     alignItems: 'flex-end',
@@ -143,20 +184,18 @@ const styles = StyleSheet.create({
   },
   userBubble: {
     backgroundColor: theme.colors.brandPrimary,
-    borderTopRightRadius: 8,
-    borderBottomRightRadius: 8,
+    borderTopRightRadius: 6,
   },
   assistantBubble: {
-    backgroundColor: '#fbf8fa',
-    borderTopLeftRadius: 8,
-    borderBottomLeftRadius: 8,
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 6,
     borderWidth: 1,
     borderColor: theme.colors.borderSubtle,
   },
   messageText: {
     fontFamily: theme.typography.fontFamily,
-    fontSize: 13,
-    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+    fontSize: 13.5,
+    lineHeight: 20,
   },
   userText: {
     color: theme.colors.textInverse,
@@ -178,15 +217,15 @@ const styles = StyleSheet.create({
   },
   actionChip: {
     paddingHorizontal: theme.spacing.sm,
-    paddingVertical: 8,
+    paddingVertical: 7,
     borderRadius: theme.radius.pill,
     backgroundColor: theme.colors.backgroundPrimary,
     borderWidth: 1,
     borderColor: theme.colors.brandPrimaryMuted,
   },
   actionChipPressed: {
-    transform: [{ scale: 0.98 }],
-    opacity: 0.9,
+    transform: [{ scale: 0.97 }],
+    opacity: 0.85,
   },
   actionChipText: {
     fontFamily: theme.typography.fontFamily,
@@ -223,5 +262,74 @@ const styles = StyleSheet.create({
   },
   timestampUser: {
     marginRight: 2,
+  },
+  // Product cards
+  productScroll: {
+    gap: theme.spacing.xs,
+    paddingRight: theme.spacing.xs,
+    paddingTop: 4,
+  },
+  productCard: {
+    width: 160,
+    borderRadius: theme.radius.lg,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+    padding: theme.spacing.sm,
+    gap: 4,
+  },
+  productCardPressed: {
+    opacity: 0.85,
+    transform: [{ scale: 0.98 }],
+  },
+  productCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 6,
+    marginBottom: 2,
+  },
+  productCardEmoji: {
+    fontSize: 20,
+    lineHeight: 24,
+  },
+  productCardName: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 12,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textPrimary,
+    lineHeight: 16,
+  },
+  productCardDesc: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 11,
+    color: theme.colors.textSecondary,
+    lineHeight: 15,
+  },
+  productCardMeta: {
+    marginTop: 2,
+  },
+  productCardPrice: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 12,
+    fontWeight: theme.typography.weights.bold,
+    color: theme.colors.brandPrimary,
+  },
+  productCardStore: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 10,
+    color: theme.colors.textMuted,
+  },
+  productCardShopRow: {
+    marginTop: 4,
+    paddingTop: 4,
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.borderSubtle,
+  },
+  productCardShopLink: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 11,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.brandPrimary,
   },
 });

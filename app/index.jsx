@@ -499,7 +499,7 @@ function FirstTimeOnboarding() {
   const pickManualPatientAsset = async (fieldName, setUploading) => {
     try {
       setUploading(true);
-      if (Platform.OS !== 'web') {
+      if (Platform.OS !== 'web' && Platform.OS !== 'android') {
         const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
         if (!permission.granted) {
           setScreenError('Please allow photo library access to continue.');

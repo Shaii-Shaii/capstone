@@ -19,7 +19,8 @@ import { DashboardSectionHeader } from '../src/components/ui/DashboardSectionHea
 import { AddressOptionSheet, AddressSelectField, SignupAddressSection } from '../src/components/auth/SignupAddressSection';
 import { useProfileActions } from '../src/hooks/useProfileActions';
 import { useNotifications } from '../src/hooks/useNotifications';
-import { theme } from '../src/design-system/theme';
+import { useAuth } from '../src/providers/AuthProvider';
+import { resolveThemeRoles, theme } from '../src/design-system/theme';
 import { getPasswordStrengthMessage } from '../src/utils/passwordRules';
 import { logAppEvent } from '../src/utils/appErrors';
 import {
@@ -44,8 +45,9 @@ const getMaximumBirthdate = () => {
   return maxDate;
 };
 
-function ActionRow({ item, onPress }) {
+function ActionRow({ item, onPress, roles = null }) {
   const scale = useSharedValue(1);
+  const actionRoles = roles || {};
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: scale.value }],
   }));
@@ -61,14 +63,37 @@ function ActionRow({ item, onPress }) {
       }}
       style={[styles.actionRow, animatedStyle]}
     >
-      <View style={[styles.actionIconWrap, item.danger ? styles.actionIconWrapDanger : null]}>
-        <AppIcon name={item.icon} state={item.danger ? 'danger' : 'active'} />
+      <View
+        style={[
+          styles.actionIconWrap,
+          {
+            backgroundColor: item.danger
+              ? actionRoles.supportCardBackground || theme.colors.surfaceSoft
+              : actionRoles.iconPrimarySurface || theme.colors.brandPrimaryMuted,
+          },
+        ]}
+      >
+        <AppIcon
+          name={item.icon}
+          state={item.danger ? 'danger' : 'active'}
+          color={item.danger ? theme.colors.textError : actionRoles.iconPrimaryColor}
+        />
       </View>
       <View style={styles.actionTextWrap}>
-        <Text style={[styles.actionTitle, item.danger ? styles.actionTitleDanger : null]}>{item.title}</Text>
-        <Text style={styles.actionDescription}>{item.description}</Text>
+        <Text
+          numberOfLines={1}
+          style={[
+            styles.actionTitle,
+            { color: item.danger ? theme.colors.textError : actionRoles.headingText || theme.colors.textPrimary },
+          ]}
+        >
+          {item.title}
+        </Text>
+        <Text numberOfLines={2} style={[styles.actionDescription, { color: actionRoles.bodyText || theme.colors.textSecondary }]}>
+          {item.description}
+        </Text>
       </View>
-      <AppIcon name="chevronRight" state="muted" />
+      <AppIcon name="chevronRight" state="muted" color={actionRoles.metaText} />
     </AnimatedPressable>
   );
 }
@@ -76,6 +101,8 @@ function ActionRow({ item, onPress }) {
 export default function ProfileScreen() {
   const router = useRouter();
   const { height: viewportHeight } = useWindowDimensions();
+  const { resolvedTheme } = useAuth();
+  const roles = resolveThemeRoles(resolvedTheme);
   const {
     user,
     profile,
@@ -294,11 +321,11 @@ export default function ProfileScreen() {
   const donorActionItems = useMemo(() => (
     [
       {
-        key: 'account',
-        icon: 'settings',
-        title: donorProfileReady ? 'Manage Account' : 'Complete Account Setup',
+        key: 'edit',
+        icon: 'editProfile',
+        title: donorProfileReady ? 'Edit Profile' : 'Complete Account Setup',
         description: donorProfileReady
-          ? 'Edit profile details, update your photo, and change your password.'
+          ? 'Update your donor details and contact information.'
           : 'Finish the core donor details on your account.',
       },
       {
@@ -312,6 +339,12 @@ export default function ProfileScreen() {
         icon: 'checkHair',
         title: 'Hair Analysis History',
         description: 'Open your saved hair-check results in a separate screen.',
+      },
+      {
+        key: 'password',
+        icon: 'changePassword',
+        title: 'Change Password',
+        description: 'Update your account password for security.',
       },
     ]
   ), [donorProfileReady]);
@@ -452,8 +485,8 @@ export default function ProfileScreen() {
     await Haptics.selectionAsync();
     setFeedback(null);
     if (role === 'donor') {
-      if (item.key === 'account') {
-        router.navigate('/donor/account');
+      if (item.key === 'edit') {
+        setMode('edit');
         return;
       }
       if (item.key === 'achievements') {
@@ -462,6 +495,10 @@ export default function ProfileScreen() {
       }
       if (item.key === 'history') {
         router.navigate('/donor/hair-history');
+        return;
+      }
+      if (item.key === 'password') {
+        setMode('password');
         return;
       }
     }
@@ -557,52 +594,79 @@ export default function ProfileScreen() {
   }, [defaultValues, mode, passwordForm, profileForm]);
 
   const renderDonorProfileContent = () => (
-    <>
-      <AppCard variant="elevated" radius="xl" padding="lg" style={styles.profileHeroCard}>
-        <View style={styles.profileHeroTopRow}>
-          <View style={styles.profileHeroIdentity}>
-            <View style={styles.profileHeroAvatar}>
+    <View style={[styles.donorProfileShell, { backgroundColor: roles.pageBackground }]}>
+      <View style={[styles.donorProfileHeader, { backgroundColor: roles.pageBackground }]}>
+        <View style={styles.donorTopRow}>
+          <View>
+            <Text style={[styles.donorHeaderEyebrow, { color: roles.metaText }]}>{resolvedTheme?.brandName || 'Donivra'}</Text>
+            <Text style={[styles.donorHeaderTitle, { color: roles.headingText }]}>Profile</Text>
+          </View>
+          <Pressable
+            onPress={handlePhotoPress}
+            disabled={isUploadingAvatar}
+            style={({ pressed }) => [
+              styles.donorHeaderIconButton,
+              {
+                backgroundColor: roles.defaultCardBackground,
+                borderColor: roles.defaultCardBorder,
+                opacity: pressed ? 0.82 : 1,
+              },
+            ]}
+          >
+            <AppIcon name="camera" size="sm" color={roles.headingText} />
+          </Pressable>
+        </View>
+
+        <View style={styles.donorIdentityBlock}>
+          <Pressable
+            onPress={handlePhotoPress}
+            disabled={isUploadingAvatar}
+            style={({ pressed }) => [styles.donorAvatarButton, { opacity: pressed ? 0.88 : 1 }]}
+          >
+            <View style={[styles.donorProfileAvatar, { borderColor: roles.defaultCardBackground }]}>
               {avatarUri ? (
                 <Image source={{ uri: avatarUri }} style={styles.profileHeroAvatarImage} resizeMode="cover" />
               ) : (
-                <Text style={styles.profileHeroAvatarText}>{(avatarInitials || 'DN').toUpperCase().slice(0, 2)}</Text>
+                <Text style={[styles.profileHeroAvatarText, { color: roles.primaryActionBackground }]}>
+                  {(avatarInitials || 'DN').toUpperCase().slice(0, 2)}
+                </Text>
               )}
             </View>
-
-            <View style={styles.profileHeroCopy}>
-              <Text numberOfLines={2} style={styles.profileHeroName}>{fullName || 'Complete your donor profile'}</Text>
-              <Text numberOfLines={1} style={styles.profileHeroEmail}>{user?.email || 'No email linked'}</Text>
+            <View style={[styles.avatarEditBadge, { backgroundColor: roles.primaryActionBackground }]}>
+              <AppIcon name="camera" size="sm" color={roles.primaryActionText} />
             </View>
-          </View>
-        </View>
+          </Pressable>
 
-        <View style={styles.profileHeroFooter}>
-          <AppButton
-            title="Change Photo"
-            variant="outline"
-            size="sm"
-            fullWidth={false}
-            loading={isUploadingAvatar}
-            leading={<AppIcon name="camera" state="muted" />}
-            onPress={handlePhotoPress}
-          />
+          <Text numberOfLines={2} style={[styles.donorProfileName, { color: roles.headingText }]}>
+            {fullName || 'Complete your donor profile'}
+          </Text>
+          <Text numberOfLines={1} style={[styles.donorProfileMeta, { color: roles.bodyText }]}>
+            {profile?.contact_number || profile?.phone || user?.email || 'No contact linked'}
+          </Text>
         </View>
-      </AppCard>
+      </View>
 
-      <AppCard variant="elevated" radius="xl" padding="lg">
-        <DashboardSectionHeader
-          title="Profile Actions"
-          description="Open donor account tools, achievements, and separate history modules."
-          style={styles.sectionHeader}
-        />
+      <View
+        style={[
+          styles.donorActionPanel,
+          {
+            backgroundColor: roles.pageBackground,
+            borderColor: roles.defaultCardBorder,
+          },
+        ]}
+      >
+        <View style={styles.donorActionHeader}>
+          <Text style={[styles.donorActionTitle, { color: roles.headingText }]}>Account Overview</Text>
+          <Text style={[styles.donorActionSubtitle, { color: roles.bodyText }]}>Manage profile, achievements, history, and security.</Text>
+        </View>
 
         <View style={styles.actionList}>
           {donorActionItems.map((item) => (
-            <ActionRow key={item.key} item={item} onPress={handleActionPress} />
+            <ActionRow key={item.key} item={item} onPress={handleActionPress} roles={roles} />
           ))}
         </View>
-      </AppCard>
-    </>
+      </View>
+    </View>
   );
 
   return (
@@ -613,7 +677,7 @@ export default function ProfileScreen() {
         activeNavKey="profile"
         navVariant={role === 'donor' ? 'donor' : 'patient'}
         onNavPress={handleNavPress}
-        header={(
+        header={role === 'donor' ? null : (
           <DashboardHeader
             title="Profile"
             subtitle=""
@@ -689,7 +753,7 @@ export default function ProfileScreen() {
 
               <View style={styles.actionList}>
                 {actionItems.map((item) => (
-                  <ActionRow key={item.key} item={item} onPress={handleActionPress} />
+                  <ActionRow key={item.key} item={item} onPress={handleActionPress} roles={roles} />
                 ))}
               </View>
             </AppCard>
@@ -1009,6 +1073,107 @@ export default function ProfileScreen() {
 }
 
 const styles = StyleSheet.create({
+  donorProfileShell: {
+    overflow: 'hidden',
+    borderRadius: theme.radius.xxl,
+    marginTop: -theme.spacing.sm,
+  },
+  donorProfileHeader: {
+    minHeight: 230,
+    paddingHorizontal: theme.spacing.lg,
+    paddingTop: theme.spacing.lg,
+    paddingBottom: theme.spacing.xl,
+  },
+  donorTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.md,
+  },
+  donorHeaderEyebrow: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  donorHeaderTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.title,
+  },
+  donorHeaderIconButton: {
+    width: 40,
+    height: 40,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+  },
+  donorIdentityBlock: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: theme.spacing.xs,
+    paddingTop: theme.spacing.lg,
+  },
+  donorAvatarButton: {
+    marginBottom: theme.spacing.xs,
+  },
+  donorProfileAvatar: {
+    width: 88,
+    height: 88,
+    borderRadius: theme.radius.full,
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.surfaceCard,
+    borderWidth: 4,
+  },
+  avatarEditBadge: {
+    position: 'absolute',
+    right: 2,
+    bottom: 2,
+    width: 28,
+    height: 28,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: theme.colors.surfaceCard,
+  },
+  donorProfileName: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    textAlign: 'center',
+  },
+  donorProfileMeta: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    textAlign: 'center',
+  },
+  donorActionPanel: {
+    marginTop: -theme.spacing.lg,
+    minHeight: 360,
+    borderTopLeftRadius: theme.radius.xxl,
+    borderTopRightRadius: theme.radius.xxl,
+    borderWidth: 1,
+    paddingHorizontal: theme.spacing.lg,
+    paddingTop: theme.spacing.lg,
+    paddingBottom: theme.spacing.xl,
+  },
+  donorActionHeader: {
+    gap: 4,
+    marginBottom: theme.spacing.md,
+  },
+  donorActionTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.bold,
+  },
+  donorActionSubtitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+  },
   profileHeroCard: {
     overflow: 'hidden',
   },
@@ -1177,18 +1342,21 @@ const styles = StyleSheet.create({
     marginBottom: theme.spacing.md,
   },
   actionList: {
-    gap: theme.spacing.sm,
+    gap: 0,
   },
   actionRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.spacing.md,
+    minHeight: 68,
     paddingVertical: theme.spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.borderSubtle,
   },
   actionIconWrap: {
-    width: 42,
-    height: 42,
-    borderRadius: theme.radius.full,
+    width: 38,
+    height: 38,
+    borderRadius: theme.radius.lg,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: theme.colors.brandPrimaryMuted,

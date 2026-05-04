@@ -1,24 +1,23 @@
 import React from 'react';
 import {
   ActivityIndicator,
+  Animated,
   Image,
   Modal,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { DashboardLayout } from '../../src/components/layout/DashboardLayout';
-import { DashboardSectionHeader } from '../../src/components/ui/DashboardSectionHeader';
-import { DashboardWidgetRail } from '../../src/components/ui/DashboardWidgetRail';
 import { AppButton } from '../../src/components/ui/AppButton';
 import { AppCard } from '../../src/components/ui/AppCard';
 import { AppIcon } from '../../src/components/ui/AppIcon';
 import { StatusBanner } from '../../src/components/ui/StatusBanner';
 import { DonorTopBar } from '../../src/components/donor/DonorTopBar';
-import { HairTrendLineChart } from '../../src/components/donor/HairTrendLineChart';
-import { LatestHairLogResultCard } from '../../src/components/donor/LatestHairLogResultCard';
 import { HairLogDetailModal as SharedHairLogDetailModal } from '../../src/components/hair/HairLogDetailModal';
 import { donorDashboardNavItems } from '../../src/constants/dashboard';
 import {
@@ -29,21 +28,22 @@ import {
   fetchDonationDrivePreview,
   fetchFeaturedOrganizations,
   fetchOrganizationPreview,
+  fetchOrganizationMembershipsByUserId,
+  fetchRelevantDonationDriveUpdates,
   joinOrganizationMembership,
 } from '../../src/features/donorHome.api';
-import {
-  buildDriveInvitationQrPayload,
-  buildQrImageUrl,
-  getDonorDonationsModuleData,
-} from '../../src/features/donorDonations.service';
+import { getDonorDonationsModuleData } from '../../src/features/donorDonations.service';
 import { useAuthActions } from '../../src/features/auth/hooks/useAuthActions';
 import { useNotifications } from '../../src/hooks/useNotifications';
 import { useAuth } from '../../src/providers/AuthProvider';
-import { resolveThemeRoles, theme } from '../../src/design-system/theme';
+import { resolveBrandLogoSource, resolveThemeRoles, theme } from '../../src/design-system/theme';
+import { invokeEdgeFunction } from '../../src/api/supabase/client';
+import { loadChatbotBootstrap, resolveChatbotReply } from '../../src/features/chatbot.service';
 
 const formatDayLabel = (value) => (
   new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(new Date(value))
 );
+
 
 const formatDriveDate = (startDate, endDate) => {
   if (!startDate) return 'Date to follow';
@@ -75,30 +75,123 @@ const normalizeConditionTone = (condition = '') => {
 
   if (normalized.includes('healthy') || normalized.includes('good')) {
     return {
-      dotColor: '#54b86f',
+      dotColor: '',
       label: 'Healthy',
     };
   }
 
   if (normalized.includes('dry') || normalized.includes('damaged')) {
     return {
-      dotColor: '#f0a856',
+      dotColor: '',
       label: 'Needs care',
     };
   }
 
   if (normalized.includes('treated') || normalized.includes('rebonded') || normalized.includes('colored')) {
     return {
-      dotColor: '#7a8ae6',
+      dotColor: '',
       label: 'Treated',
     };
   }
 
   return {
-    dotColor: theme.colors.brandPrimary,
+    dotColor: '',
     label: condition || 'Checked',
   };
 };
+
+const getConditionVisual = (condition = '', decision = '') => {
+  const normalized = `${condition} ${decision}`.trim().toLowerCase();
+
+  if (normalized.includes('healthy') || normalized.includes('eligible') || normalized.includes('good')) {
+    return {
+      icon: 'check-circle',
+      emoji: 'OK',
+      label: 'Healthy',
+    };
+  }
+
+  if (normalized.includes('dry') || normalized.includes('damaged') || normalized.includes('frizz') || normalized.includes('improve')) {
+    return {
+      icon: 'alert-circle',
+      emoji: '!',
+      label: 'Needs care',
+    };
+  }
+
+  if (normalized.includes('treated') || normalized.includes('rebonded') || normalized.includes('colored')) {
+    return {
+      icon: 'circle-slice-8',
+      emoji: '-',
+      label: 'Treated',
+    };
+  }
+
+  return {
+    icon: 'circle-outline',
+    emoji: '-',
+    label: condition || 'No check',
+  };
+};
+
+const getConditionLevel10 = (condition = '', decision = '') => {
+  const normalized = `${condition} ${decision}`.toLowerCase();
+  if (normalized.includes('eligible') || normalized.includes('healthy') || normalized.includes('good')) return 9;
+  if (normalized.includes('treated') || normalized.includes('colored') || normalized.includes('rebonded')) return 6;
+  if (normalized.includes('dry') && normalized.includes('damaged')) return 3;
+  if (normalized.includes('damaged') || normalized.includes('breakage')) return 2;
+  if (normalized.includes('dry') || normalized.includes('frizz') || normalized.includes('oily') || normalized.includes('improve')) return 4;
+  if (normalized.includes('fair')) return 5;
+  return condition || decision ? 6 : 0;
+};
+
+const getScreeningEntries = (submissions = []) => (
+  submissions
+    .flatMap((submission) => (submission?.ai_screenings || []).map((screening) => ({ submission, screening })))
+    .filter((entry) => entry.screening?.created_at)
+    .sort((left, right) => new Date(right.screening.created_at).getTime() - new Date(left.screening.created_at).getTime())
+);
+
+const WEEK_DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+const getCalendarDotColor = (level) => {
+  if (level >= 8) return '#54b86f';
+  if (level >= 5) return '#f0a856';
+  if (level > 0) return '#e05252';
+  return null;
+};
+
+function AnimatedHomeSection({ children, delay = 0, style }) {
+  const opacity = React.useRef(new Animated.Value(0)).current;
+  const translateY = React.useRef(new Animated.Value(14)).current;
+
+  React.useEffect(() => {
+    Animated.parallel([
+      Animated.timing(opacity, {
+        toValue: 1,
+        duration: 260,
+        delay,
+        useNativeDriver: true,
+      }),
+      Animated.sequence([
+        Animated.delay(delay),
+        Animated.spring(translateY, {
+          toValue: 0,
+          damping: 16,
+          stiffness: 180,
+          mass: 0.8,
+          useNativeDriver: true,
+        }),
+      ]),
+    ]).start();
+  }, [delay, opacity, translateY]);
+
+  return (
+    <Animated.View style={[style, { opacity, transform: [{ translateY }] }]}>
+      {children}
+    </Animated.View>
+  );
+}
 
 // Converts any Date or ISO string to the user's LOCAL calendar date key (YYYY-MM-DD).
 // Using toISOString() on local-midnight Date objects shifts the day in UTC+N timezones,
@@ -112,7 +205,6 @@ const toLocalDateKey = (value) => {
 };
 
 // Maps each logged calendar date to the submission that owns the latest AI screening on that date.
-// eslint-disable-next-line no-unused-vars
 const buildSubmissionByDate = (submissions = []) => {
   const latest = new Map(); // dateKey → { submission, createdAt }
 
@@ -132,52 +224,468 @@ const buildSubmissionByDate = (submissions = []) => {
   return result;
 };
 
+
+const buildHairLogDetailEntry = (entry, fallbackRecommendation = null) => {
+  if (!entry?.screening || !entry?.submission) return null;
+
+  return {
+    screening: entry.screening,
+    submission: entry.submission,
+    images: entry.submission?.submission_details?.flatMap((detail) => detail.images || []) || [],
+    recommendations: entry.submission?.donor_recommendations?.length
+      ? entry.submission.donor_recommendations
+      : fallbackRecommendation
+        ? [fallbackRecommendation]
+        : [],
+  };
+};
+
+// Derives 0-10 levels for each hair metric from the screening data.
+// Falls back to DB columns (shine_level etc.) if populated, otherwise infers from text fields.
+const deriveHairMetrics = (screening) => {
+  const cond = String(screening?.detected_condition || '').toLowerCase();
+  const dmg = String(screening?.visible_damage_notes || '').toLowerCase();
+  const tex = String(screening?.detected_texture || '').toLowerCase();
+
+  const shine =
+    screening?.shine_level != null ? screening.shine_level
+    : cond.includes('healthy') || cond.includes('good') ? 8
+    : cond.includes('dry') || cond.includes('damaged') ? 3
+    : cond.includes('oily') ? 5 : 5;
+
+  const frizz =
+    screening?.frizz_level != null ? screening.frizz_level
+    : cond.includes('frizz') ? 7
+    : cond.includes('healthy') ? 2
+    : tex.includes('wavy') || tex.includes('curly') ? 5 : 3;
+
+  const dryness =
+    screening?.dryness_level != null ? screening.dryness_level
+    : cond.includes('dry') ? 8
+    : cond.includes('healthy') ? 2
+    : cond.includes('oily') ? 1 : 4;
+
+  const oiliness =
+    screening?.oiliness_level != null ? screening.oiliness_level
+    : cond.includes('oily') || cond.includes('greasy') ? 8
+    : cond.includes('healthy') ? 2
+    : cond.includes('dry') ? 1 : 3;
+
+  const damage =
+    screening?.damage_level != null ? screening.damage_level
+    : dmg.includes('split') || dmg.includes('break') || cond.includes('damaged') ? 8
+    : cond.includes('healthy') ? 1
+    : cond.includes('dry') ? 5 : 3;
+
+  return { shine, frizz, dryness, oiliness, damage };
+};
+
+const HAIR_METRIC_DEFS = [
+  { key: 'shine',    label: 'Shine',          emoji: '✨', positive: true,  tip: 'Does hair look glossy or dull?' },
+  { key: 'frizz',   label: 'Frizz',          emoji: '🌀', positive: false, tip: 'Flyaway or messy strands?' },
+  { key: 'dryness', label: 'Dryness',         emoji: '🏜️', positive: false, tip: 'Rough or straw-like texture?' },
+  { key: 'oiliness',label: 'Oiliness',        emoji: '💧', positive: false, tip: 'Greasy or flat near roots?' },
+  { key: 'damage',  label: 'Damage / Splits', emoji: '💔', positive: false, tip: 'Broken or uneven ends?' },
+];
+
+function HairConditionWidget({ screening, onViewDetail }) {
+  const { resolvedTheme } = useAuth();
+  const roles = resolveThemeRoles(resolvedTheme);
+  const bodyFont = resolvedTheme?.fontFamily || theme.typography.fontFamily;
+  const headingFont = resolvedTheme?.secondaryFontFamily || theme.typography.fontFamilyDisplay;
+
+  if (!screening) return null;
+  const metrics = deriveHairMetrics(screening);
+
+  return (
+    <AppCard variant="default" radius="xl" padding="md">
+      <View style={styles.hairWidgetHeader}>
+        <View style={styles.hairWidgetTitleRow}>
+          <View style={[styles.hairWidgetIconWrap, { backgroundColor: roles.iconPrimarySurface }]}>
+            <MaterialCommunityIcons name="hair-dryer-outline" size={16} color={roles.primaryActionBackground} />
+          </View>
+          <Text style={[styles.hairWidgetTitle, { color: roles.headingText, fontFamily: headingFont }]}>
+            Hair Condition
+          </Text>
+        </View>
+        {onViewDetail ? (
+          <Pressable onPress={onViewDetail} style={styles.hairWidgetViewBtn}>
+            <Text style={[styles.hairWidgetViewBtnText, { color: roles.primaryActionBackground, fontFamily: bodyFont }]}>
+              View log
+            </Text>
+            <MaterialCommunityIcons name="chevron-right" size={14} color={roles.primaryActionBackground} />
+          </Pressable>
+        ) : null}
+      </View>
+
+      <View style={styles.hairMetricList}>
+        {HAIR_METRIC_DEFS.map((def) => {
+          const rawValue = metrics[def.key] ?? 5;
+          const level = Math.max(0, Math.min(10, rawValue));
+          const barFraction = level / 10;
+          const barColor = def.positive
+            ? (level >= 7 ? '#54b86f' : level >= 4 ? '#f0a856' : '#e05252')
+            : (level <= 3 ? '#54b86f' : level <= 6 ? '#f0a856' : '#e05252');
+
+          return (
+            <View key={def.key} style={styles.hairMetricRow}>
+              <Text style={styles.hairMetricEmoji}>{def.emoji}</Text>
+              <Text style={[styles.hairMetricLabel, { color: roles.bodyText, fontFamily: bodyFont }]}>
+                {def.label}
+              </Text>
+              <View style={[styles.hairMetricTrack, { backgroundColor: roles.supportCardBackground }]}>
+                <View style={[styles.hairMetricFill, { width: `${barFraction * 100}%`, backgroundColor: barColor }]} />
+              </View>
+              <Text style={[styles.hairMetricValue, { color: barColor, fontFamily: bodyFont }]}>
+                {level}/10
+              </Text>
+            </View>
+          );
+        })}
+      </View>
+
+      {screening.summary ? (
+        <Text numberOfLines={2} style={[styles.hairWidgetSummary, { color: roles.metaText, fontFamily: bodyFont }]}>
+          {screening.summary}
+        </Text>
+      ) : null}
+    </AppCard>
+  );
+}
+
+function HairCalendarWidget({ hairSubmissions, onOpenDate }) {
+  const { resolvedTheme } = useAuth();
+  const roles = resolveThemeRoles(resolvedTheme);
+  const headingFont = resolvedTheme?.secondaryFontFamily || theme.typography.fontFamilyDisplay;
+  const bodyFont = resolvedTheme?.fontFamily || theme.typography.fontFamily;
+
+  const [isMonthExpanded, setIsMonthExpanded] = React.useState(false);
+  const [currentMonth, setCurrentMonth] = React.useState(() => {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), 1);
+  });
+  const [selectedKey, setSelectedKey] = React.useState(() => toLocalDateKey(new Date()));
+
+  const submissionByDate = React.useMemo(
+    () => buildSubmissionByDate(hairSubmissions),
+    [hairSubmissions]
+  );
+  const todayKey = toLocalDateKey(new Date());
+
+  // Build 7-day week strip (Mon–Sun of the current week)
+  const weekDays = React.useMemo(() => {
+    const today = new Date();
+    const dayOfWeek = today.getDay(); // 0=Sun
+    // Get Monday of current week
+    const monday = new Date(today);
+    monday.setDate(today.getDate() - ((dayOfWeek + 6) % 7));
+    return Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(monday);
+      d.setDate(monday.getDate() + i);
+      const key = toLocalDateKey(d);
+      const submission = submissionByDate.get(key) || null;
+      const latestScreening = submission
+        ? (submission.ai_screenings || [])
+            .filter((sc) => sc?.created_at && toLocalDateKey(sc.created_at) === key)
+            .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0] || null
+        : null;
+      const level = latestScreening
+        ? getConditionLevel10(latestScreening.detected_condition || '', latestScreening.decision || '')
+        : 0;
+      const isToday = key === todayKey;
+      const dayName = isToday ? 'Today' : ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()];
+      return { date: d, key, submission, latestScreening, level, dayName };
+    });
+  }, [submissionByDate, todayKey]);
+
+  // Build monthly grid (for expanded view)
+  const calendarGrid = React.useMemo(() => {
+    const year = currentMonth.getFullYear();
+    const month = currentMonth.getMonth();
+    const firstDay = new Date(year, month, 1);
+    const lastDate = new Date(year, month + 1, 0).getDate();
+    const startPad = firstDay.getDay();
+    const cells = [];
+    for (let i = 0; i < startPad; i++) cells.push(null);
+    for (let d = 1; d <= lastDate; d++) {
+      const date = new Date(year, month, d);
+      const key = toLocalDateKey(date);
+      const submission = submissionByDate.get(key) || null;
+      const latestScreening = submission
+        ? (submission.ai_screenings || [])
+            .filter((sc) => sc?.created_at && toLocalDateKey(sc.created_at) === key)
+            .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0] || null
+        : null;
+      const level = latestScreening
+        ? getConditionLevel10(latestScreening.detected_condition || '', latestScreening.decision || '')
+        : 0;
+      cells.push({ date, key, submission, latestScreening, level });
+    }
+    return cells;
+  }, [currentMonth, submissionByDate]);
+
+  const monthRows = React.useMemo(() => {
+    const result = [];
+    for (let i = 0; i < calendarGrid.length; i += 7) {
+      const row = calendarGrid.slice(i, i + 7);
+      while (row.length < 7) row.push(null);
+      result.push(row);
+    }
+    return result;
+  }, [calendarGrid]);
+
+  const monthLabel = currentMonth.toLocaleString('default', { month: 'long', year: 'numeric' });
+
+  const selectedCell = React.useMemo(() => {
+    if (isMonthExpanded) {
+      return calendarGrid.find((c) => c && c.key === selectedKey) || null;
+    }
+    return weekDays.find((c) => c.key === selectedKey) || null;
+  }, [calendarGrid, isMonthExpanded, selectedKey, weekDays]);
+
+  const renderDayCell = (cell, key) => {
+    if (!cell) return <View key={key} style={styles.calDayCell} />;
+    const isToday = cell.key === todayKey;
+    const isSelected = cell.key === selectedKey;
+    const dotColor = getCalendarDotColor(cell.level);
+    const hasLog = Boolean(cell.latestScreening);
+    return (
+      <Pressable
+        key={cell.key}
+        onPress={() => setSelectedKey(cell.key)}
+        style={({ pressed }) => [styles.calDayCell, pressed ? styles.cardPressed : null]}
+      >
+        {dotColor
+          ? <View style={[styles.calDot, { backgroundColor: dotColor }]} />
+          : <View style={styles.calDotSpacer} />}
+        <View style={[
+          styles.calDayCircle,
+          isToday ? [styles.calDayToday, { backgroundColor: roles.primaryActionBackground }] : null,
+          isSelected && !isToday ? [styles.calDaySelected, { borderColor: roles.primaryActionBackground }] : null,
+        ]}>
+          <Text style={[styles.calDayNumber, {
+            color: isToday ? roles.primaryActionText : hasLog ? roles.headingText : roles.metaText,
+            fontFamily: bodyFont,
+          }]}>
+            {cell.date.getDate()}
+          </Text>
+        </View>
+      </Pressable>
+    );
+  };
+
+  return (
+    <AppCard variant="default" radius="xl" padding="md">
+      {/* Header row */}
+      <View style={styles.calMonthHeader}>
+        <Text style={[styles.calMonthLabel, { color: roles.headingText, fontFamily: headingFont }]}>
+          {isMonthExpanded ? monthLabel : new Date().toLocaleString('default', { month: 'long', year: 'numeric' })}
+        </Text>
+        <View style={styles.calMonthNav}>
+          {isMonthExpanded ? (
+            <>
+              <Pressable
+                onPress={() => setCurrentMonth((m) => new Date(m.getFullYear(), m.getMonth() - 1, 1))}
+                style={({ pressed }) => [styles.calNavBtn, { backgroundColor: roles.supportCardBackground }, pressed ? styles.cardPressed : null]}
+              >
+                <MaterialCommunityIcons name="chevron-left" size={18} color={roles.headingText} />
+              </Pressable>
+              <Pressable
+                onPress={() => setCurrentMonth((m) => new Date(m.getFullYear(), m.getMonth() + 1, 1))}
+                style={({ pressed }) => [styles.calNavBtn, { backgroundColor: roles.supportCardBackground }, pressed ? styles.cardPressed : null]}
+              >
+                <MaterialCommunityIcons name="chevron-right" size={18} color={roles.headingText} />
+              </Pressable>
+            </>
+          ) : null}
+          <Pressable
+            onPress={() => setIsMonthExpanded((v) => !v)}
+            style={({ pressed }) => [styles.calNavBtn, { backgroundColor: roles.iconPrimarySurface }, pressed ? styles.cardPressed : null]}
+          >
+            <MaterialCommunityIcons
+              name={isMonthExpanded ? 'calendar-minus' : 'calendar-month-outline'}
+              size={16}
+              color={roles.primaryActionBackground}
+            />
+          </Pressable>
+        </View>
+      </View>
+
+      {/* Weekday label row */}
+      <View style={styles.calWeekRow}>
+        {WEEK_DAY_LABELS.map((day) => (
+          <View key={day} style={styles.calWeekCell}>
+            <Text style={[styles.calWeekLabel, { color: roles.metaText, fontFamily: bodyFont }]}>{day}</Text>
+          </View>
+        ))}
+      </View>
+
+      {isMonthExpanded ? (
+        // Full month grid
+        monthRows.map((row, rowIdx) => (
+          <View key={rowIdx} style={styles.calRow}>
+            {row.map((cell, cellIdx) => renderDayCell(cell, `pad-${rowIdx}-${cellIdx}`))}
+          </View>
+        ))
+      ) : (
+        // Week strip
+        <View style={styles.calWeekStrip}>
+          {weekDays.map((day) => {
+            const isToday = day.key === todayKey;
+            const isSelected = day.key === selectedKey;
+            const dotColor = getCalendarDotColor(day.level);
+            const hasLog = Boolean(day.latestScreening);
+            return (
+              <Pressable
+                key={day.key}
+                onPress={() => setSelectedKey(day.key)}
+                style={({ pressed }) => [styles.calWeekDayCol, pressed ? styles.cardPressed : null]}
+              >
+                <Text style={[styles.calWeekDayLabel, {
+                  color: isToday ? roles.primaryActionBackground : roles.metaText,
+                  fontFamily: bodyFont,
+                  fontWeight: isToday ? theme.typography.weights.bold : theme.typography.weights.regular,
+                }]}>
+                  {day.dayName}
+                </Text>
+                {dotColor
+                  ? <View style={[styles.calDot, { backgroundColor: dotColor }]} />
+                  : <View style={styles.calDotSpacer} />}
+                <View style={[
+                  styles.calDayCircle,
+                  isToday ? [styles.calDayToday, { backgroundColor: roles.primaryActionBackground }] : null,
+                  isSelected && !isToday ? [styles.calDaySelected, { borderColor: roles.primaryActionBackground }] : null,
+                ]}>
+                  <Text style={[styles.calDayNumber, {
+                    color: isToday ? roles.primaryActionText : hasLog ? roles.headingText : roles.metaText,
+                    fontFamily: bodyFont,
+                  }]}>
+                    {day.date.getDate()}
+                  </Text>
+                </View>
+              </Pressable>
+            );
+          })}
+        </View>
+      )}
+
+      {/* Progress section */}
+      <View style={[styles.calProgressSection, { borderTopColor: roles.defaultCardBorder }]}>
+        <Text style={[styles.calProgressTitle, { color: roles.headingText, fontFamily: headingFont }]}>
+          {selectedKey === todayKey
+            ? "Today's check"
+            : `${new Date(`${selectedKey}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`}
+        </Text>
+        {selectedCell?.latestScreening ? (() => {
+          const dotColor = getCalendarDotColor(selectedCell.level);
+          const visual = getConditionVisual(
+            selectedCell.latestScreening.detected_condition,
+            selectedCell.latestScreening.decision
+          );
+          return (
+            <View style={styles.calProgressRow}>
+              <View style={[styles.calProgressDot, { backgroundColor: dotColor || roles.metaText }]} />
+              <View style={styles.calProgressCopy}>
+                <Text style={[styles.calProgressCondition, { color: roles.headingText, fontFamily: bodyFont }]}>
+                  {visual.label}
+                </Text>
+                {selectedCell.latestScreening.summary ? (
+                  <Text numberOfLines={1} style={[styles.calProgressSummary, { color: roles.bodyText, fontFamily: bodyFont }]}>
+                    {selectedCell.latestScreening.summary}
+                  </Text>
+                ) : null}
+              </View>
+              {onOpenDate ? (
+                <Pressable
+                  onPress={() => onOpenDate({ submission: selectedCell.submission, screening: selectedCell.latestScreening })}
+                  style={({ pressed }) => [styles.calProgressViewBtn, { backgroundColor: roles.iconPrimarySurface }, pressed ? styles.cardPressed : null]}
+                >
+                  <MaterialCommunityIcons name="chevron-right" size={16} color={roles.primaryActionBackground} />
+                </Pressable>
+              ) : null}
+            </View>
+          );
+        })() : (
+          <Text style={[styles.calProgressEmpty, { color: roles.metaText, fontFamily: bodyFont }]}>
+            {selectedKey === todayKey ? 'No hair check yet today.' : 'No log for this date.'}
+          </Text>
+        )}
+      </View>
+
+      {/* Color legend */}
+      <View style={styles.calLegendRow}>
+        {[['#54b86f', 'Good'], ['#f0a856', 'Monitor'], ['#e05252', 'Needs care']].map(([color, label]) => (
+          <View key={label} style={styles.calLegendItem}>
+            <View style={[styles.calLegendDot, { backgroundColor: color }]} />
+            <Text style={[styles.calLegendText, { color: roles.metaText, fontFamily: bodyFont }]}>{label}</Text>
+          </View>
+        ))}
+      </View>
+    </AppCard>
+  );
+}
+
 function DonationDriveCard({ drive }) {
   const { resolvedTheme } = useAuth();
   const roles = resolveThemeRoles(resolvedTheme);
+  const [imageFailed, setImageFailed] = React.useState(false);
+
+  React.useEffect(() => {
+    setImageFailed(false);
+  }, [drive?.organization_logo_url]);
 
   return (
-    <AppCard variant="default" radius="xl" padding="md" style={styles.driveCard}>
-      <View style={styles.driveCardTop}>
-        <View style={[styles.iconChip, { backgroundColor: roles.iconPrimarySurface }]}>
-          <AppIcon name="donations" size="sm" state="default" color={roles.iconPrimaryColor} />
-        </View>
-        <Text style={[styles.driveStatus, { color: roles.metaText }]}>
-          {drive.status || 'Upcoming'}
-        </Text>
-      </View>
-
-      <Text numberOfLines={2} style={[styles.driveTitle, { color: roles.headingText }]}>
-        {drive.event_title || 'Donation drive'}
-      </Text>
-
-      <View style={styles.driveMetaBlock}>
-        <View style={styles.inlineMetaRow}>
-          <AppIcon name="appointment" size="sm" state="muted" />
-          <Text numberOfLines={1} style={[styles.inlineMetaText, { color: roles.bodyText }]}>
+    <View style={[styles.driveCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
+      {/* Cover banner */}
+      <View style={[styles.driveCover, { backgroundColor: roles.iconPrimarySurface }]}>
+        {drive?.organization_logo_url && !imageFailed ? (
+          <Image
+            source={{ uri: drive.organization_logo_url }}
+            style={styles.driveCoverImage}
+            resizeMode="cover"
+            onError={() => setImageFailed(true)}
+          />
+        ) : (
+          <MaterialCommunityIcons name="gift-outline" size={32} color={roles.primaryActionBackground} />
+        )}
+        {/* Date badge floating on cover */}
+        <View style={[styles.driveDateBadge, { backgroundColor: roles.defaultCardBackground, shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 4, elevation: 2 }]}>
+          <MaterialCommunityIcons name="calendar-check-outline" size={10} color={roles.primaryActionBackground} />
+          <Text numberOfLines={1} style={[styles.driveDateBadgeText, { color: roles.headingText }]}>
             {formatDriveDate(drive.start_date, drive.end_date)}
           </Text>
         </View>
-
-        {drive.location_label ? (
-          <View style={styles.inlineMetaRow}>
-            <AppIcon name="location" size="sm" state="muted" />
-            <Text numberOfLines={1} style={[styles.inlineMetaText, { color: roles.bodyText }]}>
-              {drive.location_label}
-            </Text>
+        {/* Joined if registered */}
+        {drive.registration ? (
+          <View style={[styles.driveLinkedTag, { backgroundColor: roles.primaryActionBackground }]}>
+            <Text style={[styles.driveLinkedText, { color: roles.primaryActionText }]}>Joined</Text>
           </View>
         ) : null}
+      </View>
 
+      {/* Content */}
+      <View style={styles.driveCardBody}>
+        <Text numberOfLines={2} style={[styles.driveTitle, { color: roles.headingText }]}>
+          {drive.event_title || 'Donation drive'}
+        </Text>
         {drive.organization_name ? (
-          <View style={styles.inlineMetaRow}>
-            <AppIcon name="organization" size="sm" state="muted" />
-            <Text numberOfLines={1} style={[styles.inlineMetaText, { color: roles.bodyText }]}>
+          <View style={styles.driveOrgRow}>
+            <MaterialCommunityIcons name="domain" size={11} color={roles.metaText} />
+            <Text numberOfLines={1} style={[styles.driveSubtitle, { color: roles.bodyText }]}>
               {drive.organization_name}
             </Text>
           </View>
         ) : null}
+        {drive.location_label || drive.city ? (
+          <View style={styles.driveOrgRow}>
+            <MaterialCommunityIcons name="map-marker-outline" size={11} color={roles.metaText} />
+            <Text numberOfLines={1} style={[styles.driveSubtitle, { color: roles.metaText }]}>
+              {drive.location_label || drive.city}
+            </Text>
+          </View>
+        ) : null}
       </View>
-    </AppCard>
+    </View>
   );
 }
 
@@ -198,7 +706,7 @@ function OrganizationCard({ organization }) {
   }, [organization?.organization_logo_url]);
 
   return (
-    <AppCard variant="default" radius="xl" padding="md" style={styles.organizationCard}>
+    <View style={[styles.organizationCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
       <View style={[styles.organizationLogoWrap, { backgroundColor: roles.supportCardBackground, borderColor: roles.supportCardBorder }]}>
         {organization?.organization_logo_url && !imageFailed ? (
           <Image
@@ -210,13 +718,87 @@ function OrganizationCard({ organization }) {
         ) : initials ? (
           <Text style={[styles.organizationInitials, { color: roles.headingText }]}>{initials}</Text>
         ) : (
-          <AppIcon name="organization" size="md" state="default" color={roles.headingText} />
+          <AppIcon name="organization" size="md" color={roles.headingText} />
         )}
       </View>
       <Text numberOfLines={2} style={[styles.organizationName, { color: roles.headingText }]}>
         {organization.organization_name}
       </Text>
-    </AppCard>
+      {organization.location_label ? (
+        <Text numberOfLines={1} style={[styles.organizationLocation, { color: roles.metaText }]}>
+          {organization.location_label}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
+function HomeSectionHeader({ title, actionLabel, onActionPress }) {
+  const { resolvedTheme } = useAuth();
+  const roles = resolveThemeRoles(resolvedTheme);
+
+  return (
+    <View style={styles.homeSectionHeader}>
+      <Text style={[styles.homeSectionTitle, { color: roles.headingText }]}>{title}</Text>
+      {actionLabel && onActionPress ? (
+        <Pressable onPress={onActionPress} style={styles.homeSectionAction}>
+          <Text style={[styles.homeSectionActionText, { color: roles.primaryActionBackground }]}>
+            {actionLabel}
+          </Text>
+          <AppIcon name="chevronRight" size="sm" color={roles.primaryActionBackground} />
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
+
+function AiInsightCard({ message, name }) {
+  const { resolvedTheme } = useAuth();
+  const roles = resolveThemeRoles(resolvedTheme);
+  const headingFont = resolvedTheme?.secondaryFontFamily || theme.typography.fontFamilyDisplay;
+  const bodyFont = resolvedTheme?.fontFamily || theme.typography.fontFamily;
+
+  return (
+    <View style={[styles.aiInsightCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
+      <View style={styles.aiInsightHeader}>
+        <View style={[styles.aiInsightIconWrap, { backgroundColor: roles.iconPrimarySurface }]}>
+          <MaterialCommunityIcons name="star-four-points-outline" size={18} color={roles.primaryActionBackground} />
+        </View>
+        <Text numberOfLines={1} style={[styles.homeGreetingTitle, { color: roles.headingText, fontFamily: headingFont }]}>
+          Hello, {name}!
+        </Text>
+      </View>
+      <Text style={[styles.aiInsightText, { color: roles.bodyText, fontFamily: bodyFont }]}>
+        {message || 'Loading your personalized insight…'}
+      </Text>
+    </View>
+  );
+}
+
+function HomeSplashLoading() {
+  const { resolvedTheme } = useAuth();
+  const roles = resolveThemeRoles(resolvedTheme);
+  const [imageFailed, setImageFailed] = React.useState(false);
+  const logoSource = resolveBrandLogoSource(resolvedTheme, imageFailed);
+  const headingFont = resolvedTheme?.secondaryFontFamily || resolvedTheme?.fontFamily || theme.typography.fontFamilyDisplay;
+
+  React.useEffect(() => {
+    setImageFailed(false);
+  }, [resolvedTheme?.logoIcon]);
+
+  return (
+    <View style={styles.homeSplashLoading}>
+      <Image
+        source={logoSource}
+        style={styles.homeSplashLogo}
+        resizeMode="contain"
+        onError={() => setImageFailed(true)}
+      />
+      <Text style={[styles.homeSplashBrand, { color: roles.headingText, fontFamily: headingFont }]}>
+        {resolvedTheme?.brandName || 'Donivra'}
+      </Text>
+      <ActivityIndicator color={roles.primaryActionBackground} size="small" />
+    </View>
   );
 }
 
@@ -302,7 +884,7 @@ function DonationDrivePreviewModal({
                     </Text>
                   ) : null}
                   <Text style={[styles.previewStatusText, { color: roles.metaText }]}>
-                    {drive.registration ? 'RSVP saved' : (drive.status || 'Upcoming')}
+                    {drive.registration ? 'Joineded' : (drive.status || 'Upcoming')}
                   </Text>
                 </View>
               </View>
@@ -338,61 +920,6 @@ function DonationDrivePreviewModal({
               Drive details are not available right now.
             </Text>
           )}
-        </AppCard>
-      </View>
-    </Modal>
-  );
-}
-
-function DriveQrModal({
-  visible,
-  drive,
-  payload,
-  qrStatus,
-  onClose,
-}) {
-  const { resolvedTheme } = useAuth();
-  const roles = resolveThemeRoles(resolvedTheme);
-
-  if (!visible || !drive || !payload) return null;
-
-  return (
-    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
-      <View style={styles.previewModalOverlay}>
-        <Pressable style={styles.previewModalBackdrop} onPress={onClose} />
-
-        <AppCard variant="elevated" radius="xl" padding="lg" style={styles.previewModalCard}>
-          <View style={styles.previewModalHeader}>
-            <View style={styles.previewModalHeaderCopy}>
-              <Text style={[styles.previewEyebrow, { color: roles.metaText }]}>My drive QR</Text>
-              <Text style={[styles.previewTitle, { color: roles.headingText }]}>Drive QR</Text>
-            </View>
-
-            <Pressable onPress={onClose} style={[styles.previewCloseButton, { backgroundColor: roles.supportCardBackground }]}>
-              <AppIcon name="close" size="sm" state="muted" />
-            </Pressable>
-          </View>
-
-          <View style={styles.driveQrStage}>
-            <Image source={{ uri: buildQrImageUrl(payload, 360) }} style={styles.driveQrImage} resizeMode="contain" />
-          </View>
-
-          <View style={styles.driveQrMeta}>
-            <Text style={[styles.driveQrStatus, { color: roles.headingText }]}>
-              Status: {formatDriveQrStatusLabel(qrStatus)}
-            </Text>
-            <Text style={[styles.driveQrContextTitle, { color: roles.headingText }]}>
-              {drive.event_title || 'Donation drive'}
-            </Text>
-            {drive.organization_name ? (
-              <Text style={[styles.driveQrContextText, { color: roles.bodyText }]}>
-                {drive.organization_name}
-              </Text>
-            ) : null}
-            <Text style={[styles.driveQrContextText, { color: roles.bodyText }]}>
-              {formatDriveDate(drive.start_date, drive.end_date)}
-            </Text>
-          </View>
         </AppCard>
       </View>
     </Modal>
@@ -532,7 +1059,7 @@ function OrganizationPreviewModal({
                       </Text>
                       {drive.registration?.registration_status ? (
                         <Text style={[styles.organizationDriveRegistration, { color: roles.metaText }]}>
-                          RSVP {formatDriveQrStatusLabel(drive.registration.registration_status)}
+                          {formatDriveQrStatusLabel(drive.registration.registration_status)}
                         </Text>
                       ) : null}
                     </View>
@@ -676,12 +1203,32 @@ const buildDailyReminder = (submissions = []) => {
   };
 };
 
+const buildContextualGreeting = ({ donorName, hasHistory, latestCondition, checkedToday, daysSinceLastLog, latestRecommendation }) => {
+  const name = donorName || 'there';
+  if (!hasHistory) return `Hey ${name}! Start your first hair check to get personalized insights.`;
+  const tone = normalizeConditionTone(latestCondition || '');
+  if (checkedToday) {
+    return tone.label === 'Healthy'
+      ? `Looking great, ${name}! Your hair is healthy today. Keep it up!`
+      : `Hey ${name}! Today's check shows ${tone.label.toLowerCase()}. See your care tips below.`;
+  }
+  const days = Number(daysSinceLastLog) || 0;
+  const daysText = days === 1 ? '1 day' : `${days} days`;
+  if (days > 1) {
+    return tone.label !== 'Healthy'
+      ? `Hey ${name}, you haven't logged for ${daysText}. Based on your previous log, you had ${tone.label.toLowerCase()} hair. Have you tried the recommendations?`
+      : `Hey ${name}! It's been ${daysText} since your last check. Your hair was healthy last time — check in again!`;
+  }
+  return tone.label !== 'Healthy'
+    ? `Hey ${name}, your last check showed ${tone.label.toLowerCase()} hair. Have you tried the care tips we shared?`
+    : `Welcome back, ${name}! Last check: ${tone.label.toLowerCase()}. Ready for today's check?`;
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function DonorHomeScreen() {
   const router = useRouter();
   const { user, profile, resolvedTheme } = useAuth();
-  const roles = resolveThemeRoles(resolvedTheme);
   const { logout, isLoading: isLoggingOut } = useAuthActions();
   const {
     unreadCount,
@@ -697,11 +1244,10 @@ export default function DonorHomeScreen() {
   const [homeError, setHomeError] = React.useState('');
   const [donationDrives, setDonationDrives] = React.useState([]);
   const [organizations, setOrganizations] = React.useState([]);
+  const [activeOrganizationMemberships, setActiveOrganizationMemberships] = React.useState([]);
   const [hairSubmissions, setHairSubmissions] = React.useState([]);
   const [showAllDrives, setShowAllDrives] = React.useState(false);
   const [isDrivePreviewOpen, setIsDrivePreviewOpen] = React.useState(false);
-  const [isQRModalOpen, setIsQRModalOpen] = React.useState(false);
-  const [driveQrPayload, setDriveQrPayload] = React.useState('');
   const [isOrganizationPreviewOpen, setIsOrganizationPreviewOpen] = React.useState(false);
   const [isLoadingDrivePreview, setIsLoadingDrivePreview] = React.useState(false);
   const [isLoadingOrganizationPreview, setIsLoadingOrganizationPreview] = React.useState(false);
@@ -718,13 +1264,13 @@ export default function DonorHomeScreen() {
   });
   // Hair log detail modal
   const [isHairLogModalOpen, setIsHairLogModalOpen] = React.useState(false);
+  const [selectedHairLogEntries, setSelectedHairLogEntries] = React.useState([]);
   const [latestRecommendation, setLatestRecommendation] = React.useState(null);
+  const [aiGreeting, setAiGreeting] = React.useState('');
 
   const firstName = String(profile?.first_name || '').trim();
   const lastName = String(profile?.last_name || '').trim();
   const greetingName = firstName || String(profile?.email || user?.email || 'Donor').split('@')[0];
-  const greeting = `Hello, ${greetingName}`;
-  const donorDisplayName = [firstName, lastName].filter(Boolean).join(' ').trim() || greetingName || 'Donor';
   const avatarInitials = [firstName?.[0], lastName?.[0]].filter(Boolean).join('').toUpperCase();
   const avatarUri = profile?.avatar_url || profile?.photo_path || '';
 
@@ -734,19 +1280,32 @@ export default function DonorHomeScreen() {
     setIsLoadingHome(true);
     setHomeError('');
 
-    const [donationModuleResult, organizationsResult, submissionsResult, recommendationResult] = await Promise.all([
+    const [
+      donationModuleResult,
+      organizationsResult,
+      memberDriveUpdatesResult,
+      membershipsResult,
+      submissionsResult,
+      recommendationResult,
+    ] = await Promise.all([
       getDonorDonationsModuleData({
         userId: user.id,
         databaseUserId: profile?.user_id || null,
         driveLimit: 8,
       }),
       fetchFeaturedOrganizations(10),
+      fetchRelevantDonationDriveUpdates({
+        databaseUserId: profile?.user_id || null,
+        limit: 12,
+      }),
+      fetchOrganizationMembershipsByUserId(profile?.user_id || null),
       fetchHairSubmissionsByUserId(user.id, 12),
       fetchLatestDonorRecommendationByUserId(user.id).catch(() => ({ data: null })),
     ]);
 
-    setDonationDrives(donationModuleResult.drives || []);
+    setDonationDrives(memberDriveUpdatesResult.data?.length ? memberDriveUpdatesResult.data : (donationModuleResult.drives || []));
     setOrganizations(organizationsResult.data || []);
+    setActiveOrganizationMemberships((membershipsResult.data || []).filter((membership) => membership.is_active));
     setHairSubmissions(submissionsResult.data || []);
     setLatestRecommendation(recommendationResult?.data || null);
     setDonationFlowState({
@@ -754,16 +1313,96 @@ export default function DonorHomeScreen() {
       ongoingDonationMessage: donationModuleResult.ongoingDonationMessage || '',
     });
 
-    const loadFailed = Boolean(donationModuleResult.error || organizationsResult.error || submissionsResult.error);
-    setHomeError(loadFailed ? 'Some donor home updates could not be loaded right now.' : '');
+    const loadFailed = Boolean(
+      donationModuleResult.error
+      || organizationsResult.error
+      || memberDriveUpdatesResult.error
+      || membershipsResult.error
+      || submissionsResult.error
+    );
+    setHomeError(loadFailed ? 'Some updates could not load.' : '');
     setIsLoadingHome(false);
-  }, [profile?.user_id, user?.id]);
+
+    // Build contextual AI greeting from loaded data
+    const analytics = buildAnalyticsData(submissionsResult.data || []);
+    const todayStr = toLocalDateKey(new Date());
+    const checkedToday = (submissionsResult.data || []).some((s) =>
+      (s?.ai_screenings || []).some(
+        (sc) => sc?.created_at && toLocalDateKey(sc.created_at) === todayStr
+      )
+    );
+    const greetName = String(profile?.first_name || '').trim()
+      || String(user?.email || '').split('@')[0]
+      || 'Donor';
+
+    // Compute days since last log
+    const allEntries = getScreeningEntries(submissionsResult.data || []);
+    const latestEntry = allEntries[0] || null;
+    let daysSinceLastLog = 0;
+    if (latestEntry?.screening?.created_at) {
+      const lastDate = new Date(latestEntry.screening.created_at);
+      daysSinceLastLog = Math.max(0, Math.floor((Date.now() - lastDate.getTime()) / 86400000));
+    }
+
+    const greetingContext = {
+      donorName: greetName,
+      hasHistory: analytics.hasHistory,
+      latestCondition: analytics.latestAnalysis?.detected_condition || null,
+      checkedToday,
+      daysSinceLastLog,
+      latestRecommendation: recommendationResult?.data?.recommendation_text || null,
+    };
+
+    // Set immediate fallback, then try AI enhancement
+    setAiGreeting(buildContextualGreeting(greetingContext));
+
+    // Try OpenAI edge function, then chatbot fallback
+    const latestConditionText = analytics.latestAnalysis?.detected_condition || 'no result yet';
+    const aiPrompt = [
+      `Write one warm, personal home greeting for hair donor named ${greetName}.`,
+      analytics.hasHistory
+        ? `Their last hair check: ${latestConditionText}. Days since last log: ${daysSinceLastLog}.`
+        : 'They have not done a hair check yet.',
+      checkedToday ? 'They already checked today.' : '',
+      recommendationResult?.data?.recommendation_text
+        ? `Previous tip given: ${recommendationResult.data.recommendation_text.slice(0, 80)}` : '',
+      'Return one short sentence under 20 words. Mention condition or days since last log. No markdown.',
+    ].filter(Boolean).join(' ');
+
+    invokeEdgeFunction('home-greeting', { body: { prompt: aiPrompt, donorName: greetName, condition: latestConditionText, daysSinceLastLog } })
+      .then(({ data, error }) => {
+        const text = String(data?.greeting || data?.message || '').replace(/\s+/g, ' ').trim();
+        if (!error && text) { setAiGreeting(text.slice(0, 200)); return; }
+        return loadChatbotBootstrap({ role: 'donor', userId: user.id });
+      })
+      .then((bootstrap) => {
+        if (!bootstrap) return null;
+        return resolveChatbotReply({
+          role: 'donor',
+          userId: user.id,
+          text: aiPrompt,
+          faqs: bootstrap.faqs || [],
+          settings: bootstrap.settings,
+          recentMessages: [],
+        });
+      })
+      .then((reply) => {
+        const text = String(reply?.text || '').replace(/\s+/g, ' ').trim();
+        if (text) setAiGreeting(text.slice(0, 200));
+      })
+      .catch(() => {});
+  }, [profile?.first_name, profile?.user_id, user?.email, user?.id]);
 
   React.useEffect(() => {
     loadHome();
   }, [loadHome]);
 
-  const visibleDrives = showAllDrives ? donationDrives : donationDrives.slice(0, 4);
+  const isMemberOfAnyOrg = !isLoadingHome && (activeOrganizationMemberships.length > 0 || donationDrives.some((d) => d.is_member));
+  const memberOrgDrives = React.useMemo(
+    () => donationDrives.filter((d) => d.is_member),
+    [donationDrives]
+  );
+  const visibleMemberDrives = showAllDrives ? memberOrgDrives : memberOrgDrives.slice(0, 4);
 
   // Compute daily reminder and analytics data
   const dailyReminder = React.useMemo(() => buildDailyReminder(hairSubmissions), [hairSubmissions]);
@@ -783,13 +1422,25 @@ export default function DonorHomeScreen() {
 
     if (!latestSubmission) return [];
 
-    return [{
-      screening: latestScreening,
-      submission: latestSubmission,
-      images: latestSubmission?.submission_details?.flatMap((detail) => detail.images || []) || [],
-      recommendations: latestRecommendation ? [latestRecommendation] : [],
-    }];
+    const entry = buildHairLogDetailEntry(
+      { screening: latestScreening, submission: latestSubmission },
+      latestRecommendation
+    );
+
+    return entry ? [entry] : [];
   }, [analyticsData.latestAnalysis, hairSubmissions, latestRecommendation]);
+
+  const handleOpenHairLogEntry = React.useCallback((entry) => {
+    const detailEntry = buildHairLogDetailEntry(entry, latestRecommendation);
+    if (!detailEntry) return;
+    setSelectedHairLogEntries([detailEntry]);
+    setIsHairLogModalOpen(true);
+  }, [latestRecommendation]);
+
+  const handleCloseHairLogModal = React.useCallback(() => {
+    setIsHairLogModalOpen(false);
+    setSelectedHairLogEntries([]);
+  }, []);
 
   const handleNavPress = (item) => {
     if (!item.route) return;
@@ -838,47 +1489,17 @@ export default function DonorHomeScreen() {
     setIsLoadingOrganizationPreview(false);
   }, [profile?.user_id]);
 
-  const handleShowDriveQr = React.useCallback(() => {
-    if (!selectedDrivePreview?.registration?.qr?.is_valid || !selectedDrivePreview?.registration?.registration_id) {
-      return;
-    }
-
-    const payload = buildDriveInvitationQrPayload({
-      drive: selectedDrivePreview,
-      registration: selectedDrivePreview.registration,
-      donor: {
-        databaseUserId: profile?.user_id || null,
-        name: donorDisplayName,
-        email: user?.email || profile?.email || '',
-      },
-    });
-
-    setDriveQrPayload(payload);
-    setIsDrivePreviewOpen(false);
-    setIsQRModalOpen(true);
-  }, [donorDisplayName, profile?.email, profile?.user_id, selectedDrivePreview, user?.email]);
-
   const handleContinueDriveFlow = React.useCallback(() => {
-    if (selectedDrivePreview?.registration?.qr?.is_valid) {
-      handleShowDriveQr();
-      return;
-    }
-
     if (!selectedDrivePreview?.donation_drive_id) return;
     setIsDrivePreviewOpen(false);
     router.navigate(`/donor/drives/${selectedDrivePreview.donation_drive_id}`);
-  }, [handleShowDriveQr, router, selectedDrivePreview]);
+  }, [router, selectedDrivePreview]);
 
   const handleShowDriveMore = React.useCallback(() => {
     if (!selectedDrivePreview?.donation_drive_id) return;
     setIsDrivePreviewOpen(false);
     router.navigate(`/donor/drives/${selectedDrivePreview.donation_drive_id}`);
   }, [router, selectedDrivePreview]);
-
-  const handleCloseDriveQr = React.useCallback(() => {
-    setIsQRModalOpen(false);
-    setDriveQrPayload('');
-  }, []);
 
   const handleJoinOrganizationPreview = React.useCallback(async () => {
     const organizationId = selectedOrganizationPreview?.organization_id;
@@ -939,17 +1560,17 @@ export default function DonorHomeScreen() {
     || drivePreviewFeedback.message
     || (
       selectedDrivePreview?.registration?.qr?.is_valid
-        ? 'This drive already has your saved RSVP. Use Show my QR to open your saved drive QR.'
+        ? 'This drive is already linked to your account.'
         : hasOngoingDonation
           ? ongoingDonationMessage
           : selectedDrivePreview?.organization_id && !selectedDrivePreview?.membership?.is_active
-            ? 'Join the organization first to RSVP for this drive.'
+            ? 'Join the organization first to view this drive.'
             : ''
     );
   const drivePreviewVariant = drivePreviewError
     ? 'error'
     : (drivePreviewFeedback.message ? drivePreviewFeedback.variant : 'info');
-  const drivePreviewPrimaryTitle = selectedDrivePreview?.registration?.qr?.is_valid ? 'Show my QR' : 'Continue';
+  const drivePreviewPrimaryTitle = 'Continue';
   const drivePreviewPrimaryDisabled = !selectedDrivePreview?.registration?.qr?.is_valid && hasOngoingDonation;
   return (
     <DashboardLayout
@@ -962,7 +1583,7 @@ export default function DonorHomeScreen() {
       draggableChat={true}
       header={(
         <DonorTopBar
-          title={greeting}
+          title=""
           avatarInitials={avatarInitials}
           avatarUri={avatarUri}
           unreadCount={unreadCount}
@@ -981,129 +1602,115 @@ export default function DonorHomeScreen() {
         />
       ) : null}
 
-      {!isLoadingHome && (
-        <>
-          {/* SECTION 1: Latest Hair Log Result OR Daily Reminder */}
-          {dailyReminder.type === 'reminder' ? (
-            <AppCard variant="default" radius="xl" padding="md" style={styles.reminderCard}>
-              <View style={styles.reminderContent}>
-                <View style={[styles.reminderIconWrap, { backgroundColor: roles.iconPrimarySurface }]}>
-                  <AppIcon name="checkHair" size="md" state="default" color={theme.colors.brandPrimary} />
-                </View>
-                <View style={styles.reminderCopy}>
-                  <Text style={[styles.reminderTitle, { color: roles.headingText }]}>
-                    {dailyReminder.title}
-                  </Text>
-                  <Text style={[styles.reminderSubtitle, { color: roles.bodyText }]}>
-                    {dailyReminder.subtitle}
-                  </Text>
-                </View>
-              </View>
-              <View style={styles.reminderFooter}>
-                <AppButton
-                  title={dailyReminder.buttonLabel}
-                  size="sm"
-                  fullWidth={false}
-                  onPress={() => router.navigate('/donor/donations')}
-                />
-              </View>
-            </AppCard>
-          ) : (
-            <LatestHairLogResultCard
-              latestScreening={analyticsData.latestAnalysis}
-              latestRecommendation={latestRecommendation}
-              onViewResult={() => setIsHairLogModalOpen(true)}
-              onStartCheckHair={() => router.navigate('/donor/donations')}
+      {isLoadingHome ? (
+        <HomeSplashLoading />
+      ) : (
+        <View style={styles.homeFeed}>
+          <AnimatedHomeSection delay={20}>
+            <AiInsightCard
+              name={greetingName}
+              message={aiGreeting || buildContextualGreeting({
+                donorName: greetingName,
+                hasHistory: analyticsData.hasHistory,
+                latestCondition: analyticsData.latestAnalysis?.detected_condition || null,
+                checkedToday: dailyReminder.type === 'analyzed-today',
+                latestRecommendation: latestRecommendation?.recommendation_text || null,
+              })}
             />
-          )}
+          </AnimatedHomeSection>
 
-          {/* SECTION 2: Hair Condition Analytics */}
-          {analyticsData.hasHistory && (
-            <AppCard variant="default" radius="xl" padding="md" style={styles.analyticsCard}>
-              <View style={styles.analyticsHeader}>
-                <View>
-                  <Text style={[styles.analyticsTitle, { color: roles.headingText }]}>
-                    Hair condition
-                  </Text>
-                  <Text style={[styles.analyticsSubtitle, { color: roles.bodyText }]}>
-                    {analyticsData.latestStatus?.label || 'Tracked'} {analyticsData.trendDirection}
-                  </Text>
-                </View>
-              </View>
-              <HairTrendLineChart chartData={analyticsData.chartData} />
-            </AppCard>
-          )}
-        </>
+          <AnimatedHomeSection delay={90}>
+            <HairCalendarWidget
+              hairSubmissions={hairSubmissions}
+              onOpenDate={analyticsData.hasHistory ? handleOpenHairLogEntry : undefined}
+            />
+          </AnimatedHomeSection>
+
+          {analyticsData.latestAnalysis ? (
+            <AnimatedHomeSection delay={110}>
+              <HairConditionWidget
+                screening={analyticsData.latestAnalysis}
+                onViewDetail={analyticsData.hasHistory ? () => {
+                  if (latestResultEntries.length) {
+                    setSelectedHairLogEntries(latestResultEntries);
+                    setIsHairLogModalOpen(true);
+                  }
+                } : undefined}
+              />
+            </AnimatedHomeSection>
+          ) : null}
+
+          <AnimatedHomeSection delay={140} style={styles.section}>
+            {isMemberOfAnyOrg ? (
+              <>
+                <HomeSectionHeader
+                  title="Organization drives"
+                  actionLabel={memberOrgDrives.length > 4 ? (showAllDrives ? 'Less' : 'All') : undefined}
+                  onActionPress={memberOrgDrives.length > 4 ? () => setShowAllDrives((current) => !current) : undefined}
+                />
+                {visibleMemberDrives.length ? (
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={styles.driveFeedScroll}
+                  >
+                    {visibleMemberDrives.map((item) => (
+                      <Pressable
+                        key={`drive-${item.donation_drive_id}`}
+                        onPress={() => handleOpenDrivePreview(item)}
+                        style={({ pressed }) => [styles.driveFeedItem, pressed ? styles.cardPressed : null]}
+                      >
+                        <DonationDriveCard drive={item} />
+                      </Pressable>
+                    ))}
+                  </ScrollView>
+                ) : (
+                  <Text style={[styles.emptySectionText, { color: resolveThemeRoles(resolvedTheme).bodyText }]}>No drives yet.</Text>
+                )}
+              </>
+            ) : (
+              <>
+                <HomeSectionHeader
+                  title="Join an organization"
+                  actionLabel="All"
+                  onActionPress={() => router.navigate('/donor/organizations')}
+                />
+                <Pressable onPress={() => router.navigate('/donor/organizations')} style={({ pressed }) => [pressed ? styles.cardPressed : null]}>
+                  <AppCard variant="default" radius="xl" padding="md" contentStyle={styles.joinOrgPromptCard}>
+                    <View style={styles.joinOrgPromptRow}>
+                      <View style={[styles.joinOrgIconWrap, { backgroundColor: resolveThemeRoles(resolvedTheme).iconPrimarySurface }]}>
+                        <AppIcon name="organization" size="md" color={resolveThemeRoles(resolvedTheme).iconPrimaryColor} />
+                      </View>
+                      <View style={styles.joinOrgCopy}>
+                        <Text style={[styles.joinOrgTitle, { color: resolveThemeRoles(resolvedTheme).headingText }]}>
+                          Find your organization
+                        </Text>
+                        <Text style={[styles.joinOrgSubtitle, { color: resolveThemeRoles(resolvedTheme).bodyText }]}>
+                          See drives near you
+                        </Text>
+                      </View>
+                      <AppIcon name="chevronRight" size="sm" color={resolveThemeRoles(resolvedTheme).metaText} />
+                    </View>
+                  </AppCard>
+                </Pressable>
+                {organizations.length ? (
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalPicker}>
+                    {organizations.map((item) => (
+                      <Pressable
+                        key={`org-picker-${item.organization_id}`}
+                        onPress={() => handleOpenOrganizationPreview(item)}
+                        style={({ pressed }) => [styles.horizontalPickerItem, pressed ? styles.cardPressed : null]}
+                      >
+                        <OrganizationCard organization={item} />
+                      </Pressable>
+                    ))}
+                  </ScrollView>
+                ) : null}
+              </>
+            )}
+          </AnimatedHomeSection>
+        </View>
       )}
-
-      {/* SECTION 3: Upcoming Drives */}
-      <View style={styles.section}>
-        <DashboardSectionHeader
-          title="Upcoming drives"
-          actionLabel={donationDrives.length > 4 ? (showAllDrives ? 'Show less' : 'View more') : undefined}
-          onActionPress={donationDrives.length > 4 ? () => setShowAllDrives((current) => !current) : undefined}
-        />
-
-        {isLoadingHome ? (
-          <AppCard variant="default" radius="xl" padding="md">
-            <View style={styles.loadingState}>
-              <ActivityIndicator color={resolvedTheme?.primaryColor || theme.colors.brandPrimary} />
-              <Text style={[styles.loadingText, { color: roles.bodyText }]}>Loading drives</Text>
-            </View>
-          </AppCard>
-        ) : visibleDrives.length ? (
-          <DashboardWidgetRail
-            items={visibleDrives.map((item) => ({ ...item, key: `drive-${item.donation_drive_id}` }))}
-            cardWidth={220}
-            renderItem={(item, _index, width) => (
-              <View style={{ width }}>
-                <Pressable onPress={() => handleOpenDrivePreview(item)} style={({ pressed }) => [pressed ? styles.cardPressed : null]}>
-                  <DonationDriveCard drive={item} />
-                </Pressable>
-              </View>
-            )}
-          />
-        ) : (
-          <Text style={[styles.emptySectionText, styles.emptySectionTextInline, { color: roles.bodyText }]}>
-            No upcoming drives right now.
-          </Text>
-        )}
-      </View>
-
-      {/* SECTION 4: Organizations */}
-      <View style={styles.section}>
-        <DashboardSectionHeader
-          title="Organizations"
-          actionLabel="View all organization"
-          onActionPress={() => router.navigate('/donor/organizations')}
-        />
-
-        {isLoadingHome ? (
-          <AppCard variant="default" radius="xl" padding="md">
-            <View style={styles.loadingState}>
-              <ActivityIndicator color={resolvedTheme?.primaryColor || theme.colors.brandPrimary} />
-              <Text style={[styles.loadingText, { color: roles.bodyText }]}>Loading organizations</Text>
-            </View>
-          </AppCard>
-        ) : organizations.length ? (
-          <DashboardWidgetRail
-            items={organizations.map((item) => ({ ...item, key: `organization-${item.organization_id}` }))}
-            cardWidth={126}
-            spacing={theme.spacing.sm}
-            renderItem={(item, _index, width) => (
-              <View style={{ width }}>
-                <Pressable onPress={() => handleOpenOrganizationPreview(item)} style={({ pressed }) => [pressed ? styles.cardPressed : null]}>
-                  <OrganizationCard organization={item} />
-                </Pressable>
-              </View>
-            )}
-          />
-        ) : (
-          <AppCard variant="default" radius="xl" padding="md">
-            <Text style={[styles.emptySectionText, { color: roles.bodyText }]}>No organizations available yet.</Text>
-          </AppCard>
-        )}
-      </View>
 
       <DonationDrivePreviewModal
         visible={isDrivePreviewOpen}
@@ -1121,14 +1728,6 @@ export default function DonorHomeScreen() {
         onContinue={handleContinueDriveFlow}
         primaryActionTitle={drivePreviewPrimaryTitle}
         primaryActionDisabled={drivePreviewPrimaryDisabled}
-      />
-
-      <DriveQrModal
-        visible={isQRModalOpen}
-        drive={selectedDrivePreview}
-        payload={driveQrPayload}
-        qrStatus={selectedDrivePreview?.registration?.qr?.status || selectedDrivePreview?.registration?.registration_status || ''}
-        onClose={handleCloseDriveQr}
       />
 
       <OrganizationPreviewModal
@@ -1149,8 +1748,8 @@ export default function DonorHomeScreen() {
 
       <SharedHairLogDetailModal
         visible={isHairLogModalOpen}
-        entries={latestResultEntries}
-        onClose={() => setIsHairLogModalOpen(false)}
+        entries={selectedHairLogEntries.length ? selectedHairLogEntries : latestResultEntries}
+        onClose={handleCloseHairLogModal}
       />
     </DashboardLayout>
   );
@@ -1160,14 +1759,35 @@ const styles = StyleSheet.create({
   statusBanner: {
     marginTop: 0,
   },
+  homeFeed: {
+    gap: theme.spacing.sm,
+  },
   quickOverviewSection: {
     gap: theme.spacing.xs,
   },
   section: {
-    gap: theme.spacing.xs,
-    marginTop: theme.spacing.md,
-    marginBottom: theme.spacing.xs,
-    marginHorizontal: theme.spacing.xs,
+    gap: theme.spacing.sm,
+  },
+  homeSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: theme.spacing.xs,
+  },
+  homeSectionTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.compact.bodyMd,
+  },
+  homeSectionAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    minHeight: 32,
+  },
+  homeSectionActionText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    fontWeight: theme.typography.weights.semibold,
   },
   loadingState: {
     minHeight: 104,
@@ -1178,6 +1798,22 @@ const styles = StyleSheet.create({
   loadingText: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.bodySm,
+  },
+  homeSplashLoading: {
+    minHeight: 420,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: theme.spacing.md,
+    paddingVertical: theme.spacing.xxxl,
+  },
+  homeSplashLogo: {
+    width: 118,
+    height: 118,
+  },
+  homeSplashBrand: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.titleSm,
+    textAlign: 'center',
   },
   emptySectionText: {
     fontFamily: theme.typography.fontFamily,
@@ -1190,57 +1826,204 @@ const styles = StyleSheet.create({
   cardPressed: {
     transform: [{ scale: 0.985 }],
   },
-  driveCard: {
-    minHeight: 120,
+  // Drive feed (Facebook style)
+  driveFeedScroll: {
+    gap: theme.spacing.sm,
+    paddingRight: theme.spacing.sm,
   },
-  driveCardTop: {
+  driveFeedItem: {
+    width: 190,
+  },
+  driveCard: {
+    width: 190,
+    borderRadius: 18,
+    borderWidth: 1,
+    overflow: 'hidden',
+  },
+  driveCover: {
+    width: '100%',
+    height: 110,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  driveCoverImage: {
+    width: '100%',
+    height: '100%',
+    resizeMode: 'cover',
+  },
+  driveDateBadge: {
+    position: 'absolute',
+    bottom: 8,
+    left: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  driveDateBadgeText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 10,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  driveLinkedTag: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  driveLinkedText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 10,
+    fontWeight: theme.typography.weights.bold,
+  },
+  driveCardBody: {
+    padding: theme.spacing.sm,
+    gap: 3,
+  },
+  driveOrgRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
+  driveTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.snug,
+  },
+  driveSubtitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    flex: 1,
+  },
+  // Hair condition widget
+  hairWidgetHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: theme.spacing.xs,
+    marginBottom: theme.spacing.sm,
   },
-  iconChip: {
-    width: 32,
-    height: 32,
+  hairWidgetTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.xs,
+  },
+  hairWidgetIconWrap: {
+    width: 28,
+    height: 28,
     borderRadius: theme.radius.full,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  driveStatus: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.compact.caption,
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
-    fontWeight: theme.typography.weights.semibold,
-  },
-  driveTitle: {
+  hairWidgetTitle: {
     fontFamily: theme.typography.fontFamilyDisplay,
     fontSize: theme.typography.compact.bodyMd,
-    lineHeight: theme.typography.compact.bodyMd * theme.typography.lineHeights.snug,
-    marginBottom: theme.spacing.xs,
   },
-  driveMetaBlock: {
+  hairWidgetViewBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+  },
+  hairWidgetViewBtnText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  hairMetricList: {
     gap: theme.spacing.xs,
   },
-  inlineMetaRow: {
+  hairMetricRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.spacing.xs,
   },
-  inlineMetaText: {
-    flex: 1,
+  hairMetricEmoji: {
+    fontSize: 14,
+    width: 20,
+    textAlign: 'center',
+  },
+  hairMetricLabel: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.bodySm,
+    width: 90,
+  },
+  hairMetricTrack: {
+    flex: 1,
+    height: 7,
+    borderRadius: theme.radius.full,
+    overflow: 'hidden',
+  },
+  hairMetricFill: {
+    height: '100%',
+    borderRadius: theme.radius.full,
+  },
+  hairMetricValue: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 11,
+    fontWeight: theme.typography.weights.semibold,
+    width: 30,
+    textAlign: 'right',
+  },
+  hairWidgetSummary: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    marginTop: theme.spacing.xs,
+    lineHeight: theme.typography.compact.caption * 1.4,
+  },
+  // Week strip calendar
+  calWeekStrip: {
+    flexDirection: 'row',
+    marginBottom: theme.spacing.xs,
+  },
+  calWeekDayCol: {
+    flex: 1,
+    alignItems: 'center',
+    gap: 2,
+    paddingVertical: theme.spacing.xs,
+  },
+  calWeekDayLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 10,
+    marginBottom: 2,
+  },
+  calLegendRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: theme.spacing.md,
+    marginTop: theme.spacing.xs,
+  },
+  calLegendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  calLegendDot: {
+    width: 8,
+    height: 8,
+    borderRadius: theme.radius.full,
+  },
+  calLegendText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 10,
   },
   organizationCard: {
-    minHeight: 104,
+    width: '100%',
+    minHeight: 134,
     alignItems: 'center',
     justifyContent: 'center',
     gap: theme.spacing.xs,
+    padding: theme.spacing.sm,
+    borderRadius: 20,
+    borderWidth: 1,
   },
   organizationLogoWrap: {
-    width: 48,
-    height: 48,
+    width: '100%',
+    height: 68,
     borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
@@ -1262,6 +2045,11 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.compact.bodySm,
     lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
     fontWeight: theme.typography.weights.semibold,
+  },
+  organizationLocation: {
+    textAlign: 'center',
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
   },
   previewModalOverlay: {
     flex: 1,
@@ -1494,6 +2282,34 @@ const styles = StyleSheet.create({
     gap: theme.spacing.sm,
     marginBottom: theme.spacing.sm,
   },
+  compactCalendarHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: theme.spacing.sm,
+  },
+  compactSectionTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.compact.titleSm,
+  },
+  compactConditionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginTop: 2,
+  },
+  compactConditionText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+  },
+  iconOnlyButton: {
+    width: 34,
+    height: 34,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+  },
   calendarMonthLabel: {
     fontFamily: theme.typography.fontFamilyDisplay,
     fontSize: theme.typography.semantic.bodyLg,
@@ -1551,6 +2367,203 @@ const styles = StyleSheet.create({
     width: 7,
     height: 7,
     borderRadius: theme.radius.full,
+  },
+  // ─── AI Insight Card ───────────────────────────────────────────────────────
+  aiInsightCard: {
+    borderRadius: theme.radius.xl,
+    borderWidth: 1,
+    padding: theme.spacing.md,
+    gap: theme.spacing.sm,
+  },
+  aiInsightHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  aiInsightIconWrap: {
+    width: 34,
+    height: 34,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  homeGreetingTitle: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.compact.bodyMd,
+  },
+  aiInsightText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+  },
+  // ─── Monthly Calendar ───────────────────────────────────────────────────────
+  calMonthHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: theme.spacing.sm,
+  },
+  calMonthLabel: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.titleSm,
+    lineHeight: theme.typography.semantic.titleSm * theme.typography.lineHeights.snug,
+  },
+  calMonthNav: {
+    flexDirection: 'row',
+    gap: theme.spacing.xs,
+  },
+  calNavBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  calWeekRow: {
+    flexDirection: 'row',
+    marginBottom: 4,
+  },
+  calWeekCell: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 4,
+  },
+  calWeekLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+  },
+  calRow: {
+    flexDirection: 'row',
+    marginBottom: 2,
+  },
+  calDayCell: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 3,
+    gap: 2,
+  },
+  calDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 3,
+  },
+  calDotSpacer: {
+    width: 5,
+    height: 5,
+  },
+  calDayCircle: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  calDayToday: {
+    borderRadius: 16,
+  },
+  calDaySelected: {
+    borderWidth: 1.5,
+  },
+  calDayNumber: {
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  calProgressSection: {
+    marginTop: theme.spacing.md,
+    paddingTop: theme.spacing.md,
+    borderTopWidth: 1,
+    gap: theme.spacing.sm,
+  },
+  calProgressTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.compact.bodyMd,
+  },
+  calProgressRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  calProgressDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    flexShrink: 0,
+  },
+  calProgressCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  calProgressCondition: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.compact.bodyMd,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  calProgressSummary: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+  },
+  calProgressViewBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  calProgressEmpty: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+  },
+  calendarLegendRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  calendarLegendDot: {
+    width: 8,
+    height: 8,
+    borderRadius: theme.radius.full,
+  },
+  joinOrgPromptCard: {
+    gap: theme.spacing.sm,
+  },
+  joinOrgPromptRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  joinOrgIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  joinOrgCopy: {
+    flex: 1,
+    gap: 3,
+  },
+  joinOrgTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.compact.bodyMd,
+  },
+  joinOrgSubtitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+  },
+  horizontalPicker: {
+    gap: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.xs,
+    paddingBottom: 2,
+  },
+  horizontalPickerItem: {
+    width: 132,
   },
 
   // ─── Hair Log Detail Modal ────────────────────────────────────────────────
@@ -1752,3 +2765,4 @@ const styles = StyleSheet.create({
     lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
   },
 });
+

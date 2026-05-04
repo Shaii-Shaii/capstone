@@ -12,6 +12,7 @@ const buildChatMessage = ({
   source = 'chat',
   attachments = [],
   actions = [],
+  products = [],
   inputMode = 'text',
 }) => ({
   id: `${sender}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -21,6 +22,7 @@ const buildChatMessage = ({
   createdAt: new Date().toISOString(),
   attachments,
   actions,
+  products,
   inputMode,
 });
 
@@ -122,6 +124,7 @@ export const useChatbot = ({ role, userId }) => {
         source: reply.source,
         attachments: Array.isArray(reply.attachments) ? reply.attachments : [],
         actions: Array.isArray(reply.actions) ? reply.actions : [],
+        products: Array.isArray(reply.products) ? reply.products : [],
       });
 
       const replyAppendResult = await appendChatbotMessages({
