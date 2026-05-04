@@ -12,6 +12,7 @@
       "supportsTablet": true
     },
     "android": {
+      "minSdkVersion": 26,
       "adaptiveIcon": {
         "backgroundColor": "#f4f1f1",
         "foregroundImage": "./src/assets/images/donivra_logo_no_text.png",
