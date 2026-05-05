@@ -5,23 +5,24 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { StatusBar } from 'expo-status-bar';
 import { AuthProvider, useAuth } from '../src/providers/AuthProvider';
 import { useRoleRedirect } from '../src/hooks/useRoleRedirect';
-import { resolveBrandLogoSource, theme } from '../src/design-system/theme';
+import { normalizeResolvedTheme, resolveBrandLogoSource, theme } from '../src/design-system/theme';
 
 const SPLASH_DURATION_MS = 2000;
 
 function LaunchSplash({ resolvedTheme }) {
   const [imageFailed, setImageFailed] = useState(false);
-  const logoSource = resolveBrandLogoSource(resolvedTheme, imageFailed);
-  const bgColor = resolvedTheme?.backgroundColor || theme.colors.backgroundCanvas;
-  const textColor = resolvedTheme?.primaryTextColor || theme.colors.textPrimary;
-  const subtitleColor = resolvedTheme?.secondaryTextColor || theme.colors.textSecondary;
-  const loaderColor = resolvedTheme?.primaryColor || theme.colors.brandPrimarySoft;
-  const brandName = resolvedTheme?.brandName || 'Donivra';
-  const tagline = resolvedTheme?.brandTagline || 'Hair donation, reimagined.';
+  const visibleTheme = normalizeResolvedTheme(resolvedTheme);
+  const logoSource = resolveBrandLogoSource(visibleTheme, imageFailed);
+  const bgColor = visibleTheme.backgroundColor || theme.colors.backgroundCanvas;
+  const textColor = visibleTheme.primaryTextColor || theme.colors.textPrimary;
+  const subtitleColor = visibleTheme.secondaryTextColor || theme.colors.textSecondary;
+  const loaderColor = visibleTheme.primaryColor || textColor;
+  const brandName = visibleTheme.brandName || 'Donivra';
+  const tagline = visibleTheme.brandTagline || 'Hair donation, reimagined.';
 
   useEffect(() => {
     setImageFailed(false);
-  }, [resolvedTheme?.logoIcon]);
+  }, [visibleTheme.logoIcon]);
 
   return (
     <View style={[styles.splashScreen, { backgroundColor: bgColor }]}>

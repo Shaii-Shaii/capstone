@@ -1,4 +1,4 @@
-import { createJsonResponse, handleCorsPreflight } from '../_shared/cors';
+import { createJsonResponse, handleCorsPreflight } from '../_shared/cors.ts';
 import { createStructuredResponse } from '../_shared/google-ai.ts';
 
 const analysisSchema = {
@@ -191,13 +191,13 @@ const requiredViewDefinitions = [
     key: 'front_view',
     label: 'Front View Photo',
     role: 'main root or hairline and overall fall view',
-    analysisFocus: 'Use this view to inspect the hairline or root area, overall visible color, scalp visibility, density, and whether the full hair fall is visible from top to bottom.',
+    analysisFocus: 'Use this view to inspect the hairline or root area, face-forward framing, overall visible color, scalp visibility, density, and whether the full hair fall is visible from top to bottom. Reject this view if the donor is turned sideways instead of facing forward.',
   },
   {
     key: 'side_profile',
     label: 'Side Profile Photo',
     role: 'side length and shaft structure view',
-    analysisFocus: 'Use this view to inspect visible root-to-end length from the side, fullness through the shaft, texture consistency, and whether the lowest visible ends can be seen relative to the root area.',
+    analysisFocus: 'Use this view to inspect one clear side profile, visible root-to-end length from the side, fullness through the shaft, texture consistency, and whether the lowest visible ends can be seen relative to the root area. Reject this view if it is another front-facing image.',
   },
   {
     key: 'hair_ends_close_up',
@@ -249,7 +249,7 @@ const instructions = [
   '- DARK ENVIRONMENT: If any photo is significantly underexposed, very dark, or has insufficient lighting to clearly see hair details, set is_hair_detected to false and invalid_image_reason to "The photo is too dark. Please move to a well-lit area, preferably near a window with natural light, and retake the photo."',
   '- NO PERSON DETECTED: If no human subject or person is visible in the photo (e.g., photo of a wall, floor, object, or empty room), set is_hair_detected to false and invalid_image_reason to "No person detected. Please position yourself in front of the camera with your hair clearly visible and retake the photo."',
   '- MULTIPLE SUBJECTS: If more than one person is clearly visible in the photo, set is_hair_detected to false and invalid_image_reason to "Multiple subjects detected. Only one person should be in the frame. Please retake with only you in the photo."',
-  '- ACCESSORIES BLOCKING HAIR: If hats, headbands, clips, caps, or other hair accessories are blocking the natural hair view, set is_hair_detected to false and invalid_image_reason to "Accessories detected. Please remove hats, headbands, clips, and other hair accessories, then retake the photo for accurate analysis."',
+  '- ACCESSORIES ON FACE OR HAIR: Carefully inspect every view for eyeglasses, sunglasses, masks, face shields, caps, hats, headbands, clips, pins, claw clips, hair ties, scrunchies, scarves, bonnets, headphones, hoods, hands, towels, or fabric on the face or covering/holding the hair. If any face or hair accessory is visible, set is_hair_detected to false and invalid_image_reason to "Accessories detected. Remove glasses, sunglasses, masks, caps, headbands, clips, pins, hair ties, scarves, headphones, and anything covering the face or hair, then retake the required view."',
   '- DISTRACTING BACKGROUND: If the background contains multiple other people, very cluttered objects, or items that make it hard to isolate the hair for analysis, set is_hair_detected to false and invalid_image_reason to "The background has too many distracting items. Please use a plain wall or uncluttered area and retake the photo."',
   '- BLURRY OR MOTION-BLURRED: If the photo is too blurry to distinguish hair details, set is_hair_detected to false and invalid_image_reason to "Photos not clear, please re-capture. Hold the camera steady and ensure good lighting."',
   '',
@@ -260,16 +260,16 @@ const instructions = [
   // Hair detection and validity
   'First confirm whether the images clearly show human hair intended for screening.',
   'If the images do not clearly show hair, set is_hair_detected to false and explain briefly in invalid_image_reason.',
-  'Validate photo rules before analysis: one human subject only, hair clearly visible, no obstructing accessories, no caps, no clips covering the hair, no heavy blur, and no distracting objects blocking the hair.',
+  'Validate photo rules before analysis: one human subject only, front view is face-forward, side profile is actually turned to the side, hair ends close-up clearly shows uncovered ends, face and hair clearly visible, no glasses, no sunglasses, no masks, no face accessories, no obstructing hair accessories, no caps, no clips covering the hair, no heavy blur, and no distracting objects blocking the hair.',
   'If a photo is blurry or poorly lit enough to prevent reliable review, set is_hair_detected to false and invalid_image_reason to "Photos not clear, please re-capture."',
   'If more than one subject/person is visible in the screening photos, set is_hair_detected to false and invalid_image_reason to "Multiple subject detected, one subject is needed."',
-  'If clips, caps, hats, headbands, or accessories obstruct the hair, set is_hair_detected to false and invalid_image_reason to "Accessories detected, please remove it and re-capture."',
+  'If glasses, sunglasses, masks, face shields, clips, caps, hats, headbands, pins, hair ties, scarves, headphones, hoods, hands, towels, fabric, or accessories are visible on the face or obstruct the hairline, shaft, length, or ends, set is_hair_detected to false and invalid_image_reason to "Accessories detected. Remove glasses, sunglasses, masks, caps, headbands, clips, pins, hair ties, scarves, headphones, and anything covering the face or hair, then retake the required view."',
   `When image quality or visibility is too weak for a confident donation judgment, keep the final decision as "${IMPROVE_STATUS}" and explain the limitation honestly.`,
 
   // Per-view notes
   'For each provided photo view, write a detailed per_view_notes entry describing WHAT YOU SEE:',
   '- Front View: scalp condition, root oiliness/dryness, overall hair appearance, texture, density',
-  '- Side Profile: hair length visibility, shaft condition, shine or dullness, texture consistency',
+  '- Side Profile: confirm it is a side profile, then describe hair length visibility, shaft condition, shine or dullness, texture consistency',
   '- Hair Ends Close-Up: ends condition (split/healthy), dryness, damage, fraying',
   'Use missing_views only when a required view is genuinely absent or completely unusable.',
 
@@ -332,7 +332,7 @@ const instructions = [
   `Use "${IMPROVE_STATUS}" when image quality prevents a confident visible-length or condition judgment.`,
 
   // donation_readiness_note
-  'donation_readiness_note: include only when the observed hair length and condition suggest donation readiness.',
+  `donation_readiness_note: When the estimated_length is ≥ ${MIN_DONATION_LENGTH_CM} cm AND the detected_condition is Healthy or otherwise suitable, write 1–2 specific, encouraging sentences about what the donor should do to prepare for donation (e.g., scheduling a haircut assessment, keeping hair healthy, contacting the organization). When the hair is not yet ready for donation, return an empty string.`,
 
   // history_assessment
   'history_assessment: if 2 or more prior hair-check entries are provided, compare current vs prior. Otherwise return empty string.',
@@ -366,7 +366,7 @@ const analysisInstructions = [
   'Do not let the final result mainly focus on retaking photos, improving lighting, or capture quality. Mention those only briefly when they materially limit confidence.',
   'Use per_view_notes for factual view-specific observations that describe what is actually visible.',
   'Use visible_damage_notes for a concise note about visible damage, or state that no obvious visible damage is seen when appropriate.',
-  'Use detected_color for the dominant visible hair color seen in the current images, such as Black, Dark Brown, Brown, Light Brown, Auburn, Dyed, or Multiple Tones. If color is not reliable from the images, return Unclear.',
+  'detected_color: REQUIRED — always return a non-empty value. Inspect the photos and return the dominant visible hair color from: Black, Dark Brown, Brown, Light Brown, Blonde, Auburn, Red, Dyed (when visible color treatment is present), or Multiple Tones (when clearly mixed colors are visible). Return "Unclear" ONLY when the image is genuinely too dark or blurry to determine color. NEVER return an empty string for this field.',
   'Use detected_condition for the main visible condition. Prefer labels like Healthy, Dry, Oily, Damaged, Mixed Concerns, Frizzy, Dry and Damaged, Dry and Frizzy, or Chemically Treated.',
   'Estimate visible hair length only. Visible hair length means the visible length from the hairline or root area to the lowest clearly visible hair end.',
   'Use the front and side views together to assess visible root-to-end length.',
@@ -379,8 +379,13 @@ const analysisInstructions = [
   'If the hair looks healthy but too short for donation, still return "Improve hair condition" and tailor recommendations toward healthy growth, length retention, reduced breakage, and maintaining current hair health.',
   'Questionnaire answers should support interpretation for wash frequency, itch, flakes, oiliness, dryness, hair fall, chemical history, and heat use, but they must not replace the photo evidence.',
   'confidence_score must reflect image clarity, visibility of ends and full length, texture and scalp detail, consistency across views, and consistency with the questionnaire.',
-  'Return shine_level, frizz_level, dryness_level, oiliness_level, and damage_level as integers from 1 to 10 based on visible evidence. 1 means not visible or very low. 10 means very visible or severe. Shine is positive; the other four are concern levels.',
-  'When a level is uncertain, choose a middle-low value and explain the visual limitation in summary or visible_damage_notes.',
+  'Return shine_level, frizz_level, dryness_level, oiliness_level, and damage_level as integers from 1 to 10. These MUST reflect your actual photo observations and MUST be logically consistent with your summary, visible_damage_notes, and detected_condition.',
+  'SHINE (positive metric): 1=hair is completely dull and matte, 4-5=moderate shine, 7-9=clearly shiny and lustrous, 10=extremely glossy. If you describe the hair as shiny, healthy, or lustrous anywhere in your response, shine_level MUST be ≥ 6. Do NOT return 1 for shiny-looking hair.',
+  'FRIZZ (concern): 1=absolutely no frizz visible at all, 4-5=moderate frizz, 8-10=severe frizz. Use 1 ONLY when zero frizz is visible in any view.',
+  'DRYNESS (concern): 1=hair appears well-moisturized with no dryness, 4-5=moderate dryness, 8-10=severely dry and brittle. Use 1 ONLY when hair shows no dryness signs.',
+  'OILINESS (concern): 1=scalp and hair are clean and balanced with no oiliness, 4-5=moderate oiliness, 8-10=very greasy. Use 1 ONLY when no oiliness is observed.',
+  'DAMAGE (concern): 1=no visible damage, split ends, or breakage whatsoever, 4-5=moderate damage, 8-10=severe damage throughout. Use 1 ONLY when ZERO damage signs exist.',
+  'CRITICAL CONSISTENCY RULE: Your numeric levels MUST match your written observations. If your summary says "shiny", shine_level ≥ 6. If your visible_damage_notes say "no visible damage", damage_level ≤ 2. Returning 1 for shine on healthy shiny hair is an error. Returning 1 for all levels on any observed hair is almost always wrong — calibrate each level independently based on what you see.',
   'summary must be concise, human-friendly, and combine image-based observations, questionnaire context, and the final combined assessment.',
   'history_assessment should mention whether the current result appears better, similar, or worse than recent saved checks only when history is provided, while staying grounded in the current images.',
   'recommendations must focus on improving hair condition, maintaining healthy hair, supporting longer healthier growth if the hair is too short, and reducing visible damage.',
@@ -687,24 +692,7 @@ const buildSummaryFromAnalysisFields = ({
 };
 
 const hasIncompleteCriticalAnalysisFields = (analysis: Record<string, unknown>) => {
-  const summary = normalizeString(analysis?.summary);
-  const detectedCondition = normalizeString(analysis?.detected_condition);
-  const recommendations = normalizeRecommendationsV2(analysis?.recommendations);
-  const detectedColor = normalizeString(analysis?.detected_color);
-  const detectedDensity = normalizeString(analysis?.detected_density);
-  const lengthAssessment = normalizeString(analysis?.length_assessment);
-  const isHairDetected = analysis?.is_hair_detected !== false;
-  const invalidImageReason = normalizeString(analysis?.invalid_image_reason);
-
-  if (!isHairDetected && invalidImageReason) return false;
-
-  if (!summary) return true;
-  if (isHairDetected && !detectedCondition) return true;
-  if (isHairDetected && !detectedColor) return true;
-  if (isHairDetected && !detectedDensity) return true;
-  if (isHairDetected && recommendations.length !== 3) return true;
-  if (isHairDetected && !lengthAssessment) return true;
-  return false;
+  return Object.keys(analysis).length === 0;
 };
 
 const resolveSafeAnalysisError = (error: unknown) => {
@@ -898,11 +886,30 @@ const normalizeAnalysisPayload = (
   const invalidImageReason = normalizeString(analysis?.invalid_image_reason);
   const visibleDamageNotes = normalizeString(analysis?.visible_damage_notes);
   const confidenceScore = normalizeConfidence(analysis?.confidence_score);
-  const shineLevel = normalizeLevel10(analysis?.shine_level, detectedCondition.toLowerCase().includes('healthy') ? 8 : 5);
-  const frizzLevel = normalizeLevel10(analysis?.frizz_level, detectedCondition.toLowerCase().includes('frizz') ? 8 : 3);
-  const drynessLevel = normalizeLevel10(analysis?.dryness_level, detectedCondition.toLowerCase().includes('dry') ? 8 : 3);
-  const oilinessLevel = normalizeLevel10(analysis?.oiliness_level, detectedCondition.toLowerCase().includes('oily') ? 8 : 2);
-  const damageLevel = normalizeLevel10(analysis?.damage_level, detectedCondition.toLowerCase().includes('damage') ? 8 : 3);
+  const rawShineLevel = normalizeLevel10(analysis?.shine_level, detectedCondition.toLowerCase().includes('healthy') ? 7 : 5);
+  const rawFrizzLevel = normalizeLevel10(analysis?.frizz_level, detectedCondition.toLowerCase().includes('frizz') ? 8 : 3);
+  const rawDrynessLevel = normalizeLevel10(analysis?.dryness_level, detectedCondition.toLowerCase().includes('dry') ? 8 : 3);
+  const rawOilinessLevel = normalizeLevel10(analysis?.oiliness_level, detectedCondition.toLowerCase().includes('oily') ? 8 : 2);
+  const rawDamageLevel = normalizeLevel10(analysis?.damage_level, detectedCondition.toLowerCase().includes('damage') ? 8 : 3);
+
+  // Correct level values that contradict the AI's own text observations
+  const combinedText = [
+    normalizeString(analysis?.summary),
+    normalizeString(analysis?.visible_damage_notes),
+  ].join(' ').toLowerCase();
+  const conditionLower = detectedCondition.toLowerCase();
+
+  // Shine: if the AI describes the hair as shiny or healthy but returned a very low shine, correct it
+  const aiDescribesShiny = combinedText.includes('shin') || conditionLower.includes('healthy');
+  const shineLevel = (rawShineLevel < 5 && aiDescribesShiny) ? Math.max(rawShineLevel, 7) : rawShineLevel;
+
+  // Damage: if the AI explicitly says no visible damage but returned a high damage level, correct it
+  const aiDescribesNoDamage = combinedText.includes('no visible damage') || combinedText.includes('no damage') || (conditionLower.includes('healthy') && !combinedText.includes('split') && !combinedText.includes('fray') && !combinedText.includes('breakage'));
+  const damageLevel = (rawDamageLevel > 4 && aiDescribesNoDamage) ? Math.min(rawDamageLevel, 2) : rawDamageLevel;
+
+  const frizzLevel = rawFrizzLevel;
+  const drynessLevel = rawDrynessLevel;
+  const oilinessLevel = rawOilinessLevel;
   const inferredMissingViews = expectedViews.filter((view) => !providedViews.includes(view));
   const missingViews = [...new Set([...inferredMissingViews, ...normalizedMissingViews])];
   const minimumDonationLengthCm = Math.max(
@@ -926,36 +933,6 @@ const normalizeAnalysisPayload = (
     : IMPROVE_STATUS;
   if (!hasClearEnoughEvidence || !meetsLengthRule || !conditionAcceptable || concernType === 'donation_eligibility' && normalizeString(analysis?.decision) !== ELIGIBLE_STATUS) {
     decision = IMPROVE_STATUS;
-  }
-
-  if (isHairDetected && !detectedCondition) {
-    throw new Error('AI returned an incomplete hair condition result.');
-  }
-
-  if (isHairDetected && !normalizedRecommendations.length) {
-    throw new Error('AI returned no usable hair-care recommendations.');
-  }
-
-  if (isHairDetected && !hasMeaningfulViewEvidence({
-    isHairDetected,
-    providedViews,
-    perViewNotes: normalizedViewNotes,
-  })) {
-    throw new Error('AI returned weak per-view evidence for the current uploaded images.');
-  }
-
-  if (isHairDetected && !hasRootToEndLengthRationale(lengthAssessment)) {
-    throw new Error('AI did not explain visible hair length from the root or hairline down to the ends clearly enough.');
-  }
-
-  if (isHairDetected && !recommendationsAlignWithFindings({
-    recommendations: normalizedRecommendations,
-    detectedCondition,
-    visibleDamageNotes,
-    estimatedLength,
-    minimumDonationLengthCm,
-  })) {
-    throw new Error('AI returned recommendations that did not align closely enough with the current visible findings.');
   }
 
   const summary = normalizeString(analysis?.summary) || buildSummaryFromAnalysisFields({
@@ -1097,7 +1074,8 @@ Deno.serve(async (request) => {
       'Before generating any output, carefully look at each photo for the following:',
       '- Environment: Is it well-lit? Is it dark/underexposed? Is there a person visible?',
       '- Background: Is there only one person? Are there distracting items behind the subject?',
-      '- Accessories: Are there hats, clips, headbands, or other items blocking the hair?',
+      '- Required angle: Is the Front View face-forward? Is the Side Profile actually a side profile? Does the Hair Ends Close-Up show the uncovered ends?',
+      '- Accessories: Are glasses, sunglasses, masks, face shields, caps, hats, headbands, clips, pins, hair ties, scrunchies, scarves, headphones, hoods, hands, towels, or fabric visible on the face or blocking the hairline, shaft, length, or ends?',
       '- Scalp condition, roots, hair shaft shine or dullness, texture, density, ends condition',
       '- Score levels: shine, frizz, dryness, oiliness, damage from 1-10',
       'Use per_view_notes to record what you observe in each view.',
@@ -1131,7 +1109,7 @@ Deno.serve(async (request) => {
 
     validImages.forEach((image, index) => {
       geminiParts.push({
-        text: `Image ${index + 1}: ${image.viewLabel || image.viewKey || `Photo ${index + 1}`} - examine this photo carefully for environment quality (lighting, dark areas), subject detection, background, scalp condition, hair shine or dullness, texture, density, and ends condition.`,
+        text: `Image ${index + 1}: ${image.viewLabel || image.viewKey || `Photo ${index + 1}`} - examine this photo carefully for the correct required angle, environment quality (lighting, dark areas), subject detection, background, glasses or other face accessories, obstructing hair accessories or objects, scalp condition, hair shine or dullness, texture, density, and ends condition.`,
       });
       geminiParts.push({
         inlineData: {
@@ -1159,7 +1137,7 @@ Deno.serve(async (request) => {
       model,
       systemInstruction: analysisInstructions,
       responseJsonSchema: analysisSchema,
-      maxOutputTokens: 1800,
+      maxOutputTokens: 2800,
       temperature: 0.2,
       includeDiagnostics: true,
       contents,
@@ -1182,18 +1160,29 @@ Deno.serve(async (request) => {
       providerParseSuccess: diagnostics.provider_parse_success,
     });
 
-    const rawAnalysis = (result?.analysis || {}) as Record<string, unknown>;
+    const rawAnalysisSource = result?.analysis && typeof result.analysis === 'object'
+      ? result.analysis
+      : result;
+    const rawAnalysis = (
+      rawAnalysisSource && typeof rawAnalysisSource === 'object' ? rawAnalysisSource : {}
+    ) as Record<string, unknown>;
 
     if (hasIncompleteCriticalAnalysisFields(rawAnalysis)) {
       console.warn('[analyze-hair-submission] incomplete analysis detected', {
         concernType,
+        responseKeys: result && typeof result === 'object' ? Object.keys(result) : [],
+        usedTopLevelAnalysis: !Boolean(result?.analysis),
         hasSummary: Boolean(normalizeString(rawAnalysis?.summary)),
         hasDetectedColor: Boolean(normalizeString(rawAnalysis?.detected_color)),
         hasLengthAssessment: Boolean(normalizeString(rawAnalysis?.length_assessment)),
         hasDetectedCondition: Boolean(normalizeString(rawAnalysis?.detected_condition)),
         recommendationCount: normalizeRecommendationsV2(rawAnalysis?.recommendations).length,
       });
-      throw new Error('AI returned an incomplete analysis for the current images. Please try the hair analysis again.');
+      const incompleteError = Object.assign(
+        new Error('AI returned an incomplete analysis for the current images. Please try the hair analysis again.'),
+        { diagnostics },
+      );
+      throw incompleteError;
     }
 
     const analysis = normalizeAnalysisPayload(

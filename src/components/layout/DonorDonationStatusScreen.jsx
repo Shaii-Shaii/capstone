@@ -292,11 +292,13 @@ function ChoiceField({ label, value, options, onChange, helperText }) {
 }
 
 function DriveListItem({ drive, onPress }) {
+  const imageUrl = drive?.event_image_url || drive?.organization_logo_url || '';
+
   return (
     <Pressable onPress={() => onPress?.(drive)} style={({ pressed }) => [styles.driveRowPressable, pressed ? styles.pressableActive : null]}>
       <View style={styles.driveRow}>
-        {drive.organization_logo_url ? (
-          <Image source={{ uri: drive.organization_logo_url }} style={styles.driveLogo} resizeMode="cover" />
+        {imageUrl ? (
+          <Image source={{ uri: imageUrl }} style={styles.driveLogo} resizeMode="cover" />
         ) : (
           <View style={styles.driveLogoFallback}>
             <AppIcon name="organization" size="sm" state="active" />
@@ -399,8 +401,8 @@ function DriveBrowserModal({
         </View>
       ) : (
         <View style={styles.driveDetailWrap}>
-          {selectedDrive?.organization_logo_url ? (
-            <Image source={{ uri: selectedDrive.organization_logo_url }} style={styles.driveDetailImage} resizeMode="cover" />
+          {selectedDrive?.event_image_url || selectedDrive?.organization_logo_url ? (
+            <Image source={{ uri: selectedDrive.event_image_url || selectedDrive.organization_logo_url }} style={styles.driveDetailImage} resizeMode="cover" />
           ) : (
             <View style={styles.driveDetailFallback}>
               <AppIcon name="organization" size="lg" state="active" />
@@ -575,8 +577,8 @@ function DriveModule({ roles, drives, donationReady, onOpenDrive }) {
                 },
               ]}
             >
-              {drive?.organization_logo_url ? (
-                <Image source={{ uri: drive.organization_logo_url }} style={styles.driveModuleLogo} resizeMode="cover" />
+              {drive?.event_image_url || drive?.organization_logo_url ? (
+                <Image source={{ uri: drive.event_image_url || drive.organization_logo_url }} style={styles.driveModuleLogo} resizeMode="cover" />
               ) : (
                 <View style={[styles.driveModuleLogo, styles.driveModuleLogoFallback, { backgroundColor: roles.iconPrimarySurface }]}>
                   <AppIcon name="organization" size="sm" color={roles.iconPrimaryColor} />
@@ -1011,7 +1013,18 @@ export function DonorDonationStatusScreen() {
   const handleDriveRsvp = React.useCallback(async () => {
     if (!selectedDrive) return;
 
-    if (selectedDrive?.registration?.registration_id) {
+    const shouldLinkDonationToDrive = Boolean(
+      user?.id
+      && profile?.user_id
+      && qualifiedSubmission?.submission_id
+      && qualifiedDetail?.submission_detail_id
+      && (
+        Number(qualifiedSubmission?.donation_drive_id || 0) !== Number(selectedDrive?.donation_drive_id || 0)
+        || String(qualifiedSubmission?.donation_source || '').trim().toLowerCase() !== 'drive_donation'
+      )
+    );
+
+    if (selectedDrive?.registration?.registration_id && !shouldLinkDonationToDrive) {
       setDriveQrPayload(buildDriveInvitationQrPayload({
         drive: selectedDrive,
         registration: selectedDrive.registration,
@@ -1061,19 +1074,30 @@ export function DonorDonationStatusScreen() {
     if (refreshed.data) {
       setSelectedDrive(refreshed.data);
       if (refreshed.data?.registration?.registration_id) {
-        setDriveQrPayload(buildDriveInvitationQrPayload({
+        setDonationQrPayload(buildDonationTrackingQrPayload({
+          submission: result.submission,
+          detail: qualifiedDetail,
           drive: refreshed.data,
           registration: refreshed.data.registration,
+          trackingStatus: result.submission?.status || qualifiedDetail?.status || '',
         }));
       }
     } else if (result.registration?.registration_id) {
-      setDriveQrPayload(buildDriveInvitationQrPayload({
+      setDonationQrPayload(buildDonationTrackingQrPayload({
+        submission: result.submission,
+        detail: qualifiedDetail,
         drive: selectedDrive,
         registration: result.registration,
+        trackingStatus: result.submission?.status || qualifiedDetail?.status || '',
       }));
     }
 
-    setDriveFeedback({ message: result.alreadyRegistered ? 'Drive registration loaded.' : 'Drive joined.', variant: 'success' });
+    setDriveFeedback({
+      message: result.alreadyRegistered
+        ? 'Drive registration linked to your donation. Attach the generated donation QR to the package.'
+        : 'Drive joined. Attach the generated donation QR to the package.',
+      variant: 'success',
+    });
     await loadModuleData();
   }, [
     hasOngoingDonation,

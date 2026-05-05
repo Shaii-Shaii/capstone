@@ -18,17 +18,17 @@ export const hairAnalysisRequiredViews = [
   {
     key: hairSubmissionImageTypes.frontView,
     label: 'Front View Photo',
-    helperText: 'Capture the front view clearly with your hair and face visible.',
+    helperText: 'Face the camera directly. Keep your full hair, hairline, and face visible with no glasses, masks, clips, headbands, caps, or accessories covering the face or hair.',
   },
   {
     key: hairSubmissionImageTypes.sideProfile,
     label: 'Side Profile Photo',
-    helperText: 'Capture one clear side profile view of your hair.',
+    helperText: 'Turn your head to one side. Keep the hair length and ends visible from the side profile with no glasses, masks, or accessories covering the face or hair.',
   },
   {
     key: hairSubmissionImageTypes.hairEndsCloseUp,
     label: 'Hair Ends Close-Up',
-    helperText: 'Capture the hair ends closely so dryness and split ends can be checked.',
+    helperText: 'Move closer to the lowest hair ends. Keep the ends sharp and uncovered so dryness, fraying, and split ends can be checked.',
   },
 ];
 

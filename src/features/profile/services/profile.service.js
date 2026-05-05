@@ -328,7 +328,7 @@ export const completePostLoginOnboarding = async ({
     });
 
     const targetRole = mode === 'patient-linked' || mode === 'patient-manual' ? 'patient' : 'donor';
-    const shouldUpdateRoleImmediately = targetRole === 'patient';
+    const shouldUpdateRoleImmediately = targetRole === 'patient' || targetRole === 'donor';
     const systemUserResult = await ProfileAPI.ensureSystemUserRecord({
       authUserId: userId,
       email,

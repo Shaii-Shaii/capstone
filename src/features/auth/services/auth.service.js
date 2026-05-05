@@ -79,7 +79,7 @@ const getFriendlyAuthError = (error) => {
   const normalized = msg.toLowerCase();
 
   if (normalized.includes('invalid login credentials') || normalized.includes('invalid credentials')) {
-    return buildUserFacingLoginError('Incorrect email or password.');
+    return buildUserFacingLoginError('Invalid Credentials');
   }
   if (normalized.includes('email not confirmed')) {
     return buildUserFacingLoginError('Please verify your email address before logging in.', loginErrorCodes.emailNotConfirmed);
@@ -101,7 +101,7 @@ const getFriendlySignupError = (error) => {
     || normalized.includes('already been registered')
     || normalized.includes('identities')
   ) {
-    return buildUserFacingSignupError('This email is already registered. Please log in instead.', signupErrorCodes.emailAlreadyRegistered);
+    return buildUserFacingSignupError('Email already exists', signupErrorCodes.emailAlreadyRegistered);
   }
 
   if (normalized.includes('weak password')) {
@@ -144,6 +144,27 @@ const getFriendlyGoogleAuthError = (error) => {
     'Google sign-in could not be completed. Please try again.',
     googleAuthErrorCodes.unexpected
   );
+};
+
+const getFriendlyOtpError = (error) => {
+  const msg = String(error?.message || '').trim();
+  const normalized = msg.toLowerCase();
+
+  if (
+    normalized.includes('otp')
+    || normalized.includes('token')
+    || normalized.includes('code')
+    || normalized.includes('invalid')
+    || normalized.includes('expired')
+  ) {
+    return new Error('Invalid OTP');
+  }
+
+  if (isNetworkErrorMessage(normalized)) {
+    return new Error('We could not connect right now. Please check your internet and try again.');
+  }
+
+  return new Error(msg || 'Invalid OTP');
 };
 
 const validateSystemUserAccount = (systemUser) => {
@@ -200,10 +221,10 @@ const resolveVisualTheme = ({ uiSettings = {}, preset = {} } = {}) => {
 const getFriendlyError = (error) => {
   const msg = error.message || '';
   if (msg.toLowerCase().includes('invalid login credentials')) {
-    return new Error("Invalid email or password. Please try again.");
+    return new Error('Invalid Credentials');
   }
   if (msg.toLowerCase().includes('already registered') || msg.toLowerCase().includes('user already exists')) {
-    return new Error("This email is already registered. Please log in instead.");
+    return new Error('Email already exists');
   }
   if (msg.toLowerCase().includes('email not confirmed')) {
     // Specifically tag this error so the UI can prompt for verification
@@ -347,7 +368,7 @@ export const register = async (email, password, additionalData = {}) => {
     if (error) throw getFriendlySignupError(error);
 
     if (data?.user && !data?.session && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
-      throw buildUserFacingSignupError('This email is already registered. Please log in instead.', signupErrorCodes.emailAlreadyRegistered);
+      throw buildUserFacingSignupError('Email already exists', signupErrorCodes.emailAlreadyRegistered);
     }
 
     // When email confirmation is required, Supabase can create the auth user without
@@ -607,7 +628,7 @@ export const verifyEmail = async (email, code) => {
     });
 
     const { data, error } = await AuthAPI.verifyEmailOtp({ email, token: code });
-    if (error) throw getFriendlyError(error);
+    if (error) throw getFriendlyOtpError(error);
     
     // After verification, check profile for routing
     let profile = null;

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { View, Text, TextInput, StyleSheet } from 'react-native';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import Animated, {
   interpolateColor,
   useAnimatedStyle,
@@ -36,6 +37,7 @@ export const AppInput = ({
   shellStyle: shellStyleOverride,
   helperTextStyle: helperTextStyleOverride,
   errorTextStyle: errorTextStyleOverride,
+  leftIcon,
   ...props
 }) => {
   const { resolvedTheme } = useAuth();
@@ -108,9 +110,18 @@ export const AppInput = ({
           isFocused && styles.focusedShell,
         ]}
       >
+        {leftIcon ? (
+          <MaterialCommunityIcons
+            name={leftIcon}
+            size={18}
+            color={secondaryTextColor}
+            style={styles.leftIcon}
+          />
+        ) : null}
         <TextInput
           style={[
             styles.input,
+            leftIcon ? styles.inputWithIcon : null,
             {
               color: disabled ? theme.colors.textDisabled : primaryTextColor,
             },
@@ -169,6 +180,11 @@ const styles = StyleSheet.create({
     shadowRadius: 14,
     elevation: 2,
   },
+  leftIcon: {
+    position: 'absolute',
+    left: theme.spacing.md,
+    zIndex: 1,
+  },
   focusedShell: {
     ...theme.shadows.soft,
   },
@@ -180,6 +196,9 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.compact.body,
     paddingHorizontal: theme.spacing.inputPaddingXCompact,
     paddingVertical: theme.spacing.inputPaddingYCompact,
+  },
+  inputWithIcon: {
+    paddingLeft: 52,
   },
   helperText: {
     marginTop: theme.spacing.xs,

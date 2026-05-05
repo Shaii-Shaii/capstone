@@ -12,6 +12,7 @@ import Animated, {
 import { resolveThemeRoles, theme } from '../../design-system/theme';
 import { AppIcon } from './AppIcon';
 import { useAuth } from '../../providers/AuthProvider';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 const AnimatedView = Animated.createAnimatedComponent(View);
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
@@ -28,6 +29,7 @@ export const PasswordInput = ({
   shellStyle: shellStyleOverride,
   helperTextStyle: helperTextStyleOverride,
   errorTextStyle: errorTextStyleOverride,
+  leftIcon,
   ...props
 }) => {
   const { resolvedTheme } = useAuth();
@@ -117,9 +119,18 @@ export const PasswordInput = ({
           isFocused ? styles.inputFocused : null,
         ]}
       >
+        {leftIcon ? (
+          <MaterialCommunityIcons
+            name={leftIcon}
+            size={18}
+            color={secondaryTextColor}
+            style={styles.leftIcon}
+          />
+        ) : null}
         <TextInput
           style={[
             styles.input,
+            leftIcon ? styles.inputWithIcon : null,
             { color: disabled ? theme.colors.textDisabled : primaryTextColor },
             inputStyle,
           ]}
@@ -182,12 +193,18 @@ const styles = StyleSheet.create({
   inputFocused: {
     ...theme.shadows.soft,
   },
+  leftIcon: {
+    marginLeft: theme.spacing.md,
+  },
   input: {
     flex: 1,
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.body,
     paddingHorizontal: theme.spacing.inputPaddingXCompact,
     paddingVertical: theme.spacing.inputPaddingYCompact,
+  },
+  inputWithIcon: {
+    paddingLeft: theme.spacing.sm,
   },
   toggleIconWrap: {
     width: 40,

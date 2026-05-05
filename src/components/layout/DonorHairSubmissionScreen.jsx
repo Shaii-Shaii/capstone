@@ -92,11 +92,11 @@ try {
 }
 
 const PHOTO_GUIDELINE_ITEMS = [
-  'Use proper lighting.',
-  'Keep other people and objects out of the background.',
-  'Remove clips, caps, and other hair accessories.',
-  'Make sure the hair is fully visible and not hidden at the back.',
-  'Keep your face visible clearly.',
+  'Use bright, even lighting so color, shine, dryness, and frizz are visible.',
+  'Keep only one person in the frame with a plain background.',
+  'Remove eyeglasses, sunglasses, masks, caps, headbands, clips, pins, hair ties, scarves, headphones, and anything covering the face or hair.',
+  'Capture the required front view, one side profile, and a close-up of the hair ends.',
+  'Keep hair loose, centered, and visible from root or hairline to the lowest visible ends.',
 ];
 
 const PHOTO_CAPTURE_TARGETS = [
@@ -159,21 +159,41 @@ const hasDetectedConcern = (source, keywords = [], negativePhrases = []) => (
   && !negativePhrases.some((phrase) => source.includes(phrase))
 );
 
-const getInitialLiveFaceStatus = () => ({
-  valid: false,
+const isSideProfileView = (view = {}) => String(view?.key || view?.label || '').toLowerCase().includes('side');
+const isHairEndsView = (view = {}) => String(view?.key || view?.label || '').toLowerCase().includes('ends');
+
+const getInitialLiveFaceStatus = (view = null) => ({
+  valid: isHairEndsView(view),
   faceCount: 0,
-  message: 'Center your face and hair in the frame.',
+  message: isHairEndsView(view)
+    ? 'Frame the lowest hair ends closely. Remove ties, clips, glasses, and anything covering the face or strands.'
+    : isSideProfileView(view)
+      ? 'Turn to one side so your side profile and hair length are visible.'
+      : 'Face the camera directly and keep your hair fully visible.',
   tone: 'info',
 });
 
-const resolveLiveFaceStatus = (faces = []) => {
+const resolveLiveFaceStatus = (faces = [], view = null) => {
   const faceList = Array.isArray(faces) ? faces : [];
+  const expectsSideProfile = isSideProfileView(view);
+  const expectsHairEnds = isHairEndsView(view);
 
   if (!faceList.length) {
+    if (expectsHairEnds) {
+      return {
+        valid: true,
+        faceCount: 0,
+        message: 'Hair ends close-up ready. Keep the ends sharp, well lit, and free from accessories.',
+        tone: 'success',
+      };
+    }
+
     return {
       valid: false,
       faceCount: 0,
-      message: 'No person detected. Center your face and hair.',
+      message: expectsSideProfile
+        ? 'No side profile detected. Turn to one side and keep your hair visible.'
+        : 'No person detected. Center your face and hair.',
       tone: 'error',
     };
   }
@@ -198,16 +218,47 @@ const resolveLiveFaceStatus = (faces = []) => {
     return {
       valid: false,
       faceCount: 1,
-      message: 'Move closer so your face and hair are clearly visible.',
+      message: expectsHairEnds
+        ? 'Move closer to the hair ends so the strands are sharp and visible.'
+        : expectsSideProfile
+          ? 'Move closer so your side profile and hair length are clearly visible.'
+          : 'Move closer so your face and hair are clearly visible.',
       tone: 'warning',
     };
   }
 
-  if (rollAngle > 24 || yawAngle > 34) {
+  if (rollAngle > 24) {
     return {
       valid: false,
       faceCount: 1,
-      message: 'Face your camera directly and keep your head steady.',
+      message: 'Keep your head steady and upright for a clearer hair analysis photo.',
+      tone: 'warning',
+    };
+  }
+
+  if (expectsSideProfile) {
+    if (yawAngle < 18) {
+      return {
+        valid: false,
+        faceCount: 1,
+        message: 'Turn your head to one side. This required view should show your side profile and hair length.',
+        tone: 'warning',
+      };
+    }
+
+    return {
+      valid: true,
+      faceCount: 1,
+      message: 'Side profile detected. Keep hair length and ends visible with no glasses, clips, or headbands.',
+      tone: 'success',
+    };
+  }
+
+  if (!expectsHairEnds && yawAngle > 34) {
+    return {
+      valid: false,
+      faceCount: 1,
+      message: 'Face the camera directly for the front view. Use the next view for your side profile.',
       tone: 'warning',
     };
   }
@@ -215,7 +266,9 @@ const resolveLiveFaceStatus = (faces = []) => {
   return {
     valid: true,
     faceCount: 1,
-    message: 'Face detected. Keep your hair centered.',
+    message: expectsHairEnds
+      ? 'Hair ends close-up ready. Keep the ends sharp, well lit, and uncovered.'
+      : 'Front view detected. Keep your face and hair centered, with glasses and accessories removed.',
     tone: 'success',
   };
 };
@@ -312,6 +365,8 @@ function LiveHairCameraPanel({
   cameraRef,
   liveFaceStatus,
   canUseNativeLiveCamera,
+  liveFrameBrightness,
+  liveNoAccessories,
   isCapturing,
   isUploading,
   isAnalyzing,
@@ -340,7 +395,7 @@ function LiveHairCameraPanel({
       ? `Live face detection did not load: ${nativeFaceCameraLoadError}`
       : 'Live face detection needs the rebuilt native app.';
   const scannerTitle = canUseNativeLiveCamera
-    ? (liveFaceStatus?.valid ? 'Ready to scan' : 'Live analysis')
+    ? (liveFaceStatus?.valid ? 'Ready to scan' : isSideProfileView(currentView) ? 'Checking profile' : 'Live analysis')
     : isExpoGoRuntime ? 'Camera preview' : 'Native scanner not active';
   const scannerIconState = canUseNativeLiveCamera
     ? (liveFaceStatus?.valid ? 'success' : 'warning')
@@ -351,6 +406,17 @@ function LiveHairCameraPanel({
     : liveFaceStatus?.tone === 'error' || !canUseNativeLiveCamera
       ? styles.liveStatusDotError
       : styles.liveStatusDotActive;
+  const angleChecklistLabel = isSideProfileView(currentView)
+    ? 'Side profile'
+    : isHairEndsView(currentView)
+      ? 'Ends visible'
+      : 'Front view';
+  const isBrightEnough = canUseNativeLiveCamera && liveFrameBrightness >= 100;
+  const liveChecklistItems = [
+    { label: 'Bright light', checked: isBrightEnough },
+    { label: angleChecklistLabel, checked: Boolean(liveFaceStatus?.valid && canUseNativeLiveCamera) },
+    { label: 'No accessories', checked: Boolean(liveNoAccessories && canUseNativeLiveCamera) },
+  ];
 
   return (
     <View style={styles.liveCameraPanel}>
@@ -406,17 +472,17 @@ function LiveHairCameraPanel({
       <View style={styles.liveCameraBottomSheet}>
         <Text style={styles.liveStepLabel}>Required view {photoIndex + 1} of {requiredViews.length}</Text>
         <Text style={styles.liveCameraTitle}>{currentView?.label || 'Hair photo'}</Text>
-        <Text style={styles.liveCameraBody}>{currentView?.helperText || 'Keep your hair centered with one person in frame.'}</Text>
+        <Text style={styles.liveCameraBody}>{currentView?.helperText || 'Keep your hair centered with one person in frame and remove anything covering it.'}</Text>
 
         <View style={styles.liveChecklist}>
-          {['Bright light', 'One person', 'No accessories'].map((item) => (
-            <View key={item} style={styles.liveChecklistItem}>
+          {liveChecklistItems.map((item) => (
+            <View key={item.label} style={styles.liveChecklistItem}>
               <AppIcon
-                name={liveFaceStatus?.valid && canUseNativeLiveCamera ? 'check-circle-outline' : 'circle-outline'}
+                name={item.checked ? 'check-circle-outline' : 'circle-outline'}
                 size="sm"
-                state={liveFaceStatus?.valid && canUseNativeLiveCamera ? 'success' : 'muted'}
+                state={item.checked ? 'success' : 'muted'}
               />
-              <Text style={styles.liveChecklistText}>{item}</Text>
+              <Text style={styles.liveChecklistText}>{item.label}</Text>
             </View>
           ))}
         </View>
@@ -489,22 +555,40 @@ function NativeLiveFaceCamera({ cameraRef, isActive, onFacesChange }) {
     performanceMode: 'fast',
     landmarkMode: 'none',
     contourMode: 'none',
-    classificationMode: 'none',
+    classificationMode: 'all',
     minFaceSize: 0.18,
     trackingEnabled: true,
     cameraFacing: 'front',
   }), []);
   const { detectFaces, stopListeners } = useNativeFaceDetector(faceDetectionOptions);
   const handleFacesOnJs = React.useMemo(
-    () => NativeWorklets.createRunOnJS((faces = []) => {
-      onFacesChange?.(faces);
+    () => NativeWorklets.createRunOnJS((faces = [], brightness = -1) => {
+      onFacesChange?.(faces, brightness);
     }),
     [onFacesChange]
   );
   const frameProcessor = useNativeFrameProcessor((frame) => {
     'worklet';
     const faces = detectFaces(frame);
-    handleFacesOnJs(faces);
+    let avgBrightness = -1;
+    try {
+      if (typeof frame.toArrayBuffer === 'function') {
+        const buffer = frame.toArrayBuffer();
+        const bytes = new Uint8Array(buffer);
+        const sampleEnd = Math.min(frame.width * frame.height, bytes.length);
+        const step = Math.max(1, Math.floor(sampleEnd / 250));
+        let sum = 0;
+        let count = 0;
+        for (let i = 0; i < sampleEnd; i += step) {
+          sum += bytes[i];
+          count++;
+        }
+        avgBrightness = count > 0 ? Math.round(sum / count) : -1;
+      }
+    } catch (_e) {
+      avgBrightness = -1;
+    }
+    handleFacesOnJs(faces, avgBrightness);
   }, [detectFaces, handleFacesOnJs]);
 
   React.useEffect(() => (
@@ -1116,6 +1200,8 @@ export function DonorHairSubmissionScreen() {
   const [cameraModalError, setCameraModalError] = useState('');
   const [nativeCameraPermission, setNativeCameraPermission] = useState('not-determined');
   const [liveFaceStatus, setLiveFaceStatus] = useState(getInitialLiveFaceStatus);
+  const [liveFrameBrightness, setLiveFrameBrightness] = useState(-1);
+  const [liveNoAccessories, setLiveNoAccessories] = useState(false);
   const lastLiveFaceStatusKeyRef = useRef('');
   const [analysisHistory, setAnalysisHistory] = useState([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
@@ -1338,6 +1424,18 @@ export function DonorHairSubmissionScreen() {
     error?.retryUntil,
     user?.id,
   ]);
+
+  const runFreshAnalysisAttemptRef = useRef(null);
+  runFreshAnalysisAttemptRef.current = runFreshAnalysisAttempt;
+  const pendingAutoAnalysisRef = useRef(null);
+
+  useEffect(() => {
+    if (!pendingAutoAnalysisRef.current) return;
+    if (stepIndex !== 3 || completedPhotoCount !== requiredViews.length || analysis || isAnalyzing) return;
+    const source = pendingAutoAnalysisRef.current;
+    pendingAutoAnalysisRef.current = null;
+    runFreshAnalysisAttemptRef.current(source);
+  }, [stepIndex, completedPhotoCount, requiredViews.length, analysis, isAnalyzing]);
 
   const loadAnalysisHistory = React.useCallback(async () => {
     if (!user?.id) return;
@@ -1594,13 +1692,19 @@ export function DonorHairSubmissionScreen() {
     return Boolean(permissionResult?.granted);
   }, [canUseNativeLiveCamera, requestCameraPermission]);
 
-  const handleLiveFacesChange = React.useCallback((faces = []) => {
-    const nextStatus = resolveLiveFaceStatus(faces);
+  const handleLiveFacesChange = React.useCallback((faces = [], brightness = -1) => {
+    const nextStatus = resolveLiveFaceStatus(faces, currentView);
     const nextKey = `${nextStatus.valid}:${nextStatus.faceCount}:${nextStatus.message}`;
-    if (lastLiveFaceStatusKeyRef.current === nextKey) return;
-    lastLiveFaceStatusKeyRef.current = nextKey;
-    setLiveFaceStatus(nextStatus);
-  }, []);
+    if (lastLiveFaceStatusKeyRef.current !== nextKey) {
+      lastLiveFaceStatusKeyRef.current = nextKey;
+      setLiveFaceStatus(nextStatus);
+    }
+    setLiveFrameBrightness(brightness);
+    const face = Array.isArray(faces) ? faces[0] : null;
+    const leftEyeProb = Number(face?.leftEyeOpenProbability ?? -1);
+    const rightEyeProb = Number(face?.rightEyeOpenProbability ?? -1);
+    setLiveNoAccessories(leftEyeProb >= 0.65 && rightEyeProb >= 0.65 && nextStatus.valid);
+  }, [currentView]);
 
   useEffect(() => {
     if (questionIndex > visibleQuestions.length - 1) {
@@ -1610,11 +1714,13 @@ export function DonorHairSubmissionScreen() {
 
   useEffect(() => {
     if (stepIndex === 2) {
-      const initialStatus = getInitialLiveFaceStatus();
+      const initialStatus = getInitialLiveFaceStatus(currentView);
       lastLiveFaceStatusKeyRef.current = '';
       setLiveFaceStatus(initialStatus);
+      setLiveFrameBrightness(-1);
+      setLiveNoAccessories(false);
     }
-  }, [photoIndex, stepIndex]);
+  }, [currentView, photoIndex, stepIndex]);
 
   const renderQuestionInput = () => {
     if (!currentQuestion) return null;
@@ -1748,10 +1854,8 @@ export function DonorHairSubmissionScreen() {
         return;
       }
 
+      pendingAutoAnalysisRef.current = 'live_camera_all_views_complete';
       setStepIndex(3);
-      setTimeout(() => {
-        runFreshAnalysisAttempt('live_camera_all_views_complete');
-      }, 250);
     } catch (captureError) {
       logAppEvent('donor_hair_submission.photo_camera', 'Camera capture failed from donation photo modal.', {
         userId: user?.id || null,
@@ -1778,10 +1882,8 @@ export function DonorHairSubmissionScreen() {
         return;
       }
 
+      pendingAutoAnalysisRef.current = 'live_upload_all_views_complete';
       setStepIndex(3);
-      setTimeout(() => {
-        runFreshAnalysisAttempt('live_upload_all_views_complete');
-      }, 250);
     }
   };
 
@@ -1934,6 +2036,8 @@ export function DonorHairSubmissionScreen() {
             cameraRef={cameraRef}
             liveFaceStatus={liveFaceStatus}
             canUseNativeLiveCamera={canUseNativeLiveCamera}
+            liveFrameBrightness={liveFrameBrightness}
+            liveNoAccessories={liveNoAccessories}
             isCapturing={isCapturingPhoto || isCapturingImages}
             isUploading={isPickingImages}
             isAnalyzing={isAnalyzing}
@@ -2223,7 +2327,7 @@ export function DonorHairSubmissionScreen() {
         />
       )}
     >
-      {transientErrorNotice ? (
+      {transientErrorNotice && !isAnalyzerActive ? (
         <StatusBanner
           title={transientErrorNotice.title}
           message={transientErrorNotice.message}
@@ -2355,6 +2459,7 @@ const styles = StyleSheet.create({
     maxWidth: theme.layout.contentMaxWidth,
     alignSelf: 'center',
     gap: theme.spacing.md,
+    paddingBottom: 120,
   },
   summaryStage: {
     gap: theme.spacing.md,
@@ -2621,6 +2726,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: theme.spacing.sm,
+    alignItems: 'center',
   },
   correctionFieldGroup: {
     gap: theme.spacing.sm,
@@ -3100,6 +3206,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: theme.spacing.md,
     alignItems: 'flex-start',
+    marginBottom: theme.spacing.lg,
   },
   errorStateIcon: {
     width: 52,
@@ -3111,6 +3218,7 @@ const styles = StyleSheet.create({
   },
   errorStateCopy: {
     flex: 1,
+    minWidth: 0,
   },
   checkRow: {
     flexDirection: 'row',
@@ -3688,7 +3796,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: theme.spacing.sm,
     marginTop: theme.spacing.md,
-    marginBottom: theme.spacing.sm,
+    marginBottom: theme.spacing.xxl,
   },
   iconNavButton: {
     width: 42,

@@ -58,6 +58,14 @@
           }
         }
       ],
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Allow Donivra to use the microphone so Donivra AI can listen to your login or signup question.",
+          "speechRecognitionPermission": "Allow Donivra to use speech recognition so Donivra AI can understand your spoken question.",
+          "androidSpeechServicePackages": ["com.google.android.googlequicksearchbox"]
+        }
+      ],
       "@react-native-community/datetimepicker"
     ],
     "experiments": {

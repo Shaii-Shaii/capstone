@@ -1043,6 +1043,7 @@ const getParcelImagesWithUrls = async (detail) => {
 
 export const buildDriveInvitationQrPayload = ({ drive, registration }) => (
   JSON.stringify({
+    Payload_Type: 'Donation_Drive_Registration',
     Registration_ID: registration?.registration_id || null,
     Donation_Drive_ID: registration?.donation_drive_id || drive?.donation_drive_id || null,
     User_ID: registration?.user_id || null,
@@ -1098,9 +1099,11 @@ export const buildDonationTrackingQrPayload = ({
   detail = null,
   logistics = null,
   drive = null,
+  registration = null,
   trackingStatus = '',
 } = {}) => {
   const lines = [
+    'Payload_Type: Hair_Donation_Package',
     `Submission_ID: ${submission?.submission_id || ''}`,
     `Submission_Code: ${submission?.submission_code || 'Pending donation code'}`,
   ];
@@ -1157,6 +1160,15 @@ export const buildDonationTrackingQrPayload = ({
 
   if (drive?.donation_drive_id) {
     lines.push(`Donation_Drive_ID: ${drive.donation_drive_id}`);
+  }
+  if (registration?.registration_id) {
+    lines.push(`Registration_ID: ${registration.registration_id}`);
+  }
+  if (registration?.registration_status) {
+    lines.push(`Registration_Status: ${registration.registration_status}`);
+  }
+  if (registration?.attendance_status) {
+    lines.push(`Attendance_Status: ${registration.attendance_status}`);
   }
   if (drive?.event_title) {
     lines.push(`Event_Title: ${drive.event_title}`);

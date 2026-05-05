@@ -2,9 +2,9 @@ import React, { useState } from 'react';
 import { Image, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { AuthScreenLayout, authLayoutStyles } from '../../src/components/auth/AuthScreenLayout';
-import { AuthTabBar } from '../../src/components/auth/AuthTabBar';
 import { AuthFormFooter } from '../../src/components/auth/AuthFormFooter';
 import { LoginForm } from '../../src/components/auth/LoginForm';
+import { AuthVoiceAssistant } from '../../src/components/auth/AuthVoiceAssistant';
 import { useRoleAuthFlow } from '../../src/hooks/useRoleAuthFlow';
 import { resolveBrandLogoSource, resolveThemeRoles, theme } from '../../src/design-system/theme';
 
@@ -12,7 +12,6 @@ export default function AccessScreen() {
   const router = useRouter();
   const {
     handleLogin,
-    handleGoogleAuth,
     isLoading,
     activeAuthAction,
     loginError,
@@ -21,11 +20,9 @@ export default function AccessScreen() {
   } = useRoleAuthFlow('access');
 
   const [imageFailed, setImageFailed] = useState(false);
+  const [assistantStageMessage, setAssistantStageMessage] = useState('');
   const logoSource = resolveBrandLogoSource(resolvedTheme, imageFailed);
   const roles = resolveThemeRoles(resolvedTheme);
-  const brandName = resolvedTheme?.brandName || 'Donivra';
-  const tagline = resolvedTheme?.brandTagline || 'Hair donation, reimagined.';
-
   return (
     <AuthScreenLayout role="access" resolvedTheme={resolvedTheme}>
       {/* Brand Identity */}
@@ -58,7 +55,7 @@ export default function AccessScreen() {
             },
           ]}
         >
-          {brandName}
+          Log in
         </Text>
 
         <Text
@@ -70,25 +67,34 @@ export default function AccessScreen() {
             },
           ]}
         >
-          {tagline}
+          Enter your email and password to securely access your account.
         </Text>
       </View>
 
-      {/* Login | Register tabs */}
-      <AuthTabBar activeTab="login" resolvedTheme={resolvedTheme} />
-
       {/* Login form */}
       <View style={authLayoutStyles.formSection}>
+        <AuthVoiceAssistant
+          screen="login"
+          resolvedTheme={resolvedTheme}
+          compact
+          stageMessage={assistantStageMessage}
+        />
         <LoginForm
-          onSubmit={handleLogin}
+          onSubmit={(data) => {
+            setAssistantStageMessage('Good. I will check your login now. After login, I will help route you as a donor or patient.');
+            return handleLogin(data);
+          }}
           isLoading={isLoading}
           activeAuthAction={activeAuthAction}
           onForgotPassword={() => router.push('/auth/forgot-password')}
           buttonText="Log in"
           submitError={loginError}
           onFieldEdit={clearLoginError}
+          onFieldFocus={(fieldName) => {
+            if (fieldName === 'email') setAssistantStageMessage('Enter the email address connected to your Donivra account.');
+            if (fieldName === 'password') setAssistantStageMessage('Now enter your account password. If you forgot it, use Forgot password before logging in.');
+          }}
           resolvedTheme={resolvedTheme}
-          onGooglePress={handleGoogleAuth}
         />
       </View>
 
@@ -104,13 +110,12 @@ export default function AccessScreen() {
 const styles = StyleSheet.create({
   brandSection: {
     alignItems: 'center',
-    marginBottom: theme.spacing.xxl,
-    paddingTop: theme.spacing.lg,
+    marginBottom: theme.spacing.lg,
   },
   logoContainer: {
-    width: 80,
-    height: 80,
-    borderRadius: 20,
+    width: 64,
+    height: 64,
+    borderRadius: 18,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
@@ -122,18 +127,19 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   logoImage: {
-    width: 52,
-    height: 52,
+    width: 42,
+    height: 42,
   },
   brandName: {
-    fontSize: 22,
+    fontSize: 24,
     fontWeight: theme.typography.weights.bold,
     textAlign: 'center',
     marginBottom: theme.spacing.xs,
-    letterSpacing: -0.3,
   },
   brandTagline: {
     fontSize: theme.typography.compact.bodySm,
     textAlign: 'center',
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+    maxWidth: 260,
   },
 });

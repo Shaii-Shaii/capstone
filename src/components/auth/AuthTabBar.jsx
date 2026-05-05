@@ -61,7 +61,7 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.pill,
     borderWidth: 1,
     padding: 3,
-    marginBottom: theme.spacing.xxl,
+    marginBottom: theme.spacing.lg,
   },
   tab: {
     flex: 1,

@@ -130,7 +130,7 @@ export const resetPasswordSchema = z.object({
   password: passwordField,
   confirmPassword: z.string()
 }).refine((data) => data.password === data.confirmPassword, {
-  message: "Passwords don't match",
+  message: 'Password do not match',
   path: ["confirmPassword"],
 });
 
@@ -140,7 +140,7 @@ export const baseSignupSchema = z.object({
   password: passwordField,
   confirmPassword: z.string(),
 }).refine((data) => data.password === data.confirmPassword, {
-  message: "Passwords don't match",
+  message: 'Password do not match',
   path: ['confirmPassword'],
 }).superRefine((data, ctx) => {
   if (passwordMatchesUserContext(data.password, [data.email])) {

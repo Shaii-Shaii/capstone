@@ -221,14 +221,68 @@ function pickReadableColor(backgroundColor, candidates = [], fallback = theme.co
     || fallback;
 }
 
+function ensureReadableColor(backgroundColor, color, fallbackCandidates = [], fallback = theme.colors.textPrimary) {
+  if (!parseColorValue(color)) {
+    return pickReadableColor(backgroundColor, fallbackCandidates, fallback);
+  }
+
+  if (contrastRatio(backgroundColor, color) < 4.5) {
+    return pickReadableColor(backgroundColor, fallbackCandidates, fallback);
+  }
+
+  return color;
+}
+
+export function normalizeResolvedTheme(resolvedTheme = emptyResolvedTheme) {
+  const backgroundColor = parseColorValue(resolvedTheme?.backgroundColor)
+    ? resolvedTheme.backgroundColor
+    : theme.colors.backgroundCanvas;
+
+  const primaryTextColor = ensureReadableColor(
+    backgroundColor,
+    resolvedTheme?.primaryTextColor,
+    [theme.colors.textPrimary, theme.colors.textInverse, theme.colors.palette.white, theme.colors.palette.black],
+    theme.colors.textPrimary
+  );
+
+  const secondaryTextColor = ensureReadableColor(
+    backgroundColor,
+    resolvedTheme?.secondaryTextColor,
+    [theme.colors.textSecondary, primaryTextColor, theme.colors.textInverse, theme.colors.textPrimary],
+    primaryTextColor
+  );
+
+  const tertiaryTextColor = ensureReadableColor(
+    backgroundColor,
+    resolvedTheme?.tertiaryTextColor,
+    [theme.colors.textMuted, secondaryTextColor, primaryTextColor, theme.colors.textInverse],
+    secondaryTextColor
+  );
+
+  const primaryColor = parseColorValue(resolvedTheme?.primaryColor)
+    ? resolvedTheme.primaryColor
+    : primaryTextColor;
+
+  return {
+    ...emptyResolvedTheme,
+    ...resolvedTheme,
+    backgroundColor,
+    primaryColor,
+    primaryTextColor,
+    secondaryTextColor,
+    tertiaryTextColor,
+  };
+}
+
 export function resolveThemeRoles(resolvedTheme = emptyResolvedTheme) {
-  const background = resolvedTheme?.backgroundColor || theme.colors.backgroundCanvas;
-  const primary = resolvedTheme?.primaryColor || '';
+  const normalizedTheme = normalizeResolvedTheme(resolvedTheme);
+  const background = normalizedTheme.backgroundColor || theme.colors.backgroundCanvas;
+  const primary = normalizedTheme.primaryColor || '';
   const secondary = resolvedTheme?.secondaryColor || '';
   const tertiary = resolvedTheme?.tertiaryColor || '';
-  const heading = resolvedTheme?.primaryTextColor || theme.colors.textPrimary;
-  const body = resolvedTheme?.secondaryTextColor || theme.colors.textSecondary;
-  const meta = resolvedTheme?.tertiaryTextColor || theme.colors.textMuted;
+  const heading = normalizedTheme.primaryTextColor || theme.colors.textPrimary;
+  const body = normalizedTheme.secondaryTextColor || theme.colors.textSecondary;
+  const meta = normalizedTheme.tertiaryTextColor || theme.colors.textMuted;
   const supportSeed = secondary || tertiary || body || heading;
   const accentSeed = tertiary || secondary || meta || body || heading;
   const cardSeed = supportSeed || heading;

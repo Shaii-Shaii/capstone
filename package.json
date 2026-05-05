@@ -14,7 +14,8 @@
     "build": "expo export -p web",
     "vercel-build": "npm run build",
     "lint": "expo lint",
-    "doctor": "npx expo-doctor"
+    "doctor": "npx expo-doctor",
+    "postinstall": "node ./scripts/patch-worklets-cmake.js"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
@@ -40,6 +41,8 @@
     "expo-print": "~15.0.8",
     "expo-router": "~6.0.23",
     "expo-sharing": "~14.0.8",
+    "expo-speech": "~14.0.8",
+    "expo-speech-recognition": "^3.1.3",
     "expo-splash-screen": "~31.0.13",
     "expo-status-bar": "~3.0.9",
     "expo-symbols": "~1.0.8",

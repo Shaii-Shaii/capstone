@@ -39,6 +39,7 @@ import { useAuth } from '../../src/providers/AuthProvider';
 import { resolveBrandLogoSource, resolveThemeRoles, theme } from '../../src/design-system/theme';
 import { invokeEdgeFunction } from '../../src/api/supabase/client';
 import { loadChatbotBootstrap, resolveChatbotReply } from '../../src/features/chatbot.service';
+import { buildProfileCompletionMeta } from '../../src/features/profile/services/profile.service';
 
 const formatDayLabel = (value) => (
   new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(new Date(value))
@@ -629,18 +630,19 @@ function DonationDriveCard({ drive }) {
   const { resolvedTheme } = useAuth();
   const roles = resolveThemeRoles(resolvedTheme);
   const [imageFailed, setImageFailed] = React.useState(false);
+  const imageUrl = drive?.event_image_url || drive?.organization_logo_url || '';
 
   React.useEffect(() => {
     setImageFailed(false);
-  }, [drive?.organization_logo_url]);
+  }, [imageUrl]);
 
   return (
     <View style={[styles.driveCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
       {/* Cover banner */}
       <View style={[styles.driveCover, { backgroundColor: roles.iconPrimarySurface }]}>
-        {drive?.organization_logo_url && !imageFailed ? (
+        {imageUrl && !imageFailed ? (
           <Image
-            source={{ uri: drive.organization_logo_url }}
+            source={{ uri: imageUrl }}
             style={styles.driveCoverImage}
             resizeMode="cover"
             onError={() => setImageFailed(true)}
@@ -689,46 +691,195 @@ function DonationDriveCard({ drive }) {
   );
 }
 
-function OrganizationCard({ organization }) {
+function FinishSetupCard({ completionMeta, onManageProfile }) {
+  const { resolvedTheme } = useAuth();
+  const roles = resolveThemeRoles(resolvedTheme);
+  const missingFields = completionMeta?.missingFieldLabels?.slice(0, 3) || [];
+  const missingText = missingFields.length
+    ? `Missing: ${missingFields.join(', ')}${completionMeta.missingFieldLabels.length > 3 ? ', and more' : ''}.`
+    : 'Complete your donor details before starting donor flows.';
+
+  return (
+    <AppCard variant="soft" radius="xl" padding="md" contentStyle={styles.setupCardContent}>
+      <View style={styles.setupCardHeader}>
+        <View style={[styles.setupIcon, { backgroundColor: roles.iconPrimarySurface }]}>
+          <MaterialCommunityIcons name="account-edit-outline" size={22} color={roles.primaryActionBackground} />
+        </View>
+        <View style={styles.setupCopy}>
+          <Text style={[styles.setupTitle, { color: roles.headingText }]}>Finish Setting Up Your Account</Text>
+          <Text style={[styles.setupBody, { color: roles.bodyText }]}>{missingText}</Text>
+        </View>
+      </View>
+      <Pressable
+        onPress={onManageProfile}
+        style={({ pressed }) => [
+          styles.setupButton,
+          { backgroundColor: roles.primaryActionBackground },
+          pressed ? styles.cardPressed : null,
+        ]}
+      >
+        <Text style={[styles.setupButtonText, { color: roles.primaryActionText }]}>Manage Profile</Text>
+        <MaterialCommunityIcons name="chevron-right" size={18} color={roles.primaryActionText} />
+      </Pressable>
+    </AppCard>
+  );
+}
+
+function DonorFlowCard({
+  title,
+  description,
+  badge,
+  badgeVariant = 'neutral',
+  icon,
+  buttonTitle,
+  onPress,
+  filled = false,
+}) {
+  const { resolvedTheme } = useAuth();
+  const roles = resolveThemeRoles(resolvedTheme);
+  const badgeStyles = badgeVariant === 'success'
+    ? { backgroundColor: '#e9f8ef', color: '#0f7b3d' }
+    : badgeVariant === 'warning'
+      ? { backgroundColor: '#fff5dd', color: '#8a5a00' }
+      : { backgroundColor: roles.iconPrimarySurface, color: roles.primaryActionBackground };
+
+  return (
+    <AppCard
+      variant={filled ? 'default' : 'outline'}
+      radius="xl"
+      padding="md"
+      style={filled ? { backgroundColor: roles.primaryActionBackground, borderColor: roles.primaryActionBackground } : null}
+      contentStyle={styles.flowCardContent}
+    >
+      <View style={styles.flowCardTop}>
+        <View style={[
+          styles.flowIconWrap,
+          { backgroundColor: filled ? roles.primaryActionText : roles.iconPrimarySurface },
+        ]}>
+          <MaterialCommunityIcons
+            name={icon}
+            size={22}
+            color={filled ? roles.primaryActionBackground : roles.primaryActionBackground}
+          />
+        </View>
+        {badge ? (
+          <View style={[styles.flowBadge, { backgroundColor: badgeStyles.backgroundColor }]}>
+            <Text style={[styles.flowBadgeText, { color: badgeStyles.color }]}>{badge}</Text>
+          </View>
+        ) : null}
+      </View>
+      <View style={styles.flowCardCopy}>
+        <Text style={[styles.flowCardTitle, { color: filled ? roles.primaryActionText : roles.headingText }]}>
+          {title}
+        </Text>
+        <Text style={[styles.flowCardDescription, { color: filled ? roles.primaryActionText : roles.bodyText }]}>
+          {description}
+        </Text>
+      </View>
+      <Pressable
+        onPress={onPress}
+        style={({ pressed }) => [
+          styles.flowCardButton,
+          {
+            backgroundColor: filled ? roles.primaryActionText : roles.primaryActionBackground,
+            borderColor: filled ? roles.primaryActionText : roles.primaryActionBackground,
+          },
+          pressed ? styles.cardPressed : null,
+        ]}
+      >
+        <Text style={[
+          styles.flowCardButtonText,
+          { color: filled ? roles.primaryActionBackground : roles.primaryActionText },
+        ]}>
+          {buttonTitle}
+        </Text>
+      </Pressable>
+    </AppCard>
+  );
+}
+
+function UpcomingDriveHero({ drive, onPress }) {
   const { resolvedTheme } = useAuth();
   const roles = resolveThemeRoles(resolvedTheme);
   const [imageFailed, setImageFailed] = React.useState(false);
-  const initials = String(organization?.organization_name || '')
-    .split(' ')
-    .map((part) => part[0])
-    .filter(Boolean)
-    .slice(0, 2)
-    .join('')
-    .toUpperCase();
+  const imageUrl = drive?.event_image_url || drive?.organization_logo_url || '';
 
   React.useEffect(() => {
     setImageFailed(false);
-  }, [organization?.organization_logo_url]);
+  }, [imageUrl]);
+
+  if (!drive) {
+    return (
+      <AppCard variant="outline" radius="xl" padding="md" contentStyle={styles.emptyDriveHero}>
+        <Text style={[styles.emptyDriveTitle, { color: roles.headingText }]}>No upcoming drives yet</Text>
+        <Text style={[styles.emptyDriveText, { color: roles.bodyText }]}>
+          Join a partnered organization to see hair donation activities.
+        </Text>
+      </AppCard>
+    );
+  }
 
   return (
-    <View style={[styles.organizationCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
-      <View style={[styles.organizationLogoWrap, { backgroundColor: roles.supportCardBackground, borderColor: roles.supportCardBorder }]}>
-        {organization?.organization_logo_url && !imageFailed ? (
-          <Image
-            source={{ uri: organization.organization_logo_url }}
-            style={styles.organizationLogo}
-            resizeMode="cover"
-            onError={() => setImageFailed(true)}
-          />
-        ) : initials ? (
-          <Text style={[styles.organizationInitials, { color: roles.headingText }]}>{initials}</Text>
+    <Pressable onPress={onPress} style={({ pressed }) => [pressed ? styles.cardPressed : null]}>
+      <View style={[styles.upcomingDriveHero, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
+        {imageUrl && !imageFailed ? (
+          <Image source={{ uri: imageUrl }} style={styles.upcomingDriveImage} resizeMode="cover" onError={() => setImageFailed(true)} />
         ) : (
-          <AppIcon name="organization" size="md" color={roles.headingText} />
+          <View style={[styles.upcomingDriveFallback, { backgroundColor: roles.iconPrimarySurface }]}>
+            <MaterialCommunityIcons name="calendar-heart" size={34} color={roles.primaryActionBackground} />
+          </View>
         )}
+        <View style={styles.upcomingDriveScrim} />
+        <View style={styles.upcomingDriveCopy}>
+          <Text style={styles.upcomingDriveEyebrow}>COMMUNITY EVENT</Text>
+          <Text numberOfLines={2} style={styles.upcomingDriveTitle}>{drive.event_title || 'Donation drive'}</Text>
+          <Text numberOfLines={1} style={styles.upcomingDriveMeta}>
+            {formatDriveDate(drive.start_date, drive.end_date)}
+            {drive.location_label ? `  •  ${drive.location_label}` : ''}
+          </Text>
+        </View>
       </View>
-      <Text numberOfLines={2} style={[styles.organizationName, { color: roles.headingText }]}>
-        {organization.organization_name}
-      </Text>
-      {organization.location_label ? (
-        <Text numberOfLines={1} style={[styles.organizationLocation, { color: roles.metaText }]}>
-          {organization.location_label}
-        </Text>
-      ) : null}
+    </Pressable>
+  );
+}
+
+function PartneredOrganizationsSection({ organizations, onOpenOrganization, onViewAll }) {
+  const { resolvedTheme } = useAuth();
+  const roles = resolveThemeRoles(resolvedTheme);
+
+  return (
+    <View style={styles.section}>
+      <HomeSectionHeader title="Partnered Organizations" actionLabel="Join" onActionPress={onViewAll} />
+      {organizations.length ? (
+        <View style={styles.organizationList}>
+          {organizations.slice(0, 3).map((organization) => (
+            <Pressable
+              key={`org-row-${organization.organization_id}`}
+              onPress={() => onOpenOrganization(organization)}
+              style={({ pressed }) => [
+                styles.organizationRow,
+                { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder },
+                pressed ? styles.cardPressed : null,
+              ]}
+            >
+              <View style={[styles.organizationRowIcon, { backgroundColor: roles.iconPrimarySurface }]}>
+                <MaterialCommunityIcons name="ribbon-outline" size={19} color={roles.primaryActionBackground} />
+              </View>
+              <View style={styles.organizationRowCopy}>
+                <Text numberOfLines={1} style={[styles.organizationRowName, { color: roles.headingText }]}>
+                  {organization.organization_name}
+                </Text>
+                <Text numberOfLines={1} style={[styles.organizationRowMeta, { color: roles.metaText }]}>
+                  {organization.location_label || organization.organization_type || 'Partner organization'}
+                </Text>
+              </View>
+              <MaterialCommunityIcons name="chevron-right" size={20} color={roles.metaText} />
+            </Pressable>
+          ))}
+        </View>
+      ) : (
+        <Text style={[styles.emptySectionText, { color: roles.bodyText }]}>No organizations available right now.</Text>
+      )}
     </View>
   );
 }
@@ -869,8 +1020,8 @@ function DonationDrivePreviewModal({
           ) : drive ? (
             <>
               <View style={styles.previewIdentityRow}>
-                {drive.organization_logo_url ? (
-                  <Image source={{ uri: drive.organization_logo_url }} style={styles.previewLogo} resizeMode="cover" />
+                {drive.event_image_url || drive.organization_logo_url ? (
+                  <Image source={{ uri: drive.event_image_url || drive.organization_logo_url }} style={styles.previewLogo} resizeMode="cover" />
                 ) : (
                   <View style={[styles.previewLogoFallback, { backgroundColor: roles.iconPrimarySurface }]}>
                     <AppIcon name="donations" size="md" state="default" color={roles.iconPrimaryColor} />
@@ -1261,6 +1412,9 @@ export default function DonorHomeScreen() {
   const [donationFlowState, setDonationFlowState] = React.useState({
     hasOngoingDonation: false,
     ongoingDonationMessage: '',
+    isEligible: false,
+    isDonationReady: false,
+    latestScreeningCreatedAt: '',
   });
   // Hair log detail modal
   const [isHairLogModalOpen, setIsHairLogModalOpen] = React.useState(false);
@@ -1273,6 +1427,36 @@ export default function DonorHomeScreen() {
   const greetingName = firstName || String(profile?.email || user?.email || 'Donor').split('@')[0];
   const avatarInitials = [firstName?.[0], lastName?.[0]].filter(Boolean).join('').toUpperCase();
   const avatarUri = profile?.avatar_url || profile?.photo_path || '';
+  const profileCompletionMeta = React.useMemo(() => buildProfileCompletionMeta({
+    photo_path: profile?.photo_path || profile?.avatar_url || '',
+    first_name: profile?.first_name || '',
+    last_name: profile?.last_name || '',
+    birthdate: profile?.birthdate || '',
+    gender: profile?.gender || '',
+    contact_number: profile?.contact_number || profile?.phone || '',
+    street: profile?.street || '',
+    barangay: profile?.barangay || '',
+    city: profile?.city || '',
+    province: profile?.province || '',
+    region: profile?.region || '',
+    country: profile?.country || 'Philippines',
+  }), [
+    profile?.avatar_url,
+    profile?.barangay,
+    profile?.birthdate,
+    profile?.city,
+    profile?.contact_number,
+    profile?.country,
+    profile?.first_name,
+    profile?.gender,
+    profile?.last_name,
+    profile?.phone,
+    profile?.photo_path,
+    profile?.province,
+    profile?.region,
+    profile?.street,
+  ]);
+  const areCredentialsCompleted = profileCompletionMeta.isComplete;
 
   const loadHome = React.useCallback(async () => {
     if (!user?.id) return;
@@ -1311,6 +1495,9 @@ export default function DonorHomeScreen() {
     setDonationFlowState({
       hasOngoingDonation: Boolean(donationModuleResult.hasOngoingDonation),
       ongoingDonationMessage: donationModuleResult.ongoingDonationMessage || '',
+      isEligible: Boolean(donationModuleResult.isEligible || donationModuleResult.isAiEligible),
+      isDonationReady: Boolean(donationModuleResult.isDonationReady),
+      latestScreeningCreatedAt: donationModuleResult.latestScreening?.created_at || '',
     });
 
     const loadFailed = Boolean(
@@ -1407,6 +1594,41 @@ export default function DonorHomeScreen() {
   // Compute daily reminder and analytics data
   const dailyReminder = React.useMemo(() => buildDailyReminder(hairSubmissions), [hairSubmissions]);
   const analyticsData = React.useMemo(() => buildAnalyticsData(hairSubmissions), [hairSubmissions]);
+  const firstUpcomingDrive = React.useMemo(() => {
+    const sortedDrives = [...donationDrives]
+      .filter((drive) => drive?.donation_drive_id)
+      .sort((left, right) => new Date(left?.start_date || 8640000000000000).getTime() - new Date(right?.start_date || 8640000000000000).getTime());
+    return sortedDrives[0] || null;
+  }, [donationDrives]);
+  const latestAnalysisDateLabel = analyticsData.latestAnalysis?.created_at
+    ? formatDriveDate(analyticsData.latestAnalysis.created_at)
+    : '';
+  const hairConditionBadgeLabel = analyticsData.hasHistory
+    ? String(analyticsData.latestStatus?.label || 'Checked').toUpperCase()
+    : 'START';
+  const hairConditionBadgeVariant = analyticsData.latestStatus?.label === 'Healthy'
+    ? 'success'
+    : analyticsData.hasHistory
+      ? 'warning'
+      : 'neutral';
+  const donationEligibilityLabel = donationFlowState.isEligible
+    ? 'ELIGIBLE'
+    : donationFlowState.latestScreeningCreatedAt
+      ? 'RECHECK'
+      : 'CHECK REQUIRED';
+  const donationEligibilityBadgeVariant = donationFlowState.isEligible
+    ? 'success'
+    : donationFlowState.latestScreeningCreatedAt
+      ? 'warning'
+      : 'neutral';
+  const openProfileOrRoute = React.useCallback((route) => {
+    if (!areCredentialsCompleted) {
+      router.navigate('/profile');
+      return;
+    }
+
+    router.navigate(route);
+  }, [areCredentialsCompleted, router]);
 
   // Build entries array for latest result modal
   const latestResultEntries = React.useMemo(() => {
@@ -1619,28 +1841,79 @@ export default function DonorHomeScreen() {
             />
           </AnimatedHomeSection>
 
-          <AnimatedHomeSection delay={90}>
-            <HairCalendarWidget
-              hairSubmissions={hairSubmissions}
-              onOpenDate={analyticsData.hasHistory ? handleOpenHairLogEntry : undefined}
-            />
-          </AnimatedHomeSection>
-
-          {analyticsData.latestAnalysis ? (
-            <AnimatedHomeSection delay={110}>
-              <HairConditionWidget
-                screening={analyticsData.latestAnalysis}
-                onViewDetail={analyticsData.hasHistory ? () => {
-                  if (latestResultEntries.length) {
-                    setSelectedHairLogEntries(latestResultEntries);
-                    setIsHairLogModalOpen(true);
-                  }
-                } : undefined}
+          {!areCredentialsCompleted ? (
+            <AnimatedHomeSection delay={60}>
+              <FinishSetupCard
+                completionMeta={profileCompletionMeta}
+                onManageProfile={() => router.navigate('/profile')}
               />
             </AnimatedHomeSection>
           ) : null}
 
-          <AnimatedHomeSection delay={140} style={styles.section}>
+          <AnimatedHomeSection delay={90} style={styles.homeFlowGrid}>
+            <DonorFlowCard
+              title="Hair Condition"
+              icon="hair-dryer-outline"
+              badge={hairConditionBadgeLabel}
+              badgeVariant={hairConditionBadgeVariant}
+              description={analyticsData.hasHistory
+                ? `Last scan: ${latestAnalysisDateLabel || 'recently'}. Review your hair condition before donation.`
+                : 'Start with the hair condition flow before using donation features.'}
+              buttonTitle="Check Hair Condition"
+              onPress={() => openProfileOrRoute('/donor/donations')}
+            />
+            <DonorFlowCard
+              title="Donation Status"
+              icon="hand-heart-outline"
+              badge={donationEligibilityLabel}
+              badgeVariant={donationEligibilityBadgeVariant}
+              description={donationFlowState.hasOngoingDonation
+                ? ongoingDonationMessage
+                : donationFlowState.isEligible
+                  ? 'Your latest hair eligibility can be used for donation logistics or event registration.'
+                  : 'Complete or re-check hair eligibility within the last month before donating.'}
+              buttonTitle={donationFlowState.isEligible ? 'Donate Hair' : 'Start Eligibility Check'}
+              onPress={() => openProfileOrRoute(donationFlowState.isEligible ? '/donor/status' : '/donor/donations')}
+              filled={analyticsData.hasHistory}
+            />
+          </AnimatedHomeSection>
+
+          {analyticsData.hasHistory ? (
+            <AnimatedHomeSection delay={120}>
+              <HairCalendarWidget
+                hairSubmissions={hairSubmissions}
+                onOpenDate={handleOpenHairLogEntry}
+              />
+            </AnimatedHomeSection>
+          ) : null}
+
+          {analyticsData.latestAnalysis ? (
+            <AnimatedHomeSection delay={140}>
+              <HairConditionWidget
+                screening={analyticsData.latestAnalysis}
+                onViewDetail={() => {
+                  if (latestResultEntries.length) {
+                    setSelectedHairLogEntries(latestResultEntries);
+                    setIsHairLogModalOpen(true);
+                  }
+                }}
+              />
+            </AnimatedHomeSection>
+          ) : null}
+
+          <AnimatedHomeSection delay={160} style={styles.section}>
+            <HomeSectionHeader
+              title="Upcoming Drives"
+              actionLabel="View Events"
+              onActionPress={() => openProfileOrRoute('/donor/status')}
+            />
+            <UpcomingDriveHero
+              drive={firstUpcomingDrive}
+              onPress={() => firstUpcomingDrive ? handleOpenDrivePreview(firstUpcomingDrive) : openProfileOrRoute('/donor/organizations')}
+            />
+          </AnimatedHomeSection>
+
+          <AnimatedHomeSection delay={190} style={styles.section}>
             {isMemberOfAnyOrg ? (
               <>
                 <HomeSectionHeader
@@ -1668,46 +1941,15 @@ export default function DonorHomeScreen() {
                   <Text style={[styles.emptySectionText, { color: resolveThemeRoles(resolvedTheme).bodyText }]}>No drives yet.</Text>
                 )}
               </>
-            ) : (
-              <>
-                <HomeSectionHeader
-                  title="Join an organization"
-                  actionLabel="All"
-                  onActionPress={() => router.navigate('/donor/organizations')}
-                />
-                <Pressable onPress={() => router.navigate('/donor/organizations')} style={({ pressed }) => [pressed ? styles.cardPressed : null]}>
-                  <AppCard variant="default" radius="xl" padding="md" contentStyle={styles.joinOrgPromptCard}>
-                    <View style={styles.joinOrgPromptRow}>
-                      <View style={[styles.joinOrgIconWrap, { backgroundColor: resolveThemeRoles(resolvedTheme).iconPrimarySurface }]}>
-                        <AppIcon name="organization" size="md" color={resolveThemeRoles(resolvedTheme).iconPrimaryColor} />
-                      </View>
-                      <View style={styles.joinOrgCopy}>
-                        <Text style={[styles.joinOrgTitle, { color: resolveThemeRoles(resolvedTheme).headingText }]}>
-                          Find your organization
-                        </Text>
-                        <Text style={[styles.joinOrgSubtitle, { color: resolveThemeRoles(resolvedTheme).bodyText }]}>
-                          See drives near you
-                        </Text>
-                      </View>
-                      <AppIcon name="chevronRight" size="sm" color={resolveThemeRoles(resolvedTheme).metaText} />
-                    </View>
-                  </AppCard>
-                </Pressable>
-                {organizations.length ? (
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalPicker}>
-                    {organizations.map((item) => (
-                      <Pressable
-                        key={`org-picker-${item.organization_id}`}
-                        onPress={() => handleOpenOrganizationPreview(item)}
-                        style={({ pressed }) => [styles.horizontalPickerItem, pressed ? styles.cardPressed : null]}
-                      >
-                        <OrganizationCard organization={item} />
-                      </Pressable>
-                    ))}
-                  </ScrollView>
-                ) : null}
-              </>
-            )}
+            ) : null}
+          </AnimatedHomeSection>
+
+          <AnimatedHomeSection delay={220}>
+            <PartneredOrganizationsSection
+              organizations={organizations}
+              onOpenOrganization={handleOpenOrganizationPreview}
+              onViewAll={() => openProfileOrRoute('/donor/organizations')}
+            />
           </AnimatedHomeSection>
         </View>
       )}
@@ -1761,6 +2003,197 @@ const styles = StyleSheet.create({
   },
   homeFeed: {
     gap: theme.spacing.sm,
+  },
+  homeFlowGrid: {
+    gap: theme.spacing.sm,
+  },
+  setupCardContent: {
+    gap: theme.spacing.md,
+  },
+  setupCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  setupIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  setupCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  setupTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+  },
+  setupBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+  },
+  setupButton: {
+    minHeight: 48,
+    borderRadius: theme.radius.pill,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: theme.spacing.xs,
+  },
+  setupButtonText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    fontWeight: theme.typography.weights.bold,
+  },
+  flowCardContent: {
+    minHeight: 214,
+    gap: theme.spacing.md,
+  },
+  flowCardTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+  },
+  flowIconWrap: {
+    width: 52,
+    height: 52,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  flowBadge: {
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: 5,
+  },
+  flowBadgeText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 11,
+    fontWeight: theme.typography.weights.bold,
+    letterSpacing: 0.4,
+  },
+  flowCardCopy: {
+    flex: 1,
+    gap: theme.spacing.xs,
+  },
+  flowCardTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.titleSm,
+    lineHeight: theme.typography.semantic.titleSm * theme.typography.lineHeights.snug,
+  },
+  flowCardDescription: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+  },
+  flowCardButton: {
+    minHeight: 46,
+    borderRadius: theme.radius.md,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: theme.spacing.md,
+  },
+  flowCardButtonText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    fontWeight: theme.typography.weights.bold,
+  },
+  upcomingDriveHero: {
+    height: 224,
+    borderRadius: 18,
+    borderWidth: 1,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  upcomingDriveImage: {
+    ...StyleSheet.absoluteFillObject,
+    width: '100%',
+    height: '100%',
+  },
+  upcomingDriveFallback: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  upcomingDriveScrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0, 0, 0, 0.42)',
+  },
+  upcomingDriveCopy: {
+    position: 'absolute',
+    left: theme.spacing.lg,
+    right: theme.spacing.lg,
+    bottom: theme.spacing.lg,
+    gap: theme.spacing.xs,
+  },
+  upcomingDriveEyebrow: {
+    color: theme.colors.palette.white,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 11,
+    fontWeight: theme.typography.weights.bold,
+    letterSpacing: 0.8,
+  },
+  upcomingDriveTitle: {
+    color: theme.colors.palette.white,
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.titleSm,
+    lineHeight: theme.typography.semantic.titleSm * theme.typography.lineHeights.snug,
+  },
+  upcomingDriveMeta: {
+    color: theme.colors.palette.white,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+  },
+  emptyDriveHero: {
+    minHeight: 132,
+    justifyContent: 'center',
+    gap: theme.spacing.xs,
+  },
+  emptyDriveTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+  },
+  emptyDriveText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+  },
+  organizationList: {
+    gap: theme.spacing.sm,
+  },
+  organizationRow: {
+    minHeight: 74,
+    borderRadius: 16,
+    borderWidth: 1,
+    paddingHorizontal: theme.spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  organizationRowIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  organizationRowCopy: {
+    flex: 1,
+    gap: 3,
+  },
+  organizationRowName: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.body,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  organizationRowMeta: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
   },
   quickOverviewSection: {
     gap: theme.spacing.xs,

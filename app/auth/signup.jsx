@@ -2,9 +2,9 @@ import React, { useState } from 'react';
 import { Image, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { AuthScreenLayout, authLayoutStyles } from '../../src/components/auth/AuthScreenLayout';
-import { AuthTabBar } from '../../src/components/auth/AuthTabBar';
 import { AuthFormFooter } from '../../src/components/auth/AuthFormFooter';
 import { SignupForm } from '../../src/components/auth/SignupForm';
+import { AuthVoiceAssistant } from '../../src/components/auth/AuthVoiceAssistant';
 import { unifiedSignupSchema } from '../../src/features/auth/validators/auth.schema';
 import { useRoleAuthFlow } from '../../src/hooks/useRoleAuthFlow';
 import { resolveBrandLogoSource, resolveThemeRoles, theme } from '../../src/design-system/theme';
@@ -14,7 +14,6 @@ export default function SignupScreen() {
   const {
     config,
     handleSignup,
-    handleGoogleAuth,
     isLoading,
     activeAuthAction,
     signupError,
@@ -23,10 +22,10 @@ export default function SignupScreen() {
   } = useRoleAuthFlow('signup');
 
   const [imageFailed, setImageFailed] = useState(false);
+  const [assistantStageMessage, setAssistantStageMessage] = useState('');
   const logoSource = resolveBrandLogoSource(resolvedTheme, imageFailed);
   const roles = resolveThemeRoles(resolvedTheme);
   const brandName = resolvedTheme?.brandName || 'Donivra';
-  const tagline = resolvedTheme?.brandTagline || 'Hair donation, reimagined.';
 
   return (
     <AuthScreenLayout role="access" resolvedTheme={resolvedTheme}>
@@ -60,7 +59,7 @@ export default function SignupScreen() {
             },
           ]}
         >
-          {brandName}
+          Create Account
         </Text>
 
         <Text
@@ -72,25 +71,35 @@ export default function SignupScreen() {
             },
           ]}
         >
-          {tagline}
+          Create a new account to get started with {brandName}.
         </Text>
       </View>
 
-      {/* Login | Register tabs */}
-      <AuthTabBar activeTab="signup" resolvedTheme={resolvedTheme} />
-
       {/* Signup form */}
       <View style={authLayoutStyles.formSection}>
+        <AuthVoiceAssistant
+          screen="signup"
+          resolvedTheme={resolvedTheme}
+          compact
+          stageMessage={assistantStageMessage}
+        />
         <SignupForm
           schema={unifiedSignupSchema}
-          onSubmit={handleSignup}
+          onSubmit={(data) => {
+            setAssistantStageMessage('Good. I will send your signup request now. If it succeeds, the next step is to check your email and enter the OTP.');
+            return handleSignup(data);
+          }}
           isLoading={isLoading}
           activeAuthAction={activeAuthAction}
           buttonText={config.signup.buttonText}
           submitError={signupError}
           onFieldEdit={clearSignupError}
+          onFieldFocus={(fieldName) => {
+            if (fieldName === 'email') setAssistantStageMessage('Enter the email address you want to use for your Donivra account.');
+            if (fieldName === 'password') setAssistantStageMessage('Now enter a strong password with uppercase, lowercase, a number, and a special character.');
+            if (fieldName === 'confirmPassword') setAssistantStageMessage('Confirm your password by typing the same password again.');
+          }}
           resolvedTheme={resolvedTheme}
-          onGooglePress={handleGoogleAuth}
         />
       </View>
 
@@ -106,13 +115,12 @@ export default function SignupScreen() {
 const styles = StyleSheet.create({
   brandSection: {
     alignItems: 'center',
-    marginBottom: theme.spacing.xxl,
-    paddingTop: theme.spacing.lg,
+    marginBottom: theme.spacing.lg,
   },
   logoContainer: {
-    width: 80,
-    height: 80,
-    borderRadius: 20,
+    width: 64,
+    height: 64,
+    borderRadius: 18,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
@@ -124,18 +132,19 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   logoImage: {
-    width: 52,
-    height: 52,
+    width: 42,
+    height: 42,
   },
   brandName: {
-    fontSize: 22,
+    fontSize: 24,
     fontWeight: theme.typography.weights.bold,
     textAlign: 'center',
     marginBottom: theme.spacing.xs,
-    letterSpacing: -0.3,
   },
   brandTagline: {
     fontSize: theme.typography.compact.bodySm,
     textAlign: 'center',
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+    maxWidth: 260,
   },
 });

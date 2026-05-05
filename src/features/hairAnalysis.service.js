@@ -84,7 +84,7 @@ const resolvePhotoQualityIssueMessage = (analysis = {}) => {
 
   if (analysis?.is_hair_detected === false) {
     return isPlaceholderMessage
-      ? 'We could not reliably analyze the photos. Please retake them in bright light with one person visible and your hair clearly centered.'
+      ? 'We could not reliably analyze the photos. Please retake the front view, side profile, and hair ends close-up in bright light with one person visible and no accessories covering the face or hair.'
       : rawMessage;
   }
 
@@ -102,8 +102,20 @@ const resolvePhotoQualityIssueMessage = (analysis = {}) => {
     return 'Multiple subjects detected. Please retake the photo with only one person in the frame.';
   }
 
-  if (normalized.includes('accessor') || normalized.includes('hat') || normalized.includes('cap') || normalized.includes('clip') || normalized.includes('headband')) {
-    return 'Accessories detected. Please remove hats, headbands, clips, or anything covering the hair, then retake the photo.';
+  if (
+    normalized.includes('accessor')
+    || normalized.includes('hat')
+    || normalized.includes('cap')
+    || normalized.includes('clip')
+    || normalized.includes('headband')
+    || normalized.includes('glasses')
+    || normalized.includes('sunglasses')
+    || normalized.includes('eyeglasses')
+    || normalized.includes('mask')
+    || normalized.includes('scarf')
+    || normalized.includes('headphones')
+  ) {
+    return 'Accessories detected. Remove glasses, sunglasses, masks, caps, headbands, clips, pins, hair ties, scarves, headphones, and anything covering the face or hair, then retake the required view.';
   }
 
   if (normalized.includes('blur') || normalized.includes('not clear') || normalized.includes('unclear')) {
@@ -664,7 +676,7 @@ export const analyzeHairPhotos = async ({
               ? 'The AI response could not be read properly. Please try the hair analysis again.'
             : errorType === 'photo_quality'
               ? ['n/a', 'na', 'none', 'null', 'not applicable'].includes(technicalMessage.trim())
-                ? 'We could not reliably analyze the photos. Please retake them in bright light with one person visible and your hair clearly centered.'
+                ? 'We could not reliably analyze the photos. Please retake the front view, side profile, and hair ends close-up in bright light with one person visible and no accessories covering the face or hair.'
                 : resolvedMessage
             : technicalMessage.includes('incomplete')
               ? 'Hair analysis could not be completed right now.'

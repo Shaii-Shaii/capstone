@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Animated, Image, Platform, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import { Controller, useForm } from 'react-hook-form';
@@ -13,7 +15,7 @@ import { AppTextLink } from '../src/components/ui/AppTextLink';
 import { OtpInput } from '../src/components/ui/OtpInput';
 import { DatePickerField } from '../src/components/ui/DatePickerField';
 import { AddressOptionSheet, AddressSelectField, SignupAddressSection } from '../src/components/auth/SignupAddressSection';
-import { GoogleAuthButton } from '../src/components/auth/GoogleAuthButton';
+import { AuthVoiceAssistant } from '../src/components/auth/AuthVoiceAssistant';
 import { useAuth } from '../src/providers/AuthProvider';
 import { useRoleAuthFlow } from '../src/hooks/useRoleAuthFlow';
 import {
@@ -155,7 +157,7 @@ function LoadingState() {
   const { resolvedTheme } = useAuth();
   return (
     <ScreenContainer
-      scrollable={false}
+      scrollable={true}
       safeArea
       variant="auth"
       contentStyle={styles.screenContent}
@@ -178,13 +180,57 @@ function LoadingState() {
   );
 }
 
+function HairDonationIllustration({ roles }) {
+  return (
+    <View style={styles.illustrationStage}>
+      <View style={[styles.hairHalo, { backgroundColor: roles.iconPrimarySurface }]} />
+      <View style={[styles.hairStrandLarge, { backgroundColor: roles.primaryActionBackground }]} />
+      <View style={[styles.hairStrandSmall, { backgroundColor: roles.accentCardBorder }]} />
+      <View style={[styles.personHead, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
+        <MaterialCommunityIcons name="face-woman-outline" size={48} color={roles.headingText} />
+      </View>
+      <View style={[styles.personHairLeft, { backgroundColor: roles.headingText }]} />
+      <View style={[styles.personHairRight, { backgroundColor: roles.headingText }]} />
+      <View style={[styles.personBody, { backgroundColor: roles.supportCardBackground, borderColor: roles.supportCardBorder }]}>
+        <MaterialCommunityIcons name="heart-plus-outline" size={30} color={roles.primaryActionBackground} />
+      </View>
+      <View style={[styles.donationBadge, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
+        <MaterialCommunityIcons name="content-cut" size={20} color={roles.primaryActionBackground} />
+        <Text style={[styles.donationBadgeText, { color: roles.headingText }]}>AI Check</Text>
+      </View>
+    </View>
+  );
+}
+
 function PublicLanding() {
   const router = useRouter();
   const { resolvedTheme } = useAuth();
-  const { handleGoogleAuth, isLoading, activeAuthAction, googleError, clearGoogleError } = useRoleAuthFlow('access');
+  const { isLoading, clearGoogleError } = useRoleAuthFlow('access');
   const roles = resolveThemeRoles(resolvedTheme);
   const heroTitle = resolvedTheme?.brandName || 'Donivra';
-  const heroSubtitle = 'Where Hair Becomes Hope';
+  const floatY = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(floatY, {
+          toValue: -10,
+          duration: 1800,
+          useNativeDriver: true,
+        }),
+        Animated.timing(floatY, {
+          toValue: 0,
+          duration: 1800,
+          useNativeDriver: true,
+        }),
+      ])
+    );
+
+    animation.start();
+    return () => {
+      animation.stop();
+    };
+  }, [floatY]);
 
   const navigateWithHaptic = async (path) => {
     await Haptics.selectionAsync();
@@ -198,31 +244,59 @@ function PublicLanding() {
       variant="auth"
       contentStyle={styles.screenContent}
     >
-      <View style={styles.centeredContainer}>
-        <View style={styles.landingCard}>
-          <View style={styles.landingBrandCluster}>
-            <BrandLogo resolvedTheme={resolvedTheme} plain={true} />
-
-            <View style={styles.landingCopyBlock}>
-              <Text
-                style={[
-                  styles.landingTitle,
-                  resolvedTheme?.primaryTextColor ? { color: resolvedTheme.primaryTextColor } : null,
-                  resolvedTheme?.secondaryFontFamily ? { fontFamily: resolvedTheme.secondaryFontFamily } : null,
-                ]}
-              >
-                {heroTitle}
-              </Text>
-              <Text
-                style={[
-                  styles.landingSubtitle,
-                  resolvedTheme?.secondaryTextColor ? { color: resolvedTheme.secondaryTextColor } : null,
-                ]}
-              >
-                {heroSubtitle}
-              </Text>
-            </View>
+      <LinearGradient
+        colors={[roles.heroBackground, roles.pageBackground, roles.supportCardBackground]}
+        style={styles.landingGradient}
+      >
+        <View style={styles.landingContent}>
+          <View style={styles.landingDecorRow}>
+            <View style={[styles.landingDot, { backgroundColor: roles.primaryActionBackground }]} />
+            <View style={[styles.landingDot, { backgroundColor: roles.accentCardBorder }]} />
+            <View style={[styles.landingDot, { backgroundColor: roles.supportCardBorder }]} />
           </View>
+
+          <View style={styles.landingBrandBar}>
+            <BrandLogo resolvedTheme={resolvedTheme} plain={true} />
+            <Text
+              style={[
+                styles.landingBrandText,
+                {
+                  color: roles.headingText,
+                  fontFamily: resolvedTheme?.secondaryFontFamily || theme.typography.fontFamilyDisplay,
+                },
+              ]}
+            >
+              {heroTitle}.
+            </Text>
+          </View>
+
+          <Animated.View style={[styles.landingArtWrap, { transform: [{ translateY: floatY }] }]}>
+            <HairDonationIllustration roles={roles} />
+          </Animated.View>
+
+          <View style={styles.landingCopyBlock}>
+            <Text
+              style={[
+                styles.landingTitle,
+                {
+                  color: roles.headingText,
+                  fontFamily: resolvedTheme?.secondaryFontFamily || theme.typography.fontFamilyDisplay,
+                },
+              ]}
+            >
+              Donate Hair, Give Hope
+            </Text>
+            <Text style={[styles.landingSubtitle, { color: roles.bodyText }]}>
+              AI-assisted hair screening, donation drives, and patient support in one guided mobile experience.
+            </Text>
+          </View>
+
+          <AuthVoiceAssistant
+            screen="landing"
+            resolvedTheme={resolvedTheme}
+            prompt={`Hello, welcome to ${heroTitle}. I am ${heroTitle} AI. How can I help you?`}
+            style={styles.landingAssistant}
+          />
 
           <View style={styles.landingActionStack}>
             <AppButton
@@ -242,7 +316,7 @@ function PublicLanding() {
               enableHaptics={true}
             />
             <AppButton
-              title="Sign up"
+              title="Register"
               variant="outline"
               size="lg"
               style={styles.landingButtonSecondary}
@@ -258,23 +332,9 @@ function PublicLanding() {
               enableHaptics={true}
             />
 
-            <View style={styles.landingDividerRow}>
-              <View style={[styles.landingDividerLine, { backgroundColor: roles.defaultCardBorder }]} />
-              <Text style={[styles.landingDividerText, { color: roles.bodyText }]}>or</Text>
-              <View style={[styles.landingDividerLine, { backgroundColor: roles.defaultCardBorder }]} />
-            </View>
-
-            <GoogleAuthButton
-              mode="continue"
-              disabled={isLoading}
-              loading={isLoading && activeAuthAction === 'google'}
-              onPress={handleGoogleAuth}
-            />
-
-            {googleError ? <Text style={styles.landingErrorText}>{googleError}</Text> : null}
           </View>
         </View>
-      </View>
+      </LinearGradient>
     </ScreenContainer>
   );
 }
@@ -289,10 +349,11 @@ function PatientPreviewCard({ patient }) {
 
   return (
     <AppCard variant="soft" radius="xl" padding="md" style={styles.previewCard}>
-      <Text style={styles.confirmTitle}>Are you:</Text>
+      <Text style={styles.confirmTitle}>Display Patient Details</Text>
       <Text style={styles.confirmValue}>
         {displayName} from the {displayHospital}
       </Text>
+      <Text style={styles.onboardingBody}>An activation email will be sent to the hospital.</Text>
       {rows.map((row) => (
         <View key={row.label} style={styles.previewRow}>
           <Text style={styles.previewLabel}>{row.label}</Text>
@@ -430,7 +491,7 @@ function FirstTimeOnboarding() {
   const handleValidatePatientCode = async () => {
     const normalizedCode = normalizePatientCode(patientCode);
     if (normalizedCode.length !== 6) {
-      setPatientCodeError('Enter the 6-character hospital code.');
+      setPatientCodeError('Invalid Code');
       setPatientPreview(null);
       return;
     }
@@ -444,7 +505,7 @@ function FirstTimeOnboarding() {
     setIsValidatingCode(false);
 
     if (result.error) {
-      setPatientCodeError(result.error);
+      setPatientCodeError('Invalid Code');
       return;
     }
 
@@ -542,12 +603,15 @@ function FirstTimeOnboarding() {
       return (
         <AppCard variant="elevated" radius="xl" padding="lg" style={styles.onboardingCard}>
           <View style={styles.onboardingSection}>
-            <Text style={styles.onboardingQuestion}>This account can continue to donation support and patient care.</Text>
+            <Text style={styles.onboardingQuestion}>Assign User Role to Donor</Text>
+            <Text style={styles.onboardingBody}>
+              This account will be routed to the Donor Dashboard after the donor role is assigned.
+            </Text>
           </View>
 
           <View style={styles.actionStack}>
             <AppButton
-              title="Go to Dashboard"
+              title="Open Donor Dashboard"
               size="lg"
               loading={isSubmitting}
               disabled={isSubmitting}
@@ -570,7 +634,10 @@ function FirstTimeOnboarding() {
       return (
         <AppCard variant="elevated" radius="xl" padding="lg" style={styles.onboardingCard}>
           <View style={styles.onboardingSection}>
-            <Text style={styles.onboardingQuestion}>please enter hospital code received on your email</Text>
+            <Text style={styles.onboardingQuestion}>Input Hospital Code</Text>
+            <Text style={styles.onboardingBody}>
+              Enter the hospital code if one was provided. You can continue without a code to enter patient information.
+            </Text>
           </View>
 
           <OtpInput
@@ -595,7 +662,7 @@ function FirstTimeOnboarding() {
           <View style={styles.actionStack}>
             {patientPreview ? (
               <AppButton
-                title="Confirm and Continue"
+                title="Assign Patient Role"
                 size="lg"
                 loading={isSubmitting}
                 disabled={isSubmitting}
@@ -603,7 +670,7 @@ function FirstTimeOnboarding() {
               />
             ) : (
               <AppButton
-                title="Validate Code"
+                title="Validate Hospital Code"
                 size="lg"
                 loading={isValidatingCode}
                 disabled={isValidatingCode || isSubmitting}
@@ -612,7 +679,7 @@ function FirstTimeOnboarding() {
             )}
 
             <AppTextLink
-              title="I don't Have a Code"
+              title="No hospital code"
               variant="muted"
               disabled={isSubmitting || isValidatingCode}
               onPress={() => {
@@ -650,7 +717,10 @@ function FirstTimeOnboarding() {
       return (
         <AppCard variant="elevated" radius="xl" padding="lg" style={styles.onboardingCard}>
           <View style={styles.onboardingSection}>
-            <Text style={styles.onboardingQuestion}>Manual patient details</Text>
+            <Text style={styles.onboardingQuestion}>Enter Patient Information</Text>
+            <Text style={styles.onboardingBody}>
+              The Patient Dashboard opens only after the patient role is assigned.
+            </Text>
           </View>
 
           <View style={styles.stepIndicatorRow}>
@@ -1008,7 +1078,7 @@ function FirstTimeOnboarding() {
               />
             ) : (
               <AppButton
-                title="Create Patient Account"
+                title="Assign Patient Role"
                 size="lg"
                 loading={isSubmitting}
                 disabled={isSubmitting || isUploadingPatientPicture || isUploadingMedicalDocument}
@@ -1042,7 +1112,10 @@ function FirstTimeOnboarding() {
     return (
       <AppCard variant="elevated" radius="xl" padding="lg" style={styles.onboardingCard}>
         <View style={styles.onboardingSection}>
-          <Text style={styles.onboardingQuestion}>Are you a Patient?</Text>
+          <Text style={styles.onboardingQuestion}>Is the user a Patient?</Text>
+          <Text style={styles.onboardingBody}>
+            Choose Patient only if this account should complete the patient startup flow.
+          </Text>
         </View>
 
         <View style={styles.choiceRow}>
@@ -1149,29 +1222,166 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: theme.spacing.xl,
   },
-  landingCopyBlock: {
+  landingGradient: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: theme.spacing.xl,
+    paddingVertical: theme.spacing.lg,
+  },
+  landingContent: {
     width: '100%',
+    maxWidth: 356,
+    paddingTop: theme.spacing.xxl,
+    paddingBottom: theme.spacing.lg,
+  },
+  landingDecorRow: {
+    flexDirection: 'row',
+    gap: theme.spacing.xs,
+    marginBottom: theme.spacing.lg,
+  },
+  landingDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  landingBrandBar: {
+    width: '100%',
+    flexDirection: 'row',
     alignItems: 'center',
     gap: theme.spacing.sm,
+    marginBottom: theme.spacing.md,
+  },
+  landingBrandText: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.compact.titleSm,
+    fontWeight: theme.typography.weights.bold,
+  },
+  landingArtWrap: {
+    width: '100%',
+    height: 214,
+    marginBottom: theme.spacing.md,
+  },
+  illustrationStage: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  hairHalo: {
+    position: 'absolute',
+    width: 176,
+    height: 176,
+    borderRadius: 88,
+    opacity: 0.72,
+  },
+  hairStrandLarge: {
+    position: 'absolute',
+    width: 132,
+    height: 154,
+    borderTopLeftRadius: 88,
+    borderTopRightRadius: 34,
+    borderBottomLeftRadius: 84,
+    borderBottomRightRadius: 76,
+    opacity: 0.9,
+    transform: [{ rotate: '-16deg' }],
+  },
+  hairStrandSmall: {
+    position: 'absolute',
+    right: 46,
+    top: 30,
+    width: 42,
+    height: 116,
+    borderRadius: 24,
+    opacity: 0.8,
+    transform: [{ rotate: '18deg' }],
+  },
+  personHead: {
+    width: 92,
+    height: 92,
+    borderRadius: 46,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 2,
+  },
+  personHairLeft: {
+    position: 'absolute',
+    left: 92,
+    top: 70,
+    width: 42,
+    height: 118,
+    borderRadius: 24,
+    opacity: 0.9,
+    transform: [{ rotate: '8deg' }],
+  },
+  personHairRight: {
+    position: 'absolute',
+    right: 86,
+    top: 68,
+    width: 46,
+    height: 126,
+    borderRadius: 26,
+    opacity: 0.9,
+    transform: [{ rotate: '-8deg' }],
+  },
+  personBody: {
+    width: 126,
+    height: 74,
+    marginTop: -8,
+    borderTopLeftRadius: 42,
+    borderTopRightRadius: 42,
+    borderBottomLeftRadius: 28,
+    borderBottomRightRadius: 28,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 1,
+  },
+  donationBadge: {
+    position: 'absolute',
+    right: 18,
+    bottom: 18,
+    minWidth: 108,
+    height: 42,
+    borderRadius: 21,
+    borderWidth: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: theme.spacing.xs,
+  },
+  donationBadgeText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  landingCopyBlock: {
+    width: '100%',
+    alignItems: 'flex-start',
+    gap: theme.spacing.sm,
+    marginBottom: theme.spacing.md,
   },
   landingTitle: {
-    textAlign: 'center',
+    textAlign: 'left',
     fontFamily: theme.typography.fontFamilyDisplay,
-    fontSize: 34,
-    lineHeight: 38,
+    fontSize: 32,
+    lineHeight: 36,
     color: theme.colors.textPrimary,
   },
   landingSubtitle: {
-    textAlign: 'center',
+    textAlign: 'left',
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.bodySm,
     lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
     color: theme.colors.textSecondary,
-    maxWidth: 240,
+    maxWidth: 286,
+  },
+  landingAssistant: {
+    marginBottom: theme.spacing.md,
   },
   landingActionStack: {
     width: '100%',
-    gap: theme.spacing.md,
+    gap: theme.spacing.sm,
   },
   landingButtonPrimary: {
     minHeight: 52,
@@ -1184,31 +1394,6 @@ const styles = StyleSheet.create({
   landingButtonText: {
     fontSize: theme.typography.semantic.body,
     fontWeight: theme.typography.weights.semibold,
-  },
-  landingDividerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.spacing.sm,
-    marginVertical: theme.spacing.xs,
-  },
-  landingDividerLine: {
-    flex: 1,
-    height: 1,
-  },
-  landingDividerText: {
-    minWidth: 24,
-    textAlign: 'center',
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.compact.caption,
-    textTransform: 'lowercase',
-  },
-  landingErrorText: {
-    textAlign: 'center',
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.compact.bodySm,
-    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
-    color: theme.colors.textError,
-    marginTop: theme.spacing.xs,
   },
   content: {
     width: '100%',
@@ -1231,8 +1416,8 @@ const styles = StyleSheet.create({
     height: 68,
   },
   logoPlain: {
-    width: 104,
-    height: 104,
+    width: 42,
+    height: 42,
   },
   brandName: {
     fontFamily: theme.typography.fontFamilyDisplay,
@@ -1265,6 +1450,7 @@ const styles = StyleSheet.create({
   },
   onboardingCard: {
     width: '100%',
+    overflow: 'visible',
   },
   onboardingSection: {
     alignItems: 'center',
@@ -1315,10 +1501,16 @@ const styles = StyleSheet.create({
   choiceRow: {
     width: '100%',
     flexDirection: 'row',
-    gap: theme.spacing.sm,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: theme.spacing.md,
+    marginTop: theme.spacing.lg,
   },
   choiceButton: {
-    flex: 1,
+    flex: 0,
+    minWidth: 132,
+    maxWidth: 150,
+    alignSelf: 'center',
   },
   codeInput: {
     marginTop: 0,

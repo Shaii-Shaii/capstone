@@ -119,6 +119,7 @@ export default function DonorDriveDetailRoute() {
   const firstName = profile?.first_name || '';
   const lastName = profile?.last_name || '';
   const avatarInitials = `${firstName?.[0] || ''}${lastName?.[0] || ''}`.trim();
+  const driveImageUrl = drive?.event_image_url || drive?.organization_logo_url || '';
   const loadDrive = React.useCallback(async () => {
     if (!driveId) {
       setErrorMessage('Drive details are not available right now.');
@@ -348,6 +349,9 @@ export default function DonorDriveDetailRoute() {
       ) : drive ? (
         <>
           <AppCard variant="default" radius="xl" padding="lg" style={styles.sectionGap}>
+            {driveImageUrl ? (
+              <Image source={{ uri: driveImageUrl }} style={styles.driveHeroImage} resizeMode="cover" />
+            ) : null}
             <View style={styles.titleRow}>
               <View style={[styles.iconChip, { backgroundColor: roles.iconPrimarySurface }]}>
                 <AppIcon name="donations" size="md" state="default" color={roles.iconPrimaryColor} />
@@ -454,6 +458,13 @@ const styles = StyleSheet.create({
   },
   sectionGap: {
     marginBottom: theme.spacing.md,
+  },
+  driveHeroImage: {
+    width: '100%',
+    height: 180,
+    borderRadius: theme.radius.lg,
+    marginBottom: theme.spacing.md,
+    backgroundColor: theme.colors.backgroundMuted,
   },
   loadingState: {
     minHeight: 220,

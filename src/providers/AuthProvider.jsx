@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { useAuthSession } from '../hooks/useAuthSession';
 import { getResolvedSystemTheme } from '../features/auth/services/auth.service';
-import { emptyResolvedTheme } from '../design-system/theme';
+import { emptyResolvedTheme, normalizeResolvedTheme } from '../design-system/theme';
 
 const AuthContext = createContext({
   user: null,
@@ -25,8 +25,9 @@ export const AuthProvider = ({ children }) => {
   const refreshResolvedTheme = async () => {
     const result = await getResolvedSystemTheme();
     if (result?.data) {
-      setResolvedTheme(result.data);
-      return result.data;
+      const nextTheme = normalizeResolvedTheme(result.data);
+      setResolvedTheme(nextTheme);
+      return nextTheme;
     }
 
     setResolvedTheme(emptyResolvedTheme);

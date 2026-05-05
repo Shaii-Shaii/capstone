@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View, StyleSheet, Text, Pressable, Alert } from 'react-native';
+import { Image, View, StyleSheet, Text, Pressable, Alert } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
@@ -8,7 +8,7 @@ import { AuthScreenLayout } from '../../src/components/auth/AuthScreenLayout';
 import { verifyEmailSchema } from '../../src/features/auth/validators/auth.schema';
 import { logout, verifyEmail, resendVerifyEmail } from '../../src/features/auth/services/auth.service';
 import { syncPendingSignupDraft } from '../../src/features/auth/services/signupDraft.service';
-import { resolveThemeRoles, theme } from '../../src/design-system/theme';
+import { resolveBrandLogoSource, resolveThemeRoles, theme } from '../../src/design-system/theme';
 import { useAuth } from '../../src/providers/AuthProvider';
 
 const RESEND_DELAY = 30;
@@ -19,6 +19,8 @@ export default function VerifyEmailScreen() {
   const { email, role } = params;
   const { resolvedTheme } = useAuth();
   const roles = resolveThemeRoles(resolvedTheme);
+  const [imageFailed, setImageFailed] = useState(false);
+  const logoSource = resolveBrandLogoSource(resolvedTheme, imageFailed);
 
   const [isVerifying, setIsVerifying] = useState(false);
   const [isResending, setIsResending] = useState(false);
@@ -99,7 +101,7 @@ export default function VerifyEmailScreen() {
   };
 
   return (
-    <AuthScreenLayout>
+    <AuthScreenLayout resolvedTheme={resolvedTheme}>
       {/* Back button */}
       <Pressable
         onPress={() => router.back()}
@@ -125,27 +127,34 @@ export default function VerifyEmailScreen() {
         <Text style={[styles.backBtnText, { color: roles.bodyText }]}>Back</Text>
       </Pressable>
 
-      {/* Illustration */}
-      <View style={styles.illustrationSection}>
+      <View style={styles.brandSection}>
         <View
           style={[
-            styles.iconCircleOuter,
-            { backgroundColor: roles.supportCardBackground },
+            styles.logoContainer,
+            {
+              backgroundColor: roles.defaultCardBackground,
+              borderColor: roles.defaultCardBorder,
+            },
           ]}
         >
-          <View
-            style={[
-              styles.iconCircleInner,
-              { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder },
-            ]}
-          >
-            <MaterialCommunityIcons
-              name="email-check-outline"
-              size={36}
-              color={roles.primaryActionBackground}
-            />
-          </View>
+          <Image
+            source={logoSource}
+            style={styles.logoImage}
+            resizeMode="contain"
+            onError={() => setImageFailed(true)}
+          />
         </View>
+        <Text
+          style={[
+            styles.brandName,
+            {
+              color: roles.headingText,
+              fontFamily: resolvedTheme?.secondaryFontFamily || theme.typography.fontFamilyDisplay,
+            },
+          ]}
+        >
+          {resolvedTheme?.brandName || 'Donivra'}
+        </Text>
       </View>
 
       {/* Header text */}
@@ -160,11 +169,38 @@ export default function VerifyEmailScreen() {
             },
           ]}
         >
-          Enter Code
+          Enter OTP
         </Text>
         <Text style={[styles.subtitle, { color: roles.bodyText }]}>
-          A code has been sent to your email
+          Email Notification for Account Activation was sent to your email.
         </Text>
+      </View>
+
+      <View style={styles.flowCard}>
+        {[
+          ['email-lock-outline', 'Enter OTP'],
+          ['refresh-circle', 'Resend OTP'],
+          ['account-check-outline', 'Account Created'],
+        ].map(([icon, label], index) => (
+          <View key={label} style={styles.flowStep}>
+            <View
+              style={[
+                styles.flowIcon,
+                {
+                  backgroundColor: index === 0 ? roles.primaryActionBackground : roles.defaultCardBackground,
+                  borderColor: roles.defaultCardBorder,
+                },
+              ]}
+            >
+              <MaterialCommunityIcons
+                name={icon}
+                size={16}
+                color={index === 0 ? roles.primaryActionText : roles.headingText}
+              />
+            </View>
+            <Text style={[styles.flowLabel, { color: roles.bodyText }]}>{label}</Text>
+          </View>
+        ))}
       </View>
 
       {/* OTP form */}
@@ -208,33 +244,36 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.compact.bodySm,
     fontWeight: theme.typography.weights.medium,
   },
-  illustrationSection: {
+  brandSection: {
     alignItems: 'center',
-    marginBottom: theme.spacing.xxl,
+    marginBottom: theme.spacing.lg,
   },
-  iconCircleOuter: {
-    width: 104,
-    height: 104,
-    borderRadius: 52,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  iconCircleInner: {
-    width: 76,
-    height: 76,
-    borderRadius: 38,
+  logoContainer: {
+    width: 64,
+    height: 64,
+    borderRadius: 18,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
+    marginBottom: theme.spacing.sm,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.08,
     shadowRadius: 8,
     elevation: 3,
   },
+  logoImage: {
+    width: 42,
+    height: 42,
+  },
+  brandName: {
+    fontSize: 22,
+    fontWeight: theme.typography.weights.bold,
+    textAlign: 'center',
+  },
   headerBlock: {
     alignItems: 'center',
-    marginBottom: theme.spacing.xl,
+    marginBottom: theme.spacing.lg,
     gap: theme.spacing.sm,
   },
   title: {
@@ -250,5 +289,30 @@ const styles = StyleSheet.create({
   },
   formContainer: {
     width: '100%',
+  },
+  flowCard: {
+    width: '100%',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+    marginBottom: theme.spacing.xl,
+  },
+  flowStep: {
+    flex: 1,
+    alignItems: 'center',
+    gap: theme.spacing.xs,
+  },
+  flowIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  flowLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    textAlign: 'center',
   },
 });

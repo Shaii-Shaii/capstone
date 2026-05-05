@@ -13,6 +13,8 @@ const donationDriveSelect = `
   event_overview:Event_Overview,
   start_date:Start_Date,
   end_date:End_Date,
+  proposal_attachment:Proposal_Attachment,
+  proposal_attachment_bucket:Proposal_Attachment_Bucket,
   street:Street,
   region:Region,
   barangay:Barangay,
@@ -112,6 +114,21 @@ const buildFullAddressLabel = (row) => (
     .trim()
 );
 
+const isRemoteUrl = (value = '') => /^https?:\/\//i.test(String(value || '').trim());
+
+const buildDonationDriveAttachmentUrl = (row = {}) => {
+  const attachment = String(row?.proposal_attachment || '').trim();
+  if (!attachment) return '';
+  if (isRemoteUrl(attachment)) return attachment;
+  if (!row?.proposal_attachment_bucket) return '';
+
+  const { data } = supabase.storage
+    .from(row.proposal_attachment_bucket)
+    .getPublicUrl(attachment);
+
+  return data?.publicUrl || '';
+};
+
 const buildShortOverview = (value, maxLength = 140) => {
   const normalized = String(value || '').replace(/\s+/g, ' ').trim();
   if (!normalized) return '';
@@ -176,6 +193,9 @@ const normalizeDonationDrive = (row, organization = null, registration = null, m
   short_overview: buildShortOverview(row?.event_overview),
   start_date: row?.start_date || null,
   end_date: row?.end_date || null,
+  proposal_attachment: row?.proposal_attachment || '',
+  proposal_attachment_bucket: row?.proposal_attachment_bucket || '',
+  event_image_url: buildDonationDriveAttachmentUrl(row),
   street: row?.street || '',
   region: row?.region || '',
   barangay: row?.barangay || '',

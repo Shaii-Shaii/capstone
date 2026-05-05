@@ -25,7 +25,7 @@ const styles = StyleSheet.create({
     marginTop: theme.spacing.xl,
     gap: theme.spacing.xs,
     flexWrap: 'wrap',
-    paddingTop: theme.spacing.md,
+    paddingTop: theme.spacing.xs,
   },
   questionText: {
     fontFamily: theme.typography.fontFamily,

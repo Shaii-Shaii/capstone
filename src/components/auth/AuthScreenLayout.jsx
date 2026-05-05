@@ -1,12 +1,13 @@
 import React from 'react';
 import { StyleSheet, View, useWindowDimensions } from 'react-native';
 import { ScreenContainer } from '../ui/ScreenContainer';
-import { theme } from '../../design-system/theme';
+import { resolveThemeRoles, theme } from '../../design-system/theme';
 
-export const AuthScreenLayout = ({ children, cardStyle }) => {
+export const AuthScreenLayout = ({ children, cardStyle, resolvedTheme }) => {
   const { height } = useWindowDimensions();
   const isShortScreen = height < theme.layout.shortScreenHeight;
   const isCompactScreen = height < theme.layout.compactScreenHeight;
+  const roles = resolveThemeRoles(resolvedTheme);
 
   return (
     <ScreenContainer
@@ -25,6 +26,10 @@ export const AuthScreenLayout = ({ children, cardStyle }) => {
         <View
           style={[
             styles.shell,
+            {
+              backgroundColor: roles.defaultCardBackground,
+              borderColor: roles.defaultCardBorder,
+            },
             cardStyle,
           ]}
         >
@@ -73,5 +78,15 @@ const styles = StyleSheet.create({
     width: '100%',
     alignSelf: 'center',
     maxWidth: 356,
+    borderWidth: 1,
+    borderRadius: 28,
+    paddingHorizontal: theme.spacing.xl,
+    paddingTop: theme.spacing.xl,
+    paddingBottom: theme.spacing.xl,
+    shadowColor: theme.colors.shadow,
+    shadowOffset: { width: 0, height: 18 },
+    shadowOpacity: 0.08,
+    shadowRadius: 24,
+    elevation: 6,
   },
 });

@@ -301,6 +301,10 @@ const mapAnalysisError = (message = '', extras = {}) => {
     return createErrorState('Lighting Too Dark', 'The photo looks too dark. Please move near bright indirect light and retake it.');
   }
 
+  if (normalized.includes('not clear') || normalized.includes('unclear') || normalized.includes('blur')) {
+    return createErrorState('Photos not clear, please re-capture', 'Photos not clear, please re-capture. Hold the camera steady, use bright light, and keep the front view, side profile, and hair ends centered.');
+  }
+
   if (
     normalized.includes('could not detect a person')
     || normalized.includes('no person')
@@ -310,16 +314,23 @@ const mapAnalysisError = (message = '', extras = {}) => {
   }
 
   if (normalized.includes('multiple subjects') || normalized.includes('multiple subject')) {
-    return createErrorState('Multiple Subjects Detected', 'Multiple subjects detected. One subject is needed. Please retake the photo with only one person in frame.');
+    return createErrorState('Multiple Subject Detected, One Subject is needed', 'Multiple Subject Detected, One Subject is needed. Please retake the photo with only one person in frame.');
   }
 
   if (
     normalized.includes('accessories detected')
     || normalized.includes('remove hats')
+    || normalized.includes('glasses')
+    || normalized.includes('sunglasses')
+    || normalized.includes('eyeglasses')
+    || normalized.includes('mask')
+    || normalized.includes('hair ties')
+    || normalized.includes('scarves')
+    || normalized.includes('headphones')
     || normalized.includes('headbands')
     || normalized.includes('clips')
   ) {
-    return createErrorState('Accessories Detected', 'Accessories detected. Please remove hats, headbands, clips, or anything covering the hair, then retake the photo.');
+    return createErrorState('Accessories detected, please remove it and re-capture', 'Accessories detected, please remove it and re-capture. Remove glasses, sunglasses, masks, caps, headbands, clips, pins, hair ties, scarves, headphones, and anything covering the face or hair.');
   }
 
   if (
@@ -393,7 +404,7 @@ const mapAnalysisError = (message = '', extras = {}) => {
   }
 
   if (String(extras?.errorType || '').trim().toLowerCase() === 'photo_quality') {
-    return createErrorState('Retake Photos', message || 'Please retake the photos in bright light with one person visible and your hair clearly centered.');
+    return createErrorState('Retake Photos', message || 'Please retake the front view, side profile, and hair ends close-up in bright light with one person visible and no accessories covering the face or hair.');
   }
 
   if (normalized.includes('does not represent a valid image')) {
@@ -423,7 +434,7 @@ const mapAnalysisError = (message = '', extras = {}) => {
   }
 
   if (normalized.includes('not clear enough for a reliable hair analysis')) {
-    return createErrorState('Photos Need Better Clarity', 'The uploaded hair photos were too unclear for a reliable result. Please retake them in brighter light and keep the hair centered.');
+    return createErrorState('Photos Need Better Clarity', 'The uploaded hair photos were too unclear for a reliable result. Retake the front view, one side profile, and hair ends close-up in brighter light with the hair centered and uncovered.');
   }
 
   if (normalized.includes('invalid json') || normalized.includes('could not be parsed')) {

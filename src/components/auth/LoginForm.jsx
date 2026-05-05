@@ -6,7 +6,6 @@ import { AppInput } from '../ui/AppInput';
 import { PasswordInput } from '../ui/PasswordInput';
 import { AppButton } from '../ui/AppButton';
 import { AppTextLink } from '../ui/AppTextLink';
-import { GoogleAuthButton } from './GoogleAuthButton';
 import { loginSchema } from '../../features/auth/validators/auth.schema';
 import { resolveThemeRoles, theme } from '../../design-system/theme';
 
@@ -18,8 +17,8 @@ export const LoginForm = ({
   buttonText = 'Log in',
   submitError = '',
   onFieldEdit,
+  onFieldFocus,
   resolvedTheme,
-  onGooglePress,
 }) => {
   const { control, handleSubmit, formState: { errors } } = useForm({
     resolver: zodResolver(loginSchema),
@@ -30,9 +29,7 @@ export const LoginForm = ({
     },
   });
   const roles = resolveThemeRoles(resolvedTheme);
-  const isGoogleAvailable = typeof onGooglePress === 'function';
   const isSubmitLoading = isLoading && activeAuthAction === 'login';
-  const isGoogleLoading = isLoading && activeAuthAction === 'google';
 
   return (
     <View style={styles.container}>
@@ -48,14 +45,16 @@ export const LoginForm = ({
           name="email"
           render={({ field: { onChange, onBlur, value } }) => (
             <AppInput
-              label="Email"
-              placeholder="Your email"
+              label=""
+              placeholder="Email address"
+              leftIcon="email"
               keyboardType="email-address"
               autoCapitalize="none"
               autoCorrect={false}
               textContentType="emailAddress"
               autoComplete="email"
               onBlur={onBlur}
+              onFocus={() => onFieldFocus?.('email')}
               onChangeText={(nextValue) => {
                 onFieldEdit?.();
                 onChange(nextValue);
@@ -76,11 +75,13 @@ export const LoginForm = ({
           name="password"
           render={({ field: { onChange, onBlur, value } }) => (
             <PasswordInput
-              label="Password"
-              placeholder="Your password"
+              label=""
+              placeholder="Password"
+              leftIcon="lock"
               textContentType="password"
               autoComplete="password"
               onBlur={onBlur}
+              onFocus={() => onFieldFocus?.('password')}
               onChangeText={(nextValue) => {
                 onFieldEdit?.();
                 onChange(nextValue);
@@ -124,21 +125,6 @@ export const LoginForm = ({
         backgroundColorOverride={roles.primaryActionBackground}
         borderColorOverride={roles.primaryActionBackground}
       />
-
-      <View style={styles.altSection}>
-        <View style={styles.dividerRow}>
-          <View style={[styles.dividerLine, { backgroundColor: roles.defaultCardBorder }]} />
-          <Text style={[styles.dividerText, { color: roles.bodyText }]}>or</Text>
-          <View style={[styles.dividerLine, { backgroundColor: roles.defaultCardBorder }]} />
-        </View>
-
-        <GoogleAuthButton
-          mode="continue"
-          disabled={!isGoogleAvailable || isLoading}
-          loading={isGoogleLoading}
-          onPress={onGooglePress}
-        />
-      </View>
     </View>
   );
 };
@@ -151,19 +137,19 @@ const styles = StyleSheet.create({
     gap: 0,
   },
   field: {
-    marginBottom: theme.spacing.md,
+    marginBottom: theme.spacing.sm,
   },
   fieldLabel: {
     fontSize: theme.typography.compact.bodySm,
     color: theme.colors.textPrimary,
   },
   fieldShell: {
-    borderRadius: 20,
-    shadowColor: 'transparent',
-    shadowOpacity: 0,
-    shadowRadius: 0,
+    borderRadius: 22,
+    shadowColor: theme.colors.shadow,
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
     shadowOffset: { width: 0, height: 0 },
-    elevation: 0,
+    elevation: 2,
   },
   fieldInput: {
     fontSize: theme.typography.semantic.bodySm,
@@ -178,7 +164,7 @@ const styles = StyleSheet.create({
   },
   metaRow: {
     alignItems: 'flex-end',
-    marginTop: -4,
+    marginTop: -theme.spacing.xs,
     marginBottom: theme.spacing.md,
   },
   forgotPasswordLink: {
@@ -194,25 +180,5 @@ const styles = StyleSheet.create({
   submitBtnText: {
     fontSize: theme.typography.semantic.body,
     fontWeight: theme.typography.weights.semibold,
-  },
-  altSection: {
-    gap: theme.spacing.md,
-    marginTop: theme.spacing.lg,
-  },
-  dividerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.spacing.sm,
-  },
-  dividerLine: {
-    flex: 1,
-    height: 1,
-  },
-  dividerText: {
-    minWidth: 24,
-    textAlign: 'center',
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.compact.caption,
-    textTransform: 'lowercase',
   },
 });
