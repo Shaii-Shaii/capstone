@@ -297,7 +297,7 @@ export default function DonorDriveDetailRoute() {
 
   return (
     <DashboardLayout
-      showSupportChat={false}
+      showSupportChat
       navItems={donorDashboardNavItems}
       activeNavKey="home"
       navVariant="donor"

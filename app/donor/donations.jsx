@@ -1,6 +1,5 @@
-import React from 'react';
-import { DonorHairSubmissionScreen } from '../../src/components/layout/DonorHairSubmissionScreen';
+import { DonationLogisticsFlowScreen } from '../../src/components/layout/DonationLogisticsFlowScreen';
 
 export default function DonorDonationsScreen() {
-  return <DonorHairSubmissionScreen />;
+  return <DonationLogisticsFlowScreen />;
 }

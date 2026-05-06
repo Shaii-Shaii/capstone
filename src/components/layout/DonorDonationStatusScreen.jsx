@@ -1136,7 +1136,7 @@ export function DonorDonationStatusScreen() {
 
   return (
     <DashboardLayout
-      showSupportChat={false}
+      showSupportChat
       navItems={donorDashboardNavItems}
       activeNavKey="donations"
       navVariant="donor"

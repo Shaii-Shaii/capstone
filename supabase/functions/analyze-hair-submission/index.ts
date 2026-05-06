@@ -1163,7 +1163,7 @@ Deno.serve(async (request) => {
     const rawAnalysisSource = result?.analysis && typeof result.analysis === 'object'
       ? result.analysis
       : result;
-    const rawAnalysis = (
+    let rawAnalysis = (
       rawAnalysisSource && typeof rawAnalysisSource === 'object' ? rawAnalysisSource : {}
     ) as Record<string, unknown>;
 
@@ -1178,11 +1178,40 @@ Deno.serve(async (request) => {
         hasDetectedCondition: Boolean(normalizeString(rawAnalysis?.detected_condition)),
         recommendationCount: normalizeRecommendationsV2(rawAnalysis?.recommendations).length,
       });
-      const incompleteError = Object.assign(
-        new Error('AI returned an incomplete analysis for the current images. Please try the hair analysis again.'),
-        { diagnostics },
-      );
-      throw incompleteError;
+      rawAnalysis = {
+        is_hair_detected: true,
+        invalid_image_reason: '',
+        missing_views: [],
+        per_view_notes: Array.from(providedViews).map((view) => ({
+          view,
+          clearly_visible: true,
+          notes: 'The AI provider returned an empty structured object, so this view needs manual confirmation.',
+        })),
+        estimated_length: null,
+        detected_color: 'Unclear',
+        detected_texture: 'Unclear',
+        detected_density: 'Unclear',
+        detected_condition: 'Low-confidence image review',
+        visible_damage_notes: 'The AI provider did not return enough structured details for a confident condition reading.',
+        confidence_score: 0.35,
+        shine_level: 5,
+        frizz_level: 5,
+        dryness_level: 5,
+        oiliness_level: 5,
+        damage_level: 5,
+        decision: IMPROVE_STATUS,
+        summary: 'The photos reached the AI provider, but the returned analysis was incomplete. Please review the detected details manually or retake clearer photos for a stronger result.',
+        length_assessment: 'The current response did not include enough structured length evidence for a reliable numeric estimate.',
+        donation_readiness_note: '',
+        history_assessment: inferHistoryAssessment(historyContext, 'Low-confidence image review', null),
+        recommendations: [
+          {
+            title: 'Retake for a stronger scan',
+            recommendation_text: 'Retake the front view, side profile, and hair ends in bright light with hair uncovered and no accessories.',
+            priority_order: 1,
+          },
+        ],
+      };
     }
 
     const analysis = normalizeAnalysisPayload(

@@ -1,5 +1,5 @@
 import React from 'react';
-import { ActivityIndicator, Image, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Image, Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { DashboardLayout } from '../../src/components/layout/DashboardLayout';
@@ -196,7 +196,7 @@ function OrganizationBrowseCard({ organization, onOpenOrganization, onOpenDrive,
     }
   }, [databaseUserId, isJoining, memberStatus, onJoined, organization.organization_id]);
 
-  const joinLabel = memberStatus === 'member' ? 'Joined' : memberStatus === 'inactive' ? 'Rejoin' : 'Request to Join';
+  const joinLabel = memberStatus === 'member' ? 'Joined' : memberStatus === 'inactive' ? 'Rejoin' : 'Join';
   const joinDisabled = memberStatus === 'member' || !isJoinable || isJoining;
 
   return (
@@ -305,7 +305,7 @@ function OrganizationBrowseCard({ organization, onOpenOrganization, onOpenDrive,
         {memberStatus === 'member' && organization.drives?.length ? (
           <View style={styles.orgDriveFeed}>
             <Text style={[styles.orgFeedLabel, { color: roles.headingText }]}>Upcoming drives</Text>
-            {organization.drives.map((drive) => (
+            {organization.drives.slice(0, 1).map((drive) => (
               <Pressable
                 key={`org-drive-${organization.organization_id}-${drive.donation_drive_id}`}
                 onPress={() => onOpenDrive(drive)}
@@ -333,15 +333,7 @@ function OrganizationBrowseCard({ organization, onOpenOrganization, onOpenDrive,
               </Pressable>
             ))}
           </View>
-        ) : memberStatus === 'member' ? (
-          <Text style={[styles.emptyDriveText, { color: roles.bodyText }]}>
-            No donation drives yet.
-          </Text>
-        ) : (
-          <Text style={[styles.emptyDriveText, { color: roles.bodyText }]}>
-            Join the organization to view donation drive activities.
-          </Text>
-        )}
+        ) : null}
       </View>
     </AppCard>
   );
@@ -473,6 +465,7 @@ export default function DonorOrganizationsRoute() {
   });
   const [isLoading, setIsLoading] = React.useState(true);
   const [organizations, setOrganizations] = React.useState([]);
+  const [searchQuery, setSearchQuery] = React.useState('');
   const [selectedOrganizationDetail, setSelectedOrganizationDetail] = React.useState(null);
   const [isLoadingOrganizationDetail, setIsLoadingOrganizationDetail] = React.useState(false);
   const [errorMessage, setErrorMessage] = React.useState('');
@@ -506,6 +499,15 @@ export default function DonorOrganizationsRoute() {
     profile?.street,
   ]);
   const isDonorProfileComplete = donorProfileCompletionMeta.isComplete;
+  const filteredOrganizations = React.useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return organizations;
+    return organizations.filter((organization) => (
+      String(organization?.organization_name || '').toLowerCase().includes(query)
+      || String(organization?.organization_type || '').toLowerCase().includes(query)
+      || String(organization?.location_label || '').toLowerCase().includes(query)
+    ));
+  }, [organizations, searchQuery]);
 
   const loadOrganizations = React.useCallback(async () => {
     setIsLoading(true);
@@ -552,7 +554,7 @@ export default function DonorOrganizationsRoute() {
 
   return (
     <DashboardLayout
-      showSupportChat={false}
+      showSupportChat
       navItems={donorDashboardNavItems}
       activeNavKey="home"
       navVariant="donor"
@@ -593,7 +595,17 @@ export default function DonorOrganizationsRoute() {
         </AppCard>
       ) : organizations.length ? (
         <View style={styles.organizationList}>
-          {organizations.map((organization) => (
+          <View style={[styles.searchBox, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
+            <MaterialCommunityIcons name="magnify" size={18} color={roles.metaText} />
+            <TextInput
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              placeholder="Search organizations"
+              placeholderTextColor={roles.metaText}
+              style={[styles.searchInput, { color: roles.headingText }]}
+            />
+          </View>
+          {filteredOrganizations.map((organization) => (
             <OrganizationBrowseCard
               key={`browse-organization-${organization.organization_id}`}
               organization={organization}
@@ -603,6 +615,9 @@ export default function DonorOrganizationsRoute() {
               onJoined={() => loadOrganizations()}
             />
           ))}
+          {!filteredOrganizations.length ? (
+            <Text style={[styles.emptyStateText, { color: roles.bodyText }]}>No organizations found.</Text>
+          ) : null}
         </View>
       ) : (
         <Text style={[styles.emptyStateText, { color: roles.bodyText }]}>No organizations available right now.</Text>
@@ -731,6 +746,22 @@ const styles = StyleSheet.create({
   organizationList: {
     gap: theme.spacing.md,
   },
+  searchBox: {
+    minHeight: 48,
+    borderRadius: theme.radius.md,
+    borderWidth: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.xs,
+    paddingHorizontal: theme.spacing.md,
+  },
+  searchInput: {
+    flex: 1,
+    minHeight: 46,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    paddingVertical: 0,
+  },
   cardPressed: {
     opacity: 0.82,
   },
@@ -837,7 +868,7 @@ const styles = StyleSheet.create({
   },
   orgCoverBanner: {
     width: '100%',
-    height: 110,
+    height: 0,
     borderTopLeftRadius: theme.radius.xl,
     borderTopRightRadius: theme.radius.xl,
     overflow: 'hidden',
@@ -853,15 +884,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   orgCardBody: {
+    paddingTop: theme.spacing.md,
     paddingHorizontal: theme.spacing.md,
     paddingBottom: theme.spacing.md,
-    gap: theme.spacing.sm,
+    gap: theme.spacing.xs,
   },
   orgIdentityRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.spacing.sm,
-    marginTop: -22,
+    marginTop: 0,
   },
   orgAvatarWrap: {
     width: 52,
@@ -883,7 +915,6 @@ const styles = StyleSheet.create({
   },
   orgIdentityCopy: {
     flex: 1,
-    paddingTop: theme.spacing.md,
     gap: 2,
   },
   orgName: {
@@ -897,10 +928,12 @@ const styles = StyleSheet.create({
   orgJoinBtn: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: 4,
-    paddingHorizontal: theme.spacing.sm,
-    paddingVertical: 6,
-    borderRadius: theme.radius.full,
+    minWidth: 86,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: 8,
+    borderRadius: theme.radius.md,
     borderWidth: 1,
     alignSelf: 'flex-end',
     marginBottom: 2,

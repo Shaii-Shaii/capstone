@@ -9,10 +9,16 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Allow Donivra to use the camera for guided hair donation photo capture and AI hair screening."
+      }
     },
     "android": {
       "minSdkVersion": 26,
+      "permissions": [
+        "android.permission.CAMERA"
+      ],
       "adaptiveIcon": {
         "backgroundColor": "#f4f1f1",
         "foregroundImage": "./src/assets/images/donivra_logo_no_text.png",
@@ -40,6 +46,12 @@
     },
     "plugins": [
       "expo-router",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Donivra to use the camera for guided hair donation photo capture and AI hair screening."
+        }
+      ],
       [
         "react-native-vision-camera",
         {

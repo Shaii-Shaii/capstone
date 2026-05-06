@@ -289,6 +289,8 @@ const HAIR_METRIC_DEFS = [
   { key: 'damage',  label: 'Damage / Splits', emoji: '💔', positive: false, tip: 'Broken or uneven ends?' },
 ];
 
+// Kept for the detailed hair widget layout if the donor home re-enables an expanded analysis card.
+// eslint-disable-next-line no-unused-vars
 function HairConditionWidget({ screening, onViewDetail }) {
   const { resolvedTheme } = useAuth();
   const roles = resolveThemeRoles(resolvedTheme);
@@ -734,6 +736,7 @@ function DonorFlowCard({
   buttonTitle,
   onPress,
   filled = false,
+  style,
 }) {
   const { resolvedTheme } = useAuth();
   const roles = resolveThemeRoles(resolvedTheme);
@@ -748,7 +751,10 @@ function DonorFlowCard({
       variant={filled ? 'default' : 'outline'}
       radius="xl"
       padding="md"
-      style={filled ? { backgroundColor: roles.primaryActionBackground, borderColor: roles.primaryActionBackground } : null}
+      style={[
+        filled ? { backgroundColor: roles.primaryActionBackground, borderColor: roles.primaryActionBackground } : null,
+        style,
+      ]}
       contentStyle={styles.flowCardContent}
     >
       <View style={styles.flowCardTop}>
@@ -772,7 +778,7 @@ function DonorFlowCard({
         <Text style={[styles.flowCardTitle, { color: filled ? roles.primaryActionText : roles.headingText }]}>
           {title}
         </Text>
-        <Text style={[styles.flowCardDescription, { color: filled ? roles.primaryActionText : roles.bodyText }]}>
+        <Text numberOfLines={2} style={[styles.flowCardDescription, { color: filled ? roles.primaryActionText : roles.bodyText }]}>
           {description}
         </Text>
       </View>
@@ -863,7 +869,7 @@ function PartneredOrganizationsSection({ organizations, onOpenOrganization, onVi
               ]}
             >
               <View style={[styles.organizationRowIcon, { backgroundColor: roles.iconPrimarySurface }]}>
-                <MaterialCommunityIcons name="ribbon-outline" size={19} color={roles.primaryActionBackground} />
+                <MaterialCommunityIcons name="hand-heart-outline" size={19} color={roles.primaryActionBackground} />
               </View>
               <View style={styles.organizationRowCopy}>
                 <Text numberOfLines={1} style={[styles.organizationRowName, { color: roles.headingText }]}>
@@ -1861,6 +1867,7 @@ export default function DonorHomeScreen() {
                 : 'Start with the hair condition flow before using donation features.'}
               buttonTitle="Check Hair Condition"
               onPress={() => openProfileOrRoute('/donor/donations')}
+              style={styles.flowGridItem}
             />
             <DonorFlowCard
               title="Donation Status"
@@ -1875,6 +1882,7 @@ export default function DonorHomeScreen() {
               buttonTitle={donationFlowState.isEligible ? 'Donate Hair' : 'Start Eligibility Check'}
               onPress={() => openProfileOrRoute(donationFlowState.isEligible ? '/donor/status' : '/donor/donations')}
               filled={analyticsData.hasHistory}
+              style={styles.flowGridItem}
             />
           </AnimatedHomeSection>
 
@@ -1883,20 +1891,6 @@ export default function DonorHomeScreen() {
               <HairCalendarWidget
                 hairSubmissions={hairSubmissions}
                 onOpenDate={handleOpenHairLogEntry}
-              />
-            </AnimatedHomeSection>
-          ) : null}
-
-          {analyticsData.latestAnalysis ? (
-            <AnimatedHomeSection delay={140}>
-              <HairConditionWidget
-                screening={analyticsData.latestAnalysis}
-                onViewDetail={() => {
-                  if (latestResultEntries.length) {
-                    setSelectedHairLogEntries(latestResultEntries);
-                    setIsHairLogModalOpen(true);
-                  }
-                }}
               />
             </AnimatedHomeSection>
           ) : null}
@@ -2005,7 +1999,13 @@ const styles = StyleSheet.create({
     gap: theme.spacing.sm,
   },
   homeFlowGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: theme.spacing.sm,
+  },
+  flowGridItem: {
+    flexGrow: 1,
+    flexBasis: '47%',
   },
   setupCardContent: {
     gap: theme.spacing.md,
@@ -2049,8 +2049,8 @@ const styles = StyleSheet.create({
     fontWeight: theme.typography.weights.bold,
   },
   flowCardContent: {
-    minHeight: 214,
-    gap: theme.spacing.md,
+    minHeight: 174,
+    gap: theme.spacing.sm,
   },
   flowCardTop: {
     flexDirection: 'row',
@@ -2059,8 +2059,8 @@ const styles = StyleSheet.create({
     gap: theme.spacing.sm,
   },
   flowIconWrap: {
-    width: 52,
-    height: 52,
+    width: 42,
+    height: 42,
     borderRadius: theme.radius.full,
     alignItems: 'center',
     justifyContent: 'center',
@@ -2082,8 +2082,8 @@ const styles = StyleSheet.create({
   },
   flowCardTitle: {
     fontFamily: theme.typography.fontFamilyDisplay,
-    fontSize: theme.typography.semantic.titleSm,
-    lineHeight: theme.typography.semantic.titleSm * theme.typography.lineHeights.snug,
+    fontSize: theme.typography.semantic.bodyLg,
+    lineHeight: theme.typography.semantic.bodyLg * theme.typography.lineHeights.snug,
   },
   flowCardDescription: {
     fontFamily: theme.typography.fontFamily,
@@ -2091,7 +2091,7 @@ const styles = StyleSheet.create({
     lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
   },
   flowCardButton: {
-    minHeight: 46,
+    minHeight: 42,
     borderRadius: theme.radius.md,
     borderWidth: 1,
     alignItems: 'center',

@@ -254,6 +254,68 @@ const buildStructuredAnalysisError = (message, extras = {}) => {
   return error;
 };
 
+const isIncompleteProviderAnalysisMessage = (message = '') => {
+  const normalized = String(message || '').toLowerCase();
+  return (
+    normalized.includes('incomplete analysis')
+    || normalized.includes('response was incomplete')
+    || normalized.includes('ai returned an incomplete')
+  );
+};
+
+const buildLowConfidenceFallbackAnalysis = ({ images = [], message = '' } = {}) => {
+  const providedViews = (images || [])
+    .map((image) => image?.viewLabel || image?.viewKey || '')
+    .filter(Boolean);
+
+  return normalizeAnalysis({
+    is_hair_detected: true,
+    invalid_image_reason: '',
+    missing_views: [],
+    per_view_notes: providedViews.map((view) => ({
+      view,
+      clearly_visible: true,
+      notes: 'The AI provider received this photo but returned an incomplete structured result, so this view needs manual review or a clearer retake.',
+    })),
+    estimated_length: null,
+    detected_color: 'Unclear',
+    detected_texture: 'Unclear',
+    detected_density: 'Unclear',
+    detected_condition: 'Low-confidence image review',
+    visible_damage_notes: 'The AI provider did not return enough structured detail to confirm visible damage from the current images.',
+    confidence_score: 0.35,
+    shine_level: 5,
+    frizz_level: 5,
+    dryness_level: 5,
+    oiliness_level: 3,
+    damage_level: 5,
+    decision: 'Improve hair condition',
+    summary: message
+      ? `The photos reached the AI provider, but the returned analysis was incomplete. ${message}`
+      : 'The photos reached the AI provider, but the returned analysis was incomplete. Please retake clear front, side profile, and hair ends photos if this result does not look accurate. Final screening requires manual review.',
+    length_assessment: 'The AI provider did not return enough structured detail to estimate visible root-to-end hair length reliably.',
+    donation_readiness_note: '',
+    history_assessment: '',
+    recommendations: [
+      {
+        title: 'Retake Clear Required Views',
+        recommendation_text: 'Capture the front view, side profile, and hair ends close-up in bright lighting. Keep the hair fully visible without glasses, clips, caps, or other accessories.',
+        priority_order: 1,
+      },
+      {
+        title: 'Use a Plain Background',
+        recommendation_text: 'Stand in front of a plain wall so the AI can separate the hair from the background. Avoid clutter, shadows, and other people in the frame.',
+        priority_order: 2,
+      },
+      {
+        title: 'Keep Hair Uncovered',
+        recommendation_text: 'Remove anything covering the face, hairline, hair shaft, or ends before scanning. This helps the system check length, condition, and donation readiness more reliably.',
+        priority_order: 3,
+      },
+    ],
+  });
+};
+
 const isQuotaLikeError = (message = '', errorType = '') => {
   const normalizedMessage = String(message || '').toLowerCase();
   const normalizedType = String(errorType || '').trim().toLowerCase();
@@ -452,8 +514,36 @@ export const analyzeHairPhotos = async ({
         providerParseSuccess,
       }, 'warn');
 
+      const resolvedErrorMessage = errorPayload?.error || await resolveFunctionErrorMessage(functionResult.error);
+      if (
+        edgeFunctionInvoked
+        && providerRequestAttempted
+        && providerResponseStatus === 200
+        && providerParseSuccess === true
+        && isIncompleteProviderAnalysisMessage(resolvedErrorMessage)
+      ) {
+        const fallbackAnalysis = buildLowConfidenceFallbackAnalysis({
+          images: payload.images,
+          message: 'The result below is marked low-confidence instead of blocking your check.',
+        });
+
+        logAppEvent('hairAnalysis.invoke', 'Recovered from incomplete provider analysis with a low-confidence fallback result.', {
+          functionName: hairAnalysisFunctionName,
+          imageCount: payload.images.length,
+          providerResponseStatus,
+          providerParseSuccess,
+        }, 'warn');
+
+        return {
+          analysis: fallbackAnalysis,
+          provider: 'gemini',
+          error: null,
+          recoveredFromIncompleteProviderResponse: true,
+        };
+      }
+
       throw buildStructuredAnalysisError(
-        errorPayload?.error || await resolveFunctionErrorMessage(functionResult.error),
+        resolvedErrorMessage,
         {
           errorType: providerRequestAttempted ? errorPayload?.error_type || null : null,
           retryAfterSeconds: providerRequestAttempted ? errorPayload?.retry_after_seconds ?? null : null,
@@ -574,6 +664,38 @@ export const analyzeHairPhotos = async ({
       : '';
     const isRateLimitError = providerRequestAttempted && isQuotaLikeError(resolvedMessage, errorType);
     const isTemporaryBusyError = providerRequestAttempted && isTemporaryUnavailableError(resolvedMessage, errorType);
+    const canRecoverIncompleteProviderResponse = (
+      edgeFunctionInvoked
+      && providerRequestAttempted
+      && providerResponseStatus === 200
+      && isIncompleteProviderAnalysisMessage(resolvedMessage)
+    );
+
+    if (canRecoverIncompleteProviderResponse) {
+      const fallbackAnalysis = buildLowConfidenceFallbackAnalysis({
+        images,
+        message: 'The result below is marked low-confidence instead of blocking your check.',
+      });
+
+      logAppEvent('hairAnalysis.analyzeHairPhotos', 'Recovered from incomplete AI provider analysis in catch path.', {
+        imageCount: images?.length || 0,
+        functionName: hairAnalysisFunctionName,
+        edgeFunctionInvoked,
+        providerRequestAttempted,
+        providerResponseStatus,
+        errorType: errorType || null,
+      }, 'warn');
+
+      return {
+        analysis: fallbackAnalysis,
+        provider: 'gemini',
+        error: null,
+        edgeFunctionInvoked,
+        providerRequestAttempted,
+        providerResponseStatus,
+        recoveredFromIncompleteProviderResponse: true,
+      };
+    }
 
     if (
       !technicalMessage.includes('requested function was not found')
