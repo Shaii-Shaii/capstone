@@ -1,25 +1,26 @@
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
-import {
-  createHairBundleTrackingEntry,
-  createHairSubmission,
-  createHairSubmissionDetail,
-  createHairSubmissionImages,
-  createHairSubmissionLogistics,
-  fetchHairBundleTrackingHistory,
-  fetchHairSubmissionLogisticsBySubmissionId,
-  fetchLatestDonationRequirement,
-  fetchHairSubmissionsByUserId,
-  fetchLatestDonationCertificateByUserId,
-  getHairSubmissionImageSignedUrl,
-  updateHairSubmissionById,
-  updateHairSubmissionLogisticsById,
-  uploadHairSubmissionImage,
-} from './hairSubmission.api';
+import { logAppError } from '../utils/appErrors';
 import { createDonationDriveRegistration, fetchDonationDrivePreview, fetchUpcomingDonationDrives } from './donorHome.api';
+import {
+    createHairBundleTrackingEntry,
+    createHairSubmission,
+    createHairSubmissionDetail,
+    createHairSubmissionImages,
+    createHairSubmissionLogistics,
+    fetchHairBundleTrackingHistory,
+    fetchHairSubmissionLogisticsBySubmissionId,
+    fetchHairSubmissionsByUserId,
+    fetchLatestDonationCertificateByUserId,
+    fetchLatestDonationRequirement,
+    getHairSubmissionImageSignedUrl,
+    updateHairSubmissionById,
+    updateHairSubmissionLogisticsById,
+    uploadHairSubmissionImage,
+} from './hairSubmission.api';
 import { hairSubmissionStorageBucket } from './hairSubmission.constants';
-import { buildImmediateNotificationEvents, recordNotifications } from './notification.service';
 import { notificationTypes } from './notification.constants';
+import { buildImmediateNotificationEvents, recordNotifications } from './notification.service';
 
 const ELIGIBLE_DECISION = 'eligible for hair donation';
 const MANUAL_DONATION_SOURCE = 'manual_donor_details';
@@ -1743,6 +1744,69 @@ export const saveIndependentDonationParcelLog = async ({
     success: true,
     submission: submissionUpdateResult.data || submission,
     logistics: saveLogisticsResult.data || null,
+  };
+};
+
+/**
+ * FAST QR Generation - Returns immediately with QR URL
+ * Database sync happens in background (non-blocking)
+ */
+export const generateIndependentDonationQrFast = async ({
+  userId = null,
+  submission,
+  databaseUserId,
+}) => {
+  if (!submission?.submission_id) {
+    return { success: false, error: 'A valid donation submission is required before generating a QR.' };
+  }
+
+  const currentQr = getIndependentDonationQrState({ submission });
+  const reference = currentQr?.reference || createDonationQrReference('IND');
+  const qrPayload = buildDonationTrackingQrPayload({
+    submission,
+    detail: getLatestSubmissionDetailSnapshot(submission),
+  });
+
+  // Build QR image URL immediately (no network call)
+  const qrImageUrl = buildQrImageUrl(qrPayload, 420);
+
+  // Sync database in background (don't await)
+  if (!currentQr?.is_valid) {
+    const currentMetadata = getIndependentQrMetadata(submission);
+    const generatedAt = new Date().toISOString();
+    const nextMetadata = buildIndependentQrMetadata({
+      reference,
+      status: 'inactive',
+      generatedAt,
+      version: Number(currentMetadata?.version || 0) + 1,
+      updatedBy: databaseUserId || null,
+    });
+
+    // Fire and forget - don't block UI
+    syncIndependentDonationSubmission({
+      userId,
+      databaseUserId,
+      submission,
+      qrMetadata: nextMetadata,
+      status: 'Ready for shipment',
+      logisticsStatus: 'Ready for shipment',
+      logisticsNotes: 'Your donation QR is saved and inactive until you scan it to activate donation tracking.',
+      trackingTitle: 'Donation QR ready',
+      trackingDescription: 'A donation QR was generated for the donor shipment flow and saved to the current donation record.',
+      shouldTrack: true,
+      shouldNotify: true,
+    }).catch((err) => {
+      // Log background sync errors but don't block
+      logAppError('generateIndependentDonationQrFast/backgroundSync', err);
+    });
+  }
+
+  return {
+    success: true,
+    qrImageUrl,
+    qrPayload,
+    reference,
+    reused: currentQr?.is_valid,
   };
 };
 

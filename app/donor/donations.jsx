@@ -1,5 +1,5 @@
-import { DonationLogisticsFlowScreen } from '../../src/components/layout/DonationLogisticsFlowScreen';
+import { DonorHairSubmissionScreen } from '../../src/components/layout/DonorHairSubmissionScreen';
 
 export default function DonorDonationsScreen() {
-  return <DonationLogisticsFlowScreen />;
+  return <DonorHairSubmissionScreen />;
 }
