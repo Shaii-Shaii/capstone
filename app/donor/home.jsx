@@ -107,7 +107,6 @@ const getConditionVisual = (condition = '', decision = '') => {
   if (normalized.includes('healthy') || normalized.includes('eligible') || normalized.includes('good')) {
     return {
       icon: 'check-circle',
-      emoji: 'OK',
       label: 'Healthy',
     };
   }
@@ -115,7 +114,6 @@ const getConditionVisual = (condition = '', decision = '') => {
   if (normalized.includes('dry') || normalized.includes('damaged') || normalized.includes('frizz') || normalized.includes('improve')) {
     return {
       icon: 'alert-circle',
-      emoji: '!',
       label: 'Needs care',
     };
   }
@@ -123,14 +121,12 @@ const getConditionVisual = (condition = '', decision = '') => {
   if (normalized.includes('treated') || normalized.includes('rebonded') || normalized.includes('colored')) {
     return {
       icon: 'circle-slice-8',
-      emoji: '-',
       label: 'Treated',
     };
   }
 
   return {
     icon: 'circle-outline',
-    emoji: '-',
     label: condition || 'No check',
   };
 };
@@ -282,12 +278,20 @@ const deriveHairMetrics = (screening) => {
 };
 
 const HAIR_METRIC_DEFS = [
-  { key: 'shine',    label: 'Shine',          emoji: '✨', positive: true,  tip: 'Does hair look glossy or dull?' },
-  { key: 'frizz',   label: 'Frizz',          emoji: '🌀', positive: false, tip: 'Flyaway or messy strands?' },
-  { key: 'dryness', label: 'Dryness',         emoji: '🏜️', positive: false, tip: 'Rough or straw-like texture?' },
-  { key: 'oiliness',label: 'Oiliness',        emoji: '💧', positive: false, tip: 'Greasy or flat near roots?' },
-  { key: 'damage',  label: 'Damage / Splits', emoji: '💔', positive: false, tip: 'Broken or uneven ends?' },
+  { key: 'shine', label: 'Shine', positive: true, tip: 'Does hair look glossy or dull?' },
+  { key: 'frizz', label: 'Frizz', positive: false, tip: 'Flyaway or messy strands?' },
+  { key: 'dryness', label: 'Dryness', positive: false, tip: 'Rough or straw-like texture?' },
+  { key: 'oiliness', label: 'Oiliness', positive: false, tip: 'Greasy or flat near roots?' },
+  { key: 'damage', label: 'Damage / Splits', positive: false, tip: 'Broken or uneven ends?' },
 ];
+
+const HAIR_METRIC_ICON_BY_KEY = {
+  shine: 'white-balance-sunny',
+  frizz: 'blur',
+  dryness: 'water-off-outline',
+  oiliness: 'water-outline',
+  damage: 'content-cut',
+};
 
 // Kept for the detailed hair widget layout if the donor home re-enables an expanded analysis card.
 // eslint-disable-next-line no-unused-vars
@@ -332,7 +336,13 @@ function HairConditionWidget({ screening, onViewDetail }) {
 
           return (
             <View key={def.key} style={styles.hairMetricRow}>
-              <Text style={styles.hairMetricEmoji}>{def.emoji}</Text>
+              <View style={[styles.hairMetricIconWrap, { backgroundColor: roles.iconPrimarySurface }]}>
+                <MaterialCommunityIcons
+                  name={HAIR_METRIC_ICON_BY_KEY[def.key] || 'circle-outline'}
+                  size={12}
+                  color={roles.iconPrimaryColor}
+                />
+              </View>
               <Text style={[styles.hairMetricLabel, { color: roles.bodyText, fontFamily: bodyFont }]}>
                 {def.label}
               </Text>
@@ -2374,10 +2384,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: theme.spacing.xs,
   },
-  hairMetricEmoji: {
-    fontSize: 14,
+  hairMetricIconWrap: {
     width: 20,
-    textAlign: 'center',
+    height: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
   },
   hairMetricLabel: {
     fontFamily: theme.typography.fontFamily,

@@ -1,10 +1,13 @@
 import React from 'react';
 import { Pressable, Text, StyleSheet, View } from 'react-native';
 import * as Haptics from 'expo-haptics';
+import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { theme, resolveThemeRoles } from '../../design-system/theme';
 import { AppCard } from './AppCard';
 import { AppIcon } from './AppIcon';
 import { useAuth } from '../../providers/AuthProvider';
+
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 export const DashboardActionCard = ({
   title,
@@ -67,6 +70,10 @@ export const DashboardActionCard = ({
     },
   };
   const config = disabled ? paletteMap.disabled : (paletteMap[variant] || paletteMap.neutral);
+  const scale = useSharedValue(1);
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+  }));
 
   const handlePress = async () => {
     if (disabled || !onPress) return;
@@ -75,7 +82,19 @@ export const DashboardActionCard = ({
   };
 
   return (
-    <Pressable onPress={handlePress} disabled={disabled} style={[styles.wrapper, style]}>
+    <AnimatedPressable
+      onPress={handlePress}
+      disabled={disabled}
+      onPressIn={() => {
+        if (disabled) return;
+        scale.value = withSpring(0.98, theme.motion.spring);
+      }}
+      onPressOut={() => {
+        if (disabled) return;
+        scale.value = withSpring(1, theme.motion.spring);
+      }}
+      style={[styles.wrapper, style, animatedStyle]}
+    >
       <AppCard
         variant={config.cardVariant}
         padding={compact ? 'xs' : 'md'}
@@ -124,7 +143,7 @@ export const DashboardActionCard = ({
           </>
         )}
       </AppCard>
-    </Pressable>
+    </AnimatedPressable>
   );
 };
 

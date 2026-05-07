@@ -1,4 +1,6 @@
 const GOOGLE_AI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
+const GOOGLE_AI_MAX_ATTEMPTS = 3;
+const GOOGLE_AI_RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 
 type GenerateStructuredContentParams = {
   model?: string;
@@ -133,6 +135,20 @@ const classifyProviderErrorType = ({
 
   return 'provider_error';
 };
+
+const resolveRetryDelayMs = (attempt: number, retryAfterSeconds: number | null | undefined) => {
+  const retryAfter = Number(retryAfterSeconds);
+  if (Number.isFinite(retryAfter) && retryAfter > 0) {
+    return Math.min(Math.ceil(retryAfter * 1000), 12000);
+  }
+
+  const backoff = 700 * Math.pow(2, Math.max(0, attempt - 1));
+  return Math.min(backoff, 4200);
+};
+
+const waitFor = async (milliseconds: number) => (
+  await new Promise((resolve) => setTimeout(resolve, Math.max(0, milliseconds)))
+);
 
 const createGoogleAiError = (message: string, diagnostics: GoogleAiDiagnostics) => {
   const error = new Error(message) as Error & { diagnostics?: GoogleAiDiagnostics };
@@ -482,54 +498,79 @@ export const createStructuredResponse = async ({
   });
   diagnostics.provider_request_attempted = true;
 
-  const response = await fetch(requestUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      systemInstruction: systemInstruction
-        ? {
-            parts: [{ text: systemInstruction }],
-          }
-        : undefined,
-      contents,
-      generationConfig: {
-        temperature,
-        maxOutputTokens,
-        responseMimeType: 'application/json',
-        responseSchema: responseJsonSchema,
+  let response: Response | null = null;
+  for (let attempt = 1; attempt <= GOOGLE_AI_MAX_ATTEMPTS; attempt += 1) {
+    response = await fetch(requestUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
       },
-    }),
-  });
+      body: JSON.stringify({
+        systemInstruction: systemInstruction
+          ? {
+              parts: [{ text: systemInstruction }],
+            }
+          : undefined,
+        contents,
+        generationConfig: {
+          temperature,
+          maxOutputTokens,
+          responseMimeType: 'application/json',
+          responseSchema: responseJsonSchema,
+        },
+      }),
+    });
 
-  console.info('[google-ai] response received', {
-    model,
-    status: response.status,
-    ok: response.ok,
-  });
-  diagnostics.provider_response_status = response.status;
+    console.info('[google-ai] response received', {
+      model,
+      status: response.status,
+      ok: response.ok,
+      attempt,
+      maxAttempts: GOOGLE_AI_MAX_ATTEMPTS,
+    });
+    diagnostics.provider_response_status = response.status;
 
-  if (!response.ok) {
+    if (response.ok) break;
+
     const providerErrorMessage = await extractGoogleAiError(response);
-    diagnostics.provider_error_type = classifyProviderErrorType({
+    const providerErrorType = classifyProviderErrorType({
       status: response.status,
       message: providerErrorMessage,
     });
-    diagnostics.retry_after_seconds = await extractRetryAfterSecondsFromResponse(
+    const retryAfterSeconds = await extractRetryAfterSecondsFromResponse(
       response,
       providerErrorMessage,
     );
+    const canRetry = (
+      GOOGLE_AI_RETRYABLE_STATUS.has(response.status)
+      && (providerErrorType === 'temporary_unavailable' || providerErrorType === 'quota_exceeded')
+      && attempt < GOOGLE_AI_MAX_ATTEMPTS
+    );
+
+    diagnostics.provider_error_type = providerErrorType;
+    diagnostics.retry_after_seconds = retryAfterSeconds;
 
     console.warn('[google-ai] provider error classified', {
       model,
       status: response.status,
-      providerErrorType: diagnostics.provider_error_type,
-      retryAfterSeconds: diagnostics.retry_after_seconds,
+      providerErrorType,
+      retryAfterSeconds,
       messagePreview: buildResponsePreview(providerErrorMessage),
+      attempt,
+      maxAttempts: GOOGLE_AI_MAX_ATTEMPTS,
+      willRetry: canRetry,
     });
 
-    throw createGoogleAiError(providerErrorMessage, diagnostics);
+    if (!canRetry) {
+      throw createGoogleAiError(providerErrorMessage, diagnostics);
+    }
+
+    const retryDelayMs = resolveRetryDelayMs(attempt, retryAfterSeconds);
+    await waitFor(retryDelayMs);
+  }
+
+  if (!response) {
+    throw createGoogleAiError('Google AI request failed.', diagnostics);
   }
 
   const payload = await response.json();

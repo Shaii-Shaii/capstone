@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Image, Platform, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { ActivityIndicator, Animated, Image, Platform, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Controller, useForm, useWatch } from 'react-hook-form';
@@ -112,6 +112,26 @@ const PHOTO_CAPTURE_TARGETS = [
   'Side profile photo',
   'Hair ends close-up',
 ];
+
+const DONATION_PREP_STEPS = [
+  'Save the CheckHair result so the app creates your submission code.',
+  'Print or write the code clearly and attach it to the outside of the parcel before shipment.',
+  'Place clean, dry hair in a sealed plastic bag before putting it inside the parcel.',
+  'Keep your courier tracking number and update staff when asked.',
+];
+
+const formatLogisticsDestination = (settings = null) => {
+  if (!settings?.destination_name && !settings?.city && !settings?.province) return '';
+
+  return [
+    settings.destination_name,
+    settings.street,
+    settings.barangay,
+    settings.city,
+    settings.province,
+    settings.country,
+  ].filter(Boolean).join(', ');
+};
 
 const isAnswered = (question, answers = {}) => {
   const value = answers?.[question?.key];
@@ -379,6 +399,7 @@ function LiveHairCameraPanel({
   isUploading,
   isAnalyzing,
   cameraError,
+  autoCaptureEnabled,
   onCapture,
   onUpload,
   onRemove,
@@ -388,6 +409,7 @@ function LiveHairCameraPanel({
 }) {
   const { width: windowWidth } = useWindowDimensions();
   const cameraStageSize = Math.min(Math.max(windowWidth - theme.spacing.lg * 2, 292), 390);
+  const scanLineProgress = useRef(new Animated.Value(0)).current;
   const statusToneStyle = liveFaceStatus?.valid
     ? styles.liveStatusPillSuccess
     : liveFaceStatus?.tone === 'error'
@@ -421,8 +443,9 @@ function LiveHairCameraPanel({
       : 'Front view';
   const isBrightEnough = canUseNativeLiveCamera && liveFrameBrightness >= 100;
   const liveChecklistItems = [
-    { label: 'Bright light', checked: isBrightEnough },
+    { label: 'Bright light', checked: canUseNativeLiveCamera ? isBrightEnough : Boolean(hasCameraPermission) },
     { label: angleChecklistLabel, checked: Boolean(liveFaceStatus?.valid && canUseNativeLiveCamera) },
+    { label: 'Root to ends', checked: Boolean(currentPhoto || (liveFaceStatus?.valid && !isHairEndsView(currentView))) },
     { label: 'No accessories', checked: Boolean(liveNoAccessories && canUseNativeLiveCamera) },
   ];
   const shortViewHint = isSideProfileView(currentView)
@@ -430,6 +453,43 @@ function LiveHairCameraPanel({
     : isHairEndsView(currentView)
       ? 'Hair ends'
       : 'Face front';
+
+  useEffect(() => {
+    if (currentPhoto?.uri) return undefined;
+
+    scanLineProgress.setValue(0);
+    const scanLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(scanLineProgress, {
+          toValue: 1,
+          duration: 1650,
+          useNativeDriver: true,
+        }),
+        Animated.timing(scanLineProgress, {
+          toValue: 0,
+          duration: 1650,
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    scanLoop.start();
+
+    return () => {
+      scanLoop.stop();
+    };
+  }, [currentPhoto?.uri, scanLineProgress]);
+
+  const scanLineTravel = Math.max(cameraStageSize - 220, 90);
+  const scanLineStyle = {
+    transform: [
+      {
+        translateY: scanLineProgress.interpolate({
+          inputRange: [0, 1],
+          outputRange: [0, scanLineTravel],
+        }),
+      },
+    ],
+  };
 
   return (
     <View style={styles.liveCameraPanel}>
@@ -504,6 +564,14 @@ function LiveHairCameraPanel({
         </View>
 
         <View style={styles.liveFrameGuide} pointerEvents="none">
+          <View style={styles.liveLengthGuide}>
+            <Text style={styles.liveLengthGuideLabelTop}>Root</Text>
+            <View style={styles.liveLengthGuideLine} />
+            <Text style={styles.liveLengthGuideLabelBottom}>Ends</Text>
+          </View>
+          {!currentPhoto ? (
+            <Animated.View style={[styles.liveScanLine, scanLineStyle]} />
+          ) : null}
           <View style={styles.liveFrameCornerTopLeft} />
           <View style={styles.liveFrameCornerTopRight} />
           <View style={styles.liveFrameCornerBottomLeft} />
@@ -533,6 +601,11 @@ function LiveHairCameraPanel({
             </View>
           ))}
         </View>
+
+        <Text style={styles.liveCameraBody}>{currentView?.helperText}</Text>
+        {!currentPhoto && autoCaptureEnabled ? (
+          <Text style={styles.liveAutoCaptureText}>Auto-capture is on. Hold still for live length scan.</Text>
+        ) : null}
 
         {cameraError ? <Text style={styles.questionError}>{cameraError}</Text> : null}
 
@@ -1117,21 +1190,41 @@ const normalizeConditionTone = (condition = '') => {
   const normalized = String(condition || '').trim().toLowerCase();
 
   if (normalized.includes('healthy') || normalized.includes('good')) {
-    return { dotColor: '#54b86f', label: 'Healthy', emoji: '😊' };
+    return {
+      dotColor: '#4FAE71',
+      label: 'Healthy',
+      icon: 'check-decagram-outline',
+      iconColor: '#2B7A4B',
+      toneSurface: '#E9F8EE',
+    };
   }
 
   if (normalized.includes('dry') || normalized.includes('damaged')) {
-    return { dotColor: '#f0a856', label: 'Needs care', emoji: normalized.includes('damaged') ? '😟' : '😐' };
+    return {
+      dotColor: '#E49C49',
+      label: 'Needs care',
+      icon: 'alert-circle-outline',
+      iconColor: '#9B5F1B',
+      toneSurface: '#FFF4E8',
+    };
   }
 
   if (normalized.includes('treated') || normalized.includes('rebonded') || normalized.includes('colored')) {
-    return { dotColor: '#7a8ae6', label: 'Treated', emoji: '🙂' };
+    return {
+      dotColor: '#7A8AE6',
+      label: 'Treated',
+      icon: 'palette-outline',
+      iconColor: '#485CC5',
+      toneSurface: '#EEF1FF',
+    };
   }
 
   return {
     dotColor: theme.colors.brandPrimary,
     label: condition || 'Checked',
-    emoji: condition ? '😌' : '🙂',
+    icon: 'line-scan',
+    iconColor: theme.colors.brandPrimary,
+    toneSurface: theme.colors.brandPrimaryMuted,
   };
 };
 
@@ -1319,7 +1412,9 @@ function HairConditionLogCard({ submissions, onOpenAnalyzer, onSelectDate, trend
   return (
     <View style={styles.calendarWidget}>
       <View style={styles.calendarLeadCard}>
-        <Text style={styles.calendarEmotion}>{latestTone.emoji}</Text>
+        <View style={[styles.calendarLeadIconWrap, { backgroundColor: latestTone.toneSurface }]}>
+          <AppIcon name={latestTone.icon} size="lg" color={latestTone.iconColor} />
+        </View>
         <View style={styles.calendarLeadCopy}>
           <Text style={styles.calendarLeadTitle}>{latestTone.label}</Text>
           <Text style={styles.calendarLeadBody} numberOfLines={1}>
@@ -1328,6 +1423,10 @@ function HairConditionLogCard({ submissions, onOpenAnalyzer, onSelectDate, trend
         </View>
         <View style={styles.calendarLeadMeta}>
           <Text style={styles.calendarLeadMetaValue}>{formatCalendarDayLabel(history.latestScreening?.created_at)}</Text>
+          <View style={[styles.calendarLeadStatusChip, { backgroundColor: latestTone.toneSurface }]}>
+            <View style={[styles.conditionDot, { backgroundColor: latestTone.dotColor }]} />
+            <Text style={[styles.calendarLeadStatusText, { color: latestTone.iconColor }]}>{latestTone.label}</Text>
+          </View>
         </View>
       </View>
 
@@ -1406,7 +1505,13 @@ function HairConditionLogCard({ submissions, onOpenAnalyzer, onSelectDate, trend
                 isPressed ? styles.interactivePressed : null,
               ]}
             >
-              <Text style={styles.calendarCellEmoji}>{screening ? tone.emoji : ''}</Text>
+              {screening ? (
+                <View style={[styles.calendarCellIconWrap, { backgroundColor: tone.toneSurface }]}>
+                  <AppIcon name={tone.icon} size="sm" color={tone.iconColor} />
+                </View>
+              ) : (
+                <View style={styles.calendarCellPlaceholder} />
+              )}
               <Text style={styles.calendarCellLabel}>{day.getDate()}</Text>
               {dateEntries.length > 1 ? <Text style={styles.calendarCellCount}>{dateEntries.length}</Text> : null}
               <View
@@ -1444,6 +1549,8 @@ export function DonorHairSubmissionScreen() {
   const [liveFrameBrightness, setLiveFrameBrightness] = useState(-1);
   const [liveNoAccessories, setLiveNoAccessories] = useState(false);
   const lastLiveFaceStatusKeyRef = useRef('');
+  const autoCaptureTimeoutRef = useRef(null);
+  const autoCaptureCooldownUntilRef = useRef(0);
   const [analysisHistory, setAnalysisHistory] = useState([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [historyError, setHistoryError] = useState('');
@@ -1469,6 +1576,7 @@ export function DonorHairSubmissionScreen() {
     requiredViews,
     analysis,
     donationRequirement,
+    logisticsSettings,
     error,
     successMessage,
     isLoadingContext,
@@ -1483,6 +1591,7 @@ export function DonorHairSubmissionScreen() {
     removePhoto,
     analyzePhotos,
     submitSubmission,
+    resetFlow,
     clearAnalysisError,
   } = useDonorHairSubmission({ userId: user?.id, databaseUserId: profile?.user_id });
 
@@ -1599,6 +1708,10 @@ export function DonorHairSubmissionScreen() {
       donationRequirement,
     }),
     [analysis, questionnaireValues, donationRequirement]
+  );
+  const logisticsDestination = useMemo(
+    () => formatLogisticsDestination(logisticsSettings),
+    [logisticsSettings]
   );
 
   const stepTitles = useMemo(() => ([
@@ -1934,7 +2047,15 @@ export function DonorHairSubmissionScreen() {
   }, [canUseNativeLiveCamera, requestCameraPermission]);
 
   const handleLiveFacesChange = React.useCallback((faces = [], brightness = -1) => {
-    const nextStatus = resolveLiveFaceStatus(faces, currentView);
+    const baseStatus = resolveLiveFaceStatus(faces, currentView);
+    const nextStatus = brightness >= 0 && brightness < 82
+      ? {
+          ...baseStatus,
+          valid: false,
+          tone: 'warning',
+          message: 'Lighting is too low for a reliable scan. Move near bright indirect light and keep hair visible from root to ends.',
+        }
+      : baseStatus;
     const nextKey = `${nextStatus.valid}:${nextStatus.faceCount}:${nextStatus.message}`;
     if (lastLiveFaceStatusKeyRef.current !== nextKey) {
       lastLiveFaceStatusKeyRef.current = nextKey;
@@ -2022,7 +2143,7 @@ export function DonorHairSubmissionScreen() {
     );
   };
 
-  const handleCapturePhoto = async (slotIndex = photoIndex) => {
+  const handleCapturePhoto = React.useCallback(async (slotIndex = photoIndex, captureSource = 'manual') => {
     if (slotIndex == null) return;
 
     if (canUseNativeLiveCamera && !liveFaceStatus.valid) {
@@ -2036,6 +2157,7 @@ export function DonorHairSubmissionScreen() {
       viewKey: requiredViews[slotIndex]?.key || null,
       platform: Platform.OS,
       hasCameraPermission,
+      captureSource,
     });
 
     if (!hasCameraPermission) {
@@ -2079,6 +2201,7 @@ export function DonorHairSubmissionScreen() {
         slotIndex,
         viewKey: requiredViews[slotIndex]?.key || null,
         hasUri: Boolean(photo?.uri),
+        captureSource,
       });
 
       const saveResult = await savePhotoAssetForSlot(slotIndex, photo, 'capture');
@@ -2109,7 +2232,66 @@ export function DonorHairSubmissionScreen() {
     } finally {
       setIsCapturingPhoto(false);
     }
-  };
+  }, [
+    canUseNativeLiveCamera,
+    hasCameraPermission,
+    isCapturingPhoto,
+    photoIndex,
+    photos,
+    requiredViews,
+    requestLiveCameraPermission,
+    savePhotoAssetForSlot,
+    user?.id,
+    liveFaceStatus.valid,
+    liveFaceStatus.message,
+  ]);
+
+  const autoCaptureEnabled = useMemo(() => {
+    if (stepIndex !== 2) return false;
+    if (!canUseNativeLiveCamera) return false;
+    if (!hasCameraPermission) return false;
+    if (Boolean(currentPhoto)) return false;
+    if (isCapturingPhoto || isCapturingImages || isPickingImages || isAnalyzing) return false;
+
+    const brightnessReady = liveFrameBrightness < 0 || liveFrameBrightness >= 92;
+    const accessoriesReady = isHairEndsView(currentView) ? true : liveNoAccessories;
+    return Boolean(liveFaceStatus?.valid && brightnessReady && accessoriesReady);
+  }, [
+    canUseNativeLiveCamera,
+    currentPhoto,
+    currentView,
+    hasCameraPermission,
+    isAnalyzing,
+    isCapturingImages,
+    isCapturingPhoto,
+    isPickingImages,
+    liveFaceStatus?.valid,
+    liveFrameBrightness,
+    liveNoAccessories,
+    stepIndex,
+  ]);
+
+  useEffect(() => {
+    if (autoCaptureTimeoutRef.current) {
+      clearTimeout(autoCaptureTimeoutRef.current);
+      autoCaptureTimeoutRef.current = null;
+    }
+
+    if (!autoCaptureEnabled) return undefined;
+    if (Date.now() < autoCaptureCooldownUntilRef.current) return undefined;
+
+    autoCaptureTimeoutRef.current = setTimeout(() => {
+      autoCaptureCooldownUntilRef.current = Date.now() + 3500;
+      handleCapturePhoto(photoIndex, 'auto');
+    }, 1200);
+
+    return () => {
+      if (autoCaptureTimeoutRef.current) {
+        clearTimeout(autoCaptureTimeoutRef.current);
+        autoCaptureTimeoutRef.current = null;
+      }
+    };
+  }, [autoCaptureEnabled, handleCapturePhoto, photoIndex]);
 
   const handleLiveUpload = async (slotIndex) => {
     setCameraModalError('');
@@ -2289,6 +2471,7 @@ export function DonorHairSubmissionScreen() {
             isUploading={isPickingImages}
             isAnalyzing={isAnalyzing}
             cameraError={cameraModalError}
+            autoCaptureEnabled={autoCaptureEnabled}
             onCapture={() => handleCapturePhoto(photoIndex)}
             onUpload={() => handleLiveUpload(photoIndex)}
             onRemove={() => removePhoto(photoIndex)}
@@ -2360,6 +2543,41 @@ export function DonorHairSubmissionScreen() {
                     </View>
                   </View>
                 ) : null}
+
+                <View style={styles.donationInstructionCard}>
+                  <View style={styles.donationInstructionHeader}>
+                    <View style={styles.donationInstructionIcon}>
+                      <AppIcon name="package-variant-closed" size="md" state="active" />
+                    </View>
+                    <View style={styles.donationInstructionCopy}>
+                      <Text style={styles.donationInstructionTitle}>Donation and parcel guide</Text>
+                      <Text style={styles.donationInstructionBody}>
+                        After saving, use the generated submission code as the parcel QR/code reference.
+                      </Text>
+                    </View>
+                  </View>
+                  <View style={styles.donationSteps}>
+                    {DONATION_PREP_STEPS.map((item, index) => (
+                      <View key={item} style={styles.donationStepRow}>
+                        <View style={styles.donationStepBadge}>
+                          <Text style={styles.donationStepBadgeText}>{index + 1}</Text>
+                        </View>
+                        <Text style={styles.donationStepText}>{item}</Text>
+                      </View>
+                    ))}
+                  </View>
+                  {logisticsDestination ? (
+                    <View style={styles.destinationBox}>
+                      <Text style={styles.destinationLabel}>Ship or deliver to</Text>
+                      <Text style={styles.destinationText}>{logisticsDestination}</Text>
+                      {logisticsSettings?.contact_person || logisticsSettings?.contact_number ? (
+                        <Text style={styles.destinationMeta}>
+                          {[logisticsSettings.contact_person, logisticsSettings.contact_number].filter(Boolean).join(' - ')}
+                        </Text>
+                      ) : null}
+                    </View>
+                  ) : null}
+                </View>
 
                 <View style={styles.confirmResultBlock}>
                   <Text style={styles.summaryLabel}>Confirm result</Text>
@@ -2550,6 +2768,22 @@ export function DonorHairSubmissionScreen() {
   const latestSavedTone = normalizeConditionTone(latestSavedScreening?.detected_condition);
   const summaryHeroTitle = isReturningUser ? 'Start follow-up hair check' : 'Start first hair check';
 
+  const handleAddAnotherBundle = React.useCallback(() => {
+    resetFlow();
+    questionForm.reset({
+      ...hairAnalyzerQuestionDefaultValues,
+      questionnaireMode,
+    });
+    complianceForm.reset(hairAnalyzerComplianceDefaultValues);
+    correctionForm.reset(buildHairResultCorrectionDefaultValues(null));
+    setQuestionIndex(0);
+    setPhotoIndex(0);
+    setStepIndex(0);
+    setResultConfirmationMode('pending');
+    setIsAnalyzerActive(true);
+    setTransientErrorNotice(null);
+  }, [complianceForm, correctionForm, questionForm, questionnaireMode, resetFlow]);
+
   return (
     <DashboardLayout
       showSupportChat
@@ -2592,6 +2826,17 @@ export function DonorHairSubmissionScreen() {
         />
       ) : null}
       {successMessage ? <StatusBanner message={successMessage} variant="success" title="Hair check saved" style={styles.bannerGap} /> : null}
+      {successMessage && !isAnalyzerActive ? (
+        <AppCard variant="soft" radius="xl" padding="md" style={styles.bannerGap}>
+          <View style={styles.bundleActionRow}>
+            <View style={styles.bundleActionCopy}>
+              <Text style={styles.bundleActionTitle}>Add another hair bundle</Text>
+              <Text style={styles.bundleActionBody}>Start a new hair scan and save an additional bundle to your hair log.</Text>
+            </View>
+            <AppButton title="Add bundle" fullWidth={false} onPress={handleAddAnotherBundle} />
+          </View>
+        </AppCard>
+      ) : null}
       {historyError ? <StatusBanner message={historyError} variant="info" style={styles.bannerGap} /> : null}
       {isLoadingContext ? <StatusBanner title="Loading CheckHair" message="Preparing your analyzer context." variant="info" style={styles.bannerGap} /> : null}
 
@@ -2636,7 +2881,7 @@ export function DonorHairSubmissionScreen() {
             style={({ pressed }) => [styles.startHairWidget, pressed ? styles.interactivePressed : null]}
           >
             <View style={styles.summaryIconWrap}>
-              <AppIcon name="checkHair" size="lg" state="active" />
+              <AppIcon name="chart-timeline-variant" size="lg" state="active" />
             </View>
             <View style={styles.startHairCopy}>
               <Text style={styles.summaryHeroTitle}>{summaryHeroTitle}</Text>
@@ -2722,6 +2967,27 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: theme.layout.contentMaxWidth,
     alignSelf: 'center',
+  },
+  bundleActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.md,
+  },
+  bundleActionCopy: {
+    flex: 1,
+    gap: 3,
+  },
+  bundleActionTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.body,
+    color: theme.colors.textPrimary,
+  },
+  bundleActionBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    color: theme.colors.textSecondary,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
   },
   flowRail: {
     flexDirection: 'row',
@@ -2925,7 +3191,9 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: theme.colors.brandPrimaryMuted,
+    backgroundColor: theme.colors.surfaceSoft,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
   },
   summaryHeroBadge: {
     paddingHorizontal: theme.spacing.md,
@@ -2946,20 +3214,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   summaryHeroTitle: {
-    fontFamily: theme.typography.fontFamilyDisplay,
-    fontSize: theme.typography.semantic.titleSm,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodyLg,
+    fontWeight: theme.typography.weights.semibold,
     color: theme.colors.textPrimary,
-    textAlign: 'center',
+    textAlign: 'left',
   },
   summaryHeroBody: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.bodySm,
     lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
     color: theme.colors.textSecondary,
-    textAlign: 'center',
+    textAlign: 'left',
   },
   startHairWidget: {
-    minHeight: 96,
+    minHeight: 90,
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.spacing.md,
@@ -3003,8 +3272,9 @@ const styles = StyleSheet.create({
     color: theme.colors.textSecondary,
   },
   sectionTitleCompact: {
-    fontFamily: theme.typography.fontFamilyDisplay,
+    fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.bodyLg,
+    fontWeight: theme.typography.weights.semibold,
     color: theme.colors.textPrimary,
   },
   sectionHeaderCompact: {
@@ -3102,20 +3372,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: theme.spacing.sm,
     marginBottom: theme.spacing.md,
+    paddingHorizontal: theme.spacing.sm,
     paddingVertical: theme.spacing.sm,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+    backgroundColor: theme.colors.surfaceSoft,
     borderRadius: theme.radius.xl,
   },
-  calendarEmotion: {
-    fontSize: 36,
-    lineHeight: 42,
-  },
   calendarLeadIconWrap: {
-    width: 44,
-    height: 44,
+    width: 42,
+    height: 42,
     borderRadius: theme.radius.lg,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: theme.colors.brandPrimaryMuted,
   },
   calendarLeadCopy: {
     flex: 1,
@@ -3128,8 +3397,9 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
   calendarLeadTitle: {
-    fontFamily: theme.typography.fontFamilyDisplay,
-    fontSize: theme.typography.semantic.bodyLg,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.semibold,
     color: theme.colors.textPrimary,
   },
   calendarLeadBody: {
@@ -3140,7 +3410,7 @@ const styles = StyleSheet.create({
   },
   calendarLeadMeta: {
     alignItems: 'flex-end',
-    gap: 2,
+    gap: 6,
   },
   calendarLeadMetaLabel: {
     fontFamily: theme.typography.fontFamily,
@@ -3154,12 +3424,26 @@ const styles = StyleSheet.create({
     fontWeight: theme.typography.weights.semibold,
     color: theme.colors.textPrimary,
   },
+  calendarLeadStatusChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  calendarLeadStatusText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 11,
+    fontWeight: theme.typography.weights.semibold,
+  },
   calendarHeaderCopy: {
     flex: 1,
   },
   calendarMonthLabel: {
-    fontFamily: theme.typography.fontFamilyDisplay,
+    fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.bodyLg,
+    fontWeight: theme.typography.weights.semibold,
     color: theme.colors.textPrimary,
   },
   calendarSummaryText: {
@@ -3209,19 +3493,19 @@ const styles = StyleSheet.create({
   },
   calendarCell: {
     width: '13.5%',
-    minHeight: 56,
+    minHeight: 64,
     borderRadius: 14,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 4,
+    gap: 6,
     borderColor: theme.colors.borderSubtle,
     backgroundColor: theme.colors.backgroundPrimary,
   },
   calendarCellWeek: {
     flex: 1,
     width: undefined,
-    minHeight: 82,
+    minHeight: 90,
     borderRadius: 22,
   },
   calendarCellActive: {
@@ -3236,18 +3520,24 @@ const styles = StyleSheet.create({
   },
   calendarCellLabel: {
     fontFamily: theme.typography.fontFamily,
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: theme.typography.weights.semibold,
     color: theme.colors.textPrimary,
   },
-  calendarCellEmoji: {
-    minHeight: 20,
-    fontSize: 17,
-    lineHeight: 20,
+  calendarCellIconWrap: {
+    width: 22,
+    height: 22,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  calendarCellPlaceholder: {
+    width: 22,
+    height: 22,
   },
   conditionDot: {
-    width: 7,
-    height: 7,
+    width: 8,
+    height: 8,
     borderRadius: theme.radius.full,
   },
   calendarCellCount: {
@@ -3683,6 +3973,50 @@ const styles = StyleSheet.create({
     bottom: 58,
     borderRadius: 18,
   },
+  liveLengthGuide: {
+    position: 'absolute',
+    top: 12,
+    bottom: 12,
+    left: 8,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    zIndex: 2,
+  },
+  liveLengthGuideLine: {
+    flex: 1,
+    width: 2,
+    marginVertical: 6,
+    borderRadius: theme.radius.full,
+    backgroundColor: 'rgba(255,255,255,0.92)',
+  },
+  liveLengthGuideLabelTop: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 10,
+    fontWeight: theme.typography.weights.bold,
+    color: theme.colors.textInverse,
+    textTransform: 'uppercase',
+  },
+  liveLengthGuideLabelBottom: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 10,
+    fontWeight: theme.typography.weights.bold,
+    color: theme.colors.textInverse,
+    textTransform: 'uppercase',
+  },
+  liveScanLine: {
+    position: 'absolute',
+    left: 14,
+    right: 14,
+    top: 16,
+    height: 2,
+    borderRadius: theme.radius.full,
+    backgroundColor: 'rgba(86, 194, 113, 0.95)',
+    shadowColor: '#56c271',
+    shadowOpacity: 0.45,
+    shadowRadius: 5,
+    shadowOffset: { width: 0, height: 0 },
+    zIndex: 2,
+  },
   liveFrameCornerTopLeft: {
     position: 'absolute',
     top: 0,
@@ -3811,6 +4145,12 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.caption,
     color: theme.colors.textPrimary,
+  },
+  liveAutoCaptureText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    color: theme.colors.brandPrimary,
+    fontWeight: theme.typography.weights.semibold,
   },
   liveActionRow: {
     flexDirection: 'row',
@@ -4172,6 +4512,95 @@ const styles = StyleSheet.create({
   },
   analysisRecommendationBlock: {
     gap: theme.spacing.xs,
+  },
+  donationInstructionCard: {
+    gap: theme.spacing.md,
+    padding: theme.spacing.md,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+    backgroundColor: theme.colors.backgroundPrimary,
+  },
+  donationInstructionHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.spacing.sm,
+  },
+  donationInstructionIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: theme.radius.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.brandPrimaryMuted,
+  },
+  donationInstructionCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 3,
+  },
+  donationInstructionTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.body,
+    color: theme.colors.textPrimary,
+  },
+  donationInstructionBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textSecondary,
+  },
+  donationSteps: {
+    gap: theme.spacing.sm,
+  },
+  donationStepRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.spacing.sm,
+  },
+  donationStepBadge: {
+    width: 24,
+    height: 24,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.surfaceSoft,
+  },
+  donationStepBadgeText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    fontWeight: theme.typography.weights.bold,
+    color: theme.colors.brandPrimary,
+  },
+  donationStepText: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textPrimary,
+  },
+  destinationBox: {
+    gap: 4,
+    padding: theme.spacing.sm,
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.surfaceSoft,
+  },
+  destinationLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    fontWeight: theme.typography.weights.bold,
+    color: theme.colors.textMuted,
+    textTransform: 'uppercase',
+  },
+  destinationText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    color: theme.colors.textPrimary,
+  },
+  destinationMeta: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    color: theme.colors.textSecondary,
   },
   confirmResultBlock: {
     gap: theme.spacing.sm,

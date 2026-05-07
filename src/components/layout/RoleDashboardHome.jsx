@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Modal, Pressable, View, StyleSheet, Text } from 'react-native';
 import { usePathname, useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
+import Animated, { FadeInUp } from 'react-native-reanimated';
 import { DashboardLayout } from './DashboardLayout';
 import { DashboardHeader } from '../ui/DashboardHeader';
 import { DashboardSectionHeader } from '../ui/DashboardSectionHeader';
@@ -41,7 +42,7 @@ function renderDashboardSection({ section, content, role, onItemPress, onActionP
 
   if (section.kind === 'grid') {
     return (
-      <View key={section.key} style={styles.section}>
+      <Animated.View entering={FadeInUp.duration(320)} key={section.key} style={styles.section}>
         {header}
         <View style={styles.gridWrap}>
           {data.items.map((item) => (
@@ -59,13 +60,13 @@ function renderDashboardSection({ section, content, role, onItemPress, onActionP
             </View>
           ))}
         </View>
-      </View>
+      </Animated.View>
     );
   }
 
   if (section.kind === 'featured') {
     return (
-      <View key={section.key} style={styles.section}>
+      <Animated.View entering={FadeInUp.duration(320)} key={section.key} style={styles.section}>
         {header}
         <DashboardWidgetRail
           items={data.items}
@@ -84,13 +85,13 @@ function renderDashboardSection({ section, content, role, onItemPress, onActionP
             />
           )}
         />
-      </View>
+      </Animated.View>
     );
   }
 
   if (section.kind === 'info') {
     return (
-      <View key={section.key} style={styles.section}>
+      <Animated.View entering={FadeInUp.duration(320)} key={section.key} style={styles.section}>
         {header}
         <DashboardWidgetRail
           items={data.items}
@@ -109,12 +110,12 @@ function renderDashboardSection({ section, content, role, onItemPress, onActionP
             />
           )}
         />
-      </View>
+      </Animated.View>
     );
   }
 
   return (
-    <View key={section.key} style={styles.section}>
+    <Animated.View entering={FadeInUp.duration(320)} key={section.key} style={styles.section}>
       {header}
       <DashboardWidgetRail
         items={data.items}
@@ -134,7 +135,7 @@ function renderDashboardSection({ section, content, role, onItemPress, onActionP
           />
         )}
       />
-    </View>
+    </Animated.View>
   );
 }
 

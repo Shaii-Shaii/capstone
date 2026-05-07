@@ -35,6 +35,8 @@ const QR_IMAGE_BASE_URL = 'https://api.qrserver.com/v1/create-qr-code/';
 const QR_META_START = '[DONIVRA_QR_META]';
 const QR_META_END = '[/DONIVRA_QR_META]';
 
+const escapeRegExp = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 const escapeHtml = (value = '') => String(value)
   .replaceAll('&', '&amp;')
   .replaceAll('<', '&lt;')
@@ -78,6 +80,7 @@ const formatHistoryDateLabel = (value) => (
 
 const normalizeDecision = (value = '') => String(value || '').trim().toLowerCase();
 const normalizeStatus = (value = '') => String(value || '').trim().toLowerCase();
+const TERMINAL_DONATION_STATUSES = new Set(['completed', 'cancelled', 'canceled', 'rejected', 'closed']);
 
 const formatQrDisplayLabel = (value = '') => String(value || '')
   .split(/[_\s]+/)
@@ -99,6 +102,10 @@ const formatDonationStatusLabel = (value = '') => {
   if (!normalized) return '';
   return formatQrDisplayLabel(normalized);
 };
+
+const isTerminalDonationStatus = (status = '') => (
+  TERMINAL_DONATION_STATUSES.has(normalizeStatus(status))
+);
 
 export const isEligibleHairAnalysisDecision = (decision = '') => (
   normalizeDecision(decision) === ELIGIBLE_DECISION
@@ -167,6 +174,63 @@ const buildManualDonationReason = (reasons = []) => (
   reasons.filter(Boolean).join(' ')
 );
 
+const pushUniqueReason = (target, value) => {
+  const nextValue = String(value || '').trim();
+  if (!nextValue) return;
+  if (!target.includes(nextValue)) {
+    target.push(nextValue);
+  }
+};
+
+const isGenericIneligibleDecision = (decision = '') => {
+  const normalized = normalizeDecision(decision);
+  if (!normalized) return true;
+  return (
+    normalized.includes('not eligible')
+    || normalized.includes('improve')
+    || normalized.includes('needs improvement')
+    || normalized.includes('needs care')
+  );
+};
+
+const buildAiConditionReasons = (screening = null) => {
+  const sourceText = [
+    screening?.detected_condition,
+    screening?.visible_damage_notes,
+    screening?.summary,
+  ].filter(Boolean).join(' ').toLowerCase();
+
+  const conditionReasons = [];
+
+  if (sourceText.includes('dry') || sourceText.includes('dryness')) {
+    pushUniqueReason(conditionReasons, 'Hair appears dry.');
+  }
+  if (
+    sourceText.includes('damage')
+    || sourceText.includes('damaged')
+    || sourceText.includes('breakage')
+    || sourceText.includes('split end')
+  ) {
+    pushUniqueReason(conditionReasons, 'Visible hair damage was detected.');
+  }
+  if (sourceText.includes('frizz') || sourceText.includes('frizzy')) {
+    pushUniqueReason(conditionReasons, 'High frizz was detected.');
+  }
+  if (sourceText.includes('oily') || sourceText.includes('oiliness')) {
+    pushUniqueReason(conditionReasons, 'Hair appears too oily for current donation standards.');
+  }
+  if (
+    sourceText.includes('thin')
+    || sourceText.includes('sparse')
+    || sourceText.includes('low density')
+    || sourceText.includes('light density')
+  ) {
+    pushUniqueReason(conditionReasons, 'Hair density appears low.');
+  }
+
+  return conditionReasons;
+};
+
 const resolveMinimumLengthCm = (donationRequirement = null) => {
   const configuredLength = Number(donationRequirement?.minimum_hair_length);
   if (Number.isFinite(configuredLength) && configuredLength > 0) {
@@ -215,7 +279,17 @@ const evaluateAiDonationEligibility = ({ screening = null, detail = null, donati
   }
 
   if (screening && !isEligibleHairAnalysisDecision(screening?.decision || '')) {
-    reasons.push(screening?.decision || 'The saved AI screening does not currently qualify for donation.');
+    const conditionReasons = buildAiConditionReasons(screening);
+    conditionReasons.forEach((reason) => pushUniqueReason(reasons, reason));
+
+    if (!conditionReasons.length) {
+      const decisionText = String(screening?.decision || '').trim();
+      if (decisionText && !isGenericIneligibleDecision(decisionText)) {
+        pushUniqueReason(reasons, decisionText);
+      } else {
+        pushUniqueReason(reasons, 'AI screening marked this hair as not eligible under current donation requirements.');
+      }
+    }
   }
 
   if (!normalizedLengthCm || normalizedLengthCm < minimumLengthCm) {
@@ -260,12 +334,14 @@ export const createDonationQrReference = (prefix = 'QR') => (
 );
 
 const stripQrMetadata = (value = '') => String(value || '')
-  .replace(new RegExp(`${QR_META_START}[\\s\\S]*?${QR_META_END}\\s*`, 'g'), '')
+  .replace(new RegExp(`${escapeRegExp(QR_META_START)}[\\s\\S]*?${escapeRegExp(QR_META_END)}\\s*`, 'g'), '')
   .trim();
 
 const parseQrMetadata = (value = '') => {
   const normalized = String(value || '');
-  const match = normalized.match(new RegExp(`${QR_META_START}([\\s\\S]*?)${QR_META_END}`));
+  const match = normalized.match(
+    new RegExp(`${escapeRegExp(QR_META_START)}([\\s\\S]*?)${escapeRegExp(QR_META_END)}`),
+  );
   if (!match?.[1]) return null;
 
   try {
@@ -479,8 +555,6 @@ const syncIndependentDonationSubmission = async ({
 
   const submissionResult = await updateHairSubmissionById(submission.submission_id, {
     donation_source: INDEPENDENT_DONATION_SOURCE,
-    delivery_method: 'shipping',
-    pickup_request: false,
     donor_notes: nextNotes,
     status,
   });
@@ -581,9 +655,14 @@ export const getIndependentDonationQrState = ({
   };
 };
 
-const buildManualDonationNotes = ({ manualDetails = {}, evaluation = null }) => (
+const buildManualDonationNotes = ({
+  manualDetails = {},
+  evaluation = null,
+  donorType = 'own',
+}) => (
   [
     MANUAL_DONATION_NOTE_MARKER,
+    `Bundle source: ${donorType === 'different' ? 'Different donor hair' : 'Own hair'}`,
     `Length entered: ${manualDetails?.length_value || '-'} ${normalizeLengthUnit(manualDetails?.length_unit)}`,
     `Bundle quantity: ${Math.max(1, Number.parseInt(manualDetails?.bundle_quantity, 10) || 1)}`,
     `Treated: ${normalizeYesNoChoice(manualDetails?.treated) ? 'Yes' : 'No'}`,
@@ -592,6 +671,18 @@ const buildManualDonationNotes = ({ manualDetails = {}, evaluation = null }) => 
     `Hair color: ${manualDetails?.hair_color || 'Not provided'}`,
     `Density: ${manualDetails?.density || 'Not provided'}`,
     evaluation?.reason || '',
+  ].filter(Boolean).join(' ')
+);
+
+const buildAdditionalBundleNotes = ({
+  donorType = 'own',
+  inputMethod = 'manual',
+  detailNotes = '',
+}) => (
+  [
+    `Additional bundle source: ${donorType === 'different' ? 'Different donor hair' : 'Own hair'}.`,
+    `Additional bundle input method: ${inputMethod === 'scan' ? 'Live scan' : 'Manual details'}.`,
+    detailNotes || '',
   ].filter(Boolean).join(' ')
 );
 
@@ -675,7 +766,7 @@ const hasCurrentFlowStatus = (submission = null) => (
 const isSubmissionCompleted = ({ submission = null, certificate = null }) => (
   Boolean(
     !submission?.submission_id
-    || normalizeStatus(submission?.status) === 'completed'
+    || isTerminalDonationStatus(submission?.status)
     || (certificate?.submission_id && certificate.submission_id === submission.submission_id)
   )
 );
@@ -779,16 +870,33 @@ const resolveCurrentDonationRecord = ({
   return null;
 };
 
+const resolveCurrentFlowSubmission = ({
+  submissions = [],
+  certificate = null,
+} = {}) => {
+  const sortedSubmissions = sortSubmissionsByCreatedAt(submissions);
+
+  return sortedSubmissions
+    .filter((submission) => !isSubmissionCompleted({ submission, certificate }))
+    .find((submission) => (
+      Boolean(submission?.donation_drive_id)
+      || Boolean(getIndependentQrMetadata(submission)?.reference)
+      || Boolean(getSubmissionParcelImages(submission).length)
+      || [INDEPENDENT_DONATION_SOURCE, DRIVE_DONATION_SOURCE].includes(String(submission?.donation_source || '').trim().toLowerCase())
+      || hasCurrentFlowStatus(submission)
+    )) || null;
+};
+
 const resolveActiveDonationRecord = ({ aiRecord = null, manualRecord = null }) => (
   [aiRecord, manualRecord]
     .filter((record) => record?.qualification?.isQualified)
     .sort((left, right) => new Date(right?.created_at || 0).getTime() - new Date(left?.created_at || 0).getTime())[0] || null
 );
 
-const buildCompletedDonationHistory = ({ submissions = [], activeSubmission = null }) => (
+const buildDonationHistory = ({ submissions = [], activeSubmission = null }) => (
   sortSubmissionsByCreatedAt(submissions)
     .filter((submission) => submission?.submission_id && submission.submission_id !== activeSubmission?.submission_id)
-    .filter((submission) => normalizeStatus(submission?.status) === 'completed')
+    .filter((submission) => isTerminalDonationStatus(submission?.status))
     .map((submission) => ({
       submission_id: submission.submission_id,
       submission_code: submission.submission_code || '',
@@ -797,7 +905,7 @@ const buildCompletedDonationHistory = ({ submissions = [], activeSubmission = nu
       created_at: submission.created_at || '',
       updated_at: submission.updated_at || '',
       date_label: formatHistoryDateLabel(submission.updated_at || submission.created_at || ''),
-      bundle_quantity: submission.bundle_quantity || 0,
+      bundle_quantity: Array.isArray(submission?.submission_details) ? submission.submission_details.length : 0,
     }))
 );
 
@@ -1076,14 +1184,10 @@ export const buildIndependentDonationQrPayload = ({
     User_ID: submission?.user_id || null,
     Donation_Drive_ID: submission?.donation_drive_id || null,
     Organization_ID: submission?.organization_id || null,
-    Delivery_Method: submission?.delivery_method || '',
-    Pickup_Request: submission?.pickup_request ?? false,
     Submission_Code: submission?.submission_code || '',
     Donation_Source: submission?.donation_source || '',
-    Bundle_Quantity: submission?.bundle_quantity || null,
     Status: submission?.status || '',
     Submission_Detail_ID: detail?.submission_detail_id || null,
-    Bundle_Number: detail?.bundle_number || null,
     Declared_Length: detail?.declared_length ?? null,
     Declared_Color: detail?.declared_color || '',
     Declared_Texture: detail?.declared_texture || '',
@@ -1098,6 +1202,7 @@ export const buildIndependentDonationQrPayload = ({
 export const buildDonationTrackingQrPayload = ({
   submission = null,
   detail = null,
+  allDetails = [],
   logistics = null,
   drive = null,
   registration = null,
@@ -1141,14 +1246,39 @@ export const buildDonationTrackingQrPayload = ({
   if (detail?.declared_color) {
     lines.push(`Declared_Color: ${detail.declared_color}`);
   }
-  if (detail?.bundle_number != null) {
-    lines.push(`Bundle_Number: ${detail.bundle_number}`);
-  } else if (submission?.bundle_quantity) {
-    lines.push(`Bundle_Quantity: ${submission.bundle_quantity}`);
+  if (Array.isArray(submission?.submission_details) && submission.submission_details.length) {
+    lines.push(`Bundle_Quantity: ${submission.submission_details.length}`);
   }
 
   if (trackingStatus) {
     lines.push(`Hair_Bundle_Tracking_History.Status: ${trackingStatus}`);
+  }
+
+  const detailList = Array.isArray(allDetails) && allDetails.length
+    ? allDetails
+    : Array.isArray(submission?.submission_details) && submission.submission_details.length
+      ? submission.submission_details
+      : detail ? [detail] : [];
+
+  if (detailList.length) {
+    lines.push(`Bundle_Detail_Count: ${detailList.length}`);
+    detailList.forEach((item, index) => {
+      const detailIndex = index + 1;
+      const sourceHint = String(item?.detail_notes || '').toLowerCase();
+      const sourceLabel = sourceHint.includes('different donor hair')
+        ? 'Different donor hair'
+        : sourceHint.includes('own hair')
+          ? 'Own hair'
+          : 'Not specified';
+
+      lines.push(`Bundle_${detailIndex}_Submission_Detail_ID: ${item?.submission_detail_id || ''}`);
+      lines.push(`Bundle_${detailIndex}_Length: ${item?.declared_length ?? ''}`);
+      lines.push(`Bundle_${detailIndex}_Texture: ${item?.declared_texture || ''}`);
+      lines.push(`Bundle_${detailIndex}_Density: ${item?.declared_density || ''}`);
+      lines.push(`Bundle_${detailIndex}_Condition: ${item?.declared_condition || ''}`);
+      lines.push(`Bundle_${detailIndex}_Color: ${item?.declared_color || ''}`);
+      lines.push(`Bundle_${detailIndex}_Source: ${sourceLabel}`);
+    });
   }
 
   const shipmentStatus = formatDonationStatusLabel(logistics?.shipment_status || '');
@@ -1367,6 +1497,7 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
   if (!userId) {
     return {
       latestAnalysisEntry: null,
+      latestAiEligibility: null,
       latestDonationRequirement: null,
       isEligible: false,
       isAiEligible: false,
@@ -1389,6 +1520,7 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
   if (submissionsResult.error) {
     return {
       latestAnalysisEntry: null,
+      latestAiEligibility: null,
       latestDonationRequirement: donationRequirementResult.data || null,
       isEligible: false,
       isAiEligible: false,
@@ -1405,6 +1537,11 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
   const sortedEntries = sortScreeningEntries(flattenScreeningEntries(submissions));
   const latestAnalysisEntry = sortedEntries[0] || null;
   const latestScreening = latestAnalysisEntry?.screening || null;
+  const latestAiEligibility = evaluateAiDonationEligibility({
+    screening: latestAnalysisEntry?.screening || null,
+    detail: latestAnalysisEntry?.detail || null,
+    donationRequirement: donationRequirementResult.data || null,
+  });
   const aiRecord = resolveAiDonationRecord(latestAnalysisEntry, donationRequirementResult.data || null);
   const manualRecord = resolveManualDonationRecord({
     submissions,
@@ -1417,12 +1554,17 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
     certificate: certificateResult.data || null,
     fallbackRecord: latestQualifiedRecord,
   });
+  const activeFlowSubmission = resolveCurrentFlowSubmission({
+    submissions,
+    certificate: certificateResult.data || null,
+  });
   const isAiEligible = Boolean(aiRecord?.qualification?.isQualified);
   const isManualQualified = Boolean(manualRecord?.qualification?.isQualified);
   const isDonationReady = Boolean(activeRecord?.qualification?.isQualified);
-  const activeSubmission = activeRecord?.submission || null;
-  const activeDetail = activeRecord?.detail || null;
-  const activeScreening = activeRecord?.screening || null;
+  const activeSubmission = activeFlowSubmission || activeRecord?.submission || null;
+  const activeDetail = activeRecord?.detail || getLatestSubmissionDetail(activeSubmission);
+  const activeScreening = activeRecord?.screening || [...(activeSubmission?.ai_screenings || [])]
+    .sort((left, right) => new Date(right?.created_at || 0).getTime() - new Date(left?.created_at || 0).getTime())[0] || null;
 
   let logistics = null;
   let logisticsError = null;
@@ -1475,7 +1617,7 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
   const hasCompletedDonation = Boolean(
     (certificate?.submission_id && certificate.submission_id === activeSubmission?.submission_id)
     || latestStage?.key === 'received_by_patient' && latestStage?.state === 'completed'
-    || normalizeStatus(activeSubmission?.status) === 'completed'
+    || isTerminalDonationStatus(activeSubmission?.status)
   );
   const hasIndependentFlow = Boolean(
     independentQrState?.reference
@@ -1496,7 +1638,7 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
     && !hasCompletedDonation
     && (hasDriveFlow || hasIndependentFlow)
   );
-  const completedDonationHistory = buildCompletedDonationHistory({
+  const donationHistory = buildDonationHistory({
     submissions,
     activeSubmission: hasOngoingDonation ? activeSubmission : null,
   });
@@ -1504,6 +1646,7 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
   return {
     latestAnalysisEntry,
     latestScreening,
+    latestAiEligibility,
     latestEligibleAnalysisEntry: aiRecord ? latestAnalysisEntry : null,
     latestAiDonation: aiRecord,
     latestDonationRequirement: donationRequirementResult.data || null,
@@ -1525,9 +1668,10 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
     activeDrive,
     activeQrState,
     ongoingDonationMessage: hasOngoingDonation
-      ? 'You already have an ongoing donation. Please complete or wait for the current donation process to finish before starting a new one.'
+      ? 'You already have an ongoing donation. Please finish or cancel the current donation before starting a new one.'
       : '',
-    completedDonationHistory,
+    donationHistory,
+    completedDonationHistory: donationHistory,
     drives: drivesResult.data || [],
     logistics,
     independentQrState,
@@ -1671,7 +1815,7 @@ export const saveIndependentDonationParcelLog = async ({
   const logisticsResult = await fetchHairSubmissionLogisticsBySubmissionId(submission.submission_id);
   const logisticsPayload = {
     logistics_type: 'shipping',
-    shipment_status: 'Ready for shipment',
+    shipment_status: 'Pending',
     notes: `Independent donor parcel prepared. QR payload attached for monitoring. ${qrPayloadText ? 'QR reference generated.' : ''}`.trim(),
   };
 
@@ -1695,7 +1839,7 @@ export const saveIndependentDonationParcelLog = async ({
   const trackingResult = await createHairBundleTrackingEntry({
     submission_id: submission.submission_id,
     submission_detail_id: detail.submission_detail_id,
-    status: 'Ready for shipment',
+    status: 'Pending',
     title: 'Parcel logged by donor',
     description: 'The donor uploaded a parcel image and prepared the independent donation QR for shipment.',
     changed_by: databaseUserId,
@@ -1710,14 +1854,12 @@ export const saveIndependentDonationParcelLog = async ({
 
   const submissionUpdateResult = await updateHairSubmissionById(submission.submission_id, {
     donation_source: INDEPENDENT_DONATION_SOURCE,
-    delivery_method: 'shipping',
-    pickup_request: false,
     donor_notes: mergeDonationNotes(
       submission?.donor_notes || '',
       ['Donation path: independent donation.', 'Parcel image uploaded by donor before shipment.'],
       nextQrMetadata,
     ),
-    status: 'Ready for shipment',
+    status: 'Pending',
   });
 
   if (submissionUpdateResult.error) {
@@ -1744,6 +1886,103 @@ export const saveIndependentDonationParcelLog = async ({
     success: true,
     submission: submissionUpdateResult.data || submission,
     logistics: saveLogisticsResult.data || null,
+  };
+};
+
+export const cancelDonorDonation = async ({
+  userId = null,
+  databaseUserId = null,
+  submission = null,
+  detail = null,
+  reason = '',
+}) => {
+  if (!userId || !databaseUserId) {
+    return { success: false, error: 'Your session is not ready.' };
+  }
+
+  if (!submission?.submission_id) {
+    return { success: false, error: 'No active donation record was found.' };
+  }
+
+  if (isTerminalDonationStatus(submission?.status)) {
+    return { success: false, error: 'This donation is already closed and cannot be cancelled.' };
+  }
+
+  const normalizedReason = String(reason || '').trim();
+  const cancellationNote = normalizedReason
+    ? `Donation cancelled by donor. Reason: ${normalizedReason}`
+    : 'Donation cancelled by donor from the donor module.';
+  const existingQrMetadata = parseQrMetadata(submission?.donor_notes || '');
+  const updatedNotes = mergeDonationNotes(
+    submission?.donor_notes || '',
+    [
+      'Donation status changed to cancelled by donor.',
+      cancellationNote,
+    ],
+    existingQrMetadata,
+  );
+
+  const submissionResult = await updateHairSubmissionById(submission.submission_id, {
+    status: 'Cancelled',
+    donor_notes: updatedNotes,
+  });
+
+  if (submissionResult.error || !submissionResult.data?.submission_id) {
+    return {
+      success: false,
+      error: submissionResult.error?.message || 'Unable to cancel the donation right now.',
+    };
+  }
+
+  const logisticsResult = await upsertSubmissionLogistics({
+    submissionId: submission.submission_id,
+    logisticsType: 'shipping',
+    shipmentStatus: 'Cancelled',
+    notes: cancellationNote,
+  });
+
+  if (logisticsResult.error) {
+    return {
+      success: false,
+      error: logisticsResult.error.message || 'Unable to update donation logistics after cancellation.',
+    };
+  }
+
+  if (detail?.submission_detail_id) {
+    const trackingResult = await createHairBundleTrackingEntry({
+      submission_id: submission.submission_id,
+      submission_detail_id: detail.submission_detail_id,
+      status: 'Cancelled',
+      title: 'Donation cancelled',
+      description: cancellationNote,
+      changed_by: databaseUserId,
+    });
+
+    if (trackingResult.error) {
+      return {
+        success: false,
+        error: trackingResult.error.message || 'Unable to save the donation cancellation timeline update.',
+      };
+    }
+  }
+
+  await persistDonationNotifications({
+    userId,
+    notifications: [
+      buildDonationNotification({
+        dedupeKey: `${notificationTypes.logisticsUpdated}:${submission.submission_id}:cancelled`,
+        title: 'Donation cancelled',
+        message: 'You cancelled your current donation. You can start a new donation anytime.',
+        createdAt: new Date().toISOString(),
+        referenceId: submission.submission_id,
+      }),
+    ],
+  });
+
+  return {
+    success: true,
+    submission: submissionResult.data || submission,
+    logistics: logisticsResult.data || null,
   };
 };
 
@@ -1788,8 +2027,8 @@ export const generateIndependentDonationQrFast = async ({
       databaseUserId,
       submission,
       qrMetadata: nextMetadata,
-      status: 'Ready for shipment',
-      logisticsStatus: 'Ready for shipment',
+      status: 'Pending',
+      logisticsStatus: 'Pending',
       logisticsNotes: 'Your donation QR is saved and inactive until you scan it to activate donation tracking.',
       trackingTitle: 'Donation QR ready',
       trackingDescription: 'A donation QR was generated for the donor shipment flow and saved to the current donation record.',
@@ -1826,8 +2065,8 @@ export const ensureIndependentDonationQr = async ({
       databaseUserId,
       submission,
       qrMetadata: parseQrMetadata(submission?.donor_notes || ''),
-      status: 'Ready for shipment',
-      logisticsStatus: 'Ready for shipment',
+      status: 'Pending',
+      logisticsStatus: 'Pending',
       logisticsNotes: currentQr.is_activated
         ? 'Your donation QR is active and ready for shipment tracking.'
         : 'Your donation QR is saved and inactive until you scan it to activate donation tracking.',
@@ -1865,8 +2104,8 @@ export const ensureIndependentDonationQr = async ({
     databaseUserId,
     submission,
     qrMetadata: nextMetadata,
-    status: 'Ready for shipment',
-    logisticsStatus: 'Ready for shipment',
+    status: 'Pending',
+    logisticsStatus: 'Pending',
     logisticsNotes: 'Your donation QR is saved and inactive until you scan it to activate donation tracking.',
     trackingTitle: 'Donation QR ready',
     trackingDescription: 'A donation QR was generated for the donor shipment flow and saved to the current donation record.',
@@ -1881,11 +2120,74 @@ export const ensureIndependentDonationQr = async ({
     };
   }
 
+  const nextQrState = getIndependentDonationQrState({ submission: syncedResult.submission });
+  if (!nextQrState?.reference) {
+    const fallbackQrState = {
+      reference: nextMetadata.reference,
+      generated_at: nextMetadata.generated_at || generatedAt,
+      activated_at: '',
+      version: nextMetadata.version ?? 1,
+      status: 'inactive',
+      is_activated: false,
+      is_inactive: true,
+      is_pending: true,
+      is_expired: false,
+      is_valid: true,
+      show_my_qr: true,
+      upload_unlocked: false,
+    };
+
+    return {
+      success: true,
+      qrState: fallbackQrState,
+      submission: syncedResult.submission || submission,
+      reused: false,
+    };
+  }
+
   return {
     success: true,
-    qrState: getIndependentDonationQrState({ submission: syncedResult.submission }),
+    qrState: nextQrState,
     submission: syncedResult.submission,
     reused: false,
+  };
+};
+
+export const startIndependentDonationDraft = async ({
+  userId = null,
+  submission,
+  databaseUserId,
+}) => {
+  if (!submission?.submission_id) {
+    return { success: false, error: 'A valid donation submission is required before starting donation flow.' };
+  }
+
+  const existingMetadata = parseQrMetadata(submission?.donor_notes || '');
+  const syncedResult = await syncIndependentDonationSubmission({
+    userId,
+    databaseUserId,
+    submission,
+    qrMetadata: existingMetadata,
+    status: 'Pending',
+    logisticsStatus: 'Pending',
+    logisticsNotes: 'Donation details saved. Add any extra bundles first, then generate your donation QR.',
+    trackingTitle: 'Donation details saved',
+    trackingDescription: 'Donation details are saved. Add all bundles before generating the final QR.',
+    shouldTrack: true,
+    shouldNotify: false,
+  });
+
+  if (!syncedResult.success) {
+    return {
+      success: false,
+      error: syncedResult.error || 'Could not start donation flow right now.',
+    };
+  }
+
+  return {
+    success: true,
+    submission: syncedResult.submission || submission,
+    logistics: syncedResult.logistics || null,
   };
 };
 
@@ -1927,8 +2229,8 @@ export const activateIndependentDonationQr = async ({
     databaseUserId,
     submission,
     qrMetadata: nextMetadata,
-    status: 'Ready for shipment',
-    logisticsStatus: 'Ready for shipment',
+    status: 'Pending',
+    logisticsStatus: 'Pending',
     logisticsNotes: 'Your donation QR is active and ready for shipment tracking.',
     trackingTitle: 'Donation QR activated',
     trackingDescription: 'The donor scanned the saved donation QR and activated donation tracking.',
@@ -1985,9 +2287,246 @@ export const activateIndependentDonationQrByScan = async ({
   });
 };
 
+export const addDonationBundleFromAnalysis = async ({
+  userId = null,
+  databaseUserId = null,
+  submission = null,
+  screening = null,
+  referenceDetail = null,
+  donorType = 'own',
+}) => {
+  if (!userId || !databaseUserId) {
+    return { success: false, error: 'Your session is not ready.' };
+  }
+  if (!submission?.submission_id) {
+    return { success: false, error: 'No active donation record found.' };
+  }
+  if (!screening) {
+    return { success: false, error: 'No hair analysis result is available for bundle attachment.' };
+  }
+
+  const detailNotes = buildAdditionalBundleNotes({
+    donorType,
+    inputMethod: 'scan',
+    detailNotes: screening?.summary || '',
+  });
+
+  const detailResult = await createHairSubmissionDetail({
+    submission_id: submission.submission_id,
+    declared_length: screening?.estimated_length ?? referenceDetail?.declared_length ?? null,
+    declared_color: screening?.detected_color || referenceDetail?.declared_color || null,
+    declared_texture: screening?.detected_texture || referenceDetail?.declared_texture || null,
+    declared_density: screening?.detected_density || referenceDetail?.declared_density || null,
+    declared_condition: screening?.detected_condition || referenceDetail?.declared_condition || 'Analyzed',
+    is_chemically_treated: referenceDetail?.is_chemically_treated ?? false,
+    is_colored: referenceDetail?.is_colored ?? false,
+    is_bleached: referenceDetail?.is_bleached ?? false,
+    is_rebonded: referenceDetail?.is_rebonded ?? false,
+    detail_notes: detailNotes,
+    status: 'Pending',
+  });
+
+  if (detailResult.error || !detailResult.data?.submission_detail_id) {
+    return {
+      success: false,
+      error: detailResult.error?.message || 'Unable to add the scanned bundle right now.',
+    };
+  }
+
+  const submissionResult = await updateHairSubmissionById(submission.submission_id, {
+    status: 'Pending',
+    donor_notes: mergeDonationNotes(
+      submission?.donor_notes || '',
+      [
+        `Added bundle via scan (${donorType === 'different' ? 'different donor' : 'own hair'}).`,
+      ],
+      parseQrMetadata(submission?.donor_notes || ''),
+    ),
+  });
+
+  if (submissionResult.error) {
+    return {
+      success: false,
+      error: submissionResult.error?.message || 'Bundle was added but donation summary could not be refreshed.',
+    };
+  }
+
+  const trackingResult = await createHairBundleTrackingEntry({
+    submission_id: submission.submission_id,
+    submission_detail_id: detailResult.data.submission_detail_id,
+    status: 'Pending',
+    title: 'Additional bundle added',
+    description: donorType === 'different'
+      ? 'An additional bundle from a different donor was added using scanned hair analysis.'
+      : 'An additional bundle from the donor was added using scanned hair analysis.',
+    changed_by: databaseUserId,
+  });
+
+  if (trackingResult.error) {
+    return {
+      success: false,
+      error: trackingResult.error.message || 'Unable to update the donation timeline after adding a bundle.',
+    };
+  }
+
+  return {
+    success: true,
+    submission: submissionResult.data || submission,
+    detail: detailResult.data,
+  };
+};
+
+export const addDonationBundleFromManualDetails = async ({
+  userId = null,
+  databaseUserId = null,
+  submission = null,
+  manualDetails = null,
+  photo = null,
+  donorType = 'different',
+}) => {
+  if (!userId || !databaseUserId) {
+    return { success: false, error: 'Your session is not ready.' };
+  }
+  if (!submission?.submission_id) {
+    return { success: false, error: 'No active donation record found.' };
+  }
+  if (!manualDetails) {
+    return { success: false, error: 'Manual bundle details are required.' };
+  }
+  if (!photo) {
+    return { success: false, error: 'Please upload a clear bundle photo before saving.' };
+  }
+
+  const normalizedLengthInches = convertLengthToInches(manualDetails?.length_value, manualDetails?.length_unit);
+  if (!normalizedLengthInches || normalizedLengthInches <= 0) {
+    return { success: false, error: 'Enter a valid hair length for the additional bundle.' };
+  }
+
+  const detailNotes = buildAdditionalBundleNotes({
+    donorType,
+    inputMethod: 'manual',
+    detailNotes: buildManualDonationNotes({
+      manualDetails: {
+        ...manualDetails,
+        bundle_quantity: 1,
+      },
+      evaluation: null,
+    }),
+  });
+
+  const detailResult = await createHairSubmissionDetail({
+    submission_id: submission.submission_id,
+    declared_length: normalizedLengthInches,
+    declared_color: manualDetails?.hair_color || null,
+    declared_texture: manualDetails?.texture || null,
+    declared_density: manualDetails?.density || null,
+    declared_condition: donorType === 'different' ? 'Different donor hair (manual)' : 'Own hair (manual)',
+    is_chemically_treated: normalizeYesNoChoice(manualDetails?.treated),
+    is_colored: normalizeYesNoChoice(manualDetails?.colored),
+    is_bleached: false,
+    is_rebonded: false,
+    detail_notes: detailNotes,
+    status: 'Pending',
+  });
+
+  if (detailResult.error || !detailResult.data?.submission_detail_id) {
+    return {
+      success: false,
+      error: detailResult.error?.message || 'Unable to save manual bundle details right now.',
+    };
+  }
+
+  const uploadPayload = await getPhotoUploadPayload(photo);
+  const filePath = `${userId}/${submission.submission_id}/bundle-${detailResult.data.submission_detail_id}-${Date.now()}.jpg`;
+  const uploadResult = await uploadHairSubmissionImage({
+    path: filePath,
+    fileBody: uploadPayload.fileBody,
+    contentType: uploadPayload.contentType,
+    bucket: hairSubmissionStorageBucket,
+  });
+
+  if (uploadResult.error) {
+    return {
+      success: false,
+      error: uploadResult.error.message || 'Unable to upload the additional bundle photo right now.',
+    };
+  }
+
+  const imageInsertResult = await createHairSubmissionImages([{
+    submission_detail_id: detailResult.data.submission_detail_id,
+    file_path: filePath,
+    image_type: 'manual_donation_hair_photo',
+  }]);
+
+  if (imageInsertResult.error) {
+    return {
+      success: false,
+      error: imageInsertResult.error.message || 'Unable to save the additional bundle photo record.',
+    };
+  }
+
+  const submissionResult = await updateHairSubmissionById(submission.submission_id, {
+    status: 'Pending',
+    donor_notes: mergeDonationNotes(
+      submission?.donor_notes || '',
+      [
+        `Added bundle via manual entry (${donorType === 'different' ? 'different donor' : 'own hair'}).`,
+      ],
+      parseQrMetadata(submission?.donor_notes || ''),
+    ),
+  });
+
+  if (submissionResult.error) {
+    return {
+      success: false,
+      error: submissionResult.error?.message || 'Bundle was added but donation summary could not be refreshed.',
+    };
+  }
+
+  const trackingResult = await createHairBundleTrackingEntry({
+    submission_id: submission.submission_id,
+    submission_detail_id: detailResult.data.submission_detail_id,
+    status: 'Pending',
+    title: 'Additional bundle added',
+    description: donorType === 'different'
+      ? 'An additional bundle from a different donor was added using manual details.'
+      : 'An additional bundle from the donor was added using manual details.',
+    changed_by: databaseUserId,
+  });
+
+  if (trackingResult.error) {
+    return {
+      success: false,
+      error: trackingResult.error.message || 'Unable to update the donation timeline after adding a bundle.',
+    };
+  }
+
+  await persistDonationNotifications({
+    userId,
+    notifications: [
+      buildDonationNotification({
+        dedupeKey: `${notificationTypes.logisticsUpdated}:${submission.submission_id}:bundle-added:${detailResult.data.submission_detail_id}`,
+        title: 'Additional bundle added',
+        message: donorType === 'different'
+          ? 'A bundle from a different donor was added to this donation package.'
+          : 'An additional donor bundle was added to this donation package.',
+        createdAt: new Date().toISOString(),
+        referenceId: submission.submission_id,
+      }),
+    ],
+  });
+
+  return {
+    success: true,
+    submission: submissionResult.data || submission,
+    detail: detailResult.data,
+  };
+};
+
 export const saveManualDonationQualification = async ({
   userId,
   databaseUserId,
+  donorType = 'own',
   manualDetails,
   photo,
   donationRequirement = null,
@@ -2004,8 +2543,7 @@ export const saveManualDonationQualification = async ({
     manualDetails,
     donationRequirement,
   });
-  const bundleQuantity = Math.max(1, Number.parseInt(manualDetails?.bundle_quantity, 10) || 1);
-  const submissionNotes = buildManualDonationNotes({ manualDetails, evaluation });
+  const submissionNotes = buildManualDonationNotes({ manualDetails, evaluation, donorType });
   const uploadPayload = await getPhotoUploadPayload(photo);
 
   const submissionResult = await createHairSubmission({
@@ -2013,9 +2551,8 @@ export const saveManualDonationQualification = async ({
     database_user_id: databaseUserId,
     submission_code: createDonationSubmissionCode('MAN'),
     donation_source: MANUAL_DONATION_SOURCE,
-    bundle_quantity: bundleQuantity,
     donor_notes: submissionNotes,
-    status: evaluation.isQualified ? 'Qualified' : 'Needs improvement',
+    status: 'Pending',
   });
 
   if (submissionResult.error || !submissionResult.data?.submission_id) {
@@ -2027,18 +2564,19 @@ export const saveManualDonationQualification = async ({
 
   const detailResult = await createHairSubmissionDetail({
     submission_id: submissionResult.data.submission_id,
-    bundle_number: 1,
     declared_length: evaluation.normalized_length_inches,
     declared_color: manualDetails?.hair_color || null,
     declared_texture: null,
     declared_density: manualDetails?.density || null,
-    declared_condition: evaluation.isQualified ? 'Qualified for donor donation flow' : 'Needs improvement before donation',
+    declared_condition: donorType === 'different'
+      ? 'Different donor hair (manual)'
+      : (evaluation.isQualified ? 'Qualified for donor donation flow' : (evaluation.reason || 'Not eligible for current donation requirements')),
     is_chemically_treated: normalizeYesNoChoice(manualDetails?.treated),
     is_colored: normalizeYesNoChoice(manualDetails?.colored),
     is_bleached: false,
     is_rebonded: false,
     detail_notes: submissionNotes,
-    status: evaluation.isQualified ? 'Qualified' : 'Needs improvement',
+    status: 'Pending',
   });
 
   if (detailResult.error || !detailResult.data?.submission_detail_id) {
@@ -2079,9 +2617,9 @@ export const saveManualDonationQualification = async ({
   const trackingResult = await createHairBundleTrackingEntry({
     submission_id: submissionResult.data.submission_id,
     submission_detail_id: detailResult.data.submission_detail_id,
-    status: evaluation.isQualified ? 'Qualified' : 'Needs improvement',
+    status: 'Pending',
     title: 'Manual donor details saved',
-    description: `${evaluation.reason} Hair photo uploaded from the donor Donations module.`,
+    description: `${evaluation.reason} Source: ${donorType === 'different' ? 'Different donor hair' : 'Own hair'}. Hair photo uploaded from the donor Donations module.`,
     changed_by: databaseUserId,
   });
 
@@ -2161,12 +2699,9 @@ export const saveDriveDonationParticipation = async ({
 
   const submissionResult = await updateHairSubmissionById(submission.submission_id, {
     donation_drive_id: drive.donation_drive_id,
-    organization_id: drive.organization_id || null,
-    delivery_method: drive.donation_setup_type || 'donation_drive',
-    pickup_request: false,
     donation_source: DRIVE_DONATION_SOURCE,
     donor_notes: nextSubmissionNotes,
-    status: 'Donation drive selected',
+    status: 'Pending',
   });
 
   if (submissionResult.error || !submissionResult.data?.submission_id) {
@@ -2187,7 +2722,7 @@ export const saveDriveDonationParticipation = async ({
     const trackingResult = await createHairBundleTrackingEntry({
       submission_id: submissionResult.data.submission_id,
       submission_detail_id: detail.submission_detail_id,
-      status: 'Donation drive selected',
+      status: 'Pending',
       title: 'Donation drive selected',
       description: `The donor selected ${drive?.event_title || 'the selected drive'} for this donation.`,
       changed_by: databaseUserId,
@@ -2236,7 +2771,9 @@ export const buildCertificatePreviewModel = ({ certificateRow, submissionEntry, 
     submissionCode: submissionEntry?.submission?.submission_code || 'Pending submission code',
     donationDate: submissionEntry?.submission?.created_at || certificateRow.issued_at || '',
     donationDateLabel: formatDateShort(submissionEntry?.submission?.created_at || certificateRow.issued_at || ''),
-    bundleQuantity: submissionEntry?.submission?.bundle_quantity || 0,
+    bundleQuantity: Array.isArray(submissionEntry?.submission?.submission_details)
+      ? submissionEntry.submission.submission_details.length
+      : 0,
     decision: submissionEntry?.screening?.decision || 'Approved donation',
     summary: submissionEntry?.screening?.summary || certificateRow.remarks || '',
     issuedAt: certificateRow.issued_at || null,

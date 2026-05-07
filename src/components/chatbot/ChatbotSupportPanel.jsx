@@ -58,9 +58,15 @@ const normalizeAttachmentAssets = (assets = []) => (
 const NEARBY_SALON_URL = 'https://www.google.com/maps/search/?api=1&query=hair+salon+near+me';
 const NEARBY_DROPOFF_URL = 'https://www.google.com/maps/search/?api=1&query=hair+donation+drop+off+near+me+Philippines';
 
-export function ChatbotSupportPanel({ role, userId, variant = 'screen' }) {
+export function ChatbotSupportPanel({
+  role,
+  userId,
+  variant = 'screen',
+  queuedMessage = null,
+}) {
   const { resolvedTheme } = useAuth();
   const scrollRef = useRef(null);
+  const lastQueuedMessageIdRef = useRef(null);
   const [draftMessage, setDraftMessage] = useState('');
   const [attachments, setAttachments] = useState([]);
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
@@ -142,6 +148,23 @@ export function ChatbotSupportPanel({ role, userId, variant = 'screen' }) {
   const removeAttachment = (id) => {
     setAttachments((current) => current.filter((a) => a.id !== id));
   };
+
+  useEffect(() => {
+    const queuedId = queuedMessage?.id;
+    const text = String(queuedMessage?.text || '').trim();
+    if (!queuedId || !text) return;
+    if (lastQueuedMessageIdRef.current === queuedId) return;
+    lastQueuedMessageIdRef.current = queuedId;
+
+    setDraftMessage(text);
+    sendMessage({
+      text,
+      attachments: [],
+      inputMode: 'voice',
+    }).then((result) => {
+      if (result?.success) setDraftMessage('');
+    });
+  }, [queuedMessage, sendMessage]);
 
   const handleNearbyPress = () => {
     const url = role === 'donor' ? NEARBY_DROPOFF_URL : NEARBY_SALON_URL;

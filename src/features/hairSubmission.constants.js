@@ -1,9 +1,9 @@
 export const hairSubmissionStatuses = {
   submission: {
-    submitted: 'submitted',
+    submitted: 'Pending',
   },
   detail: {
-    pending: 'pending',
+    pending: 'Pending',
   },
 };
 

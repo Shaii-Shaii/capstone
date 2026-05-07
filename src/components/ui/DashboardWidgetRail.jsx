@@ -22,6 +22,10 @@ export const DashboardWidgetRail = ({
       horizontal
       showsHorizontalScrollIndicator={showsHorizontalScrollIndicator}
       bounces={false}
+      decelerationRate="fast"
+      snapToAlignment="start"
+      snapToInterval={computedCardWidth + spacing}
+      disableIntervalMomentum
       contentContainerStyle={[
         styles.content,
         isShortScreen ? styles.contentCompact : null,

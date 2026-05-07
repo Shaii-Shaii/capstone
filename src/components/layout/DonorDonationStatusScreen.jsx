@@ -17,9 +17,13 @@ import {
   buildQrImageUrl,
   getDonorDonationsModuleData,
   saveManualDonationQualification,
+  startIndependentDonationDraft,
+  addDonationBundleFromAnalysis,
+  addDonationBundleFromManualDetails,
   ensureIndependentDonationQr,
   activateIndependentDonationQr,
   saveIndependentDonationParcelLog,
+  cancelDonorDonation,
 } from '../../features/donorDonations.service';
 import { buildProfileCompletionMeta } from '../../features/profile/services/profile.service';
 import { resolveThemeRoles, theme } from '../../design-system/theme';
@@ -29,7 +33,18 @@ import { resolveThemeRoles, theme } from '../../design-system/theme';
 const MANUAL_FORM_DEFAULTS = {
   lengthValue: '',
   lengthUnit: 'in',
-  bundleQuantity: '1',
+  treated: 'no',
+  colored: 'no',
+  trimmed: 'no',
+  hairColor: 'Natural black',
+  density: 'Medium density',
+};
+
+const ADDITIONAL_BUNDLE_DEFAULTS = {
+  donorType: 'own',
+  inputMethod: 'scan',
+  lengthValue: '',
+  lengthUnit: 'in',
   treated: 'no',
   colored: 'no',
   trimmed: 'no',
@@ -72,6 +87,33 @@ const formatDateLabel = (dateString) => {
   });
 };
 
+const buildDonationDecisionText = ({ screening = null, isEligible = false, ineligibilityReason = '' }) => {
+  if (isEligible) {
+    return screening?.decision || 'Eligible for donation';
+  }
+
+  const reason = String(ineligibilityReason || '').trim();
+  if (reason) return reason;
+
+  return screening?.decision || 'Hair did not meet current donation requirements.';
+};
+
+const inferBundleSourceLabel = (detail = null) => {
+  const notesText = String(detail?.detail_notes || '').toLowerCase();
+  const conditionText = String(detail?.declared_condition || '').toLowerCase();
+  const merged = `${notesText} ${conditionText}`;
+  if (merged.includes('different donor hair')) return 'Different donor hair';
+  if (merged.includes('own hair')) return 'Own hair';
+  return 'Own hair';
+};
+
+const formatBundleLengthLabel = (lengthValue) => {
+  const numeric = Number(lengthValue);
+  if (!Number.isFinite(numeric) || numeric <= 0) return '-';
+  const lengthCm = numeric * 2.54;
+  return `${numeric.toFixed(1)} in (${lengthCm.toFixed(1)} cm)`;
+};
+
 // ─── Shared UI primitives ─────────────────────────────────────────────────────
 
 function SectionHeader({ eyebrow, title, body, roles }) {
@@ -89,9 +131,16 @@ function SectionHeader({ eyebrow, title, body, roles }) {
 function ModalShell({ visible, title, subtitle, onClose, children, footer, scrollContent = false }) {
   if (!visible) return null;
   return (
-    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
+    <Modal
+      transparent
+      visible={visible}
+      animationType="slide"
+      onRequestClose={onClose}
+      statusBarTranslucent
+      navigationBarTranslucent
+    >
       <View style={styles.modalOverlay}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+        <Pressable style={styles.modalBackdrop} onPress={onClose} />
         <View style={styles.modalCard}>
           <View style={styles.modalHeader}>
             <View style={styles.modalHeaderCopy}>
@@ -108,6 +157,7 @@ function ModalShell({ visible, title, subtitle, onClose, children, footer, scrol
                 style={styles.modalScroll}
                 contentContainerStyle={styles.modalScrollContent}
                 showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
               >
                 {children}
               </ScrollView>
@@ -139,6 +189,25 @@ function ChoiceField({ label, value, options, onChange }) {
             </Pressable>
           );
         })}
+      </View>
+    </View>
+  );
+}
+
+function ManualSection({ icon, title, body, children, roles }) {
+  return (
+    <View style={[styles.manualSectionCard, { backgroundColor: roles.pageBackground, borderColor: roles.defaultCardBorder }]}>
+      <View style={styles.manualSectionHeader}>
+        <View style={[styles.manualSectionIconWrap, { backgroundColor: roles.iconPrimarySurface }]}>
+          <AppIcon name={icon} size="sm" color={roles.iconPrimaryColor} />
+        </View>
+        <View style={styles.manualSectionCopy}>
+          <Text style={[styles.manualSectionTitle, { color: roles.headingText }]}>{title}</Text>
+          {body ? <Text style={[styles.manualSectionBody, { color: roles.bodyText }]}>{body}</Text> : null}
+        </View>
+      </View>
+      <View style={styles.manualSectionContent}>
+        {children}
       </View>
     </View>
   );
@@ -252,9 +321,18 @@ function JoinedDriveCard({ roles, drive }) {
 
 // ─── Hair log card (AI path) ──────────────────────────────────────────────────
 
-function HairLogCard({ roles, screening, isEligible, screeningLabel, onProceed, isLoading }) {
+function HairLogCard({
+  roles,
+  screening,
+  isEligible,
+  screeningLabel,
+  ineligibilityReason = '',
+  onProceed,
+  isLoading,
+}) {
   const lengthCm = Number(screening?.estimated_length);
   const lengthIn = lengthCm > 0 ? (lengthCm / 2.54).toFixed(1) : null;
+  const decisionText = buildDonationDecisionText({ screening, isEligible, ineligibilityReason });
 
   return (
     <View style={[styles.pathCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
@@ -296,8 +374,8 @@ function HairLogCard({ roles, screening, isEligible, screeningLabel, onProceed, 
         </View>
         <View style={[styles.hairLogTile, { backgroundColor: roles.supportCardBackground }]}>
           <Text style={[styles.hairLogTileLabel, { color: roles.metaText }]}>Decision</Text>
-          <Text style={[styles.hairLogTileValue, { color: roles.headingText }]}>
-            {screening?.decision || '—'}
+          <Text style={[styles.hairLogTileValue, { color: roles.headingText }]} numberOfLines={3}>
+            {decisionText || '—'}
           </Text>
         </View>
         <View style={[styles.hairLogTile, { backgroundColor: roles.supportCardBackground }]}>
@@ -317,7 +395,7 @@ function HairLogCard({ roles, screening, isEligible, screeningLabel, onProceed, 
         />
       ) : (
         <Text style={[styles.ineligibleNote, { color: roles.metaText }]}>
-          Your hair does not meet the current donation requirements. You may still submit manually.
+          {decisionText}
         </Text>
       )}
     </View>
@@ -351,17 +429,24 @@ function ManualEntryModal({
   visible, form, errors, photo, feedback, isSaving, aiPrefilled,
   onClose, onChangeField, onPickPhoto, onSave,
 }) {
+  const { resolvedTheme } = useAuth();
+  const roles = resolveThemeRoles(resolvedTheme);
+
   return (
     <ModalShell
       visible={visible}
       title="Hair donation details"
-      subtitle="Fill in your hair details and attach a photo."
+      subtitle="Enter your own hair details, then upload one clear photo for review."
       onClose={onClose}
       scrollContent
       footer={(
-        <View style={styles.rowActions}>
-          <AppButton title="Cancel" variant="outline" fullWidth={false} onPress={onClose} />
-          <AppButton title={isSaving ? 'Saving…' : 'Save & generate QR'} fullWidth={false} onPress={onSave} loading={isSaving} />
+        <View style={styles.modalFooterActions}>
+          <View style={styles.modalFooterActionHalf}>
+            <AppButton title="Cancel" variant="outline" onPress={onClose} />
+          </View>
+          <View style={styles.modalFooterActionHalf}>
+            <AppButton title={isSaving ? 'Saving…' : 'Save & generate QR'} onPress={onSave} loading={isSaving} />
+          </View>
         </View>
       )}
     >
@@ -376,48 +461,55 @@ function ManualEntryModal({
         <StatusBanner message={feedback.message} variant={feedback.variant} style={styles.bannerSpacing} />
       ) : null}
 
-      <View style={styles.formRow}>
-        <View style={styles.formRowFlex}>
-          <AppInput
-            label="Hair length"
-            required
-            value={form.lengthValue}
-            onChangeText={(v) => onChangeField('lengthValue', v.replace(/[^0-9.]/g, ''))}
-            keyboardType="decimal-pad"
-            placeholder="14"
-            error={errors.lengthValue}
-            helperText="Min 14 inches"
-          />
+      <ManualSection
+        icon="donations"
+        title="Hair measurements"
+        body="Enter your current hair length."
+        roles={roles}
+      >
+        <AppInput
+          label="Hair length"
+          required
+          value={form.lengthValue}
+          onChangeText={(v) => onChangeField('lengthValue', v.replace(/[^0-9.]/g, ''))}
+          keyboardType="decimal-pad"
+          placeholder="14"
+          error={errors.lengthValue}
+          helperText="Minimum required is 14 inches"
+        />
+        <ChoiceField
+          label="Unit"
+          value={form.lengthUnit}
+          options={LENGTH_UNIT_OPTIONS}
+          onChange={(v) => onChangeField('lengthUnit', v)}
+        />
+
+      </ManualSection>
+
+      <ManualSection
+        icon="checkHair"
+        title="Hair profile"
+        body="Set treatment and visible hair attributes."
+        roles={roles}
+      >
+        <View style={styles.manualChoiceGrid}>
+          <ChoiceField label="Treated" value={form.treated} options={YES_NO_OPTIONS} onChange={(v) => onChangeField('treated', v)} />
+          <ChoiceField label="Colored" value={form.colored} options={YES_NO_OPTIONS} onChange={(v) => onChangeField('colored', v)} />
+          <ChoiceField label="Trimmed" value={form.trimmed} options={YES_NO_OPTIONS} onChange={(v) => onChangeField('trimmed', v)} />
         </View>
-        <View style={styles.formRowUnit}>
-          <ChoiceField
-            label="Unit"
-            value={form.lengthUnit}
-            options={LENGTH_UNIT_OPTIONS}
-            onChange={(v) => onChangeField('lengthUnit', v)}
-          />
+
+        <View style={styles.manualChoiceGrid}>
+          <ChoiceField label="Hair color" value={form.hairColor} options={HAIR_COLOR_OPTIONS} onChange={(v) => onChangeField('hairColor', v)} />
+          <ChoiceField label="Density" value={form.density} options={MANUAL_DENSITY_OPTIONS} onChange={(v) => onChangeField('density', v)} />
         </View>
-      </View>
+      </ManualSection>
 
-      <AppInput
-        label="Number of bundles"
-        required
-        value={form.bundleQuantity}
-        onChangeText={(v) => onChangeField('bundleQuantity', v.replace(/[^0-9]/g, ''))}
-        keyboardType="number-pad"
-        placeholder="1"
-        error={errors.bundleQuantity}
-      />
-
-      <ChoiceField label="Treated" value={form.treated} options={YES_NO_OPTIONS} onChange={(v) => onChangeField('treated', v)} />
-      <ChoiceField label="Colored" value={form.colored} options={YES_NO_OPTIONS} onChange={(v) => onChangeField('colored', v)} />
-      <ChoiceField label="Trimmed" value={form.trimmed} options={YES_NO_OPTIONS} onChange={(v) => onChangeField('trimmed', v)} />
-      <ChoiceField label="Hair color" value={form.hairColor} options={HAIR_COLOR_OPTIONS} onChange={(v) => onChangeField('hairColor', v)} />
-      <ChoiceField label="Density" value={form.density} options={MANUAL_DENSITY_OPTIONS} onChange={(v) => onChangeField('density', v)} />
-
-      <View style={styles.photoCard}>
-        <Text style={styles.photoCardTitle}>Hair photo</Text>
-        <Text style={styles.photoCardBody}>Upload a clear photo of your hair for the donation record.</Text>
+      <ManualSection
+        icon="camera"
+        title="Reference photo"
+        body="Upload one clear photo with your hair fully visible."
+        roles={roles}
+      >
         {photo?.uri ? (
           <Image source={{ uri: photo.uri }} style={styles.photoPreview} resizeMode="cover" />
         ) : (
@@ -431,7 +523,164 @@ function ManualEntryModal({
           <AppButton title="Camera" fullWidth={false} onPress={() => onPickPhoto('camera')} />
         </View>
         {errors.photo ? <Text style={styles.inputError}>{errors.photo}</Text> : null}
-      </View>
+      </ManualSection>
+    </ModalShell>
+  );
+}
+
+function AddBundleModal({
+  visible,
+  bundleForm,
+  bundleErrors,
+  bundlePhoto,
+  bundleFeedback,
+  isSaving,
+  onClose,
+  onChangeField,
+  onPickPhoto,
+  onOpenScanner,
+  onAttachLatestScan,
+  onSave,
+}) {
+  const { resolvedTheme } = useAuth();
+  const roles = resolveThemeRoles(resolvedTheme);
+  const isDifferentDonor = bundleForm.donorType === 'different';
+  const isManual = bundleForm.inputMethod === 'manual';
+
+  return (
+    <ModalShell
+      visible={visible}
+      title="Add another bundle"
+      subtitle="Choose whose hair this bundle belongs to before adding it."
+      onClose={onClose}
+      scrollContent
+      footer={(
+        <View style={styles.modalFooterActions}>
+          <View style={styles.modalFooterActionHalf}>
+            <AppButton title="Cancel" variant="outline" onPress={onClose} disabled={isSaving} />
+          </View>
+          <View style={styles.modalFooterActionHalf}>
+            <AppButton title={isSaving ? 'Saving…' : 'Save bundle'} onPress={onSave} loading={isSaving} disabled={isSaving} />
+          </View>
+        </View>
+      )}
+    >
+      {bundleFeedback?.message ? (
+        <StatusBanner message={bundleFeedback.message} variant={bundleFeedback.variant} style={styles.bannerSpacing} />
+      ) : null}
+
+      <ManualSection
+        icon="account-circle-outline"
+        title="Whose hair is this?"
+        body="This decides how the bundle is validated and logged."
+        roles={roles}
+      >
+        <ChoiceField
+          label="Donor type"
+          value={bundleForm.donorType}
+          options={[
+            { label: 'My hair', value: 'own' },
+            { label: 'Different donor', value: 'different' },
+          ]}
+          onChange={(value) => onChangeField('donorType', value)}
+        />
+      </ManualSection>
+
+      {isDifferentDonor ? (
+        <ManualSection
+          icon="radar"
+          title="How will you add this bundle?"
+          body="For different-donor hair, use scan or manual details."
+          roles={roles}
+        >
+          <ChoiceField
+            label="Entry method"
+            value={bundleForm.inputMethod}
+            options={[
+              { label: 'Scan donor hair', value: 'scan' },
+              { label: 'Manual details', value: 'manual' },
+            ]}
+            onChange={(value) => onChangeField('inputMethod', value)}
+          />
+
+          {bundleForm.inputMethod === 'scan' ? (
+            <View style={styles.bundleScanActions}>
+              <AppButton title="Open CheckHair scanner" variant="outline" fullWidth={false} onPress={onOpenScanner} />
+              <AppButton title="Attach latest scanned result" fullWidth={false} onPress={onAttachLatestScan} />
+            </View>
+          ) : null}
+        </ManualSection>
+      ) : (
+        <ManualSection
+          icon="checkHair"
+          title="Use your latest hair log"
+          body="Tap Save bundle to attach your latest saved scan result as an additional own-hair bundle."
+          roles={roles}
+        />
+      )}
+
+      {(isDifferentDonor && isManual) ? (
+        <ManualSection
+          icon="donations"
+          title="Bundle details"
+          body="Enter the details for this additional bundle."
+          roles={roles}
+        >
+          <View style={styles.formRow}>
+            <View style={styles.formRowFlex}>
+              <AppInput
+                label="Hair length"
+                required
+                value={bundleForm.lengthValue}
+                onChangeText={(v) => onChangeField('lengthValue', v.replace(/[^0-9.]/g, ''))}
+                keyboardType="decimal-pad"
+                placeholder="14"
+                error={bundleErrors.lengthValue}
+              />
+            </View>
+            <View style={styles.formRowUnit}>
+              <ChoiceField
+                label="Unit"
+                value={bundleForm.lengthUnit}
+                options={LENGTH_UNIT_OPTIONS}
+                onChange={(value) => onChangeField('lengthUnit', value)}
+              />
+            </View>
+          </View>
+          <View style={styles.manualChoiceGrid}>
+            <ChoiceField label="Treated" value={bundleForm.treated} options={YES_NO_OPTIONS} onChange={(value) => onChangeField('treated', value)} />
+            <ChoiceField label="Colored" value={bundleForm.colored} options={YES_NO_OPTIONS} onChange={(value) => onChangeField('colored', value)} />
+            <ChoiceField label="Trimmed" value={bundleForm.trimmed} options={YES_NO_OPTIONS} onChange={(value) => onChangeField('trimmed', value)} />
+          </View>
+          <View style={styles.manualChoiceGrid}>
+            <ChoiceField label="Hair color" value={bundleForm.hairColor} options={HAIR_COLOR_OPTIONS} onChange={(value) => onChangeField('hairColor', value)} />
+            <ChoiceField label="Density" value={bundleForm.density} options={MANUAL_DENSITY_OPTIONS} onChange={(value) => onChangeField('density', value)} />
+          </View>
+        </ManualSection>
+      ) : null}
+
+      {(isDifferentDonor && isManual) ? (
+        <ManualSection
+          icon="camera"
+          title="Bundle photo"
+          body="Upload one clear photo for this additional bundle."
+          roles={roles}
+        >
+          {bundlePhoto?.uri ? (
+            <Image source={{ uri: bundlePhoto.uri }} style={styles.photoPreview} resizeMode="cover" />
+          ) : (
+            <View style={styles.photoPlaceholder}>
+              <AppIcon name="camera" size="md" state="muted" />
+              <Text style={styles.photoPlaceholderText}>No photo selected</Text>
+            </View>
+          )}
+          <View style={styles.rowActions}>
+            <AppButton title="Gallery" variant="outline" fullWidth={false} onPress={() => onPickPhoto('library')} />
+            <AppButton title="Camera" fullWidth={false} onPress={() => onPickPhoto('camera')} />
+          </View>
+          {bundleErrors.photo ? <Text style={styles.inputError}>{bundleErrors.photo}</Text> : null}
+        </ManualSection>
+      ) : null}
     </ModalShell>
   );
 }
@@ -442,7 +691,9 @@ function ShippingIdCard({ roles, qrPayload, qrState, submission, detail }) {
   const qrImageUrl = qrPayload ? buildQrImageUrl(qrPayload, 260) : '';
   const isActivated = Boolean(qrState?.is_activated);
   const submissionCode = submission?.submission_code || '';
-  const bundleQty = detail?.bundle_number || submission?.bundle_quantity || '';
+  const bundleQty = Array.isArray(submission?.submission_details)
+    ? submission.submission_details.length
+    : '';
   const declaredLength = detail?.declared_length ?? null;
 
   return (
@@ -652,19 +903,41 @@ function CertificateCard({ roles, certificate, donorName }) {
 
 // ─── Donation history row ─────────────────────────────────────────────────────
 
-function HistoryRow({ item }) {
+function BundlePreviewPanel({ roles, bundles = [] }) {
+  if (!bundles.length) return null;
+
   return (
-    <View style={styles.historyRow}>
-      <View style={styles.historyIcon}>
-        <AppIcon name="donations" size="sm" state="active" />
-      </View>
-      <View style={styles.historyCopy}>
-        <Text style={styles.historyCode} numberOfLines={1}>{item?.submission_code || 'Donation record'}</Text>
-        <Text style={styles.historyDate} numberOfLines={1}>{item?.date_label || 'Date unavailable'}</Text>
-      </View>
-      <Text style={styles.historyBundles}>
-        {item?.bundle_quantity ? `${item.bundle_quantity} bundle${item.bundle_quantity === 1 ? '' : 's'}` : '—'}
+    <View style={styles.bundlePreviewPanel}>
+      <Text style={[styles.bundlePreviewTitle, { color: roles.headingText }]}>Bundle preview before final QR</Text>
+      <Text style={[styles.bundlePreviewBody, { color: roles.metaText }]}>
+        Final QR will contain all bundle details listed below.
       </Text>
+      <View style={[styles.bundlePreviewList, { borderColor: roles.defaultCardBorder }]}>
+        {bundles.map((bundle, index) => (
+          <View
+            key={bundle.key}
+            style={[
+              styles.bundlePreviewRow,
+              index > 0 ? { borderTopWidth: 1, borderTopColor: roles.defaultCardBorder } : null,
+            ]}
+          >
+            <View style={styles.bundlePreviewRowTop}>
+              <Text style={[styles.bundlePreviewRowTitle, { color: roles.headingText }]}>
+                Bundle {bundle.bundleNumber || index + 1}
+              </Text>
+              <View style={[styles.bundlePreviewSourceChip, { backgroundColor: roles.iconPrimarySurface }]}>
+                <Text style={[styles.bundlePreviewSourceText, { color: roles.iconPrimaryColor }]}>{bundle.sourceLabel}</Text>
+              </View>
+            </View>
+            <View style={styles.bundlePreviewMetaGrid}>
+              <Text style={[styles.bundlePreviewMeta, { color: roles.bodyText }]}>Length: {bundle.lengthLabel}</Text>
+              <Text style={[styles.bundlePreviewMeta, { color: roles.bodyText }]}>Condition: {bundle.condition || '-'}</Text>
+              <Text style={[styles.bundlePreviewMeta, { color: roles.bodyText }]}>Color: {bundle.color || '-'}</Text>
+              <Text style={[styles.bundlePreviewMeta, { color: roles.bodyText }]}>Density: {bundle.density || '-'}</Text>
+            </View>
+          </View>
+        ))}
+      </View>
     </View>
   );
 }
@@ -704,6 +977,14 @@ export function DonorDonationStatusScreen() {
   const [parcelPhoto, setParcelPhoto] = React.useState(null);
   const [parcelFeedback, setParcelFeedback] = React.useState({ message: '', variant: 'info' });
   const [isSavingParcel, setIsSavingParcel] = React.useState(false);
+  const [isAddBundleModalOpen, setIsAddBundleModalOpen] = React.useState(false);
+  const [bundleForm, setBundleForm] = React.useState(ADDITIONAL_BUNDLE_DEFAULTS);
+  const [bundleErrors, setBundleErrors] = React.useState({});
+  const [bundlePhoto, setBundlePhoto] = React.useState(null);
+  const [bundleFeedback, setBundleFeedback] = React.useState({ message: '', variant: 'info' });
+  const [isSavingBundle, setIsSavingBundle] = React.useState(false);
+  const [isCancelModalOpen, setIsCancelModalOpen] = React.useState(false);
+  const [isCancellingDonation, setIsCancellingDonation] = React.useState(false);
 
   const avatarInitials = `${profile?.first_name?.[0] || ''}${profile?.last_name?.[0] || ''}`.trim();
 
@@ -749,6 +1030,37 @@ export function DonorDonationStatusScreen() {
   const isAiEligible = Boolean(moduleData?.isAiEligible);
   const hasOngoingDonation = Boolean(moduleData?.hasOngoingDonation);
   const independentQrState = moduleData?.independentQrState || null;
+  const hasGeneratedDonationQr = Boolean(independentQrState?.reference);
+
+  React.useEffect(() => {
+    if (!hasGeneratedDonationQr) return;
+    if (!moduleFeedback?.message) return;
+
+    const normalizedMessage = String(moduleFeedback.message).toLowerCase();
+    if (normalizedMessage.includes('qr was generated but could not be persisted')) {
+      setModuleFeedback({ message: '', variant: 'info' });
+    }
+  }, [hasGeneratedDonationQr, moduleFeedback?.message]);
+
+  const bundlePreviewItems = React.useMemo(() => {
+    const details = Array.isArray(moduleData?.latestSubmission?.submission_details) && moduleData.latestSubmission.submission_details.length
+      ? moduleData.latestSubmission.submission_details
+      : moduleData?.latestDetail ? [moduleData.latestDetail] : [];
+
+    return [...details]
+      .sort((left, right) => {
+        return new Date(left?.created_at || 0).getTime() - new Date(right?.created_at || 0).getTime();
+      })
+      .map((detail, index) => ({
+        key: String(detail?.submission_detail_id || `bundle-${index}`),
+        bundleNumber: index + 1,
+        sourceLabel: inferBundleSourceLabel(detail),
+        lengthLabel: formatBundleLengthLabel(detail?.declared_length),
+        condition: detail?.declared_condition || '',
+        color: detail?.declared_color || '',
+        density: detail?.declared_density || '',
+      }));
+  }, [moduleData?.latestDetail, moduleData?.latestSubmission?.submission_details]);
   const timelineStages = moduleData?.timelineStages || [];
   const certificate = moduleData?.certificate || null;
   const parcelImages = moduleData?.parcelImages || [];
@@ -769,6 +1081,7 @@ export function DonorDonationStatusScreen() {
     return buildDonationTrackingQrPayload({
       submission: moduleData.latestSubmission,
       detail: moduleData.latestDetail || null,
+      allDetails: moduleData?.latestSubmission?.submission_details || [],
       logistics: moduleData.logistics || null,
       trackingStatus: moduleData.latestSubmission?.status || '',
     });
@@ -783,25 +1096,34 @@ export function DonorDonationStatusScreen() {
   const handleProceedWithHairLog = React.useCallback(async () => {
     const aiDonation = moduleData?.latestAiDonation;
     if (!aiDonation?.submission) {
-      setModuleFeedback({ message: 'No eligible hair log found.', variant: 'error' });
+      setModuleFeedback({
+        message: moduleData?.latestAiEligibility?.reason || 'No eligible hair log found.',
+        variant: 'error',
+      });
       return;
     }
-    setModuleFeedback({ message: 'Generating your donation QR…', variant: 'info' });
+    setModuleFeedback({ message: 'Saving donation details…', variant: 'info' });
     setIsGeneratingQr(true);
-    const qrResult = await ensureIndependentDonationQr({
+    const draftResult = await startIndependentDonationDraft({
       userId: user?.id,
       submission: aiDonation.submission,
       databaseUserId: profile?.user_id || null,
     });
     setIsGeneratingQr(false);
     setModuleFeedback({
-      message: qrResult.success
-        ? 'Donation QR ready. Attach it to your hair package before shipping.'
-        : (qrResult.error || 'QR generation failed. Please try again.'),
-      variant: qrResult.success ? 'success' : 'error',
+      message: draftResult.success
+        ? 'Donation details saved. Add bundles if needed, then generate your QR as the final step.'
+        : (draftResult.error || 'Could not save donation details right now.'),
+      variant: draftResult.success ? 'success' : 'error',
     });
     await loadModuleData();
-  }, [loadModuleData, moduleData?.latestAiDonation, profile?.user_id, user?.id]);
+  }, [
+    loadModuleData,
+    moduleData?.latestAiDonation,
+    moduleData?.latestAiEligibility?.reason,
+    profile?.user_id,
+    user?.id,
+  ]);
 
   // ── Manual path
   const handleOpenManualModal = React.useCallback(() => {
@@ -827,7 +1149,7 @@ export function DonorDonationStatusScreen() {
 
   const updateManualField = React.useCallback((field, value) => {
     setManualForm((prev) => ({ ...prev, [field]: value }));
-    setManualFormErrors((prev) => ({ ...prev, [field]: '' }));
+    setManualFormErrors((prev) => ({ ...prev, [field]: '', photo: '' }));
   }, []);
 
   const handlePickManualPhoto = React.useCallback(async (mode = 'library') => {
@@ -842,12 +1164,8 @@ export function DonorDonationStatusScreen() {
   const handleSaveManualDetails = React.useCallback(async () => {
     const nextErrors = {};
     const numericLength = Number(manualForm.lengthValue);
-    const numericBundleQty = Number.parseInt(manualForm.bundleQuantity, 10);
     if (!Number.isFinite(numericLength) || numericLength <= 0) {
       nextErrors.lengthValue = 'Enter a valid hair length.';
-    }
-    if (!Number.isInteger(numericBundleQty) || numericBundleQty <= 0) {
-      nextErrors.bundleQuantity = 'Enter at least 1 bundle.';
     }
     if (!manualPhoto) {
       nextErrors.photo = 'Please upload or capture a hair photo.';
@@ -864,7 +1182,7 @@ export function DonorDonationStatusScreen() {
       manualDetails: {
         length_value: numericLength,
         length_unit: manualForm.lengthUnit,
-        bundle_quantity: numericBundleQty,
+        bundle_quantity: 1,
         treated: manualForm.treated,
         colored: manualForm.colored,
         trimmed: manualForm.trimmed,
@@ -884,19 +1202,19 @@ export function DonorDonationStatusScreen() {
     setIsManualModalOpen(false);
 
     if (result.canProceed && result.submission) {
-      setModuleFeedback({ message: 'Details saved. Generating your donation QR…', variant: 'info' });
+      setModuleFeedback({ message: 'Details saved. Starting your donation flow…', variant: 'info' });
       setIsGeneratingQr(true);
-      const qrResult = await ensureIndependentDonationQr({
+      const draftResult = await startIndependentDonationDraft({
         userId: user?.id,
         submission: result.submission,
         databaseUserId: profile?.user_id || null,
       });
       setIsGeneratingQr(false);
       setModuleFeedback({
-        message: qrResult.success
-          ? 'Donation QR ready. Attach it to your hair package before shipping.'
-          : (qrResult.error || 'Details saved but QR generation failed.'),
-        variant: qrResult.success ? 'success' : 'error',
+        message: draftResult.success
+          ? 'Donation details saved. Add bundles if needed, then generate your QR as the final step.'
+          : (draftResult.error || 'Details saved but donation flow could not be started.'),
+        variant: draftResult.success ? 'success' : 'error',
       });
     } else {
       setModuleFeedback({
@@ -906,7 +1224,191 @@ export function DonorDonationStatusScreen() {
     }
 
     await loadModuleData();
-  }, [loadModuleData, manualForm, manualPhoto, moduleData?.latestDonationRequirement, profile?.user_id, user?.id]);
+  }, [
+    loadModuleData,
+    manualForm,
+    manualPhoto,
+    moduleData?.latestDonationRequirement,
+    profile?.user_id,
+    user?.id,
+  ]);
+
+  const handleOpenAddBundleModal = React.useCallback(() => {
+    if (!moduleData?.latestSubmission?.submission_id) {
+      setModuleFeedback({ message: 'No active donation record found.', variant: 'error' });
+      return;
+    }
+
+    setBundleForm(ADDITIONAL_BUNDLE_DEFAULTS);
+    setBundleErrors({});
+    setBundlePhoto(null);
+    setBundleFeedback({ message: '', variant: 'info' });
+    setIsAddBundleModalOpen(true);
+  }, [moduleData?.latestSubmission?.submission_id]);
+
+  const handleUpdateBundleField = React.useCallback((field, value) => {
+    setBundleForm((prev) => {
+      const next = { ...prev, [field]: value };
+      if (field === 'donorType' && value === 'own') {
+        next.inputMethod = 'scan';
+      }
+      return next;
+    });
+    setBundleErrors((prev) => ({ ...prev, [field]: '', photo: '' }));
+  }, []);
+
+  const handlePickBundlePhoto = React.useCallback(async (mode = 'library') => {
+    const picker = mode === 'camera' ? ImagePicker.launchCameraAsync : ImagePicker.launchImageLibraryAsync;
+    const result = await picker({ mediaTypes: ['images'], allowsEditing: true, quality: 0.72, base64: true });
+    if (result.canceled || !result.assets?.length) return;
+    const asset = result.assets[0];
+    setBundlePhoto({ uri: asset.uri, base64: asset.base64 || '', mimeType: asset.mimeType || 'image/jpeg', fileName: asset.fileName || '' });
+    setBundleErrors((prev) => ({ ...prev, photo: '' }));
+  }, []);
+
+  const handleAttachLatestScanForBundle = React.useCallback(async () => {
+    const submission = moduleData?.latestSubmission;
+    if (!submission?.submission_id) {
+      setBundleFeedback({ message: 'No active donation record found.', variant: 'error' });
+      return;
+    }
+    if (!moduleData?.latestScreening) {
+      setBundleFeedback({ message: 'No recent scan was found. Open CheckHair and scan first.', variant: 'error' });
+      return;
+    }
+
+    setIsSavingBundle(true);
+    const result = await addDonationBundleFromAnalysis({
+      userId: user?.id || null,
+      databaseUserId: profile?.user_id || null,
+      submission,
+      screening: moduleData.latestScreening,
+      referenceDetail: moduleData?.latestAnalysisEntry?.detail || moduleData?.latestDetail || null,
+      donorType: bundleForm.donorType,
+    });
+    setIsSavingBundle(false);
+
+    if (!result.success) {
+      setBundleFeedback({ message: result.error || 'Could not attach scanned bundle right now.', variant: 'error' });
+      return;
+    }
+
+    setIsAddBundleModalOpen(false);
+    setModuleFeedback({ message: 'Additional scanned bundle added to this donation.', variant: 'success' });
+    await loadModuleData();
+  }, [
+    bundleForm.donorType,
+    loadModuleData,
+    moduleData?.latestAnalysisEntry?.detail,
+    moduleData?.latestDetail,
+    moduleData?.latestScreening,
+    moduleData?.latestSubmission,
+    profile?.user_id,
+    user?.id,
+  ]);
+
+  const handleSaveAdditionalBundle = React.useCallback(async () => {
+    const submission = moduleData?.latestSubmission;
+    if (!submission?.submission_id) {
+      setBundleFeedback({ message: 'No active donation record found.', variant: 'error' });
+      return;
+    }
+
+    if (bundleForm.donorType === 'own' || (bundleForm.donorType === 'different' && bundleForm.inputMethod === 'scan')) {
+      await handleAttachLatestScanForBundle();
+      return;
+    }
+
+    const nextErrors = {};
+    const numericLength = Number(bundleForm.lengthValue);
+    if (!Number.isFinite(numericLength) || numericLength <= 0) {
+      nextErrors.lengthValue = 'Enter a valid hair length.';
+    }
+    if (!bundlePhoto) {
+      nextErrors.photo = 'Please upload or capture a bundle photo.';
+    }
+    if (Object.keys(nextErrors).length) {
+      setBundleErrors(nextErrors);
+      return;
+    }
+
+    setIsSavingBundle(true);
+    const result = await addDonationBundleFromManualDetails({
+      userId: user?.id || null,
+      databaseUserId: profile?.user_id || null,
+      submission,
+      donorType: bundleForm.donorType,
+      manualDetails: {
+        length_value: numericLength,
+        length_unit: bundleForm.lengthUnit,
+        treated: bundleForm.treated,
+        colored: bundleForm.colored,
+        trimmed: bundleForm.trimmed,
+        hair_color: bundleForm.hairColor,
+        density: bundleForm.density,
+      },
+      photo: bundlePhoto,
+    });
+    setIsSavingBundle(false);
+
+    if (!result.success) {
+      setBundleFeedback({ message: result.error || 'Could not add this bundle right now.', variant: 'error' });
+      return;
+    }
+
+    setIsAddBundleModalOpen(false);
+    setModuleFeedback({
+      message: bundleForm.donorType === 'different'
+        ? 'Different-donor bundle added to this donation.'
+        : 'Additional bundle added to this donation.',
+      variant: 'success',
+    });
+    await loadModuleData();
+  }, [
+    bundleForm.colored,
+    bundleForm.density,
+    bundleForm.donorType,
+    bundleForm.hairColor,
+    bundleForm.inputMethod,
+    bundleForm.lengthUnit,
+    bundleForm.lengthValue,
+    bundleForm.treated,
+    bundleForm.trimmed,
+    bundlePhoto,
+    handleAttachLatestScanForBundle,
+    loadModuleData,
+    moduleData?.latestSubmission,
+    profile?.user_id,
+    user?.id,
+  ]);
+
+  const handleGenerateDonationQr = React.useCallback(async () => {
+    const submission = moduleData?.latestSubmission;
+    if (!submission?.submission_id) {
+      setModuleFeedback({ message: 'No active donation record found.', variant: 'error' });
+      return;
+    }
+
+    setModuleFeedback({ message: 'Generating your final donation QR…', variant: 'info' });
+    setIsGeneratingQr(true);
+    const qrResult = await ensureIndependentDonationQr({
+      userId: user?.id,
+      submission,
+      databaseUserId: profile?.user_id || null,
+    });
+    setIsGeneratingQr(false);
+
+    if (!qrResult.success) {
+      setModuleFeedback({ message: qrResult.error || 'QR generation failed. Please try again.', variant: 'error' });
+      return;
+    }
+
+    setModuleFeedback({
+      message: 'Final QR generated. Attach it to your parcel, then submit parcel photo.',
+      variant: 'success',
+    });
+    await loadModuleData();
+  }, [loadModuleData, moduleData?.latestSubmission, profile?.user_id, user?.id]);
 
   // ── Parcel photo
   const handlePickParcelPhoto = React.useCallback(async (mode = 'library') => {
@@ -985,6 +1487,34 @@ export function DonorDonationStatusScreen() {
     setParcelFeedback({ message: 'Parcel photo submitted. Your donation is ready for shipment!', variant: 'success' });
     await loadModuleData();
   }, [activeDonationQrPayload, independentQrState, loadModuleData, moduleData?.latestDetail, moduleData?.latestSubmission, parcelPhoto, profile?.user_id, user?.id]);
+
+  const handleConfirmCancelDonation = React.useCallback(async () => {
+    const submission = moduleData?.latestSubmission;
+    if (!submission?.submission_id) {
+      setModuleFeedback({ message: 'No active donation record found.', variant: 'error' });
+      setIsCancelModalOpen(false);
+      return;
+    }
+
+    setIsCancellingDonation(true);
+    const result = await cancelDonorDonation({
+      userId: user?.id || null,
+      databaseUserId: profile?.user_id || null,
+      submission,
+      detail: moduleData?.latestDetail || null,
+      reason: 'Cancelled by donor from donor donation module.',
+    });
+    setIsCancellingDonation(false);
+    setIsCancelModalOpen(false);
+
+    if (!result.success) {
+      setModuleFeedback({ message: result.error || 'Unable to cancel donation right now.', variant: 'error' });
+      return;
+    }
+
+    setModuleFeedback({ message: 'Donation cancelled. You can start a new donation anytime.', variant: 'success' });
+    await loadModuleData();
+  }, [loadModuleData, moduleData?.latestDetail, moduleData?.latestSubmission, profile?.user_id, user?.id]);
 
   // ── Render
   return (
@@ -1065,6 +1595,7 @@ export function DonorDonationStatusScreen() {
                       screening={latestScreening}
                       isEligible={isAiEligible}
                       screeningLabel={screeningLabel}
+                      ineligibilityReason={moduleData?.latestAiEligibility?.reason || ''}
                       onProceed={handleProceedWithHairLog}
                       isLoading={isGeneratingQr}
                     />
@@ -1075,7 +1606,7 @@ export function DonorDonationStatusScreen() {
               ) : null}
 
               {/* ── Active donation: QR + parcel photo */}
-              {hasOngoingDonation ? (
+              {hasOngoingDonation && hasGeneratedDonationQr ? (
                 <View style={styles.section}>
                   <SectionHeader
                     eyebrow="Step 1"
@@ -1093,7 +1624,7 @@ export function DonorDonationStatusScreen() {
                 </View>
               ) : null}
 
-              {hasOngoingDonation ? (
+              {hasOngoingDonation && hasGeneratedDonationQr ? (
                 <ParcelPhotoSection
                   roles={roles}
                   parcelImages={parcelImages}
@@ -1126,17 +1657,64 @@ export function DonorDonationStatusScreen() {
                   donorName={profile?.first_name || ''}
                 />
               ) : null}
+
             </>
           )}
 
-          {/* ── Completed donation history */}
-          {moduleData?.completedDonationHistory?.length ? (
-            <View style={styles.section}>
-              <SectionHeader eyebrow="History" title="Completed donations" roles={roles} />
-              <View style={styles.historyList}>
-                {moduleData.completedDonationHistory.map((item) => (
-                  <HistoryRow key={item.submission_id} item={item} />
-                ))}
+          <View style={[styles.card, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
+            <SectionHeader
+              eyebrow="History"
+              title="Donation history"
+              body={(moduleData?.donationHistory?.length || 0) > 0
+                ? `${moduleData.donationHistory.length} record${moduleData.donationHistory.length > 1 ? 's' : ''} saved.`
+                : 'View your completed, cancelled, and closed donation records.'}
+              roles={roles}
+            />
+            <AppButton
+              title="View history module"
+              variant="outline"
+              fullWidth={false}
+              onPress={() => router.navigate('/donor/donation-history')}
+            />
+          </View>
+
+          {hasOngoingDonation ? (
+            <View style={[styles.card, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
+              <SectionHeader
+                eyebrow="Last step"
+                title="Finalize donation"
+                body={hasGeneratedDonationQr
+                  ? 'Your final QR is ready. Attach it to your parcel and continue shipment steps.'
+                  : 'Add all needed bundles first. Generate QR only when bundle details are final.'}
+                roles={roles}
+              />
+              {!hasGeneratedDonationQr ? (
+                <BundlePreviewPanel roles={roles} bundles={bundlePreviewItems} />
+              ) : null}
+              <View style={styles.rowActions}>
+                {!hasGeneratedDonationQr ? (
+                  <AppButton
+                    title="Add bundle"
+                    variant="outline"
+                    fullWidth={false}
+                    onPress={handleOpenAddBundleModal}
+                  />
+                ) : null}
+                {!hasGeneratedDonationQr ? (
+                  <AppButton
+                    title={isGeneratingQr ? 'Generating QR…' : 'Generate final QR'}
+                    fullWidth={false}
+                    onPress={handleGenerateDonationQr}
+                    loading={isGeneratingQr}
+                    disabled={isGeneratingQr || bundlePreviewItems.length === 0}
+                  />
+                ) : null}
+                <AppButton
+                  title="Cancel donation"
+                  variant="danger"
+                  fullWidth={false}
+                  onPress={() => setIsCancelModalOpen(true)}
+                />
               </View>
             </View>
           ) : null}
@@ -1160,6 +1738,58 @@ export function DonorDonationStatusScreen() {
         onPickPhoto={handlePickManualPhoto}
         onSave={handleSaveManualDetails}
       />
+
+      <AddBundleModal
+        visible={isAddBundleModalOpen}
+        bundleForm={bundleForm}
+        bundleErrors={bundleErrors}
+        bundlePhoto={bundlePhoto}
+        bundleFeedback={bundleFeedback}
+        isSaving={isSavingBundle}
+        onClose={() => {
+          if (!isSavingBundle) setIsAddBundleModalOpen(false);
+        }}
+        onChangeField={handleUpdateBundleField}
+        onPickPhoto={handlePickBundlePhoto}
+        onOpenScanner={() => {
+          setIsAddBundleModalOpen(false);
+          router.navigate('/donor/donations');
+        }}
+        onAttachLatestScan={handleAttachLatestScanForBundle}
+        onSave={handleSaveAdditionalBundle}
+      />
+
+      <ModalShell
+        visible={isCancelModalOpen}
+        title="Cancel donation"
+        subtitle="This action will mark your active donation as cancelled."
+        onClose={() => {
+          if (!isCancellingDonation) setIsCancelModalOpen(false);
+        }}
+        footer={(
+          <View style={styles.rowActions}>
+            <AppButton
+              title="Keep donation"
+              variant="outline"
+              fullWidth={false}
+              onPress={() => setIsCancelModalOpen(false)}
+              disabled={isCancellingDonation}
+            />
+            <AppButton
+              title={isCancellingDonation ? 'Cancelling…' : 'Yes, cancel'}
+              variant="danger"
+              fullWidth={false}
+              onPress={handleConfirmCancelDonation}
+              loading={isCancellingDonation}
+              disabled={isCancellingDonation}
+            />
+          </View>
+        )}
+      >
+        <Text style={styles.cancelModalText}>
+          You can start a new donation after cancellation. This will close your current shipment flow and timeline.
+        </Text>
+      </ModalShell>
     </DashboardLayout>
   );
 }
@@ -1372,11 +2002,52 @@ const styles = StyleSheet.create({
   },
 
   // Manual modal form
+  manualSectionCard: {
+    borderWidth: 1,
+    borderRadius: theme.radius.lg,
+    padding: theme.spacing.md,
+    gap: theme.spacing.md,
+  },
+  manualSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.spacing.sm,
+  },
+  manualSectionIconWrap: {
+    width: 34,
+    height: 34,
+    borderRadius: theme.radius.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  manualSectionCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  manualSectionTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  manualSectionBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+  },
+  manualSectionContent: {
+    gap: theme.spacing.sm,
+  },
+  bundleScanActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.spacing.sm,
+    justifyContent: 'flex-end',
+  },
   formRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: theme.spacing.md,
-    marginBottom: theme.spacing.md,
   },
   formRowFlex: {
     flex: 1,
@@ -1388,7 +2059,13 @@ const styles = StyleSheet.create({
   },
   choiceField: {
     gap: theme.spacing.xs,
-    marginBottom: theme.spacing.md,
+    flex: 1,
+    minWidth: 0,
+  },
+  manualChoiceGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.spacing.sm,
   },
   choiceLabel: {
     fontFamily: theme.typography.fontFamily,
@@ -1692,32 +2369,113 @@ const styles = StyleSheet.create({
     color: theme.colors.textSecondary,
   },
 
+  // Bundle preview before final QR
+  bundlePreviewPanel: {
+    gap: theme.spacing.xs,
+  },
+  bundlePreviewTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  bundlePreviewBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+    marginBottom: theme.spacing.xs,
+  },
+  bundlePreviewList: {
+    borderWidth: 1,
+    borderRadius: theme.radius.lg,
+    borderColor: theme.colors.borderSubtle,
+    overflow: 'hidden',
+  },
+  bundlePreviewRow: {
+    gap: theme.spacing.xs,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+  },
+  bundlePreviewRowTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+  },
+  bundlePreviewRowTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  bundlePreviewSourceChip: {
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: 4,
+  },
+  bundlePreviewSourceText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  bundlePreviewMetaGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.spacing.xs,
+  },
+  bundlePreviewMeta: {
+    minWidth: '46%',
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+  },
+
   // Row actions
   rowActions: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: theme.spacing.sm,
-    justifyContent: 'flex-end',
+    justifyContent: 'flex-start',
+  },
+  modalFooterActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  modalFooterActionHalf: {
+    flex: 1,
   },
   bannerSpacing: {
     marginBottom: theme.spacing.md,
+  },
+  cancelModalText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    color: theme.colors.textSecondary,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
   },
 
   // Modal
   modalOverlay: {
     flex: 1,
-    justifyContent: 'center',
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.xxl,
+    justifyContent: 'flex-end',
+    paddingHorizontal: 0,
+    paddingTop: theme.spacing.xxl,
+    paddingBottom: 0,
     backgroundColor: theme.colors.overlay,
   },
+  modalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
   modalCard: {
-    backgroundColor: theme.colors.surfaceElevated,
-    borderRadius: theme.radius.xxl,
-    padding: theme.spacing.lg,
+    backgroundColor: theme.colors.backgroundPrimary,
+    borderTopLeftRadius: theme.radius.xxl,
+    borderTopRightRadius: theme.radius.xxl,
+    borderBottomLeftRadius: 0,
+    borderBottomRightRadius: 0,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+    paddingTop: theme.spacing.md,
     width: '100%',
-    maxWidth: 420,
-    maxHeight: '86%',
+    maxWidth: theme.layout.contentMaxWidth,
+    maxHeight: '94%',
     alignSelf: 'center',
     overflow: 'hidden',
   },
@@ -1725,15 +2483,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     gap: theme.spacing.sm,
-    marginBottom: theme.spacing.md,
+    marginBottom: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.md,
   },
   modalHeaderCopy: {
     flex: 1,
     gap: 4,
   },
   modalTitle: {
-    fontFamily: theme.typography.fontFamilyDisplay,
+    fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.bodyLg,
+    fontWeight: theme.typography.weights.semibold,
     color: theme.colors.textPrimary,
   },
   modalSubtitle: {
@@ -1743,28 +2503,35 @@ const styles = StyleSheet.create({
     lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
   },
   modalCloseBtn: {
-    width: 34,
-    height: 34,
+    width: 40,
+    height: 40,
     borderRadius: theme.radius.full,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: theme.colors.surfaceSoft,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
   },
   modalBody: {
     flexShrink: 1,
     minHeight: 0,
+    paddingHorizontal: theme.spacing.md,
   },
   modalScroll: {
     flexShrink: 1,
     minHeight: 0,
   },
   modalScrollContent: {
+    gap: theme.spacing.sm,
     paddingBottom: theme.spacing.md,
   },
   modalFooter: {
-    marginTop: theme.spacing.md,
+    marginTop: theme.spacing.xs,
+    paddingHorizontal: theme.spacing.md,
+    paddingBottom: theme.spacing.md,
     paddingTop: theme.spacing.sm,
     borderTopWidth: 1,
     borderTopColor: theme.colors.borderSubtle,
+    backgroundColor: theme.colors.backgroundPrimary,
   },
 });

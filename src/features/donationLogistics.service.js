@@ -74,7 +74,6 @@ export const submitDonation = async ({
       user_id: userId,
       submission_code: submissionCode,
       donation_source: sourceType,
-      bundle_quantity: donationDetails.bundleQuantity || 1,
       donor_notes: `Donation from logistics flow - ${donationDetails.hairLengthValue}${donationDetails.hairLengthUnit}`,
       status: 'Pending',
     });
@@ -89,7 +88,6 @@ export const submitDonation = async ({
     // Create submission detail
     const detailResult = await createHairSubmissionDetail({
       submission_id: createdSubmission.submission_id,
-      bundle_number: 1,
       declared_length: donationDetails.hairLengthValue || null,
       declared_color: donationDetails.detectedColor || null,
       declared_texture: donationDetails.detectedTexture || null,

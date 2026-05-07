@@ -5,6 +5,22 @@ import { getErrorMessage, logAppError, logAppEvent } from '../utils/appErrors';
 
 const WEB_ANALYSIS_IMAGE_MAX_SIZE = 1400;
 const WEB_ANALYSIS_IMAGE_QUALITY = 0.8;
+const HAIR_ANALYSIS_MAX_INVOKE_ATTEMPTS = 3;
+const HAIR_ANALYSIS_RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+
+const waitFor = async (milliseconds = 0) => (
+  await new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(milliseconds) || 0)))
+);
+
+const resolveRetryDelayMs = ({ attempt = 1, retryAfterSeconds = null }) => {
+  const retryAfter = Number(retryAfterSeconds);
+  if (Number.isFinite(retryAfter) && retryAfter > 0) {
+    return Math.min(Math.ceil(retryAfter * 1000), 12000);
+  }
+
+  const backoff = 700 * Math.pow(2, Math.max(0, attempt - 1));
+  return Math.min(backoff, 4200);
+};
 
 const normalizeRecommendations = (source = []) => (
   source
@@ -494,16 +510,29 @@ export const analyzeHairPhotos = async ({
       estimatedImagePayloadBytes: estimateImagePayloadBytes(preparedImages),
     });
 
-    const functionResult = await invokeEdgeFunction(hairAnalysisFunctionName, {
-      body: payload,
-    });
+    let functionResult = null;
+    for (let attempt = 1; attempt <= HAIR_ANALYSIS_MAX_INVOKE_ATTEMPTS; attempt += 1) {
+      functionResult = await invokeEdgeFunction(hairAnalysisFunctionName, {
+        body: payload,
+      });
 
-    if (functionResult.error) {
+      if (!functionResult.error) break;
+
       const errorPayload = await extractErrorPayloadFromResponse(functionResult.error?.context);
       const edgeFunctionInvoked = errorPayload?.edge_function_invoked === true;
       const providerRequestAttempted = errorPayload?.provider_request_attempted === true;
       const providerResponseStatus = errorPayload?.provider_response_status ?? null;
       const providerParseSuccess = errorPayload?.provider_parse_success ?? null;
+      const resolvedErrorMessage = errorPayload?.error || await resolveFunctionErrorMessage(functionResult.error);
+      const normalizedErrorType = String(errorPayload?.error_type || '').trim().toLowerCase();
+      const retryAfterSeconds = providerRequestAttempted ? errorPayload?.retry_after_seconds ?? null : null;
+      const isRetryableProviderBusyError = (
+        edgeFunctionInvoked
+        && providerRequestAttempted
+        && HAIR_ANALYSIS_RETRYABLE_STATUS.has(Number(providerResponseStatus))
+        && (isTemporaryUnavailableError(resolvedErrorMessage, normalizedErrorType) || isQuotaLikeError(resolvedErrorMessage, normalizedErrorType))
+      );
+      const canRetry = isRetryableProviderBusyError && attempt < HAIR_ANALYSIS_MAX_INVOKE_ATTEMPTS;
 
       logAppEvent('hairAnalysis.invoke', 'Hair analysis edge invoke failed before a usable result was returned.', {
         functionName: hairAnalysisFunctionName,
@@ -512,9 +541,11 @@ export const analyzeHairPhotos = async ({
         providerRequestAttempted,
         providerResponseStatus,
         providerParseSuccess,
+        attempt,
+        maxAttempts: HAIR_ANALYSIS_MAX_INVOKE_ATTEMPTS,
+        willRetry: canRetry,
       }, 'warn');
 
-      const resolvedErrorMessage = errorPayload?.error || await resolveFunctionErrorMessage(functionResult.error);
       if (
         edgeFunctionInvoked
         && providerRequestAttempted
@@ -532,6 +563,7 @@ export const analyzeHairPhotos = async ({
           imageCount: payload.images.length,
           providerResponseStatus,
           providerParseSuccess,
+          attempt,
         }, 'warn');
 
         return {
@@ -540,6 +572,21 @@ export const analyzeHairPhotos = async ({
           error: null,
           recoveredFromIncompleteProviderResponse: true,
         };
+      }
+
+      if (canRetry) {
+        const retryDelayMs = resolveRetryDelayMs({ attempt, retryAfterSeconds });
+        logAppEvent('hairAnalysis.invoke', 'Retrying hair analysis after provider temporary-unavailable response.', {
+          functionName: hairAnalysisFunctionName,
+          attempt,
+          maxAttempts: HAIR_ANALYSIS_MAX_INVOKE_ATTEMPTS,
+          retryDelayMs,
+          retryAfterSeconds: retryAfterSeconds ?? null,
+          providerResponseStatus,
+          errorType: normalizedErrorType || null,
+        }, 'warn');
+        await waitFor(retryDelayMs);
+        continue;
       }
 
       throw buildStructuredAnalysisError(

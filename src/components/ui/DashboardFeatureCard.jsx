@@ -1,10 +1,13 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import * as Haptics from 'expo-haptics';
+import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { AppCard } from './AppCard';
 import { AppIcon } from './AppIcon';
 import { theme, resolveThemeRoles } from '../../design-system/theme';
 import { useAuth } from '../../providers/AuthProvider';
+
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 export const DashboardFeatureCard = ({
   title,
@@ -24,6 +27,10 @@ export const DashboardFeatureCard = ({
   const iconColor = variant === 'patient' ? roles.iconSupportColor : roles.iconPrimaryColor;
   const badgeBackground = variant === 'patient' ? roles.badgeBackground : roles.badgeStrongBackground;
   const badgeTextColor = variant === 'patient' ? roles.badgeText : roles.badgeStrongText;
+  const scale = useSharedValue(1);
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+  }));
 
   const handlePress = async () => {
     if (!onPress) return;
@@ -32,7 +39,16 @@ export const DashboardFeatureCard = ({
   };
 
   return (
-    <Pressable onPress={handlePress} style={[styles.wrapper, { width }]}>
+    <AnimatedPressable
+      onPress={handlePress}
+      onPressIn={() => {
+        scale.value = withSpring(0.98, theme.motion.spring);
+      }}
+      onPressOut={() => {
+        scale.value = withSpring(1, theme.motion.spring);
+      }}
+      style={[styles.wrapper, { width }, animatedStyle]}
+    >
       <AppCard variant={tintVariant} radius="xl" padding="lg" style={styles.card}>
         <View style={styles.topRow}>
           <View style={styles.badgeWrap}>
@@ -59,7 +75,7 @@ export const DashboardFeatureCard = ({
         <Text style={[styles.description, { color: roles.bodyText }]}>{description}</Text>
         {meta ? <Text style={[styles.meta, { color: roles.metaText }]}>{meta}</Text> : null}
       </AppCard>
-    </Pressable>
+    </AnimatedPressable>
   );
 };
 

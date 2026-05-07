@@ -306,8 +306,8 @@ const buildLogisticsRowPayload = ({ submissionId, donationMode, logisticsSetting
   }
   if (donationMode.value === 'pickup') {
     notes.push('Donor requested pickup after AI screening.');
-    if (logisticsSettings?.pickup_notes) {
-      notes.push(logisticsSettings.pickup_notes);
+    if (logisticsSettings?.destination_name) {
+      notes.push(`Pickup or receiving point: ${logisticsSettings.destination_name}.`);
     }
   }
 
@@ -370,13 +370,7 @@ export const saveHairSubmissionFlow = async ({
       user_id: userId,
       database_user_id: databaseUserId,
       submission_code: buildSubmissionCode(),
-      bundle_quantity: 1,
-      donation_source: 'mobile_app',
-      delivery_method: selectedDonationMode?.delivery_method
-        || (normalizedQuestionnaire.screening_intent === 'checking_eligibility_first' ? 'eligibility_check' : null),
-      pickup_request: selectedDonationMode?.pickup_request ?? false,
       status: hairSubmissionStatuses.submission.submitted,
-      donor_notes: detailNotes || null,
     };
 
     logAppEvent('hair_submission.save', 'Hair submission payload built.', {
@@ -385,8 +379,6 @@ export const saveHairSubmissionFlow = async ({
       donationModeValue,
       selectedDonationMode: selectedDonationMode?.value || null,
       submissionPayloadKeys: Object.keys(submissionPayload),
-      deliveryMethod: submissionPayload.delivery_method,
-      pickupRequest: submissionPayload.pickup_request,
     });
 
     const { data: submission, error: submissionError } = await HairSubmissionAPI.createHairSubmission(submissionPayload);
@@ -403,7 +395,6 @@ export const saveHairSubmissionFlow = async ({
 
     const detailPayload = {
       submission_id: submission.submission_id,
-      bundle_number: 1,
       declared_length: Number(confirmedValues.declaredLength),
       declared_color: confirmedValues.declaredColor || aiAnalysis?.detected_color || null,
       declared_texture: confirmedValues.declaredTexture,
@@ -697,7 +688,7 @@ export const getHairAnalyzerContext = async (userId) => {
       hasDonationRequirement: Boolean(donationRequirement?.donation_requirement_id),
       latestSubmissionId: latestSubmission?.submission_id || null,
       latestSubmissionDetailId: latestSubmissionDetail?.submission_detail_id || null,
-      pickupEnabled: logisticsSettings?.is_pickup_enabled ?? null,
+      hasLogisticsDestination: Boolean(logisticsSettings?.destination_name),
       haircutScheduleCount: Array.isArray(upcomingHaircutSchedules) ? upcomingHaircutSchedules.length : 0,
       latestReservationId: latestHaircutReservation?.reservation_id || null,
       latestCertificateId: latestCertificate?.certificate_id || null,

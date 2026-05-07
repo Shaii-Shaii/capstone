@@ -587,7 +587,7 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
         userId,
         databaseUserId,
         hasDonationRequirement: Boolean(result.donationRequirement?.donation_requirement_id),
-        pickupEnabled: result.logisticsSettings?.is_pickup_enabled ?? null,
+        hasLogisticsDestination: Boolean(result.logisticsSettings?.destination_name),
         haircutScheduleCount: Array.isArray(result.upcomingHaircutSchedules) ? result.upcomingHaircutSchedules.length : 0,
         latestSubmissionId: result.latestSubmission?.submission_id || null,
         latestSubmissionDetailId: result.latestSubmissionDetail?.submission_detail_id || null,
@@ -946,7 +946,11 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
       submissionId: result.submission?.submission_id || null,
     });
 
-    setSuccessMessage('Hair check saved successfully. Your AI result is now added to your hair log.');
+    setSuccessMessage(
+      result.submission?.submission_code
+        ? `Hair check saved. Attach code ${result.submission.submission_code} to your parcel before shipment.`
+        : 'Hair check saved successfully. Your AI result is now added to your hair log.'
+    );
     setPhotos(createEmptyPhotoSlots());
     setAnalysis(null);
     return { success: true, submission: result.submission };

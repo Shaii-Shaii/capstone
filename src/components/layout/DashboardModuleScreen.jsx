@@ -1,7 +1,8 @@
 import React from 'react';
-import { StyleSheet, View } from 'react-native';
+import { StyleSheet } from 'react-native';
 import { usePathname, useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
+import Animated, { FadeInUp } from 'react-native-reanimated';
 import { useAuth } from '../../providers/AuthProvider';
 import { useNotifications } from '../../hooks/useNotifications';
 import { theme } from '../../design-system/theme';
@@ -69,7 +70,7 @@ export function DashboardModuleScreen({ role, navItems, module }) {
         />
       )}
     >
-      <View style={styles.section}>
+      <Animated.View entering={FadeInUp.duration(300)} style={styles.section}>
         <DashboardSectionHeader
           title={module.featured.title}
           description={module.featured.description}
@@ -93,9 +94,9 @@ export function DashboardModuleScreen({ role, navItems, module }) {
             />
           )}
         />
-      </View>
+      </Animated.View>
 
-      <View style={styles.section}>
+      <Animated.View entering={FadeInUp.duration(340)} style={styles.section}>
         <DashboardSectionHeader
           title={module.highlights.title}
           description={module.highlights.description}
@@ -119,7 +120,7 @@ export function DashboardModuleScreen({ role, navItems, module }) {
             />
           )}
         />
-      </View>
+      </Animated.View>
     </DashboardLayout>
   );
 }

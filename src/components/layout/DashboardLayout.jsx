@@ -14,6 +14,8 @@ import {
   PanResponder,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as Haptics from 'expo-haptics';
+import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from 'expo-speech-recognition';
 import { ScreenContainer } from '../ui/ScreenContainer';
 import { DashboardTabBar } from '../ui/DashboardTabBar';
 import { AppCard } from '../ui/AppCard';
@@ -40,6 +42,9 @@ export const DashboardLayout = ({
   const { height, width } = useWindowDimensions();
   const { user, resolvedTheme } = useAuth();
   const [isChatOpen, setIsChatOpen] = useState(false);
+  const [isVoiceListening, setIsVoiceListening] = useState(false);
+  const [voiceHint, setVoiceHint] = useState('');
+  const [queuedVoiceMessage, setQueuedVoiceMessage] = useState(null);
   const hasNav = navItems.length > 0;
   const isShortScreen = height < theme.layout.shortScreenHeight;
   const isCompactScreen = height < theme.layout.compactScreenHeight;
@@ -70,6 +75,9 @@ export const DashboardLayout = ({
   const isCenteredChatModal = chatModalPresentation === 'centered';
   const resolvedScreenVariant = navVariant === 'patient' ? 'default' : screenVariant;
   const chatBubblePosition = React.useRef(new RNAnimated.ValueXY({ x: 0, y: 0 })).current;
+  const chatPulse = React.useRef(new RNAnimated.Value(1)).current;
+  const voiceHintTimerRef = React.useRef(null);
+  const intentionalVoiceStopRef = React.useRef(false);
   const chatBubbleResponder = React.useRef(
     PanResponder.create({
       onMoveShouldSetPanResponder: (_event, gestureState) => (
@@ -90,6 +98,101 @@ export const DashboardLayout = ({
       },
     })
   ).current;
+
+  const showVoiceHint = React.useCallback((message) => {
+    setVoiceHint(message);
+    if (voiceHintTimerRef.current) clearTimeout(voiceHintTimerRef.current);
+    if (!message) return;
+    voiceHintTimerRef.current = setTimeout(() => setVoiceHint(''), 2200);
+  }, []);
+
+  const stopVoiceRecognition = React.useCallback(() => {
+    intentionalVoiceStopRef.current = true;
+    try {
+      ExpoSpeechRecognitionModule.stop();
+    } catch {}
+  }, []);
+
+  const startVoiceRecognition = React.useCallback(async () => {
+    await Haptics.selectionAsync();
+    if (isVoiceListening) {
+      stopVoiceRecognition();
+      return;
+    }
+
+    const available = ExpoSpeechRecognitionModule.isRecognitionAvailable();
+    if (!available) {
+      showVoiceHint('Voice not available on this device.');
+      return;
+    }
+
+    const permission = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+    if (!permission.granted) {
+      showVoiceHint('Allow microphone access for voice assist.');
+      return;
+    }
+
+    intentionalVoiceStopRef.current = false;
+    showVoiceHint('Listening...');
+    ExpoSpeechRecognitionModule.start({
+      lang: 'en-US',
+      interimResults: true,
+      continuous: false,
+    });
+  }, [isVoiceListening, showVoiceHint, stopVoiceRecognition]);
+
+  useSpeechRecognitionEvent('start', () => {
+    setIsVoiceListening(true);
+    showVoiceHint('Listening...');
+  });
+
+  useSpeechRecognitionEvent('end', () => {
+    setIsVoiceListening(false);
+    if (!intentionalVoiceStopRef.current) {
+      showVoiceHint('');
+    }
+    intentionalVoiceStopRef.current = false;
+  });
+
+  useSpeechRecognitionEvent('result', (event) => {
+    const transcript = event.results?.[0]?.transcript || '';
+    if (!transcript.trim() || event.isFinal === false) return;
+    setQueuedVoiceMessage({
+      id: Date.now(),
+      text: transcript.trim(),
+    });
+    setIsChatOpen(true);
+    showVoiceHint(`Heard: ${transcript.trim()}`);
+  });
+
+  useSpeechRecognitionEvent('error', (event) => {
+    const normalized = `${event?.error || ''} ${event?.message || ''}`.toLowerCase();
+    if (intentionalVoiceStopRef.current || normalized.includes('abort') || normalized.includes('cancel')) {
+      intentionalVoiceStopRef.current = false;
+      return;
+    }
+    setIsVoiceListening(false);
+    showVoiceHint('Could not hear clearly. Tap and try again.');
+  });
+
+  React.useEffect(() => {
+    if (isChatOpen || !isSupportChatAvailable) return undefined;
+    const loop = RNAnimated.loop(
+      RNAnimated.sequence([
+        RNAnimated.timing(chatPulse, { toValue: 1.07, duration: 700, useNativeDriver: true }),
+        RNAnimated.timing(chatPulse, { toValue: 1, duration: 700, useNativeDriver: true }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [chatPulse, isChatOpen, isSupportChatAvailable]);
+
+  React.useEffect(() => () => {
+    if (voiceHintTimerRef.current) clearTimeout(voiceHintTimerRef.current);
+    try {
+      ExpoSpeechRecognitionModule.abort();
+    } catch {}
+  }, []);
 
   return (
     <ScreenContainer
@@ -113,12 +216,12 @@ export const DashboardLayout = ({
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
-          <View
-            style={[
-              styles.contentStage,
-              isShortScreen ? styles.contentStageCompact : null,
-            ]}
-          >
+            <View
+              style={[
+                styles.contentStage,
+                isShortScreen ? styles.contentStageCompact : null,
+              ]}
+            >
             <View style={[styles.body, isShortScreen ? styles.bodyCompact : null]}>
               {children}
             </View>
@@ -155,16 +258,28 @@ export const DashboardLayout = ({
               ]}
               {...(draggableChat ? chatBubbleResponder.panHandlers : {})}
             >
+              {voiceHint ? (
+                <View style={styles.voiceHintBubble}>
+                  <Text style={styles.voiceHintText} numberOfLines={2}>{voiceHint}</Text>
+                </View>
+              ) : null}
               <Pressable
-                accessibilityLabel="Open quick inquiry chat"
-                onPress={() => setIsChatOpen(true)}
+                accessibilityLabel="Voice AI assist bubble"
+                onPress={startVoiceRecognition}
+                onLongPress={() => setIsChatOpen(true)}
                 style={({ pressed }) => [
                   styles.chatLauncher,
                   resolvedTheme?.primaryColor ? { backgroundColor: resolvedTheme.primaryColor } : null,
                   pressed ? styles.chatLauncherPressed : null,
                 ]}
               >
-                <Image source={chatbotIcon} style={styles.chatLauncherImage} resizeMode="contain" />
+                <RNAnimated.View style={{ transform: [{ scale: chatPulse }] }}>
+                  {isVoiceListening ? (
+                    <AppIcon name="microphone" state="inverse" />
+                  ) : (
+                    <Image source={chatbotIcon} style={styles.chatLauncherImage} resizeMode="contain" />
+                  )}
+                </RNAnimated.View>
               </Pressable>
             </RNAnimated.View>
           ) : null}
@@ -227,7 +342,12 @@ export const DashboardLayout = ({
                     </Pressable>
                   </View>
 
-                  <ChatbotSupportPanel role={chatRole} userId={user?.id} variant="modal" />
+                  <ChatbotSupportPanel
+                    role={chatRole}
+                    userId={user?.id}
+                    variant="modal"
+                    queuedMessage={queuedVoiceMessage}
+                  />
                 </AppCard>
               </View>
             </KeyboardAvoidingView>
@@ -291,6 +411,20 @@ const styles = StyleSheet.create({
   chatLauncherWrap: {
     position: 'absolute',
     zIndex: 24,
+    alignItems: 'flex-end',
+    gap: theme.spacing.xs,
+  },
+  voiceHintBubble: {
+    maxWidth: 200,
+    borderRadius: theme.radius.lg,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: theme.spacing.xs,
+    backgroundColor: 'rgba(19, 28, 44, 0.92)',
+  },
+  voiceHintText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    color: theme.colors.textInverse,
   },
   chatLauncher: {
     alignItems: 'center',
