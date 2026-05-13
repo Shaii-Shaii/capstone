@@ -21,6 +21,7 @@ import {
 import { hairSubmissionStorageBucket } from './hairSubmission.constants';
 import { notificationTypes } from './notification.constants';
 import { buildImmediateNotificationEvents, recordNotifications } from './notification.service';
+import { canSubmitHairDonation, mapDonationPermissionError } from './donorCompliance.service';
 
 const ELIGIBLE_DECISION = 'eligible for hair donation';
 const MANUAL_DONATION_SOURCE = 'manual_donor_details';
@@ -81,27 +82,6 @@ const formatHistoryDateLabel = (value) => (
 const normalizeDecision = (value = '') => String(value || '').trim().toLowerCase();
 const normalizeStatus = (value = '') => String(value || '').trim().toLowerCase();
 const TERMINAL_DONATION_STATUSES = new Set(['completed', 'cancelled', 'canceled', 'rejected', 'closed']);
-
-const formatQrDisplayLabel = (value = '') => String(value || '')
-  .split(/[_\s]+/)
-  .filter(Boolean)
-  .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
-  .join(' ');
-
-const formatDonationSourceLabel = (value = '') => {
-  const normalized = String(value || '').trim().toLowerCase();
-  if (!normalized) return '';
-  if (normalized === MANUAL_DONATION_SOURCE) return 'Manual donor entry';
-  if (normalized === INDEPENDENT_DONATION_SOURCE) return 'Independent donation';
-  if (normalized === DRIVE_DONATION_SOURCE) return 'Donation drive';
-  return formatQrDisplayLabel(normalized);
-};
-
-const formatDonationStatusLabel = (value = '') => {
-  const normalized = String(value || '').trim();
-  if (!normalized) return '';
-  return formatQrDisplayLabel(normalized);
-};
 
 const isTerminalDonationStatus = (status = '') => (
   TERMINAL_DONATION_STATUSES.has(normalizeStatus(status))
@@ -182,15 +162,12 @@ const pushUniqueReason = (target, value) => {
   }
 };
 
-const isGenericIneligibleDecision = (decision = '') => {
-  const normalized = normalizeDecision(decision);
-  if (!normalized) return true;
-  return (
-    normalized.includes('not eligible')
-    || normalized.includes('improve')
-    || normalized.includes('needs improvement')
-    || normalized.includes('needs care')
-  );
+const getScreeningLogMessage = (screening = null, { preferSummary = false } = {}) => {
+  const values = preferSummary
+    ? [screening?.summary, screening?.visible_damage_notes, screening?.detected_condition, screening?.decision]
+    : [screening?.decision, screening?.summary, screening?.visible_damage_notes, screening?.detected_condition];
+
+  return values.map((value) => String(value || '').trim()).find(Boolean) || '';
 };
 
 const buildAiConditionReasons = (screening = null) => {
@@ -199,25 +176,57 @@ const buildAiConditionReasons = (screening = null) => {
     screening?.visible_damage_notes,
     screening?.summary,
   ].filter(Boolean).join(' ').toLowerCase();
+  const screeningLogMessage = getScreeningLogMessage(screening, { preferSummary: true });
+  const detectedConditionText = String(screening?.detected_condition || '').toLowerCase();
+  const damageLevel = Number(screening?.damage_level);
+  const drynessLevel = Number(screening?.dryness_level);
+  const frizzLevel = Number(screening?.frizz_level);
+  const oilinessLevel = Number(screening?.oiliness_level);
+  const hasPositiveMention = (patterns = [], negatedPatterns = []) => (
+    patterns.some((pattern) => pattern.test(sourceText))
+    && !negatedPatterns.some((pattern) => pattern.test(sourceText))
+  );
 
   const conditionReasons = [];
 
-  if (sourceText.includes('dry') || sourceText.includes('dryness')) {
-    pushUniqueReason(conditionReasons, 'Hair appears dry.');
+  const hasDrynessConcern = hasPositiveMention(
+    [/\bdry(?:ness)?\b/, /\bdehydrat(?:ed|ion)\b/],
+    [/\bno\s+(?:visible\s+)?dry(?:ness)?\b/, /\bnot\s+dry\b/, /\bmoisture\s+level\s+looks\s+balanced\b/, /\bbalanced\s+moisture\b/],
+  );
+  if (hasDrynessConcern && (!Number.isFinite(drynessLevel) || drynessLevel >= 3)) {
+    pushUniqueReason(conditionReasons, screeningLogMessage);
   }
-  if (
-    sourceText.includes('damage')
-    || sourceText.includes('damaged')
-    || sourceText.includes('breakage')
-    || sourceText.includes('split end')
-  ) {
-    pushUniqueReason(conditionReasons, 'Visible hair damage was detected.');
+
+  const hasDamageConcern = hasPositiveMention(
+    [/\bdamage(?:d)?\b/, /\bbreakage\b/, /\bsplit\s+ends?\b/, /\bfray(?:ed|ing)?\b/],
+    [
+      /\bno\s+(?:visible\s+|structural\s+|hair\s+)?damage\b/,
+      /\bno\s+(?:visible\s+)?breakage\b/,
+      /\bno\s+(?:visible\s+)?split\s+ends?\b/,
+      /\bwithout\s+(?:visible\s+|structural\s+|hair\s+)?damage\b/,
+      /\bfree\s+of\s+(?:visible\s+|structural\s+|hair\s+)?damage\b/,
+      /\bnot\s+damaged\b/,
+    ],
+  );
+  const conditionLooksHealthy = /\b(healthy|good|excellent|balanced|no structural damage|no visible damage)\b/.test(detectedConditionText);
+  if (hasDamageConcern && (Number.isFinite(damageLevel) ? damageLevel >= 3 : !conditionLooksHealthy)) {
+    pushUniqueReason(conditionReasons, screeningLogMessage);
   }
-  if (sourceText.includes('frizz') || sourceText.includes('frizzy')) {
-    pushUniqueReason(conditionReasons, 'High frizz was detected.');
+
+  const hasFrizzConcern = hasPositiveMention(
+    [/\bfrizz(?:y)?\b/],
+    [/\bno\s+(?:visible\s+)?frizz\b/, /\blow\s+frizz\b/, /\bminimal\s+frizz\b/],
+  );
+  if (hasFrizzConcern && (!Number.isFinite(frizzLevel) || frizzLevel >= 4)) {
+    pushUniqueReason(conditionReasons, screeningLogMessage);
   }
-  if (sourceText.includes('oily') || sourceText.includes('oiliness')) {
-    pushUniqueReason(conditionReasons, 'Hair appears too oily for current donation standards.');
+
+  const hasOilinessConcern = hasPositiveMention(
+    [/\boily\b/, /\boiliness\b/],
+    [/\bnot\s+oily\b/, /\bno\s+(?:visible\s+)?oiliness\b/, /\bbalanced\s+oil\b/],
+  );
+  if (hasOilinessConcern && (!Number.isFinite(oilinessLevel) || oilinessLevel >= 4)) {
+    pushUniqueReason(conditionReasons, screeningLogMessage);
   }
   if (
     sourceText.includes('thin')
@@ -225,18 +234,55 @@ const buildAiConditionReasons = (screening = null) => {
     || sourceText.includes('low density')
     || sourceText.includes('light density')
   ) {
-    pushUniqueReason(conditionReasons, 'Hair density appears low.');
+    pushUniqueReason(conditionReasons, screeningLogMessage);
   }
 
   return conditionReasons;
 };
 
+const buildLengthRequirementMessage = ({ screening = null, minimumLengthCm = 0 }) => {
+  const logMessage = getScreeningLogMessage(screening);
+  const minimumInches = toRoundedNumber(minimumLengthCm / CM_PER_INCH, 1);
+  const minimumCm = toRoundedNumber(minimumLengthCm, 1);
+  const requirementMessage = `Minimum hair length: ${minimumInches} inches (${minimumCm} cm).`;
+  return [logMessage, requirementMessage].filter(Boolean).join(' ');
+};
+
 const resolveMinimumLengthCm = (donationRequirement = null) => {
+  const defaultMinimumCm = MINIMUM_MANUAL_LENGTH_INCHES * CM_PER_INCH;
   const configuredLength = Number(donationRequirement?.minimum_hair_length);
   if (Number.isFinite(configuredLength) && configuredLength > 0) {
-    return configuredLength;
+    return Math.max(defaultMinimumCm, configuredLength);
   }
-  return MINIMUM_MANUAL_LENGTH_INCHES * CM_PER_INCH;
+  return defaultMinimumCm;
+};
+
+const screeningLooksDonationReady = ({
+  screening = null,
+  normalizedLengthCm = null,
+  minimumLengthCm = null,
+  conditionReasons = [],
+}) => {
+  if (!screening) return false;
+  if (!normalizedLengthCm || !minimumLengthCm || normalizedLengthCm < minimumLengthCm) return false;
+  if (conditionReasons.length) return false;
+
+  const conditionText = String(screening?.detected_condition || '').toLowerCase();
+  const summaryText = String(screening?.summary || '').toLowerCase();
+  const visibleDamageText = String(screening?.visible_damage_notes || '').toLowerCase();
+  const mergedText = `${conditionText} ${summaryText} ${visibleDamageText}`;
+  const confidenceScore = Number(screening?.confidence_score);
+  const damageLevel = Number(screening?.damage_level);
+
+  if (Number.isFinite(confidenceScore) && confidenceScore < 0.55) return false;
+  if (Number.isFinite(damageLevel) && damageLevel >= 3) return false;
+
+  const hasHealthySignal = /\b(healthy|good|excellent|balanced|suitable|donatable)\b/.test(mergedText)
+    || /\bno\s+(?:visible\s+|structural\s+|hair\s+)?damage\b/.test(mergedText)
+    || /\bno\s+(?:visible\s+)?breakage\b/.test(mergedText);
+  const hasBlockingSignal = /\b(unclear|low-confidence|low confidence|not detected|not ready|too short)\b/.test(mergedText);
+
+  return hasHealthySignal && !hasBlockingSignal;
 };
 
 const evaluateManualDonationEligibility = ({ manualDetails = {}, donationRequirement = null }) => {
@@ -273,29 +319,33 @@ const evaluateAiDonationEligibility = ({ screening = null, detail = null, donati
   const minimumLengthCm = resolveMinimumLengthCm(donationRequirement);
   const normalizedLengthCm = toRoundedNumber(screening?.estimated_length, 1);
   const reasons = [];
+  const conditionReasons = screening ? buildAiConditionReasons(screening) : [];
+  const inferredEligibleFromFields = screeningLooksDonationReady({
+    screening,
+    normalizedLengthCm,
+    minimumLengthCm,
+    conditionReasons,
+  });
 
-  if (!screening) {
-    reasons.push('No saved AI screening result is available for this donation.');
-  }
+  if (!screening) return {
+    isQualified: false,
+    normalized_length_cm: normalizedLengthCm,
+    minimum_length_cm: minimumLengthCm,
+    reasons,
+    reason: '',
+  };
 
-  if (screening && !isEligibleHairAnalysisDecision(screening?.decision || '')) {
-    const conditionReasons = buildAiConditionReasons(screening);
+  if (screening && !isEligibleHairAnalysisDecision(screening?.decision || '') && !inferredEligibleFromFields) {
     conditionReasons.forEach((reason) => pushUniqueReason(reasons, reason));
 
     if (!conditionReasons.length) {
-      const decisionText = String(screening?.decision || '').trim();
-      if (decisionText && !isGenericIneligibleDecision(decisionText)) {
-        pushUniqueReason(reasons, decisionText);
-      } else {
-        pushUniqueReason(reasons, 'AI screening marked this hair as not eligible under current donation requirements.');
-      }
+      const logMessage = getScreeningLogMessage(screening);
+      if (logMessage) pushUniqueReason(reasons, logMessage);
     }
   }
 
   if (!normalizedLengthCm || normalizedLengthCm < minimumLengthCm) {
-    reasons.push(
-      `Hair must be at least ${toRoundedNumber(minimumLengthCm / CM_PER_INCH, 1)} inches (${toRoundedNumber(minimumLengthCm, 1)} cm) based on the current donation requirement.`,
-    );
+    reasons.push(buildLengthRequirementMessage({ screening, minimumLengthCm }));
   }
 
   if (donationRequirement?.chemical_treatment_status === false && detail?.is_chemically_treated) {
@@ -321,7 +371,9 @@ const evaluateAiDonationEligibility = ({ screening = null, detail = null, donati
     reasons,
     reason: reasons.length
       ? buildManualDonationReason(reasons)
-      : screening?.decision || 'The saved AI screening still meets the current donation criteria.',
+      : isEligibleHairAnalysisDecision(screening?.decision || '')
+        ? screening?.decision
+        : getScreeningLogMessage(screening, { preferSummary: true }),
   };
 };
 
@@ -542,6 +594,7 @@ const syncIndependentDonationSubmission = async ({
   trackingDescription = '',
   shouldTrack = false,
   shouldNotify = false,
+  donationDriveId = null,
 }) => {
   if (!submission?.submission_id) {
     return { success: false, error: 'A valid donation submission is required.' };
@@ -549,12 +602,13 @@ const syncIndependentDonationSubmission = async ({
 
   const nextNotes = mergeDonationNotes(
     submission?.donor_notes || '',
-    ['Donation path: independent donation.'],
+    [donationDriveId ? 'Donation path: public donation drive.' : 'Donation path: independent donation.'],
     qrMetadata,
   );
 
   const submissionResult = await updateHairSubmissionById(submission.submission_id, {
-    donation_source: INDEPENDENT_DONATION_SOURCE,
+    donation_drive_id: donationDriveId ?? submission?.donation_drive_id ?? undefined,
+    donation_source: donationDriveId ? DRIVE_DONATION_SOURCE : INDEPENDENT_DONATION_SOURCE,
     donor_notes: nextNotes,
     status,
   });
@@ -662,16 +716,21 @@ const buildManualDonationNotes = ({
 }) => (
   [
     MANUAL_DONATION_NOTE_MARKER,
-    `Bundle source: ${donorType === 'different' ? 'Different donor hair' : 'Own hair'}`,
+    `Hair owner: ${donorType === 'different' ? 'Other person' : 'Account owner'}`,
+    donorType === 'different' ? `Donor name: ${manualDetails?.donor_name || 'Not provided'}` : '',
+    donorType === 'different' ? `Donor birthdate: ${manualDetails?.donor_birthdate || 'Not provided'}` : '',
+    donorType === 'different' && manualDetails?.donor_age != null ? `Donor age: ${manualDetails.donor_age}` : '',
+    donorType === 'different' && manualDetails?.donor_is_minor != null
+      ? `Minor donor: ${manualDetails.donor_is_minor ? 'Yes' : 'No'}`
+      : '',
     `Length entered: ${manualDetails?.length_value || '-'} ${normalizeLengthUnit(manualDetails?.length_unit)}`,
-    `Bundle quantity: ${Math.max(1, Number.parseInt(manualDetails?.bundle_quantity, 10) || 1)}`,
     `Treated: ${normalizeYesNoChoice(manualDetails?.treated) ? 'Yes' : 'No'}`,
     `Colored: ${normalizeYesNoChoice(manualDetails?.colored) ? 'Yes' : 'No'}`,
     `Trimmed: ${normalizeYesNoChoice(manualDetails?.trimmed) ? 'Yes' : 'No'}`,
     `Hair color: ${manualDetails?.hair_color || 'Not provided'}`,
     `Density: ${manualDetails?.density || 'Not provided'}`,
     evaluation?.reason || '',
-  ].filter(Boolean).join(' ')
+  ].filter(Boolean).join(' | ')
 );
 
 const buildAdditionalBundleNotes = ({
@@ -680,7 +739,7 @@ const buildAdditionalBundleNotes = ({
   detailNotes = '',
 }) => (
   [
-    `Additional bundle source: ${donorType === 'different' ? 'Different donor hair' : 'Own hair'}.`,
+    `Additional hair owner: ${donorType === 'different' ? 'Other person' : 'Account owner'}.`,
     `Additional bundle input method: ${inputMethod === 'scan' ? 'Live scan' : 'Manual details'}.`,
     detailNotes || '',
   ].filter(Boolean).join(' ')
@@ -1176,142 +1235,25 @@ export const buildDriveInvitationQrPayload = ({ drive, registration }) => (
 
 export const buildIndependentDonationQrPayload = ({
   submission,
-  detail,
-  screening,
 }) => (
   JSON.stringify({
-    Submission_ID: submission?.submission_id || null,
-    User_ID: submission?.user_id || null,
-    Donation_Drive_ID: submission?.donation_drive_id || null,
-    Organization_ID: submission?.organization_id || null,
-    Submission_Code: submission?.submission_code || '',
-    Donation_Source: submission?.donation_source || '',
-    Status: submission?.status || '',
-    Submission_Detail_ID: detail?.submission_detail_id || null,
-    Declared_Length: detail?.declared_length ?? null,
-    Declared_Color: detail?.declared_color || '',
-    Declared_Texture: detail?.declared_texture || '',
-    Declared_Density: detail?.declared_density || '',
-    Declared_Condition: detail?.declared_condition || '',
-    AI_Screening_ID: screening?.ai_screening_id || null,
-    Decision: screening?.decision || '',
-    Detected_Condition: screening?.detected_condition || '',
+    type: 'hair_submission',
+    submission_id: submission?.submission_id || null,
+    submission_code: submission?.submission_code || '',
+    donation_drive_id: submission?.donation_drive_id || null,
   })
 );
 
 export const buildDonationTrackingQrPayload = ({
   submission = null,
-  detail = null,
-  allDetails = [],
-  logistics = null,
   drive = null,
-  registration = null,
-  trackingStatus = '',
 } = {}) => {
-  const lines = [
-    'Payload_Type: Hair_Donation_Package',
-    `Submission_ID: ${submission?.submission_id || ''}`,
-    `Submission_Code: ${submission?.submission_code || 'Pending donation code'}`,
-  ];
-
-  if (submission?.user_id) {
-    lines.push(`User_ID: ${submission.user_id}`);
-  }
-
-  const donationSource = formatDonationSourceLabel(submission?.donation_source || '');
-  if (donationSource) {
-    lines.push(`Donation_Source: ${donationSource}`);
-  }
-
-  const donationStatus = formatDonationStatusLabel(submission?.status || '');
-  if (donationStatus) {
-    lines.push(`Status: ${donationStatus}`);
-  }
-
-  if (detail?.submission_detail_id) {
-    lines.push(`Submission_Detail_ID: ${detail.submission_detail_id}`);
-  }
-  if (detail?.declared_length != null && detail?.declared_length !== '') {
-    lines.push(`Declared_Length: ${detail.declared_length}`);
-  }
-  if (detail?.declared_texture) {
-    lines.push(`Declared_Texture: ${detail.declared_texture}`);
-  }
-  if (detail?.declared_density) {
-    lines.push(`Declared_Density: ${detail.declared_density}`);
-  }
-  if (detail?.declared_condition) {
-    lines.push(`Declared_Condition: ${detail.declared_condition}`);
-  }
-  if (detail?.declared_color) {
-    lines.push(`Declared_Color: ${detail.declared_color}`);
-  }
-  if (Array.isArray(submission?.submission_details) && submission.submission_details.length) {
-    lines.push(`Bundle_Quantity: ${submission.submission_details.length}`);
-  }
-
-  if (trackingStatus) {
-    lines.push(`Hair_Bundle_Tracking_History.Status: ${trackingStatus}`);
-  }
-
-  const detailList = Array.isArray(allDetails) && allDetails.length
-    ? allDetails
-    : Array.isArray(submission?.submission_details) && submission.submission_details.length
-      ? submission.submission_details
-      : detail ? [detail] : [];
-
-  if (detailList.length) {
-    lines.push(`Bundle_Detail_Count: ${detailList.length}`);
-    detailList.forEach((item, index) => {
-      const detailIndex = index + 1;
-      const sourceHint = String(item?.detail_notes || '').toLowerCase();
-      const sourceLabel = sourceHint.includes('different donor hair')
-        ? 'Different donor hair'
-        : sourceHint.includes('own hair')
-          ? 'Own hair'
-          : 'Not specified';
-
-      lines.push(`Bundle_${detailIndex}_Submission_Detail_ID: ${item?.submission_detail_id || ''}`);
-      lines.push(`Bundle_${detailIndex}_Length: ${item?.declared_length ?? ''}`);
-      lines.push(`Bundle_${detailIndex}_Texture: ${item?.declared_texture || ''}`);
-      lines.push(`Bundle_${detailIndex}_Density: ${item?.declared_density || ''}`);
-      lines.push(`Bundle_${detailIndex}_Condition: ${item?.declared_condition || ''}`);
-      lines.push(`Bundle_${detailIndex}_Color: ${item?.declared_color || ''}`);
-      lines.push(`Bundle_${detailIndex}_Source: ${sourceLabel}`);
-    });
-  }
-
-  const shipmentStatus = formatDonationStatusLabel(logistics?.shipment_status || '');
-  if (shipmentStatus && shipmentStatus !== trackingStatus) {
-    if (logistics?.submission_logistics_id) {
-      lines.push(`Submission_Logistics_ID: ${logistics.submission_logistics_id}`);
-    }
-    lines.push(`Shipment_Status: ${shipmentStatus}`);
-  }
-
-  if (drive?.donation_drive_id) {
-    lines.push(`Donation_Drive_ID: ${drive.donation_drive_id}`);
-  }
-  if (registration?.registration_id) {
-    lines.push(`Registration_ID: ${registration.registration_id}`);
-  }
-  if (registration?.registration_status) {
-    lines.push(`Registration_Status: ${registration.registration_status}`);
-  }
-  if (registration?.attendance_status) {
-    lines.push(`Attendance_Status: ${registration.attendance_status}`);
-  }
-  if (drive?.event_title) {
-    lines.push(`Event_Title: ${drive.event_title}`);
-  }
-  if (submission?.organization_id || drive?.organization_id) {
-    lines.push(`Organization_ID: ${submission?.organization_id || drive?.organization_id}`);
-  }
-  if (drive?.organization_name) {
-    lines.push(`Organization_Name: ${drive.organization_name}`);
-  }
-
-  return lines.join('\n');
+  return JSON.stringify({
+    type: 'hair_submission',
+    submission_id: submission?.submission_id || null,
+    submission_code: submission?.submission_code || '',
+    donation_drive_id: submission?.donation_drive_id || drive?.donation_drive_id || null,
+  });
 };
 
 const getDonationQrPayloadValue = (payloadText = '', label = '') => {
@@ -1321,14 +1263,40 @@ const getDonationQrPayloadValue = (payloadText = '', label = '') => {
   return match?.[1]?.trim() || '';
 };
 
-const parseDonationTrackingQrPayload = (payloadText = '') => ({
-  submission_id: getDonationQrPayloadValue(payloadText, 'Submission_ID'),
-  submission_code: getDonationQrPayloadValue(payloadText, 'Submission_Code'),
-  user_id: getDonationQrPayloadValue(payloadText, 'User_ID'),
-  donation_source: getDonationQrPayloadValue(payloadText, 'Donation_Source'),
-  donation_status: getDonationQrPayloadValue(payloadText, 'Status'),
-  donation_drive_id: getDonationQrPayloadValue(payloadText, 'Donation_Drive_ID'),
-});
+const parseDonationTrackingQrPayload = (payloadText = '') => {
+  const rawPayload = String(payloadText || '').trim();
+  if (rawPayload.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(rawPayload);
+      if (parsed?.type === 'hair_submission') {
+        return {
+          submission_id: parsed?.submission_id != null ? String(parsed.submission_id) : '',
+          submission_code: parsed?.submission_code || '',
+          user_id: parsed?.user_id != null ? String(parsed.user_id) : '',
+          donation_source: parsed?.donation_source || '',
+          donation_status: parsed?.status || parsed?.tracking_status || '',
+          donation_drive_id: parsed?.donation_drive_id != null ? String(parsed.donation_drive_id) : '',
+        };
+      }
+    } catch (_error) {
+      // Fall back to legacy line-based parsing below.
+    }
+  }
+
+  return {
+    submission_id: getDonationQrPayloadValue(payloadText, 'Hair_Submissions.Submission_ID')
+      || getDonationQrPayloadValue(payloadText, 'Submission_ID'),
+    submission_code: getDonationQrPayloadValue(payloadText, 'Hair_Submissions.Submission_Code')
+      || getDonationQrPayloadValue(payloadText, 'Submission_Code'),
+    user_id: getDonationQrPayloadValue(payloadText, 'Hair_Submissions.User_ID')
+      || getDonationQrPayloadValue(payloadText, 'User_ID'),
+    donation_source: getDonationQrPayloadValue(payloadText, 'Hair_Submissions.Donation_Source')
+      || getDonationQrPayloadValue(payloadText, 'Donation_Source'),
+    donation_status: getDonationQrPayloadValue(payloadText, 'Hair_Submissions.Status')
+      || getDonationQrPayloadValue(payloadText, 'Status'),
+    donation_drive_id: getDonationQrPayloadValue(payloadText, 'Donation_Drive_ID'),
+  };
+};
 
 const renderDonationQrDetailsHtml = (details = []) => (
   (details || [])
@@ -1512,7 +1480,7 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
 
   const [submissionsResult, drivesResult, certificateResult, donationRequirementResult] = await Promise.all([
     fetchHairSubmissionsByUserId(userId, 12),
-    fetchUpcomingDonationDrives(driveLimit),
+    fetchUpcomingDonationDrives(driveLimit, databaseUserId || null),
     fetchLatestDonationCertificateByUserId(userId),
     fetchLatestDonationRequirement(),
   ]);
@@ -2053,6 +2021,7 @@ export const ensureIndependentDonationQr = async ({
   userId = null,
   submission,
   databaseUserId,
+  donationDriveId = null,
 }) => {
   if (!submission?.submission_id) {
     return { success: false, error: 'A valid donation submission is required before generating a QR.' };
@@ -2072,6 +2041,7 @@ export const ensureIndependentDonationQr = async ({
         : 'Your donation QR is saved and inactive until you scan it to activate donation tracking.',
       shouldTrack: false,
       shouldNotify: false,
+      donationDriveId,
     });
 
     if (!syncedResult.success) {
@@ -2111,6 +2081,7 @@ export const ensureIndependentDonationQr = async ({
     trackingDescription: 'A donation QR was generated for the donor shipment flow and saved to the current donation record.',
     shouldTrack: true,
     shouldNotify: true,
+    donationDriveId,
   });
 
   if (!syncedResult.success) {
@@ -2157,6 +2128,7 @@ export const startIndependentDonationDraft = async ({
   userId = null,
   submission,
   databaseUserId,
+  donationDriveId = null,
 }) => {
   if (!submission?.submission_id) {
     return { success: false, error: 'A valid donation submission is required before starting donation flow.' };
@@ -2170,11 +2142,12 @@ export const startIndependentDonationDraft = async ({
     qrMetadata: existingMetadata,
     status: 'Pending',
     logisticsStatus: 'Pending',
-    logisticsNotes: 'Donation details saved. Add any extra bundles first, then generate your donation QR.',
+    logisticsNotes: 'Donation details saved. Submit the donation to generate the QR for the saved hair detail.',
     trackingTitle: 'Donation details saved',
-    trackingDescription: 'Donation details are saved. Add all bundles before generating the final QR.',
+    trackingDescription: 'Donation details are saved from Hair_Submissions and Hair_Submission_Details. Submit the donation to generate its QR.',
     shouldTrack: true,
     shouldNotify: false,
+    donationDriveId,
   });
 
   if (!syncedResult.success) {
@@ -2420,7 +2393,7 @@ export const addDonationBundleFromManualDetails = async ({
     declared_color: manualDetails?.hair_color || null,
     declared_texture: manualDetails?.texture || null,
     declared_density: manualDetails?.density || null,
-    declared_condition: donorType === 'different' ? 'Different donor hair (manual)' : 'Own hair (manual)',
+    declared_condition: donorType === 'different' ? 'Other person hair' : 'Own hair',
     is_chemically_treated: normalizeYesNoChoice(manualDetails?.treated),
     is_colored: normalizeYesNoChoice(manualDetails?.colored),
     is_bleached: false,
@@ -2527,6 +2500,7 @@ export const saveManualDonationQualification = async ({
   userId,
   databaseUserId,
   donorType = 'own',
+  donationDriveId = null,
   manualDetails,
   photo,
   donationRequirement = null,
@@ -2539,6 +2513,15 @@ export const saveManualDonationQualification = async ({
     return { success: false, error: 'Please upload or capture a hair photo before continuing.' };
   }
 
+  const permission = await canSubmitHairDonation(databaseUserId);
+  if (!permission.allowed) {
+    return {
+      success: false,
+      error: mapDonationPermissionError(permission.reason),
+      errorCode: permission.reason,
+    };
+  }
+
   const evaluation = evaluateManualDonationEligibility({
     manualDetails,
     donationRequirement,
@@ -2549,9 +2532,13 @@ export const saveManualDonationQualification = async ({
   const submissionResult = await createHairSubmission({
     user_id: userId,
     database_user_id: databaseUserId,
+    donation_drive_id: donationDriveId || null,
     submission_code: createDonationSubmissionCode('MAN'),
     donation_source: MANUAL_DONATION_SOURCE,
     donor_notes: submissionNotes,
+    guardian_consent_id: permission.guardianConsentId || null,
+    donor_age_at_submission: permission.donorAge,
+    consent_checked_at: new Date().toISOString(),
     status: 'Pending',
   });
 
@@ -2569,8 +2556,8 @@ export const saveManualDonationQualification = async ({
     declared_texture: null,
     declared_density: manualDetails?.density || null,
     declared_condition: donorType === 'different'
-      ? 'Different donor hair (manual)'
-      : (evaluation.isQualified ? 'Qualified for donor donation flow' : (evaluation.reason || 'Not eligible for current donation requirements')),
+      ? 'Other person hair'
+      : (evaluation.isQualified ? 'Ready for donation' : (evaluation.reason || 'Needs review')),
     is_chemically_treated: normalizeYesNoChoice(manualDetails?.treated),
     is_colored: normalizeYesNoChoice(manualDetails?.colored),
     is_bleached: false,
@@ -2619,7 +2606,13 @@ export const saveManualDonationQualification = async ({
     submission_detail_id: detailResult.data.submission_detail_id,
     status: 'Pending',
     title: 'Manual donor details saved',
-    description: `${evaluation.reason} Source: ${donorType === 'different' ? 'Different donor hair' : 'Own hair'}. Hair photo uploaded from the donor Donations module.`,
+    description: [
+      evaluation.reason,
+      donorType === 'different'
+        ? `Hair owner: ${manualDetails?.donor_name || 'Other person'}`
+        : 'Hair owner: Account owner',
+      'Hair photo uploaded from the donor Donations module.',
+    ].filter(Boolean).join(' '),
     changed_by: databaseUserId,
   });
 
@@ -2692,6 +2685,7 @@ export const saveDriveDonationParticipation = async ({
     return {
       success: false,
       error: registrationResult.error?.message || 'Drive registration could not be saved.',
+      errorCode: registrationResult.error?.code || null,
       submission: null,
       registration: null,
     };

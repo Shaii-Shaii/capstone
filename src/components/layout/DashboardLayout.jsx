@@ -17,13 +17,15 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from 'expo-speech-recognition';
 import { ScreenContainer } from '../ui/ScreenContainer';
-import { DashboardTabBar } from '../ui/DashboardTabBar';
+import { DASHBOARD_TAB_BAR_HEIGHT, DashboardTabBar } from '../ui/DashboardTabBar';
 import { AppCard } from '../ui/AppCard';
 import { AppIcon } from '../ui/AppIcon';
 import { ChatbotSupportPanel } from '../chatbot/ChatbotSupportPanel';
 import { useAuth } from '../../providers/AuthProvider';
 import { theme } from '../../design-system/theme';
 import chatbotIcon from '../../assets/images/chatbot_icon.png';
+
+const SUPPORT_CHAT_ENABLED = false;
 
 export const DashboardLayout = ({
   children,
@@ -33,7 +35,7 @@ export const DashboardLayout = ({
   activeNavKey,
   onNavPress,
   navVariant = 'donor',
-  showSupportChat = true,
+  showSupportChat = false,
   screenVariant = 'dashboard',
   chatModalPresentation = 'sheet',
   draggableChat = false,
@@ -49,7 +51,7 @@ export const DashboardLayout = ({
   const isShortScreen = height < theme.layout.shortScreenHeight;
   const isCompactScreen = height < theme.layout.compactScreenHeight;
   const chatRole = navVariant === 'donor' || navVariant === 'patient' ? navVariant : null;
-  const isSupportChatAvailable = Boolean(showSupportChat && chatRole && user?.id);
+  const isSupportChatAvailable = Boolean(SUPPORT_CHAT_ENABLED && showSupportChat && chatRole && user?.id);
   const availableChatModalHeight = height - Math.max(insets.top, theme.spacing.md) - theme.spacing.sm;
   const minimumChatModalHeight = Math.max(availableChatModalHeight * (isShortScreen ? 0.58 : 0.52), 420);
   const desiredChatModalHeight = availableChatModalHeight * (isShortScreen ? 0.76 : 0.68);
@@ -62,16 +64,17 @@ export const DashboardLayout = ({
       ? theme.layout.dashboardFloatingNavOffsetCompact
       : theme.layout.dashboardFloatingNavOffset
   ) + theme.layout.dashboardFloatingNavLift;
+  const navReservedHeight = DASHBOARD_TAB_BAR_HEIGHT + navVisualOffset + (isCompactScreen ? 22 : 26);
   const navBottomPadding = hasNav
     ? Math.max(
-      insets.bottom + navVisualOffset + (isCompactScreen ? 12 : 16),
-      isShortScreen ? 44 : 52
+      insets.bottom + navReservedHeight,
+      isShortScreen ? 116 : 130
     )
     : (isShortScreen ? theme.spacing.sectionCompact : theme.spacing.sectionLg);
   const chatLauncherBottom = hasNav
-    ? insets.bottom + navVisualOffset + (isCompactScreen ? 52 : 60)
+    ? insets.bottom + navReservedHeight + (isCompactScreen ? 8 : 12)
     : insets.bottom + (isCompactScreen ? theme.spacing.lg : theme.spacing.xl);
-  const chatLauncherRight = theme.spacing.md;
+  const chatLauncherRight = theme.spacing.lg;
   const isCenteredChatModal = chatModalPresentation === 'centered';
   const resolvedScreenVariant = navVariant === 'patient' ? 'default' : screenVariant;
   const chatBubblePosition = React.useRef(new RNAnimated.ValueXY({ x: 0, y: 0 })).current;
@@ -429,15 +432,15 @@ const styles = StyleSheet.create({
   chatLauncher: {
     alignItems: 'center',
     justifyContent: 'center',
-    width: 46,
-    height: 46,
+    width: 56,
+    height: 56,
     borderRadius: theme.radius.full,
     backgroundColor: theme.colors.brandPrimary,
     ...theme.shadows.lg,
   },
   chatLauncherImage: {
-    width: 26,
-    height: 26,
+    width: 32,
+    height: 32,
   },
   chatLauncherPressed: {
     transform: [{ scale: 0.97 }],

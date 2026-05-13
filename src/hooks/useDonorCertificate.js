@@ -5,6 +5,7 @@ import {
   isCertificateSharingSupported,
   shareDonorCertificatePdf,
 } from '../features/donorCertificate.service';
+import { canSubmitHairDonation, mapDonationPermissionError } from '../features/donorCompliance.service';
 
 export const useDonorCertificate = ({ userId, profile }) => {
   const [certificate, setCertificate] = useState(null);
@@ -58,6 +59,11 @@ export const useDonorCertificate = ({ userId, profile }) => {
     try {
       if (!certificate) {
         throw new Error('No qualified donation certificate is ready yet.');
+      }
+
+      const permission = await canSubmitHairDonation(profile?.user_id || userId);
+      if (!permission.allowed) {
+        throw new Error(mapDonationPermissionError(permission.reason));
       }
 
       setIsGeneratingCertificate(true);

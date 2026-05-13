@@ -11,6 +11,7 @@ import {
 } from './hairSubmission.constants';
 import { normalizeHairAnalyzerAnswers } from './hairSubmission.schema';
 import { logAppEvent, writeAuditLog } from '../utils/appErrors';
+import { canSubmitHairDonation, mapDonationPermissionError } from './donorCompliance.service';
 
 const buildSubmissionCode = () => `HS-${Date.now().toString(36).toUpperCase()}`;
 
@@ -293,6 +294,13 @@ const buildRecommendationRows = ({ submissionId, recommendations = [] }) => (
     }))
 );
 
+const stringifyCheckHairNotes = (notes = {}) => (
+  JSON.stringify({
+    source: 'CheckHair',
+    ...notes,
+  })
+);
+
 const resolveSelectedDonationMode = (value = '') => (
   hairDonationModeOptions.find((item) => item.value === value) || null
 );
@@ -342,6 +350,13 @@ export const saveHairSubmissionFlow = async ({
     if (!photos?.length) throw new Error('Please upload at least one photo.');
     if (!aiAnalysis) throw new Error('Run the AI analysis before saving.');
 
+    const permission = await canSubmitHairDonation(databaseUserId || userId);
+    if (!permission.allowed) {
+      const permissionError = new Error(mapDonationPermissionError(permission.reason));
+      permissionError.code = permission.reason;
+      throw permissionError;
+    }
+
     logAppEvent('hair_submission.save', 'Saving analyzed hair submission.', {
       userId,
       databaseUserId,
@@ -362,6 +377,10 @@ export const saveHairSubmissionFlow = async ({
     const selectedDonationMode = resolveSelectedDonationMode(donationModeValue);
     const hasTreatmentHistory = normalizedQuestionnaire.has_treatment_history === 'yes'
       || normalizedQuestionnaire.chemical_process_history === 'yes';
+    const normalizedDeclaredLength = Number(confirmedValues.declaredLength);
+    const declaredLength = Number.isFinite(normalizedDeclaredLength) && normalizedDeclaredLength > 0
+      ? normalizedDeclaredLength
+      : null;
     const detailNotes = [
       confirmedValues.detailNotes || '',
       hasTreatmentHistory ? 'Questionnaire noted prior chemical processing.' : '',
@@ -370,6 +389,13 @@ export const saveHairSubmissionFlow = async ({
       user_id: userId,
       database_user_id: databaseUserId,
       submission_code: buildSubmissionCode(),
+      donation_source: 'CheckHair',
+      donor_notes: stringifyCheckHairNotes({
+        questionnaire_answers: normalizedQuestionnaire,
+        donor_age_at_submission: permission.donorAge ?? null,
+        guardian_consent_id: permission.guardianConsentId || null,
+        consent_checked_at: new Date().toISOString(),
+      }),
       status: hairSubmissionStatuses.submission.submitted,
     };
 
@@ -395,11 +421,11 @@ export const saveHairSubmissionFlow = async ({
 
     const detailPayload = {
       submission_id: submission.submission_id,
-      declared_length: Number(confirmedValues.declaredLength),
+      declared_length: declaredLength,
       declared_color: confirmedValues.declaredColor || aiAnalysis?.detected_color || null,
-      declared_texture: confirmedValues.declaredTexture,
-      declared_density: confirmedValues.declaredDensity,
-      declared_condition: confirmedValues.declaredCondition,
+      declared_texture: confirmedValues.declaredTexture || aiAnalysis?.detected_texture || null,
+      declared_density: confirmedValues.declaredDensity || aiAnalysis?.detected_density || null,
+      declared_condition: confirmedValues.declaredCondition || aiAnalysis?.detected_condition || null,
       is_chemically_treated: hasTreatmentHistory,
       is_colored: false,
       is_bleached: false,

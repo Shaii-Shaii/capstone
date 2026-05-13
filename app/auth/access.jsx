@@ -1,17 +1,54 @@
-import React, { useState } from 'react';
-import { Image, StyleSheet, Text, View } from 'react-native';
+import React from 'react';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
-import { AuthScreenLayout, authLayoutStyles } from '../../src/components/auth/AuthScreenLayout';
-import { AuthFormFooter } from '../../src/components/auth/AuthFormFooter';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { ScreenContainer } from '../../src/components/ui/ScreenContainer';
 import { LoginForm } from '../../src/components/auth/LoginForm';
-import { AuthVoiceAssistant } from '../../src/components/auth/AuthVoiceAssistant';
 import { useRoleAuthFlow } from '../../src/hooks/useRoleAuthFlow';
-import { resolveBrandLogoSource, resolveThemeRoles, theme } from '../../src/design-system/theme';
+import { resolveThemeRoles, theme } from '../../src/design-system/theme';
+
+function SocialLoginButton({
+  label,
+  icon,
+  onPress,
+  disabled,
+  loading,
+  roles,
+}) {
+  const isInactive = disabled || loading;
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      disabled={isInactive}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.socialButton,
+        {
+          backgroundColor: roles.defaultCardBackground,
+          borderColor: roles.defaultCardBorder,
+        },
+        pressed && !isInactive ? styles.pressed : null,
+        isInactive ? styles.disabledButton : null,
+      ]}
+    >
+      {loading ? (
+        <ActivityIndicator color={roles.headingText} />
+      ) : (
+        <>
+          <MaterialCommunityIcons name={icon} size={22} color={roles.headingText} />
+          <Text style={[styles.socialButtonText, { color: roles.headingText }]}>{label}</Text>
+        </>
+      )}
+    </Pressable>
+  );
+}
 
 export default function AccessScreen() {
   const router = useRouter();
   const {
     handleLogin,
+    handleGoogleAuth,
     isLoading,
     activeAuthAction,
     loginError,
@@ -19,127 +56,198 @@ export default function AccessScreen() {
     resolvedTheme,
   } = useRoleAuthFlow('access');
 
-  const [imageFailed, setImageFailed] = useState(false);
-  const [assistantStageMessage, setAssistantStageMessage] = useState('');
-  const logoSource = resolveBrandLogoSource(resolvedTheme, imageFailed);
   const roles = resolveThemeRoles(resolvedTheme);
+  const brandName = resolvedTheme?.brandName || 'Donivra';
+  const isGoogleLoading = isLoading && activeAuthAction === 'google';
+
   return (
-    <AuthScreenLayout role="access" resolvedTheme={resolvedTheme}>
-      {/* Brand Identity */}
-      <View style={styles.brandSection}>
-        <View
-          style={[
-            styles.logoContainer,
-            {
-              backgroundColor: roles.defaultCardBackground,
-              borderColor: roles.defaultCardBorder,
-            },
-          ]}
-        >
-          <Image
-            source={logoSource}
-            style={styles.logoImage}
-            resizeMode="contain"
-            onError={() => setImageFailed(true)}
+    <ScreenContainer
+      scrollable
+      safeArea
+      variant="auth"
+      contentStyle={[styles.screenContent, { backgroundColor: roles.pageBackground }]}
+    >
+      <View style={styles.loginCanvas}>
+        <View style={[styles.loginCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
+          <View style={styles.brandHeader}>
+            <View style={styles.brandRow}>
+              <MaterialCommunityIcons name="content-cut" size={28} color={roles.primaryActionBackground} />
+              <Text style={[styles.brandText, { color: roles.primaryActionBackground }]}>{brandName}</Text>
+            </View>
+
+            <Text
+              style={[
+                styles.title,
+                {
+                  color: roles.headingText,
+                  fontFamily: resolvedTheme?.secondaryFontFamily || theme.typography.fontFamilyDisplay,
+                },
+              ]}
+            >
+              Welcome Back
+            </Text>
+            <Text
+              style={[
+                styles.subtitle,
+                {
+                  color: roles.bodyText,
+                  fontFamily: resolvedTheme?.fontFamily || theme.typography.fontFamily,
+                },
+              ]}
+            >
+              Securely access your donation portal.
+            </Text>
+          </View>
+
+          <LoginForm
+            onSubmit={(data) => handleLogin(data)}
+            isLoading={isLoading}
+            activeAuthAction={activeAuthAction}
+            onForgotPassword={() => router.push('/auth/forgot-password')}
+            buttonText="Log In"
+            submitError={loginError}
+            onFieldEdit={clearLoginError}
+            onFieldFocus={() => {}}
+            resolvedTheme={resolvedTheme}
           />
+
+          <View style={styles.dividerRow}>
+            <View style={[styles.dividerLine, { backgroundColor: roles.supportCardBorder }]} />
+            <Text style={[styles.dividerText, { color: roles.bodyText }]}>Or continue with</Text>
+            <View style={[styles.dividerLine, { backgroundColor: roles.supportCardBorder }]} />
+          </View>
+
+          <View style={styles.socialStack}>
+            <SocialLoginButton
+              label="Google"
+              icon="google"
+              onPress={handleGoogleAuth}
+              disabled={isLoading}
+              loading={isGoogleLoading}
+              roles={roles}
+            />
+          </View>
+
+          <View style={styles.signupRow}>
+            <Text style={[styles.signupText, { color: roles.bodyText }]}>{'Do not have an account? '}</Text>
+            <Pressable onPress={() => router.replace('/auth/signup')} style={({ pressed }) => (pressed ? styles.pressed : null)}>
+              <Text style={[styles.signupLink, { color: roles.primaryActionBackground }]}>Sign Up</Text>
+            </Pressable>
+          </View>
         </View>
-
-        <Text
-          style={[
-            styles.brandName,
-            {
-              color: roles.headingText,
-              fontFamily:
-                resolvedTheme?.secondaryFontFamily ||
-                theme.typography.fontFamilyDisplay,
-            },
-          ]}
-        >
-          Log in
-        </Text>
-
-        <Text
-          style={[
-            styles.brandTagline,
-            {
-              color: roles.bodyText,
-              fontFamily: resolvedTheme?.fontFamily || theme.typography.fontFamily,
-            },
-          ]}
-        >
-          Enter your email and password to securely access your account.
-        </Text>
       </View>
-
-      {/* Login form */}
-      <View style={authLayoutStyles.formSection}>
-        <AuthVoiceAssistant
-          screen="login"
-          resolvedTheme={resolvedTheme}
-          compact
-          stageMessage={assistantStageMessage}
-        />
-        <LoginForm
-          onSubmit={(data) => {
-            setAssistantStageMessage('Good. I will check your login now. After login, I will help route you as a donor or patient.');
-            return handleLogin(data);
-          }}
-          isLoading={isLoading}
-          activeAuthAction={activeAuthAction}
-          onForgotPassword={() => router.push('/auth/forgot-password')}
-          buttonText="Log in"
-          submitError={loginError}
-          onFieldEdit={clearLoginError}
-          onFieldFocus={(fieldName) => {
-            if (fieldName === 'email') setAssistantStageMessage('Enter the email address connected to your Donivra account.');
-            if (fieldName === 'password') setAssistantStageMessage('Now enter your account password. If you forgot it, use Forgot password before logging in.');
-          }}
-          resolvedTheme={resolvedTheme}
-        />
-      </View>
-
-      <AuthFormFooter
-        questionText="Don't have an account?"
-        linkText="Register"
-        onLinkPress={() => router.replace('/auth/signup')}
-      />
-    </AuthScreenLayout>
+    </ScreenContainer>
   );
 }
 
 const styles = StyleSheet.create({
-  brandSection: {
-    alignItems: 'center',
-    marginBottom: theme.spacing.lg,
+  screenContent: {
+    flexGrow: 1,
+    paddingHorizontal: 0,
+    paddingTop: 0,
+    paddingBottom: 0,
   },
-  logoContainer: {
-    width: 64,
-    height: 64,
-    borderRadius: 18,
-    borderWidth: 1,
+  loginCanvas: {
+    flex: 1,
+    minHeight: 760,
+    width: '100%',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: theme.spacing.md,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.07,
-    shadowRadius: 8,
-    elevation: 3,
+    paddingHorizontal: theme.spacing.lg,
+    paddingVertical: theme.spacing.section,
   },
-  logoImage: {
-    width: 42,
-    height: 42,
+  loginCard: {
+    width: '100%',
+    maxWidth: 440,
+    borderWidth: 1,
+    borderRadius: theme.radius.xxl,
+    padding: theme.spacing.xl,
+    shadowColor: theme.colors.shadow,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.06,
+    shadowRadius: 28,
+    elevation: 6,
   },
-  brandName: {
-    fontSize: 24,
+  brandHeader: {
+    alignItems: 'center',
+    marginBottom: theme.spacing.section,
+  },
+  brandRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+    marginBottom: theme.spacing.lg,
+  },
+  brandText: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.heading,
+    fontWeight: theme.typography.weights.bold,
+  },
+  title: {
+    fontSize: 32,
+    lineHeight: 40,
     fontWeight: theme.typography.weights.bold,
     textAlign: 'center',
-    marginBottom: theme.spacing.xs,
+    marginBottom: theme.spacing.sm,
   },
-  brandTagline: {
-    fontSize: theme.typography.compact.bodySm,
+  subtitle: {
+    fontSize: theme.typography.semantic.body,
+    lineHeight: theme.typography.semantic.body * theme.typography.lineHeights.normal,
     textAlign: 'center',
-    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
-    maxWidth: 260,
+  },
+  dividerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.md,
+    marginVertical: theme.spacing.lg,
+  },
+  dividerLine: {
+    height: 1,
+    flex: 1,
+  },
+  dividerText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  socialStack: {
+    gap: theme.spacing.sm,
+    marginBottom: theme.spacing.section,
+  },
+  socialButton: {
+    minHeight: 48,
+    borderWidth: 1,
+    borderRadius: theme.radius.lg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: theme.spacing.sm,
+  },
+  socialButtonText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  signupRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    flexWrap: 'wrap',
+  },
+  signupText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+  },
+  signupLink: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  pressed: {
+    opacity: 0.72,
+  },
+  disabledButton: {
+    opacity: 0.68,
   },
 });

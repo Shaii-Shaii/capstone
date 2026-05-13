@@ -149,12 +149,6 @@ export const profileCompletionFieldLabels = {
 
 export const profileCompletionSections = [
   {
-    key: 'photo',
-    label: 'Add a profile photo',
-    shortLabel: 'Photo',
-    fields: ['photo_path'],
-  },
-  {
     key: 'name',
     label: 'Add your name',
     shortLabel: 'Name',

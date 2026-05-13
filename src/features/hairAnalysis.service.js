@@ -100,7 +100,7 @@ const resolvePhotoQualityIssueMessage = (analysis = {}) => {
 
   if (analysis?.is_hair_detected === false) {
     return isPlaceholderMessage
-      ? 'We could not reliably analyze the photos. Please retake the front view, side profile, and hair ends close-up in bright light with one person visible and no accessories covering the face or hair.'
+      ? 'We could not reliably analyze the photos. Please retake the front view, side profile, and hair ends close-up in bright light with one person visible and hair centered.'
       : rawMessage;
   }
 
@@ -131,7 +131,7 @@ const resolvePhotoQualityIssueMessage = (analysis = {}) => {
     || normalized.includes('scarf')
     || normalized.includes('headphones')
   ) {
-    return 'Accessories detected. Remove glasses, sunglasses, masks, caps, headbands, clips, pins, hair ties, scarves, headphones, and anything covering the face or hair, then retake the required view.';
+    return 'The scan needs clearer hair visibility. Please retake the required view in bright light with your hair centered.';
   }
 
   if (normalized.includes('blur') || normalized.includes('not clear') || normalized.includes('unclear')) {
@@ -279,6 +279,16 @@ const isIncompleteProviderAnalysisMessage = (message = '') => {
   );
 };
 
+const isProviderJsonParseMessage = (message = '') => {
+  const normalized = String(message || '').toLowerCase();
+  return (
+    normalized.includes('invalid json')
+    || normalized.includes('could not be parsed')
+    || normalized.includes('returned an empty response')
+    || normalized.includes('json parse')
+  );
+};
+
 const buildLowConfidenceFallbackAnalysis = ({ images = [], message = '' } = {}) => {
   const providedViews = (images || [])
     .map((image) => image?.viewLabel || image?.viewKey || '')
@@ -315,7 +325,7 @@ const buildLowConfidenceFallbackAnalysis = ({ images = [], message = '' } = {}) 
     recommendations: [
       {
         title: 'Retake Clear Required Views',
-        recommendation_text: 'Capture the front view, side profile, and hair ends close-up in bright lighting. Keep the hair fully visible without glasses, clips, caps, or other accessories.',
+        recommendation_text: 'Capture the front view, side profile, and hair ends close-up in bright lighting. Keep the hair fully visible and centered.',
         priority_order: 1,
       },
       {
@@ -550,12 +560,14 @@ export const analyzeHairPhotos = async ({
         edgeFunctionInvoked
         && providerRequestAttempted
         && providerResponseStatus === 200
-        && providerParseSuccess === true
-        && isIncompleteProviderAnalysisMessage(resolvedErrorMessage)
+        && (
+          isIncompleteProviderAnalysisMessage(resolvedErrorMessage)
+          || isProviderJsonParseMessage(resolvedErrorMessage)
+        )
       ) {
         const fallbackAnalysis = buildLowConfidenceFallbackAnalysis({
           images: payload.images,
-          message: 'The result below is marked low-confidence instead of blocking your check.',
+          message: 'The result below is marked low-confidence because the AI provider response could not be parsed into the expected structured format.',
         });
 
         logAppEvent('hairAnalysis.invoke', 'Recovered from incomplete provider analysis with a low-confidence fallback result.', {
@@ -715,13 +727,16 @@ export const analyzeHairPhotos = async ({
       edgeFunctionInvoked
       && providerRequestAttempted
       && providerResponseStatus === 200
-      && isIncompleteProviderAnalysisMessage(resolvedMessage)
+      && (
+        isIncompleteProviderAnalysisMessage(resolvedMessage)
+        || isProviderJsonParseMessage(resolvedMessage)
+      )
     );
 
     if (canRecoverIncompleteProviderResponse) {
       const fallbackAnalysis = buildLowConfidenceFallbackAnalysis({
         images,
-        message: 'The result below is marked low-confidence instead of blocking your check.',
+        message: 'The result below is marked low-confidence because the AI provider response could not be parsed into the expected structured format.',
       });
 
       logAppEvent('hairAnalysis.analyzeHairPhotos', 'Recovered from incomplete AI provider analysis in catch path.', {
@@ -845,7 +860,7 @@ export const analyzeHairPhotos = async ({
               ? 'The AI response could not be read properly. Please try the hair analysis again.'
             : errorType === 'photo_quality'
               ? ['n/a', 'na', 'none', 'null', 'not applicable'].includes(technicalMessage.trim())
-                ? 'We could not reliably analyze the photos. Please retake the front view, side profile, and hair ends close-up in bright light with one person visible and no accessories covering the face or hair.'
+                ? 'We could not reliably analyze the photos. Please retake the front view, side profile, and hair ends close-up in bright light with one person visible and hair centered.'
                 : resolvedMessage
             : technicalMessage.includes('incomplete')
               ? 'Hair analysis could not be completed right now.'

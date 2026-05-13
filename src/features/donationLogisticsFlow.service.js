@@ -264,10 +264,11 @@ export const validateDonationDetails = (donationDetails = {}, donationRequiremen
 
   // Check against donation requirements if provided
   if (donationRequirement) {
-    const minLength = donationRequirement.minimum_hair_length || 14;
-    const minLengthInches = donationRequirement.minimum_hair_length
-      ? (donationRequirement.minimum_hair_length / 2.54).toFixed(1)
-      : 14;
+    const minLength = Math.max(
+      35.56,
+      Number(donationRequirement.minimum_hair_length) > 0 ? Number(donationRequirement.minimum_hair_length) : 0,
+    );
+    const minLengthInches = (minLength / 2.54).toFixed(1);
 
     const hairLengthInches = donationDetails.hairLengthUnit === 'cm'
       ? (donationDetails.hairLengthValue / 2.54).toFixed(1)

@@ -1,11 +1,17 @@
 import React from 'react';
-import { View, StyleSheet, Text } from 'react-native';
+import { Pressable, View, StyleSheet, Text } from 'react-native';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { OtpInput } from '../ui/OtpInput';
 import { AppButton } from '../ui/AppButton';
-import { AppTextLink } from '../ui/AppTextLink';
 import { theme } from '../../design-system/theme';
+
+const formatCountdown = (seconds) => {
+  const safeSeconds = Math.max(0, Number(seconds) || 0);
+  const minutes = Math.floor(safeSeconds / 60);
+  const remainder = safeSeconds % 60;
+  return `${minutes}:${String(remainder).padStart(2, '0')}`;
+};
 
 export const VerifyEmailForm = ({ schema, emailContext, onSubmit, onResend, isLoading, isResending, resendCountdown = 0, successMessage }) => {
   const { control, handleSubmit, formState: { errors } } = useForm({
@@ -43,21 +49,35 @@ export const VerifyEmailForm = ({ schema, emailContext, onSubmit, onResend, isLo
       />
 
       <AppButton
-        title="Verify"
+        title="Verify & Continue"
         onPress={handleSubmit(onSubmit)}
         loading={isLoading}
         disabled={isLoading || isResending}
         size="lg"
         style={styles.submitBtn}
+        textStyle={styles.submitBtnText}
       />
 
       <View style={styles.resendRow}>
-        <AppTextLink
-          title={resendCountdown > 0 ? `Resend in ${resendCountdown}s` : 'Resend Code'}
+        <Text style={styles.resendText}>{'Did not receive the code? '}</Text>
+        <Pressable
           onPress={onResend}
           disabled={resendCountdown > 0 || isLoading || isResending}
-          variant="muted"
-        />
+          style={({ pressed }) => [styles.resendPressable, pressed ? styles.pressed : null]}
+          accessibilityRole="button"
+        >
+          <Text
+            style={[
+              styles.resendLink,
+              resendCountdown > 0 || isLoading || isResending ? styles.resendDisabled : null,
+            ]}
+          >
+            Resend Code
+            {resendCountdown > 0 ? (
+              <Text style={styles.resendCountdown}> ({formatCountdown(resendCountdown)})</Text>
+            ) : null}
+          </Text>
+        </Pressable>
       </View>
     </View>
   );
@@ -69,11 +89,11 @@ const styles = StyleSheet.create({
   },
   subtitle: {
     fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.body,
+    fontSize: theme.typography.semantic.bodySm,
     color: theme.colors.textSecondary,
     marginBottom: theme.spacing.lg,
     textAlign: 'center',
-    lineHeight: theme.typography.semantic.body * theme.typography.lineHeights.normal,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
   },
   emailText: {
     color: theme.colors.textPrimary,
@@ -89,7 +109,7 @@ const styles = StyleSheet.create({
     fontWeight: theme.typography.weights.medium,
   },
   otpContainer: {
-    marginBottom: theme.spacing.xl,
+    marginBottom: theme.spacing.section,
     alignItems: 'center',
   },
   errorText: {
@@ -100,10 +120,46 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
   },
   submitBtn: {
-    marginBottom: theme.spacing.md,
+    minHeight: 48,
+    borderRadius: theme.radius.lg,
+    marginBottom: theme.spacing.lg,
+  },
+  submitBtnText: {
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.bold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
   },
   resendRow: {
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    flexWrap: 'wrap',
     paddingBottom: theme.spacing.sm,
+  },
+  resendText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    color: theme.colors.textSecondary,
+  },
+  resendPressable: {
+    minHeight: 28,
+    justifyContent: 'center',
+  },
+  resendLink: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    color: theme.colors.actionTextLink,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  resendDisabled: {
+    color: theme.colors.textSecondary,
+  },
+  resendCountdown: {
+    color: theme.colors.textMuted,
+    fontWeight: theme.typography.weights.regular,
+  },
+  pressed: {
+    opacity: 0.72,
   },
 });

@@ -409,8 +409,9 @@ const styles = StyleSheet.create({
     gap: theme.spacing.sm,
   },
   gridItem: {
-    width: '22.8%',
-    minWidth: 74,
+    flexBasis: '47.5%',
+    flexGrow: 1,
+    minWidth: 142,
   },
   summaryEyebrow: {
     fontFamily: theme.typography.fontFamily,
@@ -437,13 +438,15 @@ const styles = StyleSheet.create({
     marginTop: theme.spacing.sm,
   },
   snapshotPill: {
-    minWidth: '31%',
+    flexGrow: 1,
+    flexBasis: '47%',
+    minWidth: 136,
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.spacing.xs,
-    paddingHorizontal: theme.spacing.xs,
-    paddingVertical: 5,
-    borderRadius: 16,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: 8,
+    borderRadius: 18,
     borderWidth: 1,
   },
   snapshotIconWrap: {
@@ -454,6 +457,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   snapshotCopy: {
+    flex: 1,
+    minWidth: 0,
     gap: 1,
   },
   snapshotLabel: {
@@ -466,6 +471,7 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.caption,
     fontWeight: theme.typography.weights.semibold,
+    flexShrink: 1,
   },
   setupCard: {
     flexDirection: 'row',

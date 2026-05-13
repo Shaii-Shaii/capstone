@@ -2,7 +2,6 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Animated, Image, Platform, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import { Controller, useForm } from 'react-hook-form';
@@ -15,7 +14,6 @@ import { AppTextLink } from '../src/components/ui/AppTextLink';
 import { OtpInput } from '../src/components/ui/OtpInput';
 import { DatePickerField } from '../src/components/ui/DatePickerField';
 import { AddressOptionSheet, AddressSelectField, SignupAddressSection } from '../src/components/auth/SignupAddressSection';
-import { AuthVoiceAssistant } from '../src/components/auth/AuthVoiceAssistant';
 import { useAuth } from '../src/providers/AuthProvider';
 import { useRoleAuthFlow } from '../src/hooks/useRoleAuthFlow';
 import {
@@ -25,8 +23,15 @@ import {
 import { patientOnboardingSchema } from '../src/features/profile/profile.schema';
 import { guardianRelationshipOptions, profileGenderOptions } from '../src/constants/profile';
 import { resolveBrandLogoSource, resolveThemeRoles, theme } from '../src/design-system/theme';
+import landingHeroImage from '../src/assets/images/hero_landing.png';
 
-const normalizePatientCode = (value) => value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
+const normalizePatientCode = (value) => {
+  const normalized = String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (normalized.startsWith('PT') && normalized.length > 6) {
+    return normalized.slice(2, 8);
+  }
+  return normalized.slice(0, 6);
+};
 const IMAGE_MEDIA_TYPES = ['images'];
 const PROFILE_MINIMUM_AGE = 18;
 const MINIMUM_BIRTHDATE = new Date(1900, 0, 1);
@@ -180,57 +185,12 @@ function LoadingState() {
   );
 }
 
-function HairDonationIllustration({ roles }) {
-  return (
-    <View style={styles.illustrationStage}>
-      <View style={[styles.hairHalo, { backgroundColor: roles.iconPrimarySurface }]} />
-      <View style={[styles.hairStrandLarge, { backgroundColor: roles.primaryActionBackground }]} />
-      <View style={[styles.hairStrandSmall, { backgroundColor: roles.accentCardBorder }]} />
-      <View style={[styles.personHead, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
-        <MaterialCommunityIcons name="face-woman-outline" size={48} color={roles.headingText} />
-      </View>
-      <View style={[styles.personHairLeft, { backgroundColor: roles.headingText }]} />
-      <View style={[styles.personHairRight, { backgroundColor: roles.headingText }]} />
-      <View style={[styles.personBody, { backgroundColor: roles.supportCardBackground, borderColor: roles.supportCardBorder }]}>
-        <MaterialCommunityIcons name="heart-plus-outline" size={30} color={roles.primaryActionBackground} />
-      </View>
-      <View style={[styles.donationBadge, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
-        <MaterialCommunityIcons name="content-cut" size={20} color={roles.primaryActionBackground} />
-        <Text style={[styles.donationBadgeText, { color: roles.headingText }]}>AI Check</Text>
-      </View>
-    </View>
-  );
-}
-
 function PublicLanding() {
   const router = useRouter();
   const { resolvedTheme } = useAuth();
   const { isLoading, clearGoogleError } = useRoleAuthFlow('access');
   const roles = resolveThemeRoles(resolvedTheme);
-  const heroTitle = resolvedTheme?.brandName || 'Donivra';
-  const floatY = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    const animation = Animated.loop(
-      Animated.sequence([
-        Animated.timing(floatY, {
-          toValue: -10,
-          duration: 1800,
-          useNativeDriver: true,
-        }),
-        Animated.timing(floatY, {
-          toValue: 0,
-          duration: 1800,
-          useNativeDriver: true,
-        }),
-      ])
-    );
-
-    animation.start();
-    return () => {
-      animation.stop();
-    };
-  }, [floatY]);
+  const brandName = resolvedTheme?.brandName || 'Donivra';
 
   const navigateWithHaptic = async (path) => {
     await Haptics.selectionAsync();
@@ -239,102 +199,172 @@ function PublicLanding() {
 
   return (
     <ScreenContainer
-      scrollable={false}
+      scrollable={true}
       safeArea
       variant="auth"
       contentStyle={styles.screenContent}
     >
-      <LinearGradient
-        colors={[roles.heroBackground, roles.pageBackground, roles.supportCardBackground]}
-        style={styles.landingGradient}
-      >
-        <View style={styles.landingContent}>
-          <View style={styles.landingDecorRow}>
-            <View style={[styles.landingDot, { backgroundColor: roles.primaryActionBackground }]} />
-            <View style={[styles.landingDot, { backgroundColor: roles.accentCardBorder }]} />
-            <View style={[styles.landingDot, { backgroundColor: roles.supportCardBorder }]} />
-          </View>
-
+      <View style={[styles.landingPage, { backgroundColor: roles.pageBackground }]}>
+        <View style={[styles.landingTopBar, { backgroundColor: roles.defaultCardBackground }]}>
           <View style={styles.landingBrandBar}>
-            <BrandLogo resolvedTheme={resolvedTheme} plain={true} />
+            <MaterialCommunityIcons name="content-cut" size={26} color={roles.primaryActionBackground} />
             <Text
               style={[
                 styles.landingBrandText,
                 {
-                  color: roles.headingText,
+                  color: roles.primaryActionBackground,
                   fontFamily: resolvedTheme?.secondaryFontFamily || theme.typography.fontFamilyDisplay,
                 },
               ]}
             >
-              {heroTitle}.
+              {brandName}
             </Text>
           </View>
-
-          <Animated.View style={[styles.landingArtWrap, { transform: [{ translateY: floatY }] }]}>
-            <HairDonationIllustration roles={roles} />
-          </Animated.View>
-
-          <View style={styles.landingCopyBlock}>
-            <Text
-              style={[
-                styles.landingTitle,
-                {
-                  color: roles.headingText,
-                  fontFamily: resolvedTheme?.secondaryFontFamily || theme.typography.fontFamilyDisplay,
-                },
-              ]}
-            >
-              Donate Hair, Give Hope
-            </Text>
-            <Text style={[styles.landingSubtitle, { color: roles.bodyText }]}>
-              AI-assisted hair screening, donation drives, and patient support in one guided mobile experience.
-            </Text>
-          </View>
-
-          <AuthVoiceAssistant
-            screen="landing"
-            resolvedTheme={resolvedTheme}
-            prompt={`Hello, welcome to ${heroTitle}. I am ${heroTitle} AI. How can I help you?`}
-            style={styles.landingAssistant}
+          <AppButton
+            title="Sign Up"
+            size="sm"
+            fullWidth={false}
+            style={styles.landingNavButton}
+            textStyle={styles.landingNavButtonText}
+            disabled={isLoading}
+            onPress={() => {
+              clearGoogleError();
+              return navigateWithHaptic('/auth/signup');
+            }}
           />
+        </View>
 
-          <View style={styles.landingActionStack}>
-            <AppButton
-              title="Log in"
-              variant="outline"
-              size="lg"
-              style={styles.landingButtonPrimary}
-              textStyle={styles.landingButtonText}
-              textColorOverride={roles.primaryActionText}
-              backgroundColorOverride={roles.primaryActionBackground}
-              borderColorOverride={roles.primaryActionBackground}
-              disabled={isLoading}
-              onPress={() => {
-                clearGoogleError();
-                return navigateWithHaptic('/auth/access');
-              }}
-              enableHaptics={true}
-            />
-            <AppButton
-              title="Register"
-              variant="outline"
-              size="lg"
-              style={styles.landingButtonSecondary}
-              textStyle={styles.landingButtonText}
-              textColorOverride={roles.secondaryActionText}
-              backgroundColorOverride={roles.defaultCardBackground}
-              borderColorOverride={roles.defaultCardBorder}
-              disabled={isLoading}
-              onPress={() => {
-                clearGoogleError();
-                return navigateWithHaptic('/auth/signup');
-              }}
-              enableHaptics={true}
-            />
+        <View style={styles.landingContent}>
+          <View style={styles.landingHeroSection}>
+            <View style={styles.landingCopyBlock}>
+              <Text
+                style={[
+                  styles.landingTitle,
+                  {
+                    color: roles.headingText,
+                    fontFamily: resolvedTheme?.secondaryFontFamily || theme.typography.fontFamilyDisplay,
+                  },
+                ]}
+              >
+                Give Your Hair a New Purpose
+              </Text>
+              <Text style={[styles.landingSubtitle, { color: roles.bodyText }]}>
+                Join donors making a difference in the lives of people experiencing medical hair loss. Professional, secure, and deeply impactful.
+              </Text>
+              <View style={styles.landingActionStack}>
+                <AppButton
+                  title="Start Your Journey"
+                  size="lg"
+                  style={styles.landingButtonPrimary}
+                  textStyle={styles.landingButtonText}
+                  textColorOverride={roles.primaryActionText}
+                  backgroundColorOverride={roles.primaryActionBackground}
+                  borderColorOverride={roles.primaryActionBackground}
+                  disabled={isLoading}
+                  onPress={() => {
+                    clearGoogleError();
+                    return navigateWithHaptic('/auth/signup');
+                  }}
+                  enableHaptics={true}
+                />
+                <AppButton
+                  title="Learn How It Works"
+                  variant="outline"
+                  size="lg"
+                  style={styles.landingButtonSecondary}
+                  textStyle={styles.landingButtonText}
+                  textColorOverride={roles.secondaryActionText}
+                  backgroundColorOverride={roles.defaultCardBackground}
+                  borderColorOverride={roles.defaultCardBorder}
+                  disabled={isLoading}
+                  onPress={() => Haptics.selectionAsync()}
+                  enableHaptics={true}
+                />
+              </View>
+            </View>
 
+            <View style={styles.landingArtWrap}>
+              <Image
+                source={landingHeroImage}
+                style={styles.landingHeroImage}
+                resizeMode="cover"
+              />
+            </View>
+          </View>
+
+          <View style={styles.landingSection}>
+            <Text style={[styles.landingSectionTitle, { color: roles.headingText }]}>Why Donate?</Text>
+            <View style={styles.landingCardGrid}>
+              {[
+                {
+                  icon: 'heart-outline',
+                  title: 'Emotional Impact',
+                  body: 'Provide confidence and emotional support to individuals facing severe medical treatments.',
+                },
+                {
+                  icon: 'check-decagram-outline',
+                  title: 'Trusted Process',
+                  body: 'Certified partners help ensure every strand is handled with professional care.',
+                },
+                {
+                  icon: 'leaf',
+                  title: 'Sustainable',
+                  body: 'Donated hair is used with careful, low-waste practices that respect every contribution.',
+                },
+              ].map((item) => (
+                <View key={item.title} style={[styles.landingInfoCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
+                  <View style={[styles.landingInfoIcon, { backgroundColor: roles.iconPrimarySurface }]}>
+                    <MaterialCommunityIcons name={item.icon} size={30} color={roles.primaryActionBackground} />
+                  </View>
+                  <Text style={[styles.landingInfoTitle, { color: roles.headingText }]}>{item.title}</Text>
+                  <Text style={[styles.landingInfoBody, { color: roles.bodyText }]}>{item.body}</Text>
+                </View>
+              ))}
+            </View>
+          </View>
+
+          <View style={[styles.landingProcessSection, { backgroundColor: roles.supportCardBackground }]}>
+            <Text style={[styles.landingSectionTitle, { color: roles.headingText }]}>Simple 3-Step Process</Text>
+            <Text style={[styles.landingProcessBody, { color: roles.bodyText }]}>
+              Donating is easier than you think. We guide you through every step to keep the experience clear and secure.
+            </Text>
+            <View style={styles.landingProcessGrid}>
+              {[
+                {
+                  step: '1',
+                  icon: 'ruler',
+                  title: 'Assess',
+                  body: 'Measure your hair and review basic donation requirements before starting.',
+                },
+                {
+                  step: '2',
+                  icon: 'map-marker-outline',
+                  title: 'Find',
+                  body: 'Locate a partner drive or prepare an independent hair donation through the platform.',
+                },
+                {
+                  step: '3',
+                  icon: 'truck-outline',
+                  title: 'Donate',
+                  body: 'Securely package your hair, attach the generated QR, and track the donation journey.',
+                },
+              ].map((item) => (
+                <View key={item.step} style={[styles.landingStepCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
+                  <Text style={[styles.landingStepNumber, { color: roles.defaultCardBorder }]}>{item.step}</Text>
+                  <MaterialCommunityIcons name={item.icon} size={28} color={roles.primaryActionBackground} />
+                  <Text style={[styles.landingStepTitle, { color: roles.headingText }]}>{item.title}</Text>
+                  <Text style={[styles.landingStepBody, { color: roles.bodyText }]}>{item.body}</Text>
+                </View>
+              ))}
+            </View>
           </View>
         </View>
-      </LinearGradient>
+
+        <View style={[styles.landingFooter, { backgroundColor: roles.supportCardBackground }]}>
+          <Text style={[styles.landingFooterBrand, { color: roles.primaryActionBackground }]}>{brandName}</Text>
+          <Text style={[styles.landingFooterText, { color: roles.bodyText }]}>Every strand counts.</Text>
+        </View>
+      </View>
     </ScreenContainer>
   );
 }
@@ -501,11 +531,13 @@ function FirstTimeOnboarding() {
     setPatientCodeError('');
     setPatientPreview(null);
 
-    const result = await getPatientLinkPreview(normalizedCode);
+    const result = await getPatientLinkPreview(normalizedCode, {
+      currentAuthUserId: user?.id || '',
+    });
     setIsValidatingCode(false);
 
     if (result.error) {
-      setPatientCodeError('Invalid Code');
+      setPatientCodeError(result.error || 'Patient code could not be validated.');
       return;
     }
 
@@ -634,9 +666,9 @@ function FirstTimeOnboarding() {
       return (
         <AppCard variant="elevated" radius="xl" padding="lg" style={styles.onboardingCard}>
           <View style={styles.onboardingSection}>
-            <Text style={styles.onboardingQuestion}>Input Hospital Code</Text>
+            <Text style={styles.onboardingQuestion}>Input Patient Code</Text>
             <Text style={styles.onboardingBody}>
-              Enter the hospital code if one was provided. You can continue without a code to enter patient information.
+              Enter the numeric part of the patient code provided with the temporary credentials.
             </Text>
           </View>
 
@@ -670,7 +702,7 @@ function FirstTimeOnboarding() {
               />
             ) : (
               <AppButton
-                title="Validate Hospital Code"
+                title="Validate Patient Code"
                 size="lg"
                 loading={isValidatingCode}
                 disabled={isValidatingCode || isSubmitting}
@@ -679,7 +711,7 @@ function FirstTimeOnboarding() {
             )}
 
             <AppTextLink
-              title="No hospital code"
+              title="No patient code"
               variant="muted"
               disabled={isSubmitting || isValidatingCode}
               onPress={() => {
@@ -1225,15 +1257,37 @@ const styles = StyleSheet.create({
   landingGradient: {
     flex: 1,
     alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: theme.spacing.xl,
+    justifyContent: 'space-between',
+    paddingHorizontal: theme.spacing.lg,
     paddingVertical: theme.spacing.lg,
+  },
+  landingPage: {
+    width: '100%',
+    minHeight: '100%',
+  },
+  landingTopBar: {
+    width: '100%',
+    minHeight: 64,
+    paddingHorizontal: theme.spacing.lg,
+    paddingVertical: theme.spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.borderSubtle,
   },
   landingContent: {
     width: '100%',
-    maxWidth: 356,
-    paddingTop: theme.spacing.xxl,
-    paddingBottom: theme.spacing.lg,
+    maxWidth: 1200,
+    alignSelf: 'center',
+    paddingHorizontal: theme.spacing.lg,
+    paddingTop: theme.spacing.xl,
+    paddingBottom: theme.spacing.xxxl,
+    gap: theme.spacing.xxxl,
+  },
+  landingHeroSection: {
+    width: '100%',
+    gap: theme.spacing.xl,
   },
   landingDecorRow: {
     flexDirection: 'row',
@@ -1246,21 +1300,66 @@ const styles = StyleSheet.create({
     borderRadius: 4,
   },
   landingBrandBar: {
-    width: '100%',
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.spacing.sm,
-    marginBottom: theme.spacing.md,
   },
   landingBrandText: {
     fontFamily: theme.typography.fontFamilyDisplay,
-    fontSize: theme.typography.compact.titleSm,
+    fontSize: theme.typography.semantic.title,
+    fontWeight: theme.typography.weights.bold,
+  },
+  landingNavButton: {
+    minHeight: 44,
+    borderRadius: theme.radius.lg,
+    paddingHorizontal: theme.spacing.md,
+  },
+  landingNavButtonText: {
+    fontSize: theme.typography.semantic.caption,
     fontWeight: theme.typography.weights.bold,
   },
   landingArtWrap: {
     width: '100%',
-    height: 214,
-    marginBottom: theme.spacing.md,
+    height: 270,
+    borderRadius: theme.radius.xxl,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+    shadowColor: theme.colors.palette.black,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.08,
+    shadowRadius: 24,
+    elevation: 5,
+  },
+  landingHeroImage: {
+    width: '100%',
+    height: '100%',
+  },
+  landingHeroImageInner: {
+    borderRadius: 30,
+  },
+  landingHeroShade: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(17,17,17,0.18)',
+  },
+  landingHeroBadgeRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.spacing.xs,
+    padding: theme.spacing.md,
+  },
+  landingHeroBadge: {
+    minHeight: 34,
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: theme.spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  landingHeroBadgeText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    fontWeight: theme.typography.weights.bold,
   },
   illustrationStage: {
     flex: 1,
@@ -1358,23 +1457,23 @@ const styles = StyleSheet.create({
   landingCopyBlock: {
     width: '100%',
     alignItems: 'flex-start',
-    gap: theme.spacing.sm,
-    marginBottom: theme.spacing.md,
+    gap: theme.spacing.md,
   },
   landingTitle: {
     textAlign: 'left',
     fontFamily: theme.typography.fontFamilyDisplay,
     fontSize: 32,
-    lineHeight: 36,
+    lineHeight: 40,
+    fontWeight: theme.typography.weights.bold,
     color: theme.colors.textPrimary,
   },
   landingSubtitle: {
     textAlign: 'left',
     fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+    fontSize: theme.typography.semantic.body,
+    lineHeight: theme.typography.semantic.body * theme.typography.lineHeights.relaxed,
     color: theme.colors.textSecondary,
-    maxWidth: 286,
+    maxWidth: 560,
   },
   landingAssistant: {
     marginBottom: theme.spacing.md,
@@ -1382,18 +1481,125 @@ const styles = StyleSheet.create({
   landingActionStack: {
     width: '100%',
     gap: theme.spacing.sm,
+    marginTop: theme.spacing.sm,
   },
   landingButtonPrimary: {
-    minHeight: 52,
-    borderRadius: 22,
+    minHeight: 48,
+    borderRadius: theme.radius.lg,
   },
   landingButtonSecondary: {
-    minHeight: 52,
-    borderRadius: 22,
+    minHeight: 48,
+    borderRadius: theme.radius.lg,
   },
   landingButtonText: {
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  landingSection: {
+    width: '100%',
+    gap: theme.spacing.lg,
+  },
+  landingSectionTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.title,
+    lineHeight: theme.typography.semantic.title * theme.typography.lineHeights.tight,
+    fontWeight: theme.typography.weights.semibold,
+    textAlign: 'center',
+  },
+  landingCardGrid: {
+    width: '100%',
+    gap: theme.spacing.md,
+  },
+  landingInfoCard: {
+    borderWidth: 1,
+    borderRadius: theme.radius.xxl,
+    padding: theme.spacing.lg,
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+    shadowColor: theme.colors.palette.black,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.05,
+    shadowRadius: 20,
+    elevation: 3,
+  },
+  landingInfoIcon: {
+    width: 64,
+    height: 64,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: theme.spacing.xs,
+  },
+  landingInfoTitle: {
+    fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.body,
     fontWeight: theme.typography.weights.semibold,
+    textAlign: 'center',
+  },
+  landingInfoBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+    textAlign: 'center',
+  },
+  landingProcessSection: {
+    borderRadius: 24,
+    padding: theme.spacing.lg,
+    gap: theme.spacing.md,
+  },
+  landingProcessBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    lineHeight: theme.typography.semantic.body * theme.typography.lineHeights.relaxed,
+    textAlign: 'center',
+    alignSelf: 'center',
+    maxWidth: 680,
+  },
+  landingProcessGrid: {
+    gap: theme.spacing.md,
+    marginTop: theme.spacing.sm,
+  },
+  landingStepCard: {
+    borderWidth: 1,
+    borderRadius: theme.radius.xxl,
+    padding: theme.spacing.lg,
+    gap: theme.spacing.sm,
+    overflow: 'hidden',
+  },
+  landingStepNumber: {
+    position: 'absolute',
+    top: theme.spacing.md,
+    right: theme.spacing.md,
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: 42,
+    fontWeight: theme.typography.weights.bold,
+  },
+  landingStepTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.semibold,
+    marginTop: theme.spacing.xs,
+  },
+  landingStepBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+  },
+  landingFooter: {
+    width: '100%',
+    paddingHorizontal: theme.spacing.lg,
+    paddingVertical: theme.spacing.lg,
+    alignItems: 'center',
+    gap: theme.spacing.xs,
+  },
+  landingFooterBrand: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  landingFooterText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
   },
   content: {
     width: '100%',

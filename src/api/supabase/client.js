@@ -10,6 +10,79 @@ const canUseBrowserStorage = typeof window !== 'undefined';
 const hasSupabaseConfig = Boolean(supabaseUrl && supabasePublishableKey);
 const missingSupabaseConfigMessage = 'Supabase environment variables are not configured.';
 
+const extractPersistedSession = (payload) => {
+  if (!payload || typeof payload !== 'object') return null;
+
+  if (payload.currentSession && typeof payload.currentSession === 'object') {
+    return payload.currentSession;
+  }
+
+  if (payload.session && typeof payload.session === 'object') {
+    return payload.session;
+  }
+
+  if (payload.access_token || payload.refresh_token || payload.user) {
+    return payload;
+  }
+
+  return null;
+};
+
+const shouldDiscardPersistedAuthValue = (rawValue) => {
+  if (!rawValue) return false;
+
+  let parsedValue;
+  try {
+    parsedValue = JSON.parse(rawValue);
+  } catch (_error) {
+    return true;
+  }
+
+  const persistedSession = extractPersistedSession(parsedValue);
+  if (!persistedSession) return false;
+
+  const hasAccessToken = Boolean(persistedSession?.access_token);
+  const hasRefreshToken = Boolean(persistedSession?.refresh_token);
+  const hasUser = Boolean(persistedSession?.user);
+
+  if ((hasAccessToken || hasUser) && !hasRefreshToken) {
+    return true;
+  }
+
+  const expiresAt = Number(persistedSession?.expires_at);
+  if (expiresAt && expiresAt * 1000 <= Date.now() && !hasRefreshToken) {
+    return true;
+  }
+
+  return false;
+};
+
+const createSanitizedAuthStorage = (storage) => ({
+  async getItem(key) {
+    if (!storage?.getItem) return null;
+    const value = await storage.getItem(key);
+
+    if (shouldDiscardPersistedAuthValue(value)) {
+      try {
+        await storage.removeItem?.(key);
+      } catch (_error) {
+        // Ignore storage cleanup failures and return signed out.
+      }
+      return null;
+    }
+
+    return value;
+  },
+  async setItem(key, value) {
+    if (!storage?.setItem) return;
+    await storage.setItem(key, value);
+  },
+  async removeItem(key) {
+    if (!storage?.removeItem) return;
+    await storage.removeItem(key);
+  },
+});
+
 const webStorage = {
   async getItem(key) {
     if (!canUseBrowserStorage) return null;
@@ -136,7 +209,7 @@ const createFallbackSupabaseClient = () => ({
 export const supabase = hasSupabaseConfig
   ? createClient(supabaseUrl, supabasePublishableKey, {
       auth: {
-        storage: isWeb ? webStorage : AsyncStorage,
+        storage: createSanitizedAuthStorage(isWeb ? webStorage : AsyncStorage),
         autoRefreshToken: false,
         persistSession: true,
         detectSessionInUrl: false,
@@ -246,24 +319,6 @@ const getPersistedAuthStorageKey = () => {
   }
 };
 
-const extractPersistedSession = (payload) => {
-  if (!payload || typeof payload !== 'object') return null;
-
-  if (payload.currentSession && typeof payload.currentSession === 'object') {
-    return payload.currentSession;
-  }
-
-  if (payload.session && typeof payload.session === 'object') {
-    return payload.session;
-  }
-
-  if (payload.access_token || payload.refresh_token || payload.user) {
-    return payload;
-  }
-
-  return null;
-};
-
 const sanitizePersistedAuthSession = async () => {
   const storage = getAuthStorage();
   const storageKey = getPersistedAuthStorageKey();
@@ -298,7 +353,24 @@ const sanitizePersistedAuthSession = async () => {
 const getSessionSafely = async () => {
   await sanitizePersistedAuthSession();
 
-  const sessionResult = await supabase.auth.getSession();
+  let sessionResult;
+  try {
+    sessionResult = await supabase.auth.getSession();
+  } catch (error) {
+    if (isInvalidRefreshTokenError(error)) {
+      await clearPersistedAuthSession();
+      return {
+        session: null,
+        error: null,
+      };
+    }
+
+    return {
+      session: null,
+      error: error || null,
+    };
+  }
+
   if (isInvalidRefreshTokenError(sessionResult?.error)) {
     await clearPersistedAuthSession();
     return {
@@ -314,20 +386,29 @@ const getSessionSafely = async () => {
 };
 
 const clearPersistedAuthSession = async () => {
-  try {
-    await supabase.auth.signOut({ scope: 'local' });
-  } catch (_error) {
-    // Continue to storage cleanup below. A broken refresh token can make signOut fail.
-  }
-
   const storage = getAuthStorage();
   const storageKey = getPersistedAuthStorageKey();
-  if (!storage?.removeItem || !storageKey) return;
+  if (!storage?.removeItem || !storageKey) {
+    try {
+      await supabase.auth.signOut({ scope: 'local' });
+    } catch (_error) {
+      // A broken refresh token should not block falling back to signed-out state.
+    }
+    return;
+  }
 
   try {
     await storage.removeItem(storageKey);
   } catch (_error) {
     // Ignore cleanup errors and let the app proceed unauthenticated.
+  }
+
+  try {
+    await supabase.auth.signOut({ scope: 'local' });
+  } catch (error) {
+    if (!isInvalidRefreshTokenError(error)) {
+      // Ignore cleanup errors and let the app proceed unauthenticated.
+    }
   }
 };
 
@@ -348,25 +429,17 @@ const tryRefreshAuthSession = async () => {
     };
   }
 
-  const directRefreshResult = await supabase.auth.refreshSession();
-  if (isInvalidRefreshTokenError(directRefreshResult?.error)) {
-    await clearPersistedAuthSession();
-    return {
-      session: null,
-      error: null,
-    };
+  let data = null;
+  let error = null;
+  try {
+    const refreshResult = await supabase.auth.refreshSession({
+      refresh_token: currentSession.refresh_token,
+    });
+    data = refreshResult?.data || null;
+    error = refreshResult?.error || null;
+  } catch (caughtError) {
+    error = caughtError;
   }
-
-  if (directRefreshResult?.data?.session && !directRefreshResult?.error) {
-    return {
-      session: directRefreshResult.data.session,
-      error: null,
-    };
-  }
-
-  const { data, error } = await supabase.auth.refreshSession({
-    refresh_token: currentSession.refresh_token,
-  });
 
   if (isInvalidRefreshTokenError(error)) {
     await clearPersistedAuthSession();

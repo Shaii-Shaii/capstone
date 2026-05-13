@@ -4,14 +4,14 @@ import { colors } from './colors';
 const shadow = (y, blur, opacity, elevation) =>
   Platform.select({
     ios: {
-      shadowColor: colors.palette.codGray,
+      shadowColor: colors.palette.codGray || colors.palette.black,
       shadowOffset: { width: 0, height: y },
       shadowOpacity: opacity,
       shadowRadius: blur,
     },
     android: {
       elevation,
-      shadowColor: colors.palette.codGray,
+      shadowColor: colors.palette.codGray || colors.palette.black,
     },
     default: {
       boxShadow: `0px ${y}px ${blur * 2}px rgba(8, 8, 8, ${opacity})`,

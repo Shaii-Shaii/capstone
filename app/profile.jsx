@@ -33,16 +33,21 @@ import {
 } from '../src/constants/profile';
 import { changePasswordSchema, profileUpdateSchema } from '../src/features/profile/profile.schema';
 import { donorDashboardNavItems, patientDashboardNavItems } from '../src/constants/dashboard';
+import {
+  fetchActiveGuardianConsent,
+  getDonorProfileBadge,
+  GUARDIAN_CONSENT_TEXT,
+  saveGuardianConsent,
+} from '../src/features/donorCompliance.service';
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
-const PROFILE_MINIMUM_AGE = 18;
 const MINIMUM_BIRTHDATE = new Date(1900, 0, 1);
 const REQUIRED_PROFILE_FIELDS = new Set(['firstName', 'lastName', 'birthdate', 'gender', 'phone']);
 
 const getMaximumBirthdate = () => {
-  const maxDate = new Date();
-  maxDate.setFullYear(maxDate.getFullYear() - PROFILE_MINIMUM_AGE);
-  return maxDate;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return today;
 };
 
 function ActionRow({ item, onPress, roles = null }) {
@@ -61,7 +66,14 @@ function ActionRow({ item, onPress, roles = null }) {
       onPressOut={() => {
         scale.value = withSpring(1, theme.motion.spring);
       }}
-      style={[styles.actionRow, animatedStyle]}
+      style={[
+        styles.actionRow,
+        {
+          backgroundColor: actionRoles.defaultCardBackground || theme.colors.surfaceCard,
+          borderColor: actionRoles.defaultCardBorder || theme.colors.borderSubtle,
+        },
+        animatedStyle,
+      ]}
     >
       <View
         style={[
@@ -129,6 +141,20 @@ export default function ProfileScreen() {
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [passwordSuccess, setPasswordSuccess] = useState(false);
   const [activeProfilePicker, setActiveProfilePicker] = useState('');
+  const [guardianConsent, setGuardianConsent] = useState(null);
+  const [isGuardianConsentModalOpen, setIsGuardianConsentModalOpen] = useState(false);
+  const [isSavingGuardianConsent, setIsSavingGuardianConsent] = useState(false);
+  const [guardianConsentForm, setGuardianConsentForm] = useState({
+    guardianFullName: '',
+    guardianRelationship: '',
+    guardianContactNumber: '',
+    guardianEmail: '',
+    minorDonationConsent: false,
+    aiImageProcessingConsent: false,
+    publicPostingAllowed: false,
+    signature: '',
+  });
+  const [guardianConsentErrors, setGuardianConsentErrors] = useState({});
   const successTimerRef = useRef(null);
 
   const profileForm = useForm({
@@ -150,10 +176,31 @@ export default function ProfileScreen() {
     control: profileForm.control,
   });
   const profileErrors = profileForm.formState.errors;
+  const role = resolvedRole;
 
   useEffect(() => {
     profileForm.reset(defaultValues);
   }, [defaultValues, profileForm]);
+
+  useEffect(() => {
+    let isMounted = true;
+    const loadGuardianConsent = async () => {
+      if (role !== 'donor' || !profile?.user_id) {
+        if (isMounted) setGuardianConsent(null);
+        return;
+      }
+
+      const result = await fetchActiveGuardianConsent(profile.user_id);
+      if (isMounted) {
+        setGuardianConsent(result.data || null);
+      }
+    };
+
+    loadGuardianConsent();
+    return () => {
+      isMounted = false;
+    };
+  }, [profile?.user_id, role]);
 
   useEffect(() => () => {
     if (successTimerRef.current) {
@@ -161,7 +208,6 @@ export default function ProfileScreen() {
     }
   }, []);
 
-  const role = resolvedRole;
   const isPatient = role === 'patient';
   const hasOrganization = !isPatient && Boolean(staffProfile?.hospital_id);
   const navItems = role === 'donor' ? donorDashboardNavItems : patientDashboardNavItems;
@@ -174,6 +220,9 @@ export default function ProfileScreen() {
   const avatarUri = profile?.avatar_url || profile?.photo_path || patientProfile?.patient_picture || '';
   const avatarInitials = `${firstName?.[0] || ''}${lastName?.[0] || ''}`.trim();
   const fullName = [firstName, middleName, lastName, suffix].filter(Boolean).join(' ');
+  const donorAgeBadge = useMemo(() => (
+    getDonorProfileBadge({ birthdate: profile?.birthdate, guardianConsent })
+  ), [guardianConsent, profile?.birthdate]);
   const displayRows = useMemo(() => (
     profileDisplayFields
       .map((field) => {
@@ -287,6 +336,12 @@ export default function ProfileScreen() {
   ]);
   const watchedNewPassword = passwordForm.watch('newPassword');
   const watchedGender = useWatch({ control: profileForm.control, name: 'gender' });
+  const watchedBirthdate = useWatch({ control: profileForm.control, name: 'birthdate' });
+  const setupDonorAgeBadge = useMemo(() => (
+    getDonorProfileBadge({ birthdate: watchedBirthdate, guardianConsent })
+  ), [guardianConsent, watchedBirthdate]);
+  const isMinorProfileDraft = setupDonorAgeBadge && setupDonorAgeBadge.category !== 'Adult';
+  const hasActiveGuardianConsent = Boolean(guardianConsent?.guardian_consent_id || guardianConsent?.Guardian_Consent_ID);
   const editablePreviewRows = useMemo(() => (
     [
       fullName ? { key: 'preview_name', label: 'Name', value: fullName } : null,
@@ -412,9 +467,96 @@ export default function ProfileScreen() {
   const completionHint = activeProfileCompletionMeta.isComplete
     ? 'All core details are complete.'
     : `Missing: ${activeProfileCompletionMeta.missingFieldLabels.slice(0, 3).join(', ')}.`;
-  const setFloatingFeedback = (type, title, message) => {
+  const setFloatingFeedback = useCallback((type, title, message) => {
     setFeedback({ type, title, message });
-  };
+  }, []);
+
+  const updateGuardianConsentField = useCallback((field, value) => {
+    setGuardianConsentForm((current) => ({
+      ...current,
+      [field]: value,
+    }));
+    setGuardianConsentErrors((current) => {
+      if (!current[field]) return current;
+      const next = { ...current };
+      delete next[field];
+      return next;
+    });
+  }, []);
+
+  const validateGuardianConsentForm = useCallback(() => {
+    const nextErrors = {};
+    const fullName = guardianConsentForm.guardianFullName.trim();
+    const relationship = guardianConsentForm.guardianRelationship.trim();
+    const contactNumber = guardianConsentForm.guardianContactNumber.trim();
+    const signature = guardianConsentForm.signature.trim();
+
+    if (!fullName) nextErrors.guardianFullName = 'Guardian full name is required.';
+    if (!relationship) nextErrors.guardianRelationship = 'Relationship is required.';
+    if (!contactNumber) nextErrors.guardianContactNumber = 'Guardian contact number is required.';
+    if (!guardianConsentForm.minorDonationConsent) nextErrors.minorDonationConsent = 'Minor donation consent is required.';
+    if (!guardianConsentForm.aiImageProcessingConsent) nextErrors.aiImageProcessingConsent = 'AI image processing consent is required.';
+    if (!signature) {
+      nextErrors.signature = 'Typed guardian name is required.';
+    } else if (fullName && signature.toLowerCase() !== fullName.toLowerCase()) {
+      nextErrors.signature = 'Signature must match the guardian full name.';
+    }
+
+    setGuardianConsentErrors(nextErrors);
+    return Object.keys(nextErrors).length === 0;
+  }, [guardianConsentForm]);
+
+  const closeGuardianConsentModal = useCallback(() => {
+    if (isSavingGuardianConsent) return;
+    setIsGuardianConsentModalOpen(false);
+    setGuardianConsentErrors({});
+  }, [isSavingGuardianConsent]);
+
+  const submitGuardianConsent = useCallback(async () => {
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    if (!profile?.user_id) {
+      setFloatingFeedback('error', 'Profile Not Ready', 'Please save your donor account first, then complete guardian consent.');
+      return;
+    }
+
+    if (!validateGuardianConsentForm()) {
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      return;
+    }
+
+    setIsSavingGuardianConsent(true);
+    const result = await saveGuardianConsent({
+      userId: profile.user_id,
+      guardianFullName: guardianConsentForm.guardianFullName,
+      guardianRelationship: guardianConsentForm.guardianRelationship,
+      guardianContactNumber: guardianConsentForm.guardianContactNumber,
+      guardianEmail: guardianConsentForm.guardianEmail,
+      publicPostingAllowed: guardianConsentForm.publicPostingAllowed,
+    });
+    setIsSavingGuardianConsent(false);
+
+    if (result.error) {
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      setFloatingFeedback('error', 'Consent Not Saved', result.error.message || 'Guardian consent could not be saved. Please try again.');
+      return;
+    }
+
+    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    const refreshed = await fetchActiveGuardianConsent(profile.user_id);
+    setGuardianConsent(refreshed.data || result.data || { guardian_consent_id: true });
+    setGuardianConsentForm({
+      guardianFullName: '',
+      guardianRelationship: '',
+      guardianContactNumber: '',
+      guardianEmail: '',
+      minorDonationConsent: false,
+      aiImageProcessingConsent: false,
+      publicPostingAllowed: false,
+      signature: '',
+    });
+    setIsGuardianConsentModalOpen(false);
+    setFloatingFeedback('success', 'Consent Completed', 'Guardian consent is now saved for this donor account.');
+  }, [guardianConsentForm, profile?.user_id, setFloatingFeedback, validateGuardianConsentForm]);
 
   const closeEditModal = useCallback(() => {
     profileForm.reset(defaultValues);
@@ -595,11 +737,11 @@ export default function ProfileScreen() {
 
   const renderDonorProfileContent = () => (
     <View style={[styles.donorProfileShell, { backgroundColor: roles.pageBackground }]}>
-      <View style={[styles.donorProfileHeader, { backgroundColor: roles.pageBackground }]}>
+      <View style={[styles.donorProfileHeader, { backgroundColor: roles.heroBackground, borderColor: roles.heroBorder }]}>
         <View style={styles.donorTopRow}>
           <View>
-            <Text style={[styles.donorHeaderEyebrow, { color: roles.metaText }]}>{resolvedTheme?.brandName || 'Donivra'}</Text>
-            <Text style={[styles.donorHeaderTitle, { color: roles.headingText }]}>Profile</Text>
+            <Text style={[styles.donorHeaderEyebrow, { color: roles.heroMetaText }]}>{resolvedTheme?.brandName || 'Donivra'}</Text>
+            <Text style={[styles.donorHeaderTitle, { color: roles.heroHeadingText }]}>Profile</Text>
           </View>
           <Pressable
             onPress={handlePhotoPress}
@@ -607,13 +749,13 @@ export default function ProfileScreen() {
             style={({ pressed }) => [
               styles.donorHeaderIconButton,
               {
-                backgroundColor: roles.defaultCardBackground,
-                borderColor: roles.defaultCardBorder,
+                backgroundColor: roles.headerUtilityBackground,
+                borderColor: roles.heroBorder,
                 opacity: pressed ? 0.82 : 1,
               },
             ]}
           >
-            <AppIcon name="camera" size="sm" color={roles.headingText} />
+            <AppIcon name="camera" size="sm" color={roles.headerUtilityText} />
           </Pressable>
         </View>
 
@@ -623,7 +765,7 @@ export default function ProfileScreen() {
             disabled={isUploadingAvatar}
             style={({ pressed }) => [styles.donorAvatarButton, { opacity: pressed ? 0.88 : 1 }]}
           >
-            <View style={[styles.donorProfileAvatar, { borderColor: roles.defaultCardBackground }]}>
+            <View style={[styles.donorProfileAvatar, { borderColor: roles.headerUtilityBackground }]}>
               {avatarUri ? (
                 <Image source={{ uri: avatarUri }} style={styles.profileHeroAvatarImage} resizeMode="cover" />
               ) : (
@@ -637,12 +779,29 @@ export default function ProfileScreen() {
             </View>
           </Pressable>
 
-          <Text numberOfLines={2} style={[styles.donorProfileName, { color: roles.headingText }]}>
+          <Text numberOfLines={2} style={[styles.donorProfileName, { color: roles.heroHeadingText }]}>
             {fullName || 'Complete your donor profile'}
           </Text>
-          <Text numberOfLines={1} style={[styles.donorProfileMeta, { color: roles.bodyText }]}>
+          <Text numberOfLines={1} style={[styles.donorProfileMeta, { color: roles.heroBodyText }]}>
             {profile?.contact_number || profile?.phone || user?.email || 'No contact linked'}
           </Text>
+          {donorAgeBadge ? (
+            <View
+              style={[
+                styles.donorAgeBadge,
+                donorAgeBadge.tone === 'success' ? styles.donorAgeBadgeSuccess : styles.donorAgeBadgeWarning,
+              ]}
+            >
+              <Text
+                style={[
+                  styles.donorAgeBadgeText,
+                  donorAgeBadge.tone === 'success' ? styles.donorAgeBadgeTextSuccess : styles.donorAgeBadgeTextWarning,
+                ]}
+              >
+                {donorAgeBadge.label}
+              </Text>
+            </View>
+          ) : null}
         </View>
       </View>
 
@@ -668,6 +827,34 @@ export default function ProfileScreen() {
       </View>
     </View>
   );
+
+  const renderConsentCheckbox = (field, label, required = false) => {
+    const checked = Boolean(guardianConsentForm[field]);
+    return (
+      <View style={styles.guardianConsentCheckWrap}>
+        <Pressable
+          onPress={() => updateGuardianConsentField(field, !checked)}
+          style={({ pressed }) => [
+            styles.guardianConsentCheckRow,
+            {
+              opacity: pressed ? 0.78 : 1,
+            },
+          ]}
+        >
+          <View style={[styles.guardianConsentCheckBox, checked ? styles.guardianConsentCheckBoxActive : null]}>
+            {checked ? <AppIcon name="success" size="sm" color={theme.colors.surfaceCard} /> : null}
+          </View>
+          <Text style={styles.guardianConsentCheckLabel}>
+            {label}
+            {required ? <Text style={styles.requiredInline}> *</Text> : null}
+          </Text>
+        </Pressable>
+        {guardianConsentErrors[field] ? (
+          <Text style={styles.guardianConsentError}>{guardianConsentErrors[field]}</Text>
+        ) : null}
+      </View>
+    );
+  };
 
   return (
     <>
@@ -894,19 +1081,89 @@ export default function ProfileScreen() {
                             render={({ field: controllerField, fieldState }) => {
                               if (field.formKey === 'birthdate') {
                                 return (
-                                  <DatePickerField
-                                    label={field.label}
-                                    required={REQUIRED_PROFILE_FIELDS.has(field.formKey)}
-                                    value={controllerField.value}
-                                    placeholder={field.placeholder}
-                                    helperText={field.helperText}
-                                    error={fieldState.error?.message}
-                                    onChange={controllerField.onChange}
-                                    onBlur={controllerField.onBlur}
-                                    minimumDate={MINIMUM_BIRTHDATE}
-                                    maximumDate={getMaximumBirthdate()}
-                                    onPress={() => Haptics.selectionAsync()}
-                                  />
+                                  <View>
+                                    <DatePickerField
+                                      label={field.label}
+                                      required={REQUIRED_PROFILE_FIELDS.has(field.formKey)}
+                                      value={controllerField.value}
+                                      placeholder={field.placeholder}
+                                      helperText={field.helperText}
+                                      error={fieldState.error?.message}
+                                      onChange={controllerField.onChange}
+                                      onBlur={controllerField.onBlur}
+                                      minimumDate={MINIMUM_BIRTHDATE}
+                                      maximumDate={getMaximumBirthdate()}
+                                      onPress={() => Haptics.selectionAsync()}
+                                    />
+                                    {setupDonorAgeBadge ? (
+                                      <View
+                                        style={[
+                                          styles.setupAgeBadge,
+                                          setupDonorAgeBadge.tone === 'success'
+                                            ? styles.setupAgeBadgeSuccess
+                                            : styles.setupAgeBadgeWarning,
+                                        ]}
+                                      >
+                                        <AppIcon
+                                          name={setupDonorAgeBadge.tone === 'success' ? 'success' : 'shield'}
+                                          size="sm"
+                                          color={setupDonorAgeBadge.tone === 'success' ? '#1E7A42' : '#8A5A00'}
+                                        />
+                                        <View style={styles.setupAgeBadgeCopy}>
+                                          <Text
+                                            style={[
+                                              styles.setupAgeBadgeTitle,
+                                              setupDonorAgeBadge.tone === 'success'
+                                                ? styles.setupAgeBadgeTextSuccess
+                                                : styles.setupAgeBadgeTextWarning,
+                                            ]}
+                                          >
+                                            {setupDonorAgeBadge.label}
+                                          </Text>
+                                          {setupDonorAgeBadge.category !== 'Adult' ? (
+                                            <Text style={styles.setupAgeBadgeHint}>
+                                              Complete guardian consent now so donation features are ready after account setup.
+                                            </Text>
+                                          ) : null}
+                                        </View>
+                                      </View>
+                                    ) : null}
+                                    {isMinorProfileDraft ? (
+                                      <Pressable
+                                        onPress={async () => {
+                                          await Haptics.selectionAsync();
+                                          if (hasActiveGuardianConsent) return;
+                                          setIsGuardianConsentModalOpen(true);
+                                        }}
+                                        style={({ pressed }) => [
+                                          styles.setupConsentPrompt,
+                                          hasActiveGuardianConsent ? styles.setupConsentPromptDone : null,
+                                          { opacity: pressed ? 0.84 : 1 },
+                                        ]}
+                                      >
+                                        <View style={styles.setupConsentPromptIcon}>
+                                          <AppIcon
+                                            name={hasActiveGuardianConsent ? 'success' : 'shield'}
+                                            size="sm"
+                                            color={hasActiveGuardianConsent ? '#1E7A42' : theme.colors.brandPrimary}
+                                          />
+                                        </View>
+                                        <View style={styles.setupConsentPromptCopy}>
+                                          <Text style={styles.setupConsentPromptTitle}>
+                                            {hasActiveGuardianConsent ? 'Guardian consent completed' : 'Complete guardian consent'}
+                                          </Text>
+                                          <Text style={styles.setupConsentPromptText}>
+                                            {hasActiveGuardianConsent
+                                              ? 'This account can continue to donation steps after the profile is saved.'
+                                              : 'Open the consent form for the parent or legal guardian.'}
+                                          </Text>
+                                        </View>
+                                        {!hasActiveGuardianConsent ? (
+                                          <AppIcon name="chevronRight" size="sm" color={theme.colors.brandPrimary} />
+                                        ) : null}
+                                      </Pressable>
+                                    ) : null}
+                                  </View>
                                 );
                               }
 
@@ -1058,6 +1315,127 @@ export default function ProfileScreen() {
             </View>
           </KeyboardAvoidingView>
         </Modal>
+
+        <Modal
+          transparent
+          visible={isGuardianConsentModalOpen}
+          animationType="fade"
+          onRequestClose={closeGuardianConsentModal}
+        >
+          <KeyboardAvoidingView
+            style={styles.modalKeyboardWrap}
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          >
+            <View style={styles.modalOverlay}>
+              <Pressable style={styles.modalBackdrop} onPress={closeGuardianConsentModal} />
+
+              <AppCard
+                variant="elevated"
+                radius="xl"
+                padding="lg"
+                style={[styles.guardianConsentModalCard, { maxHeight: modalMaxHeight }]}
+                contentStyle={styles.modalCardContent}
+              >
+                <View style={styles.guardianConsentHeader}>
+                  <View style={styles.guardianConsentHeaderIcon}>
+                    <AppIcon name="shield" color={theme.colors.brandPrimary} />
+                  </View>
+                  <View style={styles.guardianConsentHeaderCopy}>
+                    <Text style={styles.guardianConsentTitle}>Guardian Consent</Text>
+                    <Text style={styles.guardianConsentSubtitle}>
+                      Required because the entered birthdate is below 18 years old.
+                    </Text>
+                  </View>
+                  <Pressable
+                    onPress={closeGuardianConsentModal}
+                    style={({ pressed }) => [styles.guardianConsentCloseButton, { opacity: pressed ? 0.72 : 1 }]}
+                  >
+                    <AppIcon name="close" size="sm" color={theme.colors.textSecondary} />
+                  </Pressable>
+                </View>
+
+                <ScrollView
+                  style={[styles.modalBodyScroll, { maxHeight: modalMaxHeight - 170 }]}
+                  contentContainerStyle={styles.guardianConsentBody}
+                  showsVerticalScrollIndicator={true}
+                  keyboardShouldPersistTaps="handled"
+                  keyboardDismissMode="interactive"
+                  nestedScrollEnabled={true}
+                >
+                  <View style={styles.guardianConsentNotice}>
+                    <Text style={styles.guardianConsentNoticeText}>{GUARDIAN_CONSENT_TEXT}</Text>
+                  </View>
+
+                  <AppInput
+                    label="Guardian Full Name"
+                    required
+                    placeholder="Parent or legal guardian name"
+                    variant="filled"
+                    value={guardianConsentForm.guardianFullName}
+                    onChangeText={(value) => updateGuardianConsentField('guardianFullName', value)}
+                    error={guardianConsentErrors.guardianFullName}
+                  />
+                  <AppInput
+                    label="Relationship"
+                    required
+                    placeholder="Mother, father, legal guardian"
+                    variant="filled"
+                    value={guardianConsentForm.guardianRelationship}
+                    onChangeText={(value) => updateGuardianConsentField('guardianRelationship', value)}
+                    error={guardianConsentErrors.guardianRelationship}
+                  />
+                  <AppInput
+                    label="Guardian Contact Number"
+                    required
+                    placeholder="09XXXXXXXXX"
+                    keyboardType="phone-pad"
+                    variant="filled"
+                    value={guardianConsentForm.guardianContactNumber}
+                    onChangeText={(value) => updateGuardianConsentField('guardianContactNumber', value)}
+                    error={guardianConsentErrors.guardianContactNumber}
+                  />
+                  <AppInput
+                    label="Guardian Email"
+                    placeholder="Optional email address"
+                    keyboardType="email-address"
+                    autoCapitalize="none"
+                    variant="filled"
+                    value={guardianConsentForm.guardianEmail}
+                    onChangeText={(value) => updateGuardianConsentField('guardianEmail', value)}
+                  />
+
+                  <View style={styles.guardianConsentChecks}>
+                    {renderConsentCheckbox('minorDonationConsent', 'I allow this minor donor to participate in Donivra hair donation.', true)}
+                    {renderConsentCheckbox('aiImageProcessingConsent', 'I allow AI-assisted processing of submitted hair images for initial screening.', true)}
+                    {renderConsentCheckbox('publicPostingAllowed', 'I allow public recognition or posting when applicable.', false)}
+                  </View>
+
+                  <AppInput
+                    label="E-signature"
+                    required
+                    placeholder="Type guardian full name"
+                    variant="filled"
+                    value={guardianConsentForm.signature}
+                    onChangeText={(value) => updateGuardianConsentField('signature', value)}
+                    error={guardianConsentErrors.signature}
+                    helperText="The typed name must match the guardian full name."
+                  />
+
+                  <View style={styles.formActions}>
+                    <AppButton
+                      title="Save Guardian Consent"
+                      size="lg"
+                      loading={isSavingGuardianConsent}
+                      onPress={submitGuardianConsent}
+                      leading={<AppIcon name="save" state="inverse" />}
+                    />
+                    <AppTextLink title="Cancel" variant="muted" onPress={closeGuardianConsentModal} />
+                  </View>
+                </ScrollView>
+              </AppCard>
+            </View>
+          </KeyboardAvoidingView>
+        </Modal>
       </DashboardLayout>
 
       <StatusBanner
@@ -1075,14 +1453,15 @@ export default function ProfileScreen() {
 const styles = StyleSheet.create({
   donorProfileShell: {
     overflow: 'hidden',
-    borderRadius: theme.radius.xxl,
-    marginTop: -theme.spacing.sm,
+    borderRadius: 30,
   },
   donorProfileHeader: {
-    minHeight: 230,
+    minHeight: 242,
     paddingHorizontal: theme.spacing.lg,
     paddingTop: theme.spacing.lg,
-    paddingBottom: theme.spacing.xl,
+    paddingBottom: theme.spacing.xxxl,
+    borderRadius: 30,
+    borderWidth: 1,
   },
   donorTopRow: {
     flexDirection: 'row',
@@ -1099,7 +1478,8 @@ const styles = StyleSheet.create({
   },
   donorHeaderTitle: {
     fontFamily: theme.typography.fontFamilyDisplay,
-    fontSize: theme.typography.semantic.title,
+    fontSize: theme.typography.semantic.titleSm,
+    fontWeight: theme.typography.weights.bold,
   },
   donorHeaderIconButton: {
     width: 40,
@@ -1119,8 +1499,8 @@ const styles = StyleSheet.create({
     marginBottom: theme.spacing.xs,
   },
   donorProfileAvatar: {
-    width: 88,
-    height: 88,
+    width: 96,
+    height: 96,
     borderRadius: theme.radius.full,
     overflow: 'hidden',
     alignItems: 'center',
@@ -1142,7 +1522,8 @@ const styles = StyleSheet.create({
   },
   donorProfileName: {
     fontFamily: theme.typography.fontFamilyDisplay,
-    fontSize: theme.typography.semantic.bodyLg,
+    fontSize: theme.typography.semantic.titleSm,
+    fontWeight: theme.typography.weights.bold,
     textAlign: 'center',
   },
   donorProfileMeta: {
@@ -1150,14 +1531,121 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.semantic.bodySm,
     textAlign: 'center',
   },
+  donorAgeBadge: {
+    borderRadius: theme.radius.full,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: 7,
+    marginTop: theme.spacing.xs,
+  },
+  donorAgeBadgeSuccess: {
+    backgroundColor: '#EAF8EF',
+  },
+  donorAgeBadgeWarning: {
+    backgroundColor: '#FFF4D8',
+  },
+  donorAgeBadgeText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    fontWeight: theme.typography.weights.semibold,
+    textAlign: 'center',
+  },
+  donorAgeBadgeTextSuccess: {
+    color: '#1E7A42',
+  },
+  donorAgeBadgeTextWarning: {
+    color: '#8A5A00',
+  },
+  setupAgeBadge: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.spacing.sm,
+    borderRadius: 18,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    marginTop: -theme.spacing.xs,
+    marginBottom: theme.spacing.sm,
+    borderWidth: 1,
+  },
+  setupAgeBadgeSuccess: {
+    backgroundColor: '#EAF8EF',
+    borderColor: '#BFE8CD',
+  },
+  setupAgeBadgeWarning: {
+    backgroundColor: '#FFF4D8',
+    borderColor: '#F2D38B',
+  },
+  setupAgeBadgeCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  setupAgeBadgeTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  setupAgeBadgeHint: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    lineHeight: theme.typography.compact.caption * theme.typography.lineHeights.relaxed,
+    color: '#526078',
+  },
+  setupAgeBadgeTextSuccess: {
+    color: '#1E7A42',
+  },
+  setupAgeBadgeTextWarning: {
+    color: '#8A5A00',
+  },
+  setupConsentPrompt: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+    minHeight: 62,
+    borderRadius: 20,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    marginTop: -theme.spacing.xs,
+    marginBottom: theme.spacing.sm,
+    backgroundColor: theme.colors.surfaceCard,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+    ...theme.shadows.soft,
+  },
+  setupConsentPromptDone: {
+    backgroundColor: '#EAF8EF',
+    borderColor: '#BFE8CD',
+  },
+  setupConsentPromptIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.brandPrimaryMuted,
+  },
+  setupConsentPromptCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  setupConsentPromptTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    fontWeight: theme.typography.weights.bold,
+    color: theme.colors.textPrimary,
+  },
+  setupConsentPromptText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    lineHeight: theme.typography.compact.caption * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textSecondary,
+  },
   donorActionPanel: {
-    marginTop: -theme.spacing.lg,
+    marginTop: -theme.spacing.xl,
     minHeight: 360,
-    borderTopLeftRadius: theme.radius.xxl,
-    borderTopRightRadius: theme.radius.xxl,
+    borderTopLeftRadius: 30,
+    borderTopRightRadius: 30,
     borderWidth: 1,
     paddingHorizontal: theme.spacing.lg,
-    paddingTop: theme.spacing.lg,
+    paddingTop: theme.spacing.xl,
     paddingBottom: theme.spacing.xl,
   },
   donorActionHeader: {
@@ -1342,21 +1830,23 @@ const styles = StyleSheet.create({
     marginBottom: theme.spacing.md,
   },
   actionList: {
-    gap: 0,
+    gap: theme.spacing.sm,
   },
   actionRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.spacing.md,
-    minHeight: 68,
+    minHeight: 76,
+    paddingHorizontal: theme.spacing.md,
     paddingVertical: theme.spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.borderSubtle,
+    borderWidth: 1,
+    borderRadius: 20,
+    ...theme.shadows.soft,
   },
   actionIconWrap: {
-    width: 38,
-    height: 38,
-    borderRadius: theme.radius.lg,
+    width: 44,
+    height: 44,
+    borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: theme.colors.brandPrimaryMuted,
@@ -1517,6 +2007,124 @@ const styles = StyleSheet.create({
   },
   modalBodyContent: {
     paddingBottom: theme.spacing.xl,
+  },
+  guardianConsentModalCard: {
+    width: '100%',
+    alignSelf: 'center',
+    maxWidth: theme.layout.authCardMaxWidth,
+    minHeight: 0,
+    overflow: 'hidden',
+    flexShrink: 1,
+  },
+  guardianConsentHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+    paddingBottom: theme.spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.borderSubtle,
+  },
+  guardianConsentHeaderIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.brandPrimaryMuted,
+  },
+  guardianConsentHeaderCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  guardianConsentTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodyLg,
+    fontWeight: theme.typography.weights.bold,
+    color: theme.colors.textPrimary,
+  },
+  guardianConsentSubtitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    lineHeight: theme.typography.compact.caption * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textSecondary,
+  },
+  guardianConsentCloseButton: {
+    width: 40,
+    height: 40,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.surfaceSoft,
+  },
+  guardianConsentBody: {
+    paddingTop: theme.spacing.md,
+    paddingBottom: theme.spacing.xl,
+  },
+  guardianConsentNotice: {
+    marginBottom: theme.spacing.md,
+    borderRadius: 18,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.md,
+    backgroundColor: theme.colors.surfaceSoft,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+  },
+  guardianConsentNoticeText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textSecondary,
+  },
+  guardianConsentChecks: {
+    gap: theme.spacing.sm,
+    marginBottom: theme.spacing.sm,
+  },
+  guardianConsentCheckWrap: {
+    gap: 4,
+  },
+  guardianConsentCheckRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.spacing.sm,
+    minHeight: 48,
+    borderRadius: 18,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    backgroundColor: theme.colors.surfaceSoft,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+  },
+  guardianConsentCheckBox: {
+    width: 24,
+    height: 24,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+    backgroundColor: theme.colors.surfaceCard,
+    marginTop: 1,
+  },
+  guardianConsentCheckBoxActive: {
+    backgroundColor: theme.colors.brandPrimary,
+    borderColor: theme.colors.brandPrimary,
+  },
+  guardianConsentCheckLabel: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textPrimary,
+  },
+  guardianConsentError: {
+    marginLeft: 36,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    color: theme.colors.textError,
+  },
+  requiredInline: {
+    color: theme.colors.textError,
+    fontWeight: theme.typography.weights.bold,
   },
   modalKeyboardWrap: {
     flex: 1,

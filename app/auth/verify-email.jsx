@@ -1,26 +1,25 @@
 import React, { useEffect, useState } from 'react';
-import { Image, View, StyleSheet, Text, Pressable, Alert } from 'react-native';
+import { View, StyleSheet, Text, Pressable, Alert } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
+import { ScreenContainer } from '../../src/components/ui/ScreenContainer';
 import { VerifyEmailForm } from '../../src/components/auth/VerifyEmailForm';
-import { AuthScreenLayout } from '../../src/components/auth/AuthScreenLayout';
 import { verifyEmailSchema } from '../../src/features/auth/validators/auth.schema';
 import { logout, verifyEmail, resendVerifyEmail } from '../../src/features/auth/services/auth.service';
 import { syncPendingSignupDraft } from '../../src/features/auth/services/signupDraft.service';
-import { resolveBrandLogoSource, resolveThemeRoles, theme } from '../../src/design-system/theme';
+import { resolveThemeRoles, theme } from '../../src/design-system/theme';
 import { useAuth } from '../../src/providers/AuthProvider';
 
-const RESEND_DELAY = 30;
+const RESEND_DELAY = 59;
 
 export default function VerifyEmailScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
   const { email, role } = params;
-  const { resolvedTheme } = useAuth();
+  const { refreshProfile, resolvedTheme } = useAuth();
   const roles = resolveThemeRoles(resolvedTheme);
-  const [imageFailed, setImageFailed] = useState(false);
-  const logoSource = resolveBrandLogoSource(resolvedTheme, imageFailed);
+  const brandName = resolvedTheme?.brandName || 'Donivra';
 
   const [isVerifying, setIsVerifying] = useState(false);
   const [isResending, setIsResending] = useState(false);
@@ -44,7 +43,12 @@ export default function VerifyEmailScreen() {
 
   if (!email) return null;
 
-  const routeAfterVerify = () => {
+  const routeAfterVerify = (nextRole = '') => {
+    if (String(nextRole || role || '').trim().toLowerCase() === 'donor') {
+      router.replace('/profile');
+      return;
+    }
+
     router.replace('/auth/access');
   };
 
@@ -62,7 +66,7 @@ export default function VerifyEmailScreen() {
     }
 
     await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    setStatusMessage('Email verified. Redirecting to login...');
+    setStatusMessage('Email verified. Preparing your donor profile...');
 
     if (session?.user?.id && email) {
       const syncResult = await syncPendingSignupDraft({
@@ -76,11 +80,14 @@ export default function VerifyEmailScreen() {
       }
     }
 
-    if (session) {
+    const nextRole = verifiedRole || role;
+    if (session?.user?.id && String(nextRole || '').trim().toLowerCase() === 'donor') {
+      await refreshProfile(session.user.id);
+    } else if (session) {
       await logout();
     }
 
-    setTimeout(() => routeAfterVerify(), 900);
+    setTimeout(() => routeAfterVerify(nextRole), 900);
   };
 
   const handleResend = async () => {
@@ -101,218 +108,150 @@ export default function VerifyEmailScreen() {
   };
 
   return (
-    <AuthScreenLayout resolvedTheme={resolvedTheme}>
-      {/* Back button */}
-      <Pressable
-        onPress={() => router.back()}
-        style={({ pressed }) => [styles.backBtn, pressed ? styles.backBtnPressed : null]}
-        accessibilityRole="button"
-        accessibilityLabel="Go back"
-      >
-        <View
-          style={[
-            styles.backIconShell,
-            {
-              backgroundColor: roles.defaultCardBackground,
-              borderColor: roles.defaultCardBorder,
-            },
-          ]}
-        >
-          <MaterialCommunityIcons
-            name="arrow-left"
-            size={18}
-            color={roles.headingText}
-          />
-        </View>
-        <Text style={[styles.backBtnText, { color: roles.bodyText }]}>Back</Text>
-      </Pressable>
+    <ScreenContainer
+      scrollable
+      safeArea
+      variant="auth"
+      contentStyle={[styles.screenContent, { backgroundColor: roles.defaultCardBackground }]}
+    >
+      <View style={[styles.glowTop, { backgroundColor: roles.iconPrimarySurface }]} />
+      <View style={[styles.glowBottom, { backgroundColor: theme.colors.brandPrimaryMuted }]} />
 
-      <View style={styles.brandSection}>
-        <View
-          style={[
-            styles.logoContainer,
-            {
-              backgroundColor: roles.defaultCardBackground,
-              borderColor: roles.defaultCardBorder,
-            },
-          ]}
-        >
-          <Image
-            source={logoSource}
-            style={styles.logoImage}
-            resizeMode="contain"
-            onError={() => setImageFailed(true)}
-          />
-        </View>
-        <Text
-          style={[
-            styles.brandName,
-            {
-              color: roles.headingText,
-              fontFamily: resolvedTheme?.secondaryFontFamily || theme.typography.fontFamilyDisplay,
-            },
-          ]}
-        >
-          {resolvedTheme?.brandName || 'Donivra'}
-        </Text>
-      </View>
-
-      {/* Header text */}
-      <View style={styles.headerBlock}>
-        <Text
-          style={[
-            styles.title,
-            {
-              color: roles.headingText,
-              fontFamily:
-                resolvedTheme?.secondaryFontFamily || theme.typography.fontFamilyDisplay,
-            },
-          ]}
-        >
-          Enter OTP
-        </Text>
-        <Text style={[styles.subtitle, { color: roles.bodyText }]}>
-          Email Notification for Account Activation was sent to your email.
-        </Text>
-      </View>
-
-      <View style={styles.flowCard}>
-        {[
-          ['email-lock-outline', 'Enter OTP'],
-          ['refresh-circle', 'Resend OTP'],
-          ['account-check-outline', 'Account Created'],
-        ].map(([icon, label], index) => (
-          <View key={label} style={styles.flowStep}>
-            <View
+      <View style={styles.verifyCanvas}>
+        <View style={[styles.verifyCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
+          <View style={styles.headerBlock}>
+            <View style={[styles.emailIcon, { backgroundColor: roles.iconPrimarySurface }]}>
+              <MaterialCommunityIcons name="email-check-outline" size={34} color={roles.primaryActionBackground} />
+            </View>
+            <Text
               style={[
-                styles.flowIcon,
+                styles.title,
                 {
-                  backgroundColor: index === 0 ? roles.primaryActionBackground : roles.defaultCardBackground,
-                  borderColor: roles.defaultCardBorder,
+                  color: roles.headingText,
+                  fontFamily: resolvedTheme?.secondaryFontFamily || theme.typography.fontFamilyDisplay,
                 },
               ]}
             >
-              <MaterialCommunityIcons
-                name={icon}
-                size={16}
-                color={index === 0 ? roles.primaryActionText : roles.headingText}
-              />
-            </View>
-            <Text style={[styles.flowLabel, { color: roles.bodyText }]}>{label}</Text>
+              Verify Your Email
+            </Text>
+            <Text style={[styles.subtitle, { color: roles.bodyText }]}>
+              {'We have sent a 6-digit code to your email. Please enter it below to continue.'}
+            </Text>
           </View>
-        ))}
-      </View>
 
-      {/* OTP form */}
-      <View style={styles.formContainer}>
-        <VerifyEmailForm
-          schema={verifyEmailSchema}
-          emailContext={email}
-          onSubmit={handleVerify}
-          onResend={handleResend}
-          isLoading={isVerifying}
-          isResending={isResending}
-          resendCountdown={resendCountdown}
-          successMessage={statusMessage}
-        />
+          <VerifyEmailForm
+            schema={verifyEmailSchema}
+            emailContext={email}
+            onSubmit={handleVerify}
+            onResend={handleResend}
+            isLoading={isVerifying}
+            isResending={isResending}
+            resendCountdown={resendCountdown}
+            successMessage={statusMessage}
+          />
+        </View>
+
+        <Pressable
+          onPress={() => router.back()}
+          style={({ pressed }) => [styles.backLink, pressed ? styles.backBtnPressed : null]}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+        >
+          <MaterialCommunityIcons name="content-cut" size={24} color={roles.primaryActionBackground} />
+          <Text style={[styles.brandName, { color: roles.primaryActionBackground }]}>{brandName}</Text>
+        </Pressable>
       </View>
-    </AuthScreenLayout>
+    </ScreenContainer>
   );
 }
 
 const styles = StyleSheet.create({
-  backBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'flex-start',
-    gap: theme.spacing.sm,
-    marginBottom: theme.spacing.xxl,
+  screenContent: {
+    flexGrow: 1,
+    paddingHorizontal: 0,
+    paddingTop: 0,
+    paddingBottom: 0,
   },
-  backBtnPressed: {
-    opacity: 0.7,
-  },
-  backIconShell: {
-    width: 36,
-    height: 36,
-    borderRadius: theme.radius.full,
-    borderWidth: 1,
+  verifyCanvas: {
+    flex: 1,
+    minHeight: 780,
+    width: '100%',
     alignItems: 'center',
     justifyContent: 'center',
+    paddingHorizontal: theme.spacing.lg,
+    paddingVertical: theme.spacing.section,
   },
-  backBtnText: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.compact.bodySm,
-    fontWeight: theme.typography.weights.medium,
+  verifyCard: {
+    width: '100%',
+    maxWidth: 480,
+    borderWidth: 1,
+    borderRadius: theme.radius.xxl,
+    paddingHorizontal: theme.spacing.xl,
+    paddingVertical: theme.spacing.section,
+    shadowColor: theme.colors.shadow,
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.08,
+    shadowRadius: 28,
+    elevation: 7,
+    zIndex: 2,
   },
-  brandSection: {
-    alignItems: 'center',
-    marginBottom: theme.spacing.lg,
+  glowTop: {
+    position: 'absolute',
+    top: -150,
+    left: -80,
+    width: 260,
+    height: 260,
+    borderRadius: 130,
+    opacity: 0.32,
   },
-  logoContainer: {
+  glowBottom: {
+    position: 'absolute',
+    bottom: -160,
+    right: -90,
+    width: 280,
+    height: 280,
+    borderRadius: 140,
+    opacity: 0.32,
+  },
+  emailIcon: {
     width: 64,
     height: 64,
-    borderRadius: 18,
-    borderWidth: 1,
+    borderRadius: theme.radius.full,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: theme.spacing.sm,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 3,
-  },
-  logoImage: {
-    width: 42,
-    height: 42,
+    marginBottom: theme.spacing.lg,
   },
   brandName: {
-    fontSize: 22,
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.title,
     fontWeight: theme.typography.weights.bold,
     textAlign: 'center',
   },
   headerBlock: {
     alignItems: 'center',
-    marginBottom: theme.spacing.lg,
+    marginBottom: theme.spacing.section,
     gap: theme.spacing.sm,
   },
   title: {
-    fontSize: 26,
-    lineHeight: 32,
+    fontSize: 32,
+    lineHeight: 40,
+    fontWeight: theme.typography.weights.bold,
     textAlign: 'center',
   },
   subtitle: {
     fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.compact.bodySm,
+    fontSize: theme.typography.semantic.body,
     textAlign: 'center',
-    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+    lineHeight: theme.typography.semantic.body * theme.typography.lineHeights.relaxed,
+    maxWidth: 320,
   },
-  formContainer: {
-    width: '100%',
-  },
-  flowCard: {
-    width: '100%',
+  backLink: {
+    marginTop: theme.spacing.section,
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    alignItems: 'center',
     gap: theme.spacing.sm,
-    marginBottom: theme.spacing.xl,
   },
-  flowStep: {
-    flex: 1,
-    alignItems: 'center',
-    gap: theme.spacing.xs,
-  },
-  flowIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  flowLabel: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.compact.caption,
-    textAlign: 'center',
+  backBtnPressed: {
+    opacity: 0.7,
   },
 });

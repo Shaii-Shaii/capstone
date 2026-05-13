@@ -228,8 +228,9 @@ const updateRoleProfile = async (role, userId, updates) => {
   return { data: null, error: null };
 };
 
-export const getPatientLinkPreview = async (patientCode) => {
+export const getPatientLinkPreview = async (patientCode, options = {}) => {
   try {
+    const currentAuthUserId = String(options?.currentAuthUserId || '').trim();
     logAppEvent('patient.code_validation', 'Patient code validation started.', getPatientCodeLogMeta(patientCode));
 
     const { data, error } = await ProfileAPI.fetchPatientDetailsByCode(patientCode);
@@ -237,7 +238,7 @@ export const getPatientLinkPreview = async (patientCode) => {
     if (!data?.patient_id) {
       throw new Error('We could not find a patient record for that code.');
     }
-    if (data.linked_auth_user_id) {
+    if (data.linked_auth_user_id && data.linked_auth_user_id !== currentAuthUserId) {
       throw new Error('This patient code is already linked to another account.');
     }
 

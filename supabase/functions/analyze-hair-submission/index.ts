@@ -138,6 +138,105 @@ const analysisSchema = {
   required: ['analysis'],
 };
 
+const lengthFallbackSchema = {
+  type: 'object',
+  properties: {
+    analysis: {
+      type: 'object',
+      properties: {
+        is_hair_detected: { type: 'boolean' },
+        estimated_length: { type: 'number', nullable: true },
+        length_assessment: { type: 'string' },
+        detected_color: { type: 'string' },
+        detected_texture: { type: 'string' },
+        detected_density: { type: 'string' },
+        detected_condition: { type: 'string' },
+        confidence_score: { type: 'number', nullable: true },
+        summary: { type: 'string' },
+      },
+      required: [
+        'is_hair_detected',
+        'estimated_length',
+        'length_assessment',
+        'detected_color',
+        'detected_texture',
+        'detected_density',
+        'detected_condition',
+        'confidence_score',
+        'summary',
+      ],
+    },
+  },
+  required: ['analysis'],
+};
+
+const coreAnalysisSchema = {
+  type: 'object',
+  properties: {
+    analysis: {
+      type: 'object',
+      properties: {
+        is_hair_detected: { type: 'boolean' },
+        invalid_image_reason: { type: 'string' },
+        missing_views: {
+          type: 'array',
+          items: { type: 'string' },
+        },
+        per_view_notes: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              view: { type: 'string' },
+              clearly_visible: { type: 'boolean' },
+              notes: { type: 'string' },
+            },
+            required: ['view', 'clearly_visible', 'notes'],
+          },
+        },
+        estimated_length: { type: 'number', nullable: true },
+        length_assessment: { type: 'string' },
+        detected_color: { type: 'string' },
+        detected_texture: { type: 'string' },
+        detected_density: { type: 'string' },
+        detected_condition: { type: 'string' },
+        visible_damage_notes: { type: 'string' },
+        confidence_score: { type: 'number', nullable: true },
+        shine_level: { type: 'integer', nullable: true },
+        frizz_level: { type: 'integer', nullable: true },
+        dryness_level: { type: 'integer', nullable: true },
+        oiliness_level: { type: 'integer', nullable: true },
+        damage_level: { type: 'integer', nullable: true },
+        decision: { type: 'string' },
+        summary: { type: 'string' },
+        donation_readiness_note: { type: 'string' },
+        history_assessment: { type: 'string' },
+        recommendations: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              title: { type: 'string' },
+              recommendation_text: { type: 'string' },
+              priority_order: { type: 'integer' },
+            },
+            required: ['title', 'recommendation_text', 'priority_order'],
+          },
+        },
+      },
+      required: [
+        'is_hair_detected',
+        'estimated_length',
+        'length_assessment',
+        'detected_condition',
+        'confidence_score',
+        'summary',
+      ],
+    },
+  },
+  required: ['analysis'],
+};
+
 type HairImage = {
   mimeType?: string;
   dataUrl?: string;
@@ -208,8 +307,43 @@ const requiredViewDefinitions = [
 ] as const;
 const expectedViews = requiredViewDefinitions.map((view) => view.label);
 const MIN_DONATION_LENGTH_CM = 35.56;
+const MIN_ELIGIBILITY_CONFIDENCE = 0.55;
 const ELIGIBLE_STATUS = 'Eligible for hair donation';
 const IMPROVE_STATUS = 'Improve hair condition';
+const PHILIPPINE_PRODUCT_OPTIONS: Record<string, string[]> = {
+  dry: [
+    'Human Nature Moisturizing Plus Shampoo and Conditioner',
+    'Dove Hair Therapy Intense Repair Shampoo and Conditioner',
+  ],
+  damage: [
+    'Cream Silk Triple Keratin Rescue Ultimate Repair & Shine',
+    'Dove Hair Therapy Intense Repair Shampoo and Conditioner',
+  ],
+  frizz: [
+    'Cream Silk Triple Keratin Rescue Ultimate Straight',
+    'Vitress Hair Polish or a lightweight anti-frizz serum',
+  ],
+  oily: [
+    'Human Nature Clarifying Shampoo',
+    'a light daily shampoo used mainly on the scalp, not the ends',
+  ],
+  flakes: [
+    'Head & Shoulders anti-dandruff shampoo',
+    'Selsun Blue anti-dandruff shampoo if flakes are persistent',
+  ],
+  treated: [
+    'Cream Silk Triple Keratin Rescue Ultimate Color Revive',
+    'a color-safe conditioner plus weekly repair mask',
+  ],
+  healthy: [
+    'Human Nature Daily Hair Treatment or conditioner',
+    'a lightweight leave-on serum only on the ends',
+  ],
+  length: [
+    'Human Nature Strengthening Plus Shampoo and Conditioner',
+    'a gentle conditioner focused on the mid-lengths and ends',
+  ],
+};
 const canonicalViewAliases: Record<string, string> = {
   'front view photo': 'Front View Photo',
   front_view: 'Front View Photo',
@@ -249,7 +383,7 @@ const instructions = [
   '- DARK ENVIRONMENT: If any photo is significantly underexposed, very dark, or has insufficient lighting to clearly see hair details, set is_hair_detected to false and invalid_image_reason to "The photo is too dark. Please move to a well-lit area, preferably near a window with natural light, and retake the photo."',
   '- NO PERSON DETECTED: If no human subject or person is visible in the photo (e.g., photo of a wall, floor, object, or empty room), set is_hair_detected to false and invalid_image_reason to "No person detected. Please position yourself in front of the camera with your hair clearly visible and retake the photo."',
   '- MULTIPLE SUBJECTS: If more than one person is clearly visible in the photo, set is_hair_detected to false and invalid_image_reason to "Multiple subjects detected. Only one person should be in the frame. Please retake with only you in the photo."',
-  '- ACCESSORIES ON FACE OR HAIR: Carefully inspect every view for eyeglasses, sunglasses, masks, face shields, caps, hats, headbands, clips, pins, claw clips, hair ties, scrunchies, scarves, bonnets, headphones, hoods, hands, towels, or fabric on the face or covering/holding the hair. If any face or hair accessory is visible, set is_hair_detected to false and invalid_image_reason to "Accessories detected. Remove glasses, sunglasses, masks, caps, headbands, clips, pins, hair ties, scarves, headphones, and anything covering the face or hair, then retake the required view."',
+  '- OBSTRUCTIONS ON HAIR: Carefully inspect every view for masks, face shields, caps, hats, headbands, clips, pins, claw clips, hair ties, scrunchies, scarves, bonnets, headphones, hoods, hands, towels, or fabric covering/holding the hair. Ordinary eyeglasses are allowed when they do not cover the hairline, hair shaft, or ends. If an item blocks the hairline, shaft, length, or ends, set is_hair_detected to false and invalid_image_reason to "Hair is obstructed. Remove anything covering or holding the hair, then retake the required view."',
   '- DISTRACTING BACKGROUND: If the background contains multiple other people, very cluttered objects, or items that make it hard to isolate the hair for analysis, set is_hair_detected to false and invalid_image_reason to "The background has too many distracting items. Please use a plain wall or uncluttered area and retake the photo."',
   '- BLURRY OR MOTION-BLURRED: If the photo is too blurry to distinguish hair details, set is_hair_detected to false and invalid_image_reason to "Photos not clear, please re-capture. Hold the camera steady and ensure good lighting."',
   '',
@@ -260,10 +394,10 @@ const instructions = [
   // Hair detection and validity
   'First confirm whether the images clearly show human hair intended for screening.',
   'If the images do not clearly show hair, set is_hair_detected to false and explain briefly in invalid_image_reason.',
-  'Validate photo rules before analysis: one human subject only, front view is face-forward, side profile is actually turned to the side, hair ends close-up clearly shows uncovered ends, face and hair clearly visible, no glasses, no sunglasses, no masks, no face accessories, no obstructing hair accessories, no caps, no clips covering the hair, no heavy blur, and no distracting objects blocking the hair.',
+  'Validate photo rules before analysis: one human subject only, front view is face-forward, side profile is actually turned to the side, hair ends close-up clearly shows uncovered ends, face and hair clearly visible, no masks or face coverings, no obstructing hair accessories, no caps, no clips covering the hair, no heavy blur, and no distracting objects blocking the hair. Ordinary eyeglasses are acceptable if they do not hide the hairline or hair.',
   'If a photo is blurry or poorly lit enough to prevent reliable review, set is_hair_detected to false and invalid_image_reason to "Photos not clear, please re-capture."',
   'If more than one subject/person is visible in the screening photos, set is_hair_detected to false and invalid_image_reason to "Multiple subject detected, one subject is needed."',
-  'If glasses, sunglasses, masks, face shields, clips, caps, hats, headbands, pins, hair ties, scarves, headphones, hoods, hands, towels, fabric, or accessories are visible on the face or obstruct the hairline, shaft, length, or ends, set is_hair_detected to false and invalid_image_reason to "Accessories detected. Remove glasses, sunglasses, masks, caps, headbands, clips, pins, hair ties, scarves, headphones, and anything covering the face or hair, then retake the required view."',
+  'If masks, face shields, clips, caps, hats, headbands, pins, hair ties, scarves, headphones, hoods, hands, towels, fabric, or accessories obstruct the hairline, shaft, length, or ends, set is_hair_detected to false and invalid_image_reason to "Hair is obstructed. Remove anything covering or holding the hair, then retake the required view." Do not reject ordinary eyeglasses unless they hide the hairline or hair.',
   `When image quality or visibility is too weak for a confident donation judgment, keep the final decision as "${IMPROVE_STATUS}" and explain the limitation honestly.`,
 
   // Per-view notes
@@ -274,7 +408,10 @@ const instructions = [
   'Use missing_views only when a required view is genuinely absent or completely unusable.',
 
   // Length estimation
-  'Estimate hair length in centimeters as a numeric value when the full hair fall from root to ends is visible. Use the Front View Photo and Side Profile Photo together. Return null only if both root and ends are blocked or cropped.',
+  'Estimate hair length in centimeters as a numeric value whenever the hairline/root area and the lowest visible hair ends are visible in at least one front or side view. Use the Front View Photo and Side Profile Photo together when both are available.',
+  'IMPORTANT LENGTH RULE: Do not return null just because there is no ruler. Make a practical approximate visual estimate using face/head scale and body landmarks. Examples: chin-length hair is usually about 15-22 cm, neck-length about 20-28 cm, shoulder-length about 25-35 cm, collarbone-length about 30-40 cm, armpit-length about 40-55 cm, mid-back about 55-75 cm, waist-length about 75-95 cm. Return a rounded numeric estimate in centimeters.',
+  'Return null for estimated_length only when the root/hairline or the lowest visible ends are not visible enough to estimate at all. If hair is too short for donation, still return the best numeric estimate instead of null.',
+  'In length_assessment, explicitly mention the visible landmark used for the estimate, such as chin, neck, shoulder, collarbone, armpit, mid-back, waist, or "root-to-end visible span".',
 
   // Detected fields
   'detected_texture: use Straight, Wavy, Curly, Coily, or Mixed — based ONLY on what you see in the photos.',
@@ -370,8 +507,10 @@ const analysisInstructions = [
   'Use detected_condition for the main visible condition. Prefer labels like Healthy, Dry, Oily, Damaged, Mixed Concerns, Frizzy, Dry and Damaged, Dry and Frizzy, or Chemically Treated.',
   'Estimate visible hair length only. Visible hair length means the visible length from the hairline or root area to the lowest clearly visible hair end.',
   'Use the front and side views together to assess visible root-to-end length.',
-  'Use length_assessment to explain how the visible root-to-end length was judged from the current images and to state any visibility limits honestly. Mention both the root or hairline area and the visible ends.',
-  'Do not invent fake precision when the hair is curled, tied, blocked, cropped, blurry, or lacks reliable scale. Return null when a numeric estimate is not reasonably supported.',
+  'Use length_assessment to explain how the visible root-to-end length was judged from the current images and to state any visibility limits honestly. Mention the root or hairline area, visible ends, and the body landmark used for approximation.',
+  'When the root/hairline and ends are visible but no measuring ruler is present, still return an approximate estimated_length in centimeters using visible face/head/body proportions. Round to the nearest whole centimeter. Return null only when the root/hairline or lowest visible ends are completely blocked/cropped.',
+  'If the hair appears short, shoulder-length, or below the donation threshold, return the approximate short length in centimeters instead of null.',
+  'Do not invent fake precision when the hair is curled, tied, blocked, cropped, blurry, or lacks reliable scale. Prefer an approximate rounded estimate with lower confidence over null when root and ends are visible.',
   `Donation suitability must respect the 14-inch rule. Fourteen inches is ${MIN_DONATION_LENGTH_CM} cm.`,
   `Set decision to exactly one of: "${ELIGIBLE_STATUS}" or "${IMPROVE_STATUS}".`,
   `Use "${ELIGIBLE_STATUS}" only when the visible hair length appears at least ${MIN_DONATION_LENGTH_CM} cm, the visible condition appears suitable for donation, and the evidence is clear enough for that judgment.`,
@@ -392,6 +531,9 @@ const analysisInstructions = [
   'Return exactly 3 recommendations when hair is visible enough to analyze.',
   'Recommendations should be specific to the observed condition, such as reducing heat exposure, improving scalp care, adjusting wash routine, improving moisture care, trimming damaged ends when appropriate, and avoiding harsh chemical processing.',
   'If the visible hair is too short for donation, include guidance about length retention, healthy growth habits, or reducing breakage. If the hair is dry, recommendations must address dryness. If the hair appears healthy, recommendations must focus on maintenance rather than damage repair.',
+  'When recommending products, include 1-2 commonly available Philippine product options that match the observed concern. Present them as examples to consider, not as medical treatment or guaranteed results.',
+  `For donation eligibility, require confidence_score >= ${MIN_ELIGIBILITY_CONFIDENCE}. If confidence is lower, use "${IMPROVE_STATUS}" and explain what must be clearer.`,
+  'Be conservative with eligibility: if root-to-end length, ends condition, chemical treatment status, or required views are uncertain, do not mark the donor eligible.',
   'Do not diagnose disease. Use careful phrases such as "the photos show", "this check suggests", and "based on the visible images".',
 ].join('\n');
 
@@ -423,6 +565,26 @@ const normalizeLevel10 = (value: unknown, fallback = 1) => {
   const parsed = normalizeNumber(value);
   if (parsed === null) return fallback;
   return Math.max(1, Math.min(10, Math.round(parsed)));
+};
+
+const inferApproximateLengthFromText = (value: string) => {
+  const normalized = normalizeString(value).toLowerCase();
+  if (!normalized) return null;
+
+  const rules: { keywords: string[]; lengthCm: number }[] = [
+    { keywords: ['waist-length', 'waist length', 'reaches the waist', 'at the waist'], lengthCm: 82 },
+    { keywords: ['lower back', 'low back'], lengthCm: 72 },
+    { keywords: ['mid-back', 'mid back', 'middle of the back'], lengthCm: 62 },
+    { keywords: ['armpit-length', 'armpit length', 'underarm', 'chest length'], lengthCm: 48 },
+    { keywords: ['collarbone-length', 'collarbone length', 'collarbone', 'near the clavicle', 'clavicle'], lengthCm: 35 },
+    { keywords: ['shoulder-length', 'shoulder length', 'at the shoulders', 'near the shoulders', 'reaches the shoulders'], lengthCm: 30 },
+    { keywords: ['neck-length', 'neck length', 'nape length', 'reaches the neck'], lengthCm: 24 },
+    { keywords: ['chin-length', 'chin length', 'around the chin'], lengthCm: 18 },
+    { keywords: ['ear-length', 'ear length', 'around the ears'], lengthCm: 12 },
+  ];
+
+  const matched = rules.find((rule) => rule.keywords.some((keyword) => normalized.includes(keyword)));
+  return matched?.lengthCm ?? null;
 };
 
 const normalizeMissingViews = (source: unknown) => {
@@ -604,6 +766,181 @@ const recommendationsAlignWithFindings = ({
   return keywordChecks.every((keywords) => keywords.some((keyword) => combinedText.includes(keyword)));
 };
 
+const includesAnyKeyword = (value: string, keywords: string[]) => {
+  const normalized = value.toLowerCase();
+  return keywords.some((keyword) => normalized.includes(keyword));
+};
+
+const inferRecommendationConcerns = ({
+  detectedCondition,
+  visibleDamageNotes,
+  summary,
+  estimatedLength,
+  minimumDonationLengthCm,
+}: {
+  detectedCondition: string;
+  visibleDamageNotes: string;
+  summary: string;
+  estimatedLength: number | null;
+  minimumDonationLengthCm: number;
+}) => {
+  const combined = `${detectedCondition} ${visibleDamageNotes} ${summary}`.toLowerCase();
+  const concerns: string[] = [];
+
+  if (estimatedLength == null || estimatedLength < minimumDonationLengthCm) concerns.push('length');
+  if (includesAnyKeyword(combined, ['dry', 'dull', 'brittle', 'rough'])) concerns.push('dry');
+  if (includesAnyKeyword(combined, ['split', 'fray', 'breakage', 'damage', 'damaged'])) concerns.push('damage');
+  if (includesAnyKeyword(combined, ['frizz', 'flyaway', 'uneven texture'])) concerns.push('frizz');
+  if (includesAnyKeyword(combined, ['oily', 'greasy', 'buildup', 'limp'])) concerns.push('oily');
+  if (includesAnyKeyword(combined, ['flake', 'dandruff'])) concerns.push('flakes');
+  if (includesAnyKeyword(combined, ['chemical', 'treated', 'dyed', 'colored', 'bleached', 'rebonded'])) concerns.push('treated');
+  if (!concerns.length || includesAnyKeyword(combined, ['healthy', 'sealed ends', 'good shine'])) concerns.push('healthy');
+
+  return [...new Set(concerns)];
+};
+
+const productLineForConcern = (concern: string) => {
+  const options = PHILIPPINE_PRODUCT_OPTIONS[concern] || PHILIPPINE_PRODUCT_OPTIONS.healthy;
+  return `Philippine product options to consider: ${options.slice(0, 2).join(' or ')}.`;
+};
+
+const buildFallbackRecommendations = ({
+  concerns,
+  estimatedLength,
+  minimumDonationLengthCm,
+}: {
+  concerns: string[];
+  estimatedLength: number | null;
+  minimumDonationLengthCm: number;
+}) => {
+  const primaryConcern = concerns[0] || 'healthy';
+  const rows: { title: string; recommendation_text: string; priority_order: number }[] = [];
+
+  if (estimatedLength == null || estimatedLength < minimumDonationLengthCm || concerns.includes('length')) {
+    rows.push({
+      title: 'Protect Length Retention',
+      recommendation_text: `The visible length is not confidently at the ${minimumDonationLengthCm.toFixed(1)} cm donation requirement yet, so focus on gentle handling and reducing breakage while growing it out. ${productLineForConcern('length')}`,
+      priority_order: rows.length + 1,
+    });
+  }
+
+  if (concerns.includes('damage')) {
+    rows.push({
+      title: 'Care for Visible Damage',
+      recommendation_text: `The photos suggest damage or stressed ends, so trim visibly split tips and reduce heat styling before donation screening. ${productLineForConcern('damage')}`,
+      priority_order: rows.length + 1,
+    });
+  }
+
+  if (concerns.includes('dry')) {
+    rows.push({
+      title: 'Restore Moisture',
+      recommendation_text: `The hair appears dry or dull in the photos, so use conditioner consistently and add a weekly moisturizing treatment on the mid-lengths and ends. ${productLineForConcern('dry')}`,
+      priority_order: rows.length + 1,
+    });
+  }
+
+  if (concerns.includes('frizz')) {
+    rows.push({
+      title: 'Smooth Frizz Gently',
+      recommendation_text: `Visible frizz or flyaways can make the shaft look rough, so dry with a soft towel and use a small amount of smoothing product on the ends. ${productLineForConcern('frizz')}`,
+      priority_order: rows.length + 1,
+    });
+  }
+
+  if (concerns.includes('oily') || concerns.includes('flakes')) {
+    rows.push({
+      title: concerns.includes('flakes') ? 'Control Visible Flakes' : 'Balance Scalp Oil',
+      recommendation_text: `The scalp or roots need clearer balance before donation readiness, so focus shampoo on the scalp and avoid heavy oils near the roots. ${productLineForConcern(concerns.includes('flakes') ? 'flakes' : 'oily')}`,
+      priority_order: rows.length + 1,
+    });
+  }
+
+  if (concerns.includes('treated')) {
+    rows.push({
+      title: 'Support Treated Hair',
+      recommendation_text: `The photos or history suggest chemical or color treatment, so keep the routine gentle and prioritize repair before donation screening. ${productLineForConcern('treated')}`,
+      priority_order: rows.length + 1,
+    });
+  }
+
+  rows.push({
+    title: primaryConcern === 'healthy' ? 'Maintain Donation Readiness' : 'Prepare for Recheck',
+    recommendation_text: `Keep the hair loose, clean, and fully visible for the next CheckHair scan so the app can reassess length and ends more accurately. ${productLineForConcern(primaryConcern === 'healthy' ? 'healthy' : primaryConcern)}`,
+    priority_order: rows.length + 1,
+  });
+
+  return rows.slice(0, 3).map((item, index) => ({ ...item, priority_order: index + 1 }));
+};
+
+const enhanceRecommendations = ({
+  source,
+  detectedCondition,
+  visibleDamageNotes,
+  summary,
+  estimatedLength,
+  minimumDonationLengthCm,
+}: {
+  source: unknown;
+  detectedCondition: string;
+  visibleDamageNotes: string;
+  summary: string;
+  estimatedLength: number | null;
+  minimumDonationLengthCm: number;
+}) => {
+  const concerns = inferRecommendationConcerns({
+    detectedCondition,
+    visibleDamageNotes,
+    summary,
+    estimatedLength,
+    minimumDonationLengthCm,
+  });
+  const normalized = normalizeRecommendationsV2(source);
+  const aligned = recommendationsAlignWithFindings({
+    recommendations: normalized,
+    detectedCondition,
+    visibleDamageNotes,
+    estimatedLength,
+    minimumDonationLengthCm,
+  });
+  const rows = aligned && normalized.length >= 3
+    ? normalized
+    : buildFallbackRecommendations({ concerns, estimatedLength, minimumDonationLengthCm });
+
+  return rows.slice(0, 3).map((item, index) => {
+    const concern = concerns[index] || concerns[0] || 'healthy';
+    const hasProductLine = item.recommendation_text.toLowerCase().includes('philippine product options');
+    return {
+      ...item,
+      recommendation_text: hasProductLine
+        ? item.recommendation_text
+        : `${item.recommendation_text} ${productLineForConcern(concern)}`,
+      priority_order: index + 1,
+    };
+  });
+};
+
+const hasRequirementTreatmentConflict = (
+  requirementContext: DonationRequirementContext | null,
+  detectedCondition: string,
+  visibleDamageNotes: string,
+  questionnaireAnswers: Record<string, unknown>,
+) => {
+  if (!requirementContext) return false;
+
+  const questionnaireText = Object.entries(questionnaireAnswers || {})
+    .map(([key, value]) => `${key}: ${String(value ?? '')}`)
+    .join(' ');
+  const combined = `${detectedCondition} ${visibleDamageNotes} ${questionnaireText}`.toLowerCase();
+
+  if (requirementContext.chemical_treatment_status === false && includesAnyKeyword(combined, ['chemical', 'treated', 'permed', 'relaxed'])) return true;
+  if (requirementContext.colored_hair_status === false && includesAnyKeyword(combined, ['dyed', 'colored', 'colour', 'color-treated', 'multiple tones'])) return true;
+  if (requirementContext.bleached_hair_status === false && includesAnyKeyword(combined, ['bleach', 'bleached', 'lightened'])) return true;
+  if (requirementContext.rebonded_hair_status === false && includesAnyKeyword(combined, ['rebond', 'rebonded', 'straightened chemically'])) return true;
+
+  return false;
+};
+
 const buildLengthAssessment = ({
   estimatedLength,
   providedViews,
@@ -693,6 +1030,114 @@ const buildSummaryFromAnalysisFields = ({
 
 const hasIncompleteCriticalAnalysisFields = (analysis: Record<string, unknown>) => {
   return Object.keys(analysis).length === 0;
+};
+
+const runFocusedLengthFallback = async ({
+  model,
+  contents,
+  providedViews,
+}: {
+  model: string;
+  contents: Array<Record<string, unknown>>;
+  providedViews: string[];
+}) => {
+  try {
+    const fallbackResult = await createStructuredResponse({
+      model,
+      systemInstruction: [
+        'You are a focused hair length estimator for a hair donation app.',
+        'Return valid JSON only.',
+        'Your main job is to estimate visible root-to-end hair length from the current images.',
+        'Use the front and side profile images. Use the hair ends close-up only to confirm visible ends and condition.',
+        'If the hairline/root area and the lowest visible ends are visible, return an approximate estimated_length in centimeters even when no ruler is present.',
+        'Use face/head/body proportions and landmarks: chin 15-22 cm, neck 20-28 cm, shoulder 25-35 cm, collarbone 30-40 cm, armpit 40-55 cm, mid-back 55-75 cm, waist 75-95 cm.',
+        'Return null only if the root/hairline or lowest visible ends are completely blocked or cropped.',
+        'Do not reject ordinary eyeglasses unless they hide the hairline or hair.',
+      ].join('\n'),
+      responseJsonSchema: lengthFallbackSchema,
+      maxOutputTokens: 900,
+      temperature: 0.1,
+      includeDiagnostics: true,
+      contents,
+    }) as { parsed: Record<string, unknown>; diagnostics: Record<string, unknown> };
+
+    const source = fallbackResult?.parsed?.analysis && typeof fallbackResult.parsed.analysis === 'object'
+      ? fallbackResult.parsed.analysis
+      : fallbackResult?.parsed;
+    const focused = (source && typeof source === 'object' ? source : {}) as Record<string, unknown>;
+    const estimatedLength = normalizeNumber(focused?.estimated_length);
+    const lengthAssessment = normalizeString(focused?.length_assessment);
+
+    console.info('[analyze-hair-submission] focused length fallback completed', {
+      hasEstimatedLength: estimatedLength != null,
+      estimatedLength,
+      hasLengthAssessment: Boolean(lengthAssessment),
+      providerResponseStatus: fallbackResult?.diagnostics?.provider_response_status ?? null,
+      providerParseSuccess: fallbackResult?.diagnostics?.provider_parse_success ?? null,
+    });
+
+    if (!Object.keys(focused).length) return null;
+
+    return {
+      is_hair_detected: focused?.is_hair_detected !== false,
+      invalid_image_reason: '',
+      missing_views: [],
+      per_view_notes: providedViews.map((view) => ({
+        view,
+        clearly_visible: true,
+        notes: lengthAssessment || 'Focused length fallback reviewed this view for visible root-to-end hair length.',
+      })),
+      estimated_length: estimatedLength,
+      detected_color: normalizeString(focused?.detected_color) || 'Unclear',
+      detected_texture: normalizeString(focused?.detected_texture) || 'Unclear',
+      detected_density: normalizeString(focused?.detected_density) || 'Unclear',
+      detected_condition: normalizeString(focused?.detected_condition) || 'Low-confidence image review',
+      visible_damage_notes: 'Focused fallback was used because the first structured analysis was incomplete; visible condition still needs manual confirmation.',
+      confidence_score: normalizeConfidence(focused?.confidence_score) ?? (estimatedLength != null ? 0.56 : 0.42),
+      shine_level: 5,
+      frizz_level: 4,
+      dryness_level: 4,
+      oiliness_level: 3,
+      damage_level: 4,
+      decision: IMPROVE_STATUS,
+      summary: normalizeString(focused?.summary) || (
+        estimatedLength != null
+          ? `Focused fallback estimated visible hair length at about ${estimatedLength.toFixed(1)} cm. Final screening requires manual review.`
+          : 'Focused fallback could not confirm a numeric visible length. Final screening requires manual review.'
+      ),
+      length_assessment: lengthAssessment || (
+        estimatedLength != null
+          ? `Focused fallback estimated visible root-to-end hair length at about ${estimatedLength.toFixed(1)} cm using body-landmark proportions.`
+          : 'The focused fallback could not see both root/hairline and the lowest ends clearly enough for a numeric estimate.'
+      ),
+      donation_readiness_note: '',
+      history_assessment: '',
+      recommendations: [
+        {
+          title: estimatedLength != null ? 'Protect Length Retention' : 'Retake Clear Length Views',
+          recommendation_text: estimatedLength != null
+            ? 'Keep hair loose and reduce breakage while growing toward donation length. Retake with hair fully visible if the estimate looks too low.'
+            : 'Retake the front and side profile with hair loose from root to ends so length can be estimated.',
+          priority_order: 1,
+        },
+        {
+          title: 'Use Side Profile for Length',
+          recommendation_text: 'The side profile should show the hairline or roots and the lowest visible ends in one frame.',
+          priority_order: 2,
+        },
+        {
+          title: 'Keep Ends Visible',
+          recommendation_text: 'Keep the ends centered and uncovered so the cut line and donation length can be checked.',
+          priority_order: 3,
+        },
+      ],
+    };
+  } catch (error) {
+    console.warn('[analyze-hair-submission] focused length fallback failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
 };
 
 const resolveSafeAnalysisError = (error: unknown) => {
@@ -878,7 +1323,6 @@ const normalizeAnalysisPayload = (
   const isHairDetected = analysis?.is_hair_detected !== false;
   const normalizedMissingViews = normalizeMissingViews(analysis?.missing_views);
   const normalizedViewNotes = normalizePerViewNotes(analysis?.per_view_notes);
-  const estimatedLength = normalizeNumber(analysis?.estimated_length);
   const detectedColor = normalizeString(analysis?.detected_color);
   const detectedTexture = normalizeString(analysis?.detected_texture);
   const detectedDensity = normalizeString(analysis?.detected_density);
@@ -886,6 +1330,14 @@ const normalizeAnalysisPayload = (
   const invalidImageReason = normalizeString(analysis?.invalid_image_reason);
   const visibleDamageNotes = normalizeString(analysis?.visible_damage_notes);
   const confidenceScore = normalizeConfidence(analysis?.confidence_score);
+  const lengthAssessment = normalizeString(analysis?.length_assessment);
+  const approximateLengthFromText = inferApproximateLengthFromText([
+    lengthAssessment,
+    normalizeString(analysis?.summary),
+    visibleDamageNotes,
+    ...normalizedViewNotes.map((item) => item.notes),
+  ].join(' '));
+  const estimatedLength = normalizeNumber(analysis?.estimated_length) ?? approximateLengthFromText;
   const rawShineLevel = normalizeLevel10(analysis?.shine_level, detectedCondition.toLowerCase().includes('healthy') ? 7 : 5);
   const rawFrizzLevel = normalizeLevel10(analysis?.frizz_level, detectedCondition.toLowerCase().includes('frizz') ? 8 : 3);
   const rawDrynessLevel = normalizeLevel10(analysis?.dryness_level, detectedCondition.toLowerCase().includes('dry') ? 8 : 3);
@@ -911,12 +1363,14 @@ const normalizeAnalysisPayload = (
   const drynessLevel = rawDrynessLevel;
   const oilinessLevel = rawOilinessLevel;
   const inferredMissingViews = expectedViews.filter((view) => !providedViews.includes(view));
-  const missingViews = [...new Set([...inferredMissingViews, ...normalizedMissingViews])];
+  const unclearRequiredViews = normalizedViewNotes
+    .filter((item) => expectedViews.some((view) => view === item.view) && item.clearly_visible === false)
+    .map((item) => item.view);
+  const missingViews = [...new Set([...inferredMissingViews, ...normalizedMissingViews, ...unclearRequiredViews])];
   const minimumDonationLengthCm = Math.max(
     MIN_DONATION_LENGTH_CM,
     requirementContext?.minimum_hair_length != null ? Number(requirementContext.minimum_hair_length) : 0,
   );
-  const lengthAssessment = normalizeString(analysis?.length_assessment);
   const donationReadinessNote = normalizeString(analysis?.donation_readiness_note);
   const historyAssessment = normalizeString(analysis?.history_assessment) || inferHistoryAssessment(
     historyContext,
@@ -924,14 +1378,19 @@ const normalizeAnalysisPayload = (
     estimatedLength,
   );
   const conditionAcceptable = isDonationConditionAcceptable(detectedCondition, visibleDamageNotes);
-  const hasClearEnoughEvidence = isHairDetected && !missingViews.length && (confidenceScore == null || confidenceScore >= 0.35);
+  const treatmentConflict = hasRequirementTreatmentConflict(
+    requirementContext,
+    detectedCondition,
+    visibleDamageNotes,
+    questionnaireAnswers,
+  );
+  const hasClearEnoughEvidence = isHairDetected && !missingViews.length && confidenceScore != null && confidenceScore >= MIN_ELIGIBILITY_CONFIDENCE;
   const meetsLengthRule = estimatedLength != null && estimatedLength >= minimumDonationLengthCm;
-  const normalizedRecommendations = normalizeRecommendationsV2(analysis?.recommendations);
 
   let decision = normalizeString(analysis?.decision) === ELIGIBLE_STATUS
     ? ELIGIBLE_STATUS
     : IMPROVE_STATUS;
-  if (!hasClearEnoughEvidence || !meetsLengthRule || !conditionAcceptable || concernType === 'donation_eligibility' && normalizeString(analysis?.decision) !== ELIGIBLE_STATUS) {
+  if (!hasClearEnoughEvidence || !meetsLengthRule || !conditionAcceptable || treatmentConflict || concernType === 'donation_eligibility' && normalizeString(analysis?.decision) !== ELIGIBLE_STATUS) {
     decision = IMPROVE_STATUS;
   }
 
@@ -944,6 +1403,14 @@ const normalizeAnalysisPayload = (
     detectedCondition,
     visibleDamageNotes,
     decision,
+  });
+  const normalizedRecommendations = enhanceRecommendations({
+    source: analysis?.recommendations,
+    detectedCondition,
+    visibleDamageNotes,
+    summary,
+    estimatedLength,
+    minimumDonationLengthCm,
   });
 
   return {
@@ -1099,6 +1566,9 @@ Deno.serve(async (request) => {
       'Return one per_view_notes entry for every required current image.',
       `Visible length must be at least ${MIN_DONATION_LENGTH_CM} cm for donation eligibility.`,
       `Use "${ELIGIBLE_STATUS}" only when visible condition is suitable and length appears to meet the 14-inch rule.`,
+      `Use "${ELIGIBLE_STATUS}" only when confidence_score is at least ${MIN_ELIGIBILITY_CONFIDENCE} and all required views are clearly visible.`,
+      'If donation requirements disallow colored, bleached, rebonded, or chemically treated hair and the photos or questionnaire suggest that treatment, mark the result as needing improvement or manual review.',
+      'Include practical product examples commonly available in the Philippines when they fit the visible concern, such as moisturizing, repair, anti-frizz, clarifying, or anti-dandruff options.',
       `Use "${IMPROVE_STATUS}" when length is too short, condition needs work, or confidence is too low.`,
     ].join('\n');
 
@@ -1109,7 +1579,7 @@ Deno.serve(async (request) => {
 
     validImages.forEach((image, index) => {
       geminiParts.push({
-        text: `Image ${index + 1}: ${image.viewLabel || image.viewKey || `Photo ${index + 1}`} - examine this photo carefully for the correct required angle, environment quality (lighting, dark areas), subject detection, background, glasses or other face accessories, obstructing hair accessories or objects, scalp condition, hair shine or dullness, texture, density, and ends condition.`,
+        text: `Image ${index + 1}: ${image.viewLabel || image.viewKey || `Photo ${index + 1}`} - examine this photo carefully for the correct required angle, environment quality (lighting, dark areas), subject detection, background, obstructing items on the hair, scalp condition, hair shine or dullness, texture, density, ends condition, and visible root-to-end length. If the hairline/root and lowest visible ends are visible, estimate approximate hair length in centimeters using face/head/body proportions even without a ruler.`,
       });
       geminiParts.push({
         inlineData: {
@@ -1133,15 +1603,106 @@ Deno.serve(async (request) => {
       historyEntryCount: Array.isArray(historyContext?.entries) ? historyContext.entries.length : 0,
     });
 
-    const providerResult = await createStructuredResponse({
-      model,
-      systemInstruction: analysisInstructions,
-      responseJsonSchema: analysisSchema,
-      maxOutputTokens: 2800,
-      temperature: 0.2,
-      includeDiagnostics: true,
-      contents,
-    }) as { parsed: Record<string, unknown>; diagnostics: Record<string, unknown> };
+    let providerResult: { parsed: Record<string, unknown>; diagnostics: Record<string, unknown> };
+
+    try {
+      providerResult = await createStructuredResponse({
+        model,
+        systemInstruction: analysisInstructions,
+        responseJsonSchema: coreAnalysisSchema,
+        maxOutputTokens: 1600,
+        temperature: 0.2,
+        includeDiagnostics: true,
+        contents,
+      }) as { parsed: Record<string, unknown>; diagnostics: Record<string, unknown> };
+    } catch (providerError) {
+      const diagnostics = (providerError as { diagnostics?: Record<string, unknown> })?.diagnostics || {};
+      const providerMessage = normalizeString(providerError instanceof Error ? providerError.message : String(providerError || ''));
+      const providerStatus = normalizeNumber(diagnostics.provider_response_status);
+      const canRecoverProviderParseFailure = (
+        diagnostics.provider_request_attempted === true
+        && providerStatus === 200
+        && diagnostics.provider_parse_success === false
+        && (
+          providerMessage.toLowerCase().includes('invalid json')
+          || providerMessage.toLowerCase().includes('empty response')
+          || providerMessage.toLowerCase().includes('could not be parsed')
+        )
+      );
+
+      if (!canRecoverProviderParseFailure) {
+        throw providerError;
+      }
+
+      console.warn('[analyze-hair-submission] provider returned unparseable JSON; returning low-confidence fallback', {
+        concernType,
+        model,
+        providerStatus,
+        providerParseSuccess: diagnostics.provider_parse_success,
+        message: providerMessage,
+      });
+
+      const focusedFallbackAnalysis = await runFocusedLengthFallback({
+        model,
+        contents,
+        providedViews: Array.from(providedViews),
+      });
+
+      const rawAnalysis = focusedFallbackAnalysis || {
+        is_hair_detected: true,
+        invalid_image_reason: '',
+        missing_views: [],
+        per_view_notes: Array.from(providedViews).map((view) => ({
+          view,
+          clearly_visible: true,
+          notes: 'The AI provider received this photo but returned JSON that could not be parsed, so this view needs manual confirmation.',
+        })),
+        estimated_length: null,
+        detected_color: 'Unclear',
+        detected_texture: 'Unclear',
+        detected_density: 'Unclear',
+        detected_condition: 'Low-confidence image review',
+        visible_damage_notes: 'The AI provider response could not be parsed into structured hair-analysis details.',
+        confidence_score: 0.35,
+        shine_level: 5,
+        frizz_level: 5,
+        dryness_level: 5,
+        oiliness_level: 5,
+        damage_level: 5,
+        decision: IMPROVE_STATUS,
+        summary: 'The photos reached the AI provider, but the response could not be parsed into the expected structured format. This fallback result is low-confidence and should be reviewed manually or retaken with clearer photos.',
+        length_assessment: 'The AI provider response could not be parsed, so the current scan did not include a reliable numeric length estimate.',
+        donation_readiness_note: '',
+        history_assessment: inferHistoryAssessment(historyContext, 'Low-confidence image review', null),
+        recommendations: [
+          {
+            title: 'Retake Clear Required Views',
+            recommendation_text: 'Retake the front view, side profile, and hair ends close-up in bright lighting with hair fully visible and centered.',
+            priority_order: 1,
+          },
+        ],
+      };
+
+      const analysis = normalizeAnalysisPayload(
+        rawAnalysis,
+        Array.from(providedViews),
+        concernType,
+        donationRequirementContext,
+        questionnaireAnswers,
+        historyContext,
+      );
+
+      return createJsonResponse({
+        success: true,
+        provider: 'gemini',
+        edge_function_invoked: true,
+        provider_request_attempted: true,
+        provider_response_status: providerStatus,
+        provider_parse_success: false,
+        recovered_from_provider_parse_error: true,
+        analysis,
+      });
+    }
 
     const result = providerResult?.parsed || {};
     const diagnostics = providerResult?.diagnostics || {
@@ -1166,6 +1727,7 @@ Deno.serve(async (request) => {
     let rawAnalysis = (
       rawAnalysisSource && typeof rawAnalysisSource === 'object' ? rawAnalysisSource : {}
     ) as Record<string, unknown>;
+    let focusedLengthFallbackRan = false;
 
     if (hasIncompleteCriticalAnalysisFields(rawAnalysis)) {
       console.warn('[analyze-hair-submission] incomplete analysis detected', {
@@ -1178,7 +1740,14 @@ Deno.serve(async (request) => {
         hasDetectedCondition: Boolean(normalizeString(rawAnalysis?.detected_condition)),
         recommendationCount: normalizeRecommendationsV2(rawAnalysis?.recommendations).length,
       });
-      rawAnalysis = {
+      const focusedFallbackAnalysis = await runFocusedLengthFallback({
+        model,
+        contents,
+        providedViews: Array.from(providedViews),
+      });
+      focusedLengthFallbackRan = true;
+
+      rawAnalysis = focusedFallbackAnalysis || {
         is_hair_detected: true,
         invalid_image_reason: '',
         missing_views: [],
@@ -1214,6 +1783,53 @@ Deno.serve(async (request) => {
       };
     }
 
+    const isEstimatedLengthMissing = normalizeNumber(rawAnalysis?.estimated_length) == null;
+    if (isEstimatedLengthMissing && !focusedLengthFallbackRan) {
+      console.warn('[analyze-hair-submission] estimated length missing; running focused length fallback', {
+        concernType,
+        hasSummary: Boolean(normalizeString(rawAnalysis?.summary)),
+        hasDetectedColor: Boolean(normalizeString(rawAnalysis?.detected_color)),
+        hasLengthAssessment: Boolean(normalizeString(rawAnalysis?.length_assessment)),
+        hasDetectedCondition: Boolean(normalizeString(rawAnalysis?.detected_condition)),
+        recommendationCount: normalizeRecommendationsV2(rawAnalysis?.recommendations).length,
+      });
+
+      const focusedFallbackAnalysis = await runFocusedLengthFallback({
+        model,
+        contents,
+        providedViews: Array.from(providedViews),
+      });
+      focusedLengthFallbackRan = true;
+
+      const fallbackLength = normalizeNumber(focusedFallbackAnalysis?.estimated_length);
+      if (focusedFallbackAnalysis && fallbackLength != null) {
+        rawAnalysis = {
+          ...rawAnalysis,
+          estimated_length: fallbackLength,
+          length_assessment: normalizeString(focusedFallbackAnalysis.length_assessment)
+            || normalizeString(rawAnalysis.length_assessment)
+            || `Focused fallback estimated visible root-to-end hair length at about ${fallbackLength.toFixed(1)} cm.`,
+          per_view_notes: Array.isArray(rawAnalysis.per_view_notes) && rawAnalysis.per_view_notes.length
+            ? rawAnalysis.per_view_notes
+            : focusedFallbackAnalysis.per_view_notes,
+          confidence_score: Math.max(
+            normalizeConfidence(rawAnalysis.confidence_score) ?? 0,
+            normalizeConfidence(focusedFallbackAnalysis.confidence_score) ?? 0,
+          ),
+          summary: normalizeString(rawAnalysis.summary) || focusedFallbackAnalysis.summary,
+          recommendations: normalizeRecommendationsV2(rawAnalysis.recommendations).length
+            ? rawAnalysis.recommendations
+            : focusedFallbackAnalysis.recommendations,
+        };
+      } else {
+        console.warn('[analyze-hair-submission] focused length fallback could not provide estimated length', {
+          hasFallbackAnalysis: Boolean(focusedFallbackAnalysis),
+          fallbackLength,
+          fallbackLengthAssessment: normalizeString(focusedFallbackAnalysis?.length_assessment),
+        });
+      }
+    }
+
     const analysis = normalizeAnalysisPayload(
       rawAnalysis,
       Array.from(providedViews),
@@ -1230,7 +1846,9 @@ Deno.serve(async (request) => {
       missingViews: Array.isArray(analysis?.missing_views) ? analysis.missing_views : [],
       decision: analysis?.decision || '',
       detectedColor: analysis?.detected_color || '',
+      estimatedLength: analysis?.estimated_length ?? null,
       hasLengthAssessment: Boolean(analysis?.length_assessment),
+      focusedLengthFallbackRan,
       recommendationCount: Array.isArray(analysis?.recommendations) ? analysis.recommendations.length : 0,
     });
 

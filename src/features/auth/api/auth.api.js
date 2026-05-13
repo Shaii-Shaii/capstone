@@ -1,6 +1,6 @@
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
-import { supabase } from '../../../api/supabase/client';
+import { ensureActiveSession, supabase } from '../../../api/supabase/client';
 
 const APP_SCHEME = 'donivra';
 
@@ -98,13 +98,13 @@ const createSessionFromOAuthRedirect = async (url) => {
     };
   }
 
-  const sessionResult = await supabase.auth.getSession();
+  const sessionResult = await ensureActiveSession();
   return {
     data: {
-      session: sessionResult.data?.session || null,
-      user: sessionResult.data?.session?.user || null,
+      session: sessionResult?.session || null,
+      user: sessionResult?.session?.user || null,
     },
-    error: sessionResult.error || null,
+    error: sessionResult?.error || null,
   };
 };
 
@@ -156,7 +156,13 @@ export const logoutUser = async () => {
 };
 
 export const getCurrentSession = async () => {
-  return await supabase.auth.getSession();
+  const result = await ensureActiveSession();
+  return {
+    data: {
+      session: result?.session || null,
+    },
+    error: result?.error || null,
+  };
 };
 
 export const sendPasswordResetEmail = async ({ email, redirectTo }) => {

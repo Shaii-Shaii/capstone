@@ -1,17 +1,20 @@
 import React from 'react';
 import { ActivityIndicator, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { DashboardLayout } from './DashboardLayout';
 import { AppButton } from '../ui/AppButton';
 import { AppIcon } from '../ui/AppIcon';
 import { AppInput } from '../ui/AppInput';
+import { StatusBadge } from '../ui/StatusBadge';
 import { StatusBanner } from '../ui/StatusBanner';
 import { DonorTopBar } from '../donor/DonorTopBar';
 import { donorDashboardNavItems } from '../../constants/dashboard';
 import { useAuth } from '../../providers/AuthProvider';
 import { useNotifications } from '../../hooks/useNotifications';
 import { useAuthActions } from '../../features/auth/hooks/useAuthActions';
+import { supabase } from '../../api/supabase/client';
 import {
   buildDonationTrackingQrPayload,
   buildQrImageUrl,
@@ -26,11 +29,15 @@ import {
   cancelDonorDonation,
 } from '../../features/donorDonations.service';
 import { buildProfileCompletionMeta } from '../../features/profile/services/profile.service';
+import { canSubmitHairDonation, DONOR_PERMISSION_REASONS, mapDonationPermissionError } from '../../features/donorCompliance.service';
 import { resolveThemeRoles, theme } from '../../design-system/theme';
 
-// ─── Constants ───────────────────────────────────────────────────────────────
+// â”€â”€â”€ Constants â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const MANUAL_FORM_DEFAULTS = {
+  donorType: 'own',
+  donorName: '',
+  donorBirthdate: '',
   lengthValue: '',
   lengthUnit: 'in',
   treated: 'no',
@@ -56,6 +63,7 @@ const LENGTH_UNIT_OPTIONS = [
   { label: 'Inches', value: 'in' },
   { label: 'Centimeters', value: 'cm' },
 ];
+const DONATION_REALTIME_DEBOUNCE_MS = 420;
 
 const YES_NO_OPTIONS = [
   { label: 'Yes', value: 'yes' },
@@ -87,34 +95,72 @@ const formatDateLabel = (dateString) => {
   });
 };
 
+const isValidBirthdate = (value) => {
+  const text = String(value || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return false;
+  const parsed = new Date(`${text}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return false;
+  const [year, month, day] = text.split('-').map(Number);
+  if (
+    parsed.getFullYear() !== year
+    || parsed.getMonth() !== month - 1
+    || parsed.getDate() !== day
+  ) {
+    return false;
+  }
+  return parsed <= new Date();
+};
+
+const getAgeFromBirthdate = (value) => {
+  if (!isValidBirthdate(value)) return null;
+  const birthdate = new Date(`${String(value).trim()}T00:00:00`);
+  const today = new Date();
+  let age = today.getFullYear() - birthdate.getFullYear();
+  const monthDelta = today.getMonth() - birthdate.getMonth();
+  if (monthDelta < 0 || (monthDelta === 0 && today.getDate() < birthdate.getDate())) {
+    age -= 1;
+  }
+  return age;
+};
+
+const getScreeningLogText = (screening = null, { preferSummary = false } = {}) => {
+  const values = preferSummary
+    ? [screening?.summary, screening?.visible_damage_notes, screening?.detected_condition, screening?.decision]
+    : [screening?.decision, screening?.summary, screening?.visible_damage_notes, screening?.detected_condition];
+
+  return values.map((value) => String(value || '').trim()).find(Boolean) || '';
+};
+
 const buildDonationDecisionText = ({ screening = null, isEligible = false, ineligibilityReason = '' }) => {
   if (isEligible) {
-    return screening?.decision || 'Eligible for donation';
+    const decision = String(screening?.decision || '').trim().toLowerCase();
+    const preferSummary = decision.includes('improve') || decision.includes('not eligible') || decision.includes('needs');
+    return getScreeningLogText(screening, { preferSummary });
   }
 
   const reason = String(ineligibilityReason || '').trim();
   if (reason) return reason;
 
-  return screening?.decision || 'Hair did not meet current donation requirements.';
+  return getScreeningLogText(screening);
 };
 
-const inferBundleSourceLabel = (detail = null) => {
-  const notesText = String(detail?.detail_notes || '').toLowerCase();
-  const conditionText = String(detail?.declared_condition || '').toLowerCase();
-  const merged = `${notesText} ${conditionText}`;
-  if (merged.includes('different donor hair')) return 'Different donor hair';
-  if (merged.includes('own hair')) return 'Own hair';
-  return 'Own hair';
+const formatScreeningLengthInches = (screening = null) => {
+  const lengthCm = Number(screening?.estimated_length);
+  if (!Number.isFinite(lengthCm) || lengthCm <= 0) return 'N/A';
+  return `${(lengthCm / 2.54).toFixed(1)}"`;
 };
 
-const formatBundleLengthLabel = (lengthValue) => {
-  const numeric = Number(lengthValue);
-  if (!Number.isFinite(numeric) || numeric <= 0) return '-';
-  const lengthCm = numeric * 2.54;
-  return `${numeric.toFixed(1)} in (${lengthCm.toFixed(1)} cm)`;
-};
+const getDriveDateLabel = (drive = null) => (
+  drive?.start_date
+    ? `${formatDateLabel(drive.start_date)}${drive?.end_date ? ` - ${formatDateLabel(drive.end_date)}` : ''}`
+    : 'Schedule to be announced'
+);
 
-// ─── Shared UI primitives ─────────────────────────────────────────────────────
+const getDriveOrganizationLabel = (drive = null) => (
+  drive?.organization_name || drive?.organization?.organization_name || 'Partner organization'
+);
+
+// â”€â”€â”€ Shared UI primitives â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function SectionHeader({ eyebrow, title, body, roles }) {
   return (
@@ -177,13 +223,25 @@ function ChoiceField({ label, value, options, onChange }) {
       <View style={styles.choiceChipRow}>
         {options.map((opt) => {
           const active = value === opt.value;
+          const disabled = Boolean(opt.disabled);
           return (
             <Pressable
               key={opt.value}
-              onPress={() => onChange?.(opt.value)}
-              style={[styles.choiceChip, active ? styles.choiceChipActive : null]}
+              disabled={disabled}
+              onPress={() => {
+                if (!disabled) onChange?.(opt.value);
+              }}
+              style={[
+                styles.choiceChip,
+                active ? styles.choiceChipActive : null,
+                disabled ? styles.choiceChipDisabled : null,
+              ]}
             >
-              <Text style={[styles.choiceChipText, active ? styles.choiceChipTextActive : null]}>
+              <Text style={[
+                styles.choiceChipText,
+                active ? styles.choiceChipTextActive : null,
+                disabled ? styles.choiceChipTextDisabled : null,
+              ]}>
                 {opt.label}
               </Text>
             </Pressable>
@@ -213,7 +271,7 @@ function ManualSection({ icon, title, body, children, roles }) {
   );
 }
 
-// ─── Profile pending ──────────────────────────────────────────────────────────
+// â”€â”€â”€ Profile pending â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function ProfilePendingCard({ roles, completionMeta, onManageProfile }) {
   const missing = (completionMeta?.missingFieldLabels || []).slice(0, 3);
@@ -242,7 +300,7 @@ function ProfilePendingCard({ roles, completionMeta, onManageProfile }) {
   );
 }
 
-// ─── Hair eligibility gate ────────────────────────────────────────────────────
+// â”€â”€â”€ Hair eligibility gate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function HairEligibilityGateCard({ roles, hasScreening, screeningLabel, onCheckHair }) {
   return (
@@ -262,7 +320,233 @@ function HairEligibilityGateCard({ roles, hasScreening, screeningLabel, onCheckH
   );
 }
 
-// ─── Active joined drive ──────────────────────────────────────────────────────
+// â”€â”€â”€ Active joined drive â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+function DonationHomeOverview({
+  roles,
+  latestScreening,
+  isEligible,
+  joinedDrives,
+  drives,
+  displayDrive,
+  hasOngoingDonation,
+  hasGeneratedDonationQr,
+  onCheckHair,
+  onFindOrganizations,
+  onSubmitDriveDonation,
+  onSubmitDonation,
+  onAddHair,
+  onCancelDonation,
+  isSubmittingDonation,
+}) {
+  const organizationCards = React.useMemo(() => {
+    const seen = new Set();
+    const source = [
+      ...(joinedDrives || []),
+      ...(drives || []).filter((drive) => drive?.organization_id),
+    ];
+
+    return source.filter((drive) => {
+      const key = drive?.organization_id || getDriveOrganizationLabel(drive);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).slice(0, 4);
+  }, [drives, joinedDrives]);
+  const participatedEventCards = (joinedDrives || []).slice(0, 4);
+  const hasScreening = Boolean(latestScreening);
+  const bannerTitle = isEligible
+    ? "You're Eligible to Donate!"
+    : hasScreening
+      ? 'Not Ready for Donation Yet'
+      : 'Complete CheckHair First';
+  const bannerStatus = isEligible ? 'Ready' : hasScreening ? 'Needs care' : 'No scan';
+  const upcomingTitle = displayDrive?.event_title || (hasOngoingDonation ? 'Independent hair donation' : 'No upcoming donation yet');
+  const upcomingBody = displayDrive
+    ? getDriveDateLabel(displayDrive)
+    : hasOngoingDonation
+      ? hasGeneratedDonationQr
+        ? 'QR generated. Attach it to the matching hair plastic.'
+        : 'Review the saved hair details, then submit to generate its QR.'
+      : isEligible
+        ? 'Choose a drive or start an independent donation.'
+        : 'Complete an eligible CheckHair result before donating.';
+
+  return (
+    <View style={styles.donationHome}>
+      <View style={[styles.eligibleBanner, { backgroundColor: isEligible ? roles.primaryActionBackground : roles.supportCardBackground }]}>
+        <View style={styles.eligibleBannerHeader}>
+          <View style={[styles.eligibleBannerIcon, { backgroundColor: isEligible ? 'rgba(255,255,255,0.18)' : roles.iconPrimarySurface }]}>
+            <MaterialCommunityIcons
+              name={isEligible ? 'check-circle-outline' : 'hair-dryer-outline'}
+              size={24}
+              color={isEligible ? roles.primaryActionText : roles.iconPrimaryColor}
+            />
+          </View>
+          <Text style={[styles.eligibleBannerTitle, { color: isEligible ? roles.primaryActionText : roles.headingText }]}>
+            {bannerTitle}
+          </Text>
+        </View>
+        <View style={[styles.eligibleStatsCard, { borderColor: isEligible ? 'rgba(255,255,255,0.22)' : roles.defaultCardBorder }]}>
+          <View style={styles.eligibleStat}>
+            <Text style={[styles.eligibleStatLabel, { color: isEligible ? 'rgba(255,255,255,0.78)' : roles.metaText }]}>CURRENT LENGTH</Text>
+            <Text style={[styles.eligibleStatValue, { color: isEligible ? roles.primaryActionText : roles.headingText }]}>
+              {formatScreeningLengthInches(latestScreening)}
+            </Text>
+          </View>
+          <View style={[styles.eligibleDivider, { backgroundColor: isEligible ? 'rgba(255,255,255,0.25)' : roles.defaultCardBorder }]} />
+          <View style={[styles.eligibleStat, styles.eligibleStatCenter]}>
+            <Text style={[styles.eligibleStatLabel, { color: isEligible ? 'rgba(255,255,255,0.78)' : roles.metaText }]}>HAIR TYPE</Text>
+            <Text style={[styles.eligibleStatValue, { color: isEligible ? roles.primaryActionText : roles.headingText }]} numberOfLines={1}>
+              {latestScreening?.detected_texture || 'N/A'}
+            </Text>
+          </View>
+          <View style={[styles.eligibleDivider, { backgroundColor: isEligible ? 'rgba(255,255,255,0.25)' : roles.defaultCardBorder }]} />
+          <View style={[styles.eligibleStat, styles.eligibleStatEnd]}>
+            <Text style={[styles.eligibleStatLabel, { color: isEligible ? 'rgba(255,255,255,0.78)' : roles.metaText }]}>STATUS</Text>
+            <Text style={[styles.eligibleStatValue, { color: isEligible ? roles.primaryActionText : roles.headingText }]} numberOfLines={1}>
+              {bannerStatus}
+            </Text>
+          </View>
+        </View>
+        {!hasScreening ? (
+          <AppButton title="Start CheckHair" variant="secondary" fullWidth={false} onPress={onCheckHair} />
+        ) : null}
+      </View>
+
+      <View style={styles.section}>
+        <Text style={[styles.sectionTitle, { color: roles.headingText }]}>Your Organizations</Text>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.organizationScroll}>
+          {organizationCards.map((drive, index) => {
+            const organizationName = getDriveOrganizationLabel(drive);
+            const logoUri = drive?.organization_logo_url || drive?.organization?.organization_logo_url || '';
+            return (
+              <View
+                key={`${drive?.organization_id || drive?.donation_drive_id || organizationName}-${index}`}
+                style={[styles.organizationMiniCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}
+              >
+                {logoUri ? (
+                  <Image source={{ uri: logoUri }} style={styles.organizationMiniLogo} resizeMode="cover" />
+                ) : (
+                  <View style={[styles.organizationMiniLogo, styles.organizationMiniLogoFallback, { backgroundColor: roles.iconPrimarySurface }]}>
+                    <AppIcon name="organization" size="lg" color={roles.iconPrimaryColor} />
+                  </View>
+                )}
+                <Text style={[styles.organizationMiniName, { color: roles.headingText }]} numberOfLines={2}>
+                  {organizationName}
+                </Text>
+                <Text style={[styles.organizationMiniStatus, { color: roles.primaryActionBackground }]}>
+                  {drive?.registration ? 'Verified' : drive?.membership ? 'Member' : 'Partner'}
+                </Text>
+              </View>
+            );
+          })}
+          <Pressable
+            onPress={onFindOrganizations}
+            style={[styles.findMoreCard, { backgroundColor: roles.supportCardBackground, borderColor: roles.defaultCardBorder }]}
+          >
+            <View style={[styles.findMoreIcon, { backgroundColor: roles.defaultCardBackground }]}>
+              <AppIcon name="plus" size="lg" color={roles.metaText} />
+            </View>
+            <Text style={[styles.findMoreText, { color: roles.bodyText }]}>Find More</Text>
+          </Pressable>
+        </ScrollView>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={[styles.sectionTitle, { color: roles.headingText }]}>Your Participated Events</Text>
+        {participatedEventCards.length ? (
+          <View style={styles.participatedEventList}>
+            {participatedEventCards.map((drive) => (
+              <View
+                key={`participated-${drive?.donation_drive_id || drive?.event_title}`}
+                style={[styles.upcomingDonationCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}
+              >
+                <View style={[styles.upcomingDonationIcon, { backgroundColor: roles.iconPrimarySurface }]}>
+                  <MaterialCommunityIcons name="calendar-check-outline" size={24} color={roles.iconPrimaryColor} />
+                </View>
+                <View style={styles.upcomingDonationCopy}>
+                  <Text style={[styles.upcomingDonationTitle, { color: roles.headingText }]} numberOfLines={2}>
+                    {drive?.event_title || 'Donation drive'}
+                  </Text>
+                  <Text style={[styles.upcomingDonationBody, { color: roles.bodyText }]} numberOfLines={2}>
+                    {getDriveDateLabel(drive)}
+                  </Text>
+                </View>
+                <View style={styles.upcomingDonationActions}>
+                  <AppButton
+                    title="Submit my donation"
+                    fullWidth={false}
+                    size="sm"
+                    style={styles.upcomingActionButton}
+                    onPress={() => onSubmitDriveDonation?.(drive)}
+                    disabled={isSubmittingDonation}
+                  />
+                </View>
+              </View>
+            ))}
+          </View>
+        ) : (
+          <View style={[styles.emptyDonationCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
+            <AppIcon name="donations" size="lg" color={roles.metaText} />
+            <Text style={[styles.emptyDonationText, { color: roles.bodyText }]}>No participated events yet.</Text>
+          </View>
+        )}
+
+        {hasOngoingDonation ? (
+          <View style={[styles.upcomingDonationCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
+            <View style={[styles.upcomingDonationIcon, { backgroundColor: roles.iconPrimarySurface }]}>
+              <MaterialCommunityIcons name="content-cut" size={24} color={roles.iconPrimaryColor} />
+            </View>
+            <View style={styles.upcomingDonationCopy}>
+              <Text style={[styles.upcomingDonationTitle, { color: roles.headingText }]} numberOfLines={2}>
+                {upcomingTitle}
+              </Text>
+              <Text style={[styles.upcomingDonationBody, { color: roles.bodyText }]} numberOfLines={2}>
+                {upcomingBody}
+              </Text>
+            </View>
+            <View style={styles.upcomingDonationActions}>
+              {!hasGeneratedDonationQr ? (
+                <AppButton
+                  title={isSubmittingDonation ? 'Opening preview...' : 'Submit Donation'}
+                  fullWidth={false}
+                  size="sm"
+                  style={styles.upcomingActionButton}
+                  onPress={onSubmitDonation}
+                  loading={isSubmittingDonation}
+                  disabled={isSubmittingDonation}
+                />
+              ) : (
+                <View style={[styles.upcomingStatusChip, { backgroundColor: roles.supportCardBackground }]}>
+                  <Text style={[styles.upcomingStatusText, { color: roles.headingText }]}>QR Ready</Text>
+                </View>
+              )}
+              <AppButton
+                title="Cancel Submission"
+                variant="danger"
+                fullWidth={false}
+                size="sm"
+                style={styles.upcomingActionButton}
+                onPress={onCancelDonation}
+                disabled={isSubmittingDonation}
+              />
+              <AppButton
+                title="Add Another Hair"
+                variant="outline"
+                fullWidth={false}
+                size="sm"
+                style={styles.upcomingActionButton}
+                onPress={onAddHair}
+                disabled={isSubmittingDonation}
+              />
+            </View>
+          </View>
+        ) : null}
+      </View>
+    </View>
+  );
+}
 
 function JoinedDriveCard({ roles, drive }) {
   if (!drive?.registration) return null;
@@ -296,7 +580,7 @@ function JoinedDriveCard({ roles, drive }) {
           </Text>
           {drive.start_date ? (
             <Text style={[styles.driveMeta2, { color: roles.metaText }]}>
-              {formatDateLabel(drive.start_date)}{drive.end_date ? ` – ${formatDateLabel(drive.end_date)}` : ''}
+              {formatDateLabel(drive.start_date)}{drive.end_date ? ` â€“ ${formatDateLabel(drive.end_date)}` : ''}
             </Text>
           ) : null}
         </View>
@@ -319,7 +603,10 @@ function JoinedDriveCard({ roles, drive }) {
   );
 }
 
-// ─── Hair log card (AI path) ──────────────────────────────────────────────────
+// â”€â”€â”€ Hair log card (AI path) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+void JoinedDriveCard;
+void HairLogCard;
 
 function HairLogCard({
   roles,
@@ -343,7 +630,7 @@ function HairLogCard({
         <View style={styles.pathCardCopy}>
           <Text style={[styles.pathCardTitle, { color: roles.headingText }]}>Use recent hair log</Text>
           <Text style={[styles.pathCardBody, { color: roles.bodyText }]}>
-            Donate using your last hair analysis result — no extra input needed.
+            Donate using your last hair analysis result; no extra input needed.
           </Text>
         </View>
         <View style={[
@@ -363,32 +650,32 @@ function HairLogCard({
         <View style={[styles.hairLogTile, { backgroundColor: roles.supportCardBackground }]}>
           <Text style={[styles.hairLogTileLabel, { color: roles.metaText }]}>Length</Text>
           <Text style={[styles.hairLogTileValue, { color: roles.headingText }]}>
-            {lengthIn ? `${lengthIn} in` : '—'}
+            {lengthIn ? `${lengthIn} in` : 'â€”'}
           </Text>
         </View>
         <View style={[styles.hairLogTile, { backgroundColor: roles.supportCardBackground }]}>
           <Text style={[styles.hairLogTileLabel, { color: roles.metaText }]}>Condition</Text>
           <Text style={[styles.hairLogTileValue, { color: roles.headingText }]}>
-            {screening?.detected_condition || '—'}
+            {screening?.detected_condition || 'â€”'}
           </Text>
         </View>
         <View style={[styles.hairLogTile, { backgroundColor: roles.supportCardBackground }]}>
           <Text style={[styles.hairLogTileLabel, { color: roles.metaText }]}>Decision</Text>
           <Text style={[styles.hairLogTileValue, { color: roles.headingText }]} numberOfLines={3}>
-            {decisionText || '—'}
+            {decisionText || 'â€”'}
           </Text>
         </View>
         <View style={[styles.hairLogTile, { backgroundColor: roles.supportCardBackground }]}>
           <Text style={[styles.hairLogTileLabel, { color: roles.metaText }]}>Analyzed</Text>
           <Text style={[styles.hairLogTileValue, { color: roles.headingText }]}>
-            {screeningLabel || '—'}
+            {screeningLabel || 'â€”'}
           </Text>
         </View>
       </View>
 
       {isEligible ? (
         <AppButton
-          title={isLoading ? 'Generating QR…' : 'Donate with this hair log'}
+          title={isLoading ? 'Saving...' : 'Add hair to donate'}
           onPress={onProceed}
           loading={isLoading}
           fullWidth
@@ -402,7 +689,7 @@ function HairLogCard({
   );
 }
 
-// ─── Manual input path card ───────────────────────────────────────────────────
+// â”€â”€â”€ Manual input path card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function ManualInputCard({ roles, onOpen }) {
   return (
@@ -414,7 +701,7 @@ function ManualInputCard({ roles, onOpen }) {
         <View style={styles.pathCardCopy}>
           <Text style={[styles.pathCardTitle, { color: roles.headingText }]}>Enter hair details manually</Text>
           <Text style={[styles.pathCardBody, { color: roles.bodyText }]}>
-            Input your hair length, bundles, and condition yourself and upload a photo.
+            Input hair length and condition manually, then upload a clear photo.
           </Text>
         </View>
         <AppIcon name="chevronRight" size="sm" color={roles.metaText} />
@@ -423,7 +710,7 @@ function ManualInputCard({ roles, onOpen }) {
   );
 }
 
-// ─── Manual entry modal ───────────────────────────────────────────────────────
+// â”€â”€â”€ Manual entry modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function ManualEntryModal({
   visible, form, errors, photo, feedback, isSaving, aiPrefilled,
@@ -431,12 +718,13 @@ function ManualEntryModal({
 }) {
   const { resolvedTheme } = useAuth();
   const roles = resolveThemeRoles(resolvedTheme);
+  const isOtherPersonHair = form.donorType === 'different';
 
   return (
     <ModalShell
       visible={visible}
-      title="Hair donation details"
-      subtitle="Enter your own hair details, then upload one clear photo for review."
+      title="Add hair to donate"
+      subtitle="Add hair under this account. Use this for your own hair or hair from someone without an account."
       onClose={onClose}
       scrollContent
       footer={(
@@ -445,14 +733,16 @@ function ManualEntryModal({
             <AppButton title="Cancel" variant="outline" onPress={onClose} />
           </View>
           <View style={styles.modalFooterActionHalf}>
-            <AppButton title={isSaving ? 'Saving…' : 'Save & generate QR'} onPress={onSave} loading={isSaving} />
+            <AppButton title={isSaving ? 'Saving...' : 'Save hair'} onPress={onSave} loading={isSaving} />
           </View>
         </View>
       )}
     >
       {aiPrefilled ? (
         <StatusBanner
-          message="Hair length pre-filled from your recent AI screening. Adjust if needed."
+          message={isOtherPersonHair
+            ? 'Recent AI screening is used only to pre-fill this donation form. It will not create a CheckHair log for this donor.'
+            : 'Hair length pre-filled from your recent AI screening. Adjust if needed.'}
           variant="info"
           style={styles.bannerSpacing}
         />
@@ -460,6 +750,47 @@ function ManualEntryModal({
       {feedback?.message ? (
         <StatusBanner message={feedback.message} variant={feedback.variant} style={styles.bannerSpacing} />
       ) : null}
+
+      <ManualSection
+        icon="account-circle-outline"
+        title="Hair owner"
+        body="Choose whether this hair is yours or from another person using your account."
+        roles={roles}
+      >
+        <ChoiceField
+          label="Donor type"
+          value={form.donorType}
+          options={[
+            { label: 'My hair', value: 'own' },
+            { label: 'Other person', value: 'different' },
+          ]}
+          onChange={(v) => onChangeField('donorType', v)}
+        />
+        {errors.donorType ? <Text style={styles.inputError}>{errors.donorType}</Text> : null}
+        {isOtherPersonHair ? (
+          <View style={styles.donorIdentityFields}>
+            <AppInput
+              label="Donor full name"
+              required
+              value={form.donorName}
+              onChangeText={(v) => onChangeField('donorName', v)}
+              placeholder="Full name"
+              error={errors.donorName}
+              helperText="Use the name of the person who owns this hair."
+            />
+            <AppInput
+              label="Donor birthday"
+              required
+              value={form.donorBirthdate}
+              onChangeText={(v) => onChangeField('donorBirthdate', v.replace(/[^0-9-]/g, '').slice(0, 10))}
+              placeholder="YYYY-MM-DD"
+              keyboardType="numbers-and-punctuation"
+              error={errors.donorBirthdate}
+              helperText="Used for donation identification and minor checking."
+            />
+          </View>
+        ) : null}
+      </ManualSection>
 
       <ManualSection
         icon="donations"
@@ -560,7 +891,7 @@ function AddBundleModal({
             <AppButton title="Cancel" variant="outline" onPress={onClose} disabled={isSaving} />
           </View>
           <View style={styles.modalFooterActionHalf}>
-            <AppButton title={isSaving ? 'Saving…' : 'Save bundle'} onPress={onSave} loading={isSaving} disabled={isSaving} />
+            <AppButton title={isSaving ? 'Savingâ€¦' : 'Save bundle'} onPress={onSave} loading={isSaving} disabled={isSaving} />
           </View>
         </View>
       )}
@@ -685,7 +1016,7 @@ function AddBundleModal({
   );
 }
 
-// ─── Shipping ID / QR card ────────────────────────────────────────────────────
+// â”€â”€â”€ Shipping ID / QR card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function ShippingIdCard({ roles, qrPayload, qrState, submission, detail }) {
   const qrImageUrl = qrPayload ? buildQrImageUrl(qrPayload, 260) : '';
@@ -703,15 +1034,10 @@ function ShippingIdCard({ roles, qrPayload, qrState, submission, detail }) {
           <Text style={[styles.qrEyebrow, { color: roles.primaryActionBackground }]}>Your Shipping ID</Text>
           <Text style={[styles.qrTitle, { color: roles.headingText }]}>Ready for shipment</Text>
         </View>
-        <View style={[styles.qrStatusBadge, {
-          backgroundColor: isActivated ? roles.primaryActionBackground : roles.supportCardBackground,
-        }]}>
-          <Text style={[styles.qrStatusText, {
-            color: isActivated ? roles.primaryActionText : roles.bodyText,
-          }]}>
-            {isActivated ? 'QR Active' : 'Pending Scan'}
-          </Text>
-        </View>
+        <StatusBadge
+          label={isActivated ? 'QR Active' : 'Pending Scan'}
+          tone={isActivated ? 'completed' : 'pendingScan'}
+        />
       </View>
 
       {qrImageUrl ? (
@@ -721,7 +1047,7 @@ function ShippingIdCard({ roles, qrPayload, qrState, submission, detail }) {
       ) : (
         <View style={[styles.qrImageWrap, { backgroundColor: roles.supportCardBackground }]}>
           <ActivityIndicator color={roles.primaryActionBackground} />
-          <Text style={[styles.qrLoadingText, { color: roles.metaText }]}>Building QR…</Text>
+          <Text style={[styles.qrLoadingText, { color: roles.metaText }]}>Building QRâ€¦</Text>
         </View>
       )}
 
@@ -753,7 +1079,7 @@ function ShippingIdCard({ roles, qrPayload, qrState, submission, detail }) {
   );
 }
 
-// ─── Parcel photo section ─────────────────────────────────────────────────────
+// â”€â”€â”€ Parcel photo section â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function ParcelPhotoSection({
   roles, parcelImages, photo, feedback, isSaving,
@@ -792,19 +1118,24 @@ function ParcelPhotoSection({
         {photo?.uri ? (
           <Image source={{ uri: photo.uri }} style={styles.photoPreview} resizeMode="cover" />
         ) : (
-          <View style={styles.photoPlaceholder}>
-            <AppIcon name="camera" size="md" state="muted" />
-            <Text style={styles.photoPlaceholderText}>No photo selected</Text>
+          <View style={[styles.photoPlaceholder, { borderColor: roles.defaultCardBorder, backgroundColor: roles.supportCardBackground }]}>
+            <View style={[styles.uploadIconBubble, { backgroundColor: roles.iconPrimarySurface }]}>
+              <AppIcon name="camera" size="md" color={roles.iconPrimaryColor} />
+            </View>
+            <Text style={[styles.photoPlaceholderTitle, { color: roles.headingText }]}>Add parcel proof</Text>
+            <Text style={[styles.photoPlaceholderText, { color: roles.bodyText }]}>
+              Capture the package clearly with the QR visible.
+            </Text>
           </View>
         )}
         <View style={styles.rowActions}>
-          <AppButton title="Gallery" variant="outline" fullWidth={false} onPress={() => onPickPhoto('library')} />
-          <AppButton title="Camera" fullWidth={false} onPress={() => onPickPhoto('camera')} />
+          <AppButton title="Gallery" variant="outline" fullWidth={false} size="sm" onPress={() => onPickPhoto('library')} />
+          <AppButton title="Camera" fullWidth={false} size="sm" onPress={() => onPickPhoto('camera')} />
         </View>
       </View>
 
       <AppButton
-        title={isSaving ? 'Submitting…' : 'Submit parcel photo'}
+        title={isSaving ? 'Submittingâ€¦' : 'Submit parcel photo'}
         onPress={onSave}
         loading={isSaving}
         disabled={!photo}
@@ -814,58 +1145,9 @@ function ParcelPhotoSection({
   );
 }
 
-// ─── Donation journey timeline ────────────────────────────────────────────────
+// â”€â”€â”€ Donation journey timeline â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-function DonationJourneyTimeline({ roles, stages }) {
-  if (!stages?.length) return null;
-  return (
-    <View style={styles.timelineContainer}>
-      {stages.map((stage, index) => {
-        const isCompleted = stage.state === 'completed';
-        const isCurrent = stage.state === 'current';
-        const isUpcoming = stage.state === 'upcoming';
-        return (
-          <View key={stage.key} style={styles.timelineRow}>
-            <View style={styles.timelineTrack}>
-              <View style={[
-                styles.timelineNode,
-                isCompleted
-                  ? { backgroundColor: roles.primaryActionBackground }
-                  : isCurrent
-                    ? { backgroundColor: roles.defaultCardBackground, borderColor: roles.primaryActionBackground, borderWidth: 2 }
-                    : { backgroundColor: roles.defaultCardBorder },
-              ]} />
-              {index < stages.length - 1 ? (
-                <View style={[
-                  styles.timelineConnector,
-                  isCompleted ? { backgroundColor: roles.primaryActionBackground } : { backgroundColor: roles.defaultCardBorder },
-                ]} />
-              ) : null}
-            </View>
-            <View style={styles.timelineCopy}>
-              <Text style={[
-                styles.timelineLabel,
-                { color: isUpcoming ? roles.metaText : roles.headingText },
-                isCurrent ? { fontWeight: '600' } : null,
-              ]}>{stage.label}</Text>
-              {stage.timestampLabel && !isUpcoming ? (
-                <Text style={[styles.timelineMeta, { color: roles.metaText }]}>{stage.timestampLabel}</Text>
-              ) : null}
-              {isCurrent ? (
-                <Text style={[styles.timelineMeta, { color: roles.primaryActionBackground }]}>In progress</Text>
-              ) : null}
-            </View>
-            {isCompleted ? (
-              <AppIcon name="success" size="sm" color={roles.primaryActionBackground} />
-            ) : null}
-          </View>
-        );
-      })}
-    </View>
-  );
-}
-
-// ─── Certificate card ─────────────────────────────────────────────────────────
+// â”€â”€â”€ Certificate card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function CertificateCard({ roles, certificate, donorName }) {
   if (!certificate) return null;
@@ -901,16 +1183,16 @@ function CertificateCard({ roles, certificate, donorName }) {
   );
 }
 
-// ─── Donation history row ─────────────────────────────────────────────────────
+// â”€â”€â”€ Donation history row â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function BundlePreviewPanel({ roles, bundles = [] }) {
   if (!bundles.length) return null;
 
   return (
     <View style={styles.bundlePreviewPanel}>
-      <Text style={[styles.bundlePreviewTitle, { color: roles.headingText }]}>Bundle preview before final QR</Text>
+      <Text style={[styles.bundlePreviewTitle, { color: roles.headingText }]}>Hair preview before QR</Text>
       <Text style={[styles.bundlePreviewBody, { color: roles.metaText }]}>
-        Final QR will contain all bundle details listed below.
+        Review each hair separately. Each hair gets its own QR.
       </Text>
       <View style={[styles.bundlePreviewList, { borderColor: roles.defaultCardBorder }]}>
         {bundles.map((bundle, index) => (
@@ -923,13 +1205,19 @@ function BundlePreviewPanel({ roles, bundles = [] }) {
           >
             <View style={styles.bundlePreviewRowTop}>
               <Text style={[styles.bundlePreviewRowTitle, { color: roles.headingText }]}>
-                Bundle {bundle.bundleNumber || index + 1}
+                Hair {bundle.bundleNumber || index + 1}
               </Text>
               <View style={[styles.bundlePreviewSourceChip, { backgroundColor: roles.iconPrimarySurface }]}>
                 <Text style={[styles.bundlePreviewSourceText, { color: roles.iconPrimaryColor }]}>{bundle.sourceLabel}</Text>
               </View>
             </View>
             <View style={styles.bundlePreviewMetaGrid}>
+              {bundle.donorName ? (
+                <Text style={[styles.bundlePreviewMeta, { color: roles.bodyText }]}>Donor: {bundle.donorName}</Text>
+              ) : null}
+              {bundle.donorBirthdate ? (
+                <Text style={[styles.bundlePreviewMeta, { color: roles.bodyText }]}>Birthday: {bundle.donorBirthdate}</Text>
+              ) : null}
               <Text style={[styles.bundlePreviewMeta, { color: roles.bodyText }]}>Length: {bundle.lengthLabel}</Text>
               <Text style={[styles.bundlePreviewMeta, { color: roles.bodyText }]}>Condition: {bundle.condition || '-'}</Text>
               <Text style={[styles.bundlePreviewMeta, { color: roles.bodyText }]}>Color: {bundle.color || '-'}</Text>
@@ -942,10 +1230,108 @@ function BundlePreviewPanel({ roles, bundles = [] }) {
   );
 }
 
-// ─── Main screen ──────────────────────────────────────────────────────────────
+// â”€â”€â”€ Main screen â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+function getNoteValue(notes = '', label = '') {
+  const escapedLabel = String(label).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = String(notes || '').match(new RegExp(`${escapedLabel}:\\s*([^|.]+)`, 'i'));
+  return match?.[1]?.trim() || '';
+}
+
+function getPreviewConditionLabel(condition = '') {
+  const text = String(condition || '').trim();
+  const lower = text.toLowerCase();
+  if (!text) return 'Pending review';
+  if (lower.includes('different donor') || lower.includes('other person')) return 'Other person hair';
+  if (lower.includes('qualified for donor donation flow')) return 'Ready for donation';
+  if (lower.includes('own hair')) return 'Own hair';
+  return text;
+}
+
+function buildHairSubmissionPreviewItems(submission = null, fallbackDetail = null) {
+  const submissionDetails = Array.isArray(submission?.submission_details)
+    ? submission.submission_details
+    : [];
+  const latestSubmissionDetail = submissionDetails.length
+    ? [...submissionDetails].sort((a, b) => new Date(b?.created_at || 0) - new Date(a?.created_at || 0))[0]
+    : null;
+  const details = fallbackDetail ? [fallbackDetail] : (latestSubmissionDetail ? [latestSubmissionDetail] : []);
+
+  return details.map((detail, index) => {
+    const rawLength = Number(detail?.declared_length);
+    const lengthLabel = Number.isFinite(rawLength) && rawLength > 0
+      ? `${rawLength.toFixed(1)} ${rawLength > 40 ? 'cm' : 'in'}`
+      : 'Not recorded';
+    const notes = [detail?.detail_notes, submission?.donor_notes].filter(Boolean).join(' ');
+    const condition = getPreviewConditionLabel(detail?.declared_condition);
+    const markerText = `${notes} ${condition}`.toLowerCase();
+    const isOtherPersonHair = markerText.includes('different donor') || markerText.includes('other person');
+
+    return {
+      key: String(detail?.submission_detail_id || `${submission?.submission_id || 'hair'}-${index}`),
+      bundleNumber: index + 1,
+      sourceLabel: isOtherPersonHair ? 'Other person' : 'My hair',
+      donorName: isOtherPersonHair ? getNoteValue(notes, 'Donor name') : '',
+      donorBirthdate: isOtherPersonHair ? getNoteValue(notes, 'Donor birthdate') : '',
+      lengthLabel,
+      condition,
+      color: detail?.declared_color || '-',
+      density: detail?.declared_density || '-',
+    };
+  });
+}
+
+function DonationSubmitPreviewModal({
+  visible,
+  roles,
+  submission,
+  detail,
+  qrPayload,
+  isSubmitting,
+  onClose,
+  onConfirm,
+}) {
+  const previewItems = React.useMemo(
+    () => buildHairSubmissionPreviewItems(submission, detail),
+    [detail, submission]
+  );
+  const qrImageUrl = qrPayload ? buildQrImageUrl(qrPayload, 260) : '';
+
+  return (
+    <ModalShell
+      visible={visible}
+      title="Preview hair submission"
+      subtitle="Confirm these details before generating the QR for the hair plastic."
+      onClose={onClose}
+      scrollContent
+      footer={(
+        <View style={styles.modalFooterActions}>
+          <View style={styles.modalFooterActionHalf}>
+            <AppButton title="Edit details" variant="outline" onPress={onClose} disabled={isSubmitting} />
+          </View>
+          <View style={styles.modalFooterActionHalf}>
+            <AppButton title={isSubmitting ? 'Submitting...' : 'Submit donation'} onPress={onConfirm} loading={isSubmitting} disabled={isSubmitting} />
+          </View>
+        </View>
+      )}
+    >
+      <BundlePreviewPanel roles={roles} bundles={previewItems} />
+      {qrPayload ? (
+        <View style={[styles.previewQrCard, { borderColor: roles.defaultCardBorder, backgroundColor: roles.supportCardBackground }]}>
+          <Text style={[styles.previewQrTitle, { color: roles.headingText }]}>Hair QR preview</Text>
+          <Text style={[styles.previewQrPayload, { color: roles.bodyText }]}>
+            This QR belongs only to the hair shown above. Attach it to the matching hair plastic after submitting.
+          </Text>
+          {qrImageUrl ? <Image source={{ uri: qrImageUrl }} style={styles.previewQrImage} resizeMode="contain" /> : null}
+        </View>
+      ) : null}
+    </ModalShell>
+  );
+}
 
 export function DonorDonationStatusScreen() {
   const router = useRouter();
+  const routeParams = useLocalSearchParams();
   const { user, profile, resolvedTheme } = useAuth();
   const roles = resolveThemeRoles(resolvedTheme);
   const { logout, isLoggingOut } = useAuthActions();
@@ -958,13 +1344,13 @@ export function DonorDonationStatusScreen() {
     liveUpdates: true,
   });
 
-  // ── Module data
+  // â”€â”€ Module data
   const [moduleData, setModuleData] = React.useState(null);
   const [isLoading, setIsLoading] = React.useState(true);
   const [screenError, setScreenError] = React.useState('');
   const [moduleFeedback, setModuleFeedback] = React.useState({ message: '', variant: 'info' });
 
-  // ── Manual form
+  // â”€â”€ Manual form
   const [isManualModalOpen, setIsManualModalOpen] = React.useState(false);
   const [manualForm, setManualForm] = React.useState(MANUAL_FORM_DEFAULTS);
   const [manualFormErrors, setManualFormErrors] = React.useState({});
@@ -973,7 +1359,7 @@ export function DonorDonationStatusScreen() {
   const [isSavingManual, setIsSavingManual] = React.useState(false);
   const [isGeneratingQr, setIsGeneratingQr] = React.useState(false);
 
-  // ── Parcel photo
+  // â”€â”€ Parcel photo
   const [parcelPhoto, setParcelPhoto] = React.useState(null);
   const [parcelFeedback, setParcelFeedback] = React.useState({ message: '', variant: 'info' });
   const [isSavingParcel, setIsSavingParcel] = React.useState(false);
@@ -985,13 +1371,17 @@ export function DonorDonationStatusScreen() {
   const [isSavingBundle, setIsSavingBundle] = React.useState(false);
   const [isCancelModalOpen, setIsCancelModalOpen] = React.useState(false);
   const [isCancellingDonation, setIsCancellingDonation] = React.useState(false);
+  const [isSubmitPreviewOpen, setIsSubmitPreviewOpen] = React.useState(false);
+  const [selectedDriveForDonation, setSelectedDriveForDonation] = React.useState(null);
 
   const avatarInitials = `${profile?.first_name?.[0] || ''}${profile?.last_name?.[0] || ''}`.trim();
 
-  // ── Load module data
-  const loadModuleData = React.useCallback(async () => {
+  // â”€â”€ Load module data
+  const loadModuleData = React.useCallback(async ({ silent = false } = {}) => {
     if (!user?.id) return;
-    setIsLoading(true);
+    if (!silent) {
+      setIsLoading(true);
+    }
     setScreenError('');
     const result = await getDonorDonationsModuleData({
       userId: user.id,
@@ -1002,9 +1392,28 @@ export function DonorDonationStatusScreen() {
     if (result.error) setScreenError(result.error);
   }, [profile?.user_id, user?.id]);
 
+  const donationRealtimeRefreshRef = React.useRef(null);
+  const scheduleDonationRealtimeRefresh = React.useCallback(() => {
+    if (donationRealtimeRefreshRef.current) {
+      clearTimeout(donationRealtimeRefreshRef.current);
+    }
+
+    donationRealtimeRefreshRef.current = setTimeout(() => {
+      void loadModuleData({ silent: true });
+    }, DONATION_REALTIME_DEBOUNCE_MS);
+  }, [loadModuleData]);
+
   React.useEffect(() => { loadModuleData(); }, [loadModuleData]);
 
-  // ── Derived state
+  React.useEffect(() => {
+    return () => {
+      if (donationRealtimeRefreshRef.current) {
+        clearTimeout(donationRealtimeRefreshRef.current);
+      }
+    };
+  }, []);
+
+  // â”€â”€ Derived state
   const donorProfileMeta = React.useMemo(() => buildProfileCompletionMeta({
     photo_path: profile?.photo_path || profile?.avatar_url || '',
     first_name: profile?.first_name || '',
@@ -1042,26 +1451,6 @@ export function DonorDonationStatusScreen() {
     }
   }, [hasGeneratedDonationQr, moduleFeedback?.message]);
 
-  const bundlePreviewItems = React.useMemo(() => {
-    const details = Array.isArray(moduleData?.latestSubmission?.submission_details) && moduleData.latestSubmission.submission_details.length
-      ? moduleData.latestSubmission.submission_details
-      : moduleData?.latestDetail ? [moduleData.latestDetail] : [];
-
-    return [...details]
-      .sort((left, right) => {
-        return new Date(left?.created_at || 0).getTime() - new Date(right?.created_at || 0).getTime();
-      })
-      .map((detail, index) => ({
-        key: String(detail?.submission_detail_id || `bundle-${index}`),
-        bundleNumber: index + 1,
-        sourceLabel: inferBundleSourceLabel(detail),
-        lengthLabel: formatBundleLengthLabel(detail?.declared_length),
-        condition: detail?.declared_condition || '',
-        color: detail?.declared_color || '',
-        density: detail?.declared_density || '',
-      }));
-  }, [moduleData?.latestDetail, moduleData?.latestSubmission?.submission_details]);
-  const timelineStages = moduleData?.timelineStages || [];
   const certificate = moduleData?.certificate || null;
   const parcelImages = moduleData?.parcelImages || [];
 
@@ -1070,30 +1459,179 @@ export function DonorDonationStatusScreen() {
     (moduleData?.drives || []).filter((d) => Boolean(d?.registration))
   ), [moduleData?.drives]);
 
+  React.useEffect(() => {
+    const routeDriveId = Array.isArray(routeParams.driveId) ? routeParams.driveId[0] : routeParams.driveId;
+    const numericRouteDriveId = Number(routeDriveId);
+    if (!Number.isFinite(numericRouteDriveId) || numericRouteDriveId <= 0) return;
+
+    const matchingDrive = (moduleData?.drives || []).find((drive) => Number(drive?.donation_drive_id) === numericRouteDriveId);
+    if (matchingDrive) {
+      setSelectedDriveForDonation(matchingDrive);
+    }
+  }, [moduleData?.drives, routeParams.driveId]);
+
   // Active drive from submission
   const activeDriveFromSubmission = moduleData?.activeDrive || null;
-  const displayDrive = activeDriveFromSubmission || joinedDrives[0] || null;
+  const displayDrive = activeDriveFromSubmission || selectedDriveForDonation || joinedDrives[0] || null;
+  const selectedDonationDriveId = (
+    activeDriveFromSubmission?.donation_drive_id
+    || selectedDriveForDonation?.donation_drive_id
+    || (displayDrive?.registration?.registration_id ? displayDrive?.donation_drive_id : null)
+    || null
+  );
+  const trackedSubmissionId = moduleData?.latestSubmission?.submission_id || null;
+  const trackedDetailIds = React.useMemo(() => {
+    const fromSubmission = Array.isArray(moduleData?.latestSubmission?.submission_details)
+      ? moduleData.latestSubmission.submission_details
+      : [];
+    const fallback = moduleData?.latestDetail ? [moduleData.latestDetail] : [];
+    const detailSource = fromSubmission.length ? fromSubmission : fallback;
+
+    return [...new Set(
+      detailSource
+        .map((item) => Number(item?.submission_detail_id))
+        .filter((value) => Number.isFinite(value) && value > 0)
+    )];
+  }, [moduleData?.latestDetail, moduleData?.latestSubmission?.submission_details]);
+  const trackedDetailIdsKey = React.useMemo(
+    () => trackedDetailIds.join(','),
+    [trackedDetailIds]
+  );
+
+  React.useEffect(() => {
+    if (!user?.id || !profile?.user_id) return undefined;
+
+    const channel = supabase.channel(`donor-donation-live-${profile.user_id}`);
+    const onRealtimeEvent = () => {
+      scheduleDonationRealtimeRefresh();
+    };
+
+    channel
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'Donation_Drive_Requests',
+      }, onRealtimeEvent)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'Donation_Drive_Registrations',
+        filter: `User_ID=eq.${profile.user_id}`,
+      }, onRealtimeEvent)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'Organization_Members',
+        filter: `User_ID=eq.${profile.user_id}`,
+      }, onRealtimeEvent)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'Hair_Submissions',
+        filter: `User_ID=eq.${profile.user_id}`,
+      }, onRealtimeEvent)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'Donation_Certificates',
+        filter: `User_ID=eq.${profile.user_id}`,
+      }, onRealtimeEvent);
+
+    if (trackedSubmissionId) {
+      channel
+        .on('postgres_changes', {
+          event: '*',
+          schema: 'public',
+          table: 'Hair_Submission_Details',
+          filter: `Submission_ID=eq.${trackedSubmissionId}`,
+        }, onRealtimeEvent)
+        .on('postgres_changes', {
+          event: '*',
+          schema: 'public',
+          table: 'Hair_Submission_Logistics',
+          filter: `Submission_ID=eq.${trackedSubmissionId}`,
+        }, onRealtimeEvent)
+        .on('postgres_changes', {
+          event: '*',
+          schema: 'public',
+          table: 'Hair_Bundle_Tracking_History',
+          filter: `Submission_ID=eq.${trackedSubmissionId}`,
+        }, onRealtimeEvent)
+        .on('postgres_changes', {
+          event: '*',
+          schema: 'public',
+          table: 'Donation_Certificates',
+          filter: `Submission_ID=eq.${trackedSubmissionId}`,
+        }, onRealtimeEvent);
+    }
+
+    trackedDetailIds.forEach((detailId) => {
+      channel.on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'Hair_Submission_Images',
+        filter: `Submission_Detail_ID=eq.${detailId}`,
+      }, onRealtimeEvent);
+    });
+
+    channel.subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [
+    profile?.user_id,
+    scheduleDonationRealtimeRefresh,
+    trackedDetailIds,
+    trackedDetailIdsKey,
+    trackedSubmissionId,
+    user?.id,
+  ]);
 
   // QR payload for the active independent donation
   const activeDonationQrPayload = React.useMemo(() => {
     if (!moduleData?.latestSubmission) return '';
+    const payloadSubmission = selectedDonationDriveId && !moduleData.latestSubmission?.donation_drive_id
+      ? { ...moduleData.latestSubmission, donation_drive_id: selectedDonationDriveId }
+      : moduleData.latestSubmission;
     // Don't wait for independentQrState?.reference - generate QR immediately
     return buildDonationTrackingQrPayload({
-      submission: moduleData.latestSubmission,
+      submission: payloadSubmission,
       detail: moduleData.latestDetail || null,
       allDetails: moduleData?.latestSubmission?.submission_details || [],
       logistics: moduleData.logistics || null,
       trackingStatus: moduleData.latestSubmission?.status || '',
     });
-  }, [moduleData?.latestSubmission, moduleData?.latestDetail, moduleData?.logistics]);
+  }, [moduleData?.latestSubmission, moduleData?.latestDetail, moduleData?.logistics, selectedDonationDriveId]);
 
   const handleNavPress = React.useCallback((item) => {
     if (!item.route || item.route === '/donor/status') return;
     router.navigate(item.route);
   }, [router]);
 
-  // ── AI log path
+  // â”€â”€ AI log path
+  const guardDonationPermission = React.useCallback(async () => {
+    const permission = await canSubmitHairDonation(profile?.user_id || null);
+    if (permission.allowed) return true;
+
+    if (permission.reason === DONOR_PERMISSION_REASONS.profileIncomplete) {
+      router.navigate('/profile');
+      return false;
+    }
+
+    if (permission.reason === DONOR_PERMISSION_REASONS.guardianConsentRequired) {
+      router.navigate('/donor/guardian-consent');
+      return false;
+    }
+
+    setModuleFeedback({ message: mapDonationPermissionError(permission.reason), variant: 'error' });
+    return false;
+  }, [profile?.user_id, router]);
+
   const handleProceedWithHairLog = React.useCallback(async () => {
+    const hasPermission = await guardDonationPermission();
+    if (!hasPermission) return;
+
     const aiDonation = moduleData?.latestAiDonation;
     if (!aiDonation?.submission) {
       setModuleFeedback({
@@ -1102,17 +1640,18 @@ export function DonorDonationStatusScreen() {
       });
       return;
     }
-    setModuleFeedback({ message: 'Saving donation details…', variant: 'info' });
+    setModuleFeedback({ message: 'Saving donation detailsâ€¦', variant: 'info' });
     setIsGeneratingQr(true);
     const draftResult = await startIndependentDonationDraft({
       userId: user?.id,
       submission: aiDonation.submission,
       databaseUserId: profile?.user_id || null,
+      donationDriveId: selectedDonationDriveId,
     });
     setIsGeneratingQr(false);
     setModuleFeedback({
       message: draftResult.success
-        ? 'Donation details saved. Add bundles if needed, then generate your QR as the final step.'
+        ? 'Hair details saved. Tap Submit Donation to preview and generate the QR for this hair.'
         : (draftResult.error || 'Could not save donation details right now.'),
       variant: draftResult.success ? 'success' : 'error',
     });
@@ -1122,17 +1661,17 @@ export function DonorDonationStatusScreen() {
     moduleData?.latestAiDonation,
     moduleData?.latestAiEligibility?.reason,
     profile?.user_id,
+    guardDonationPermission,
+    selectedDonationDriveId,
     user?.id,
   ]);
 
-  // ── Manual path
+  // â”€â”€ Manual path
+  void handleProceedWithHairLog;
+
   const handleOpenManualModal = React.useCallback(() => {
     if (!isProfileComplete) { router.navigate('/profile'); return; }
-    if (!isHairFresh) { router.navigate('/donor/donations'); return; }
-    if (hasOngoingDonation) {
-      setModuleFeedback({ message: 'You have an ongoing donation in progress.', variant: 'info' });
-      return;
-    }
+    if (!isHairFresh && !selectedDriveForDonation) { router.navigate('/donor/donations'); return; }
     const screening = moduleData?.latestScreening;
     if (screening) {
       const estLengthCm = Number(screening.estimated_length);
@@ -1145,11 +1684,17 @@ export function DonorDonationStatusScreen() {
     setManualPhoto(null);
     setManualFeedback({ message: '', variant: 'info' });
     setIsManualModalOpen(true);
-  }, [hasOngoingDonation, isHairFresh, isProfileComplete, moduleData?.latestScreening, router]);
+  }, [isHairFresh, isProfileComplete, moduleData?.latestScreening, router, selectedDriveForDonation]);
 
   const updateManualField = React.useCallback((field, value) => {
     setManualForm((prev) => ({ ...prev, [field]: value }));
-    setManualFormErrors((prev) => ({ ...prev, [field]: '', photo: '' }));
+    setManualFormErrors((prev) => ({
+      ...prev,
+      [field]: '',
+      donorType: '',
+      ...(field === 'donorType' ? { donorName: '', donorBirthdate: '' } : {}),
+      photo: '',
+    }));
   }, []);
 
   const handlePickManualPhoto = React.useCallback(async (mode = 'library') => {
@@ -1167,6 +1712,14 @@ export function DonorDonationStatusScreen() {
     if (!Number.isFinite(numericLength) || numericLength <= 0) {
       nextErrors.lengthValue = 'Enter a valid hair length.';
     }
+    if (manualForm.donorType === 'different') {
+      if (!String(manualForm.donorName || '').trim()) {
+        nextErrors.donorName = 'Enter the hair donor full name.';
+      }
+      if (!isValidBirthdate(manualForm.donorBirthdate)) {
+        nextErrors.donorBirthdate = 'Enter a valid birthday in YYYY-MM-DD format.';
+      }
+    }
     if (!manualPhoto) {
       nextErrors.photo = 'Please upload or capture a hair photo.';
     }
@@ -1179,6 +1732,8 @@ export function DonorDonationStatusScreen() {
     const result = await saveManualDonationQualification({
       userId: user?.id,
       databaseUserId: profile?.user_id || null,
+      donorType: manualForm.donorType,
+      donationDriveId: selectedDonationDriveId,
       manualDetails: {
         length_value: numericLength,
         length_unit: manualForm.lengthUnit,
@@ -1188,6 +1743,12 @@ export function DonorDonationStatusScreen() {
         trimmed: manualForm.trimmed,
         hair_color: manualForm.hairColor,
         density: manualForm.density,
+        donor_name: manualForm.donorType === 'different' ? String(manualForm.donorName || '').trim() : null,
+        donor_birthdate: manualForm.donorType === 'different' ? String(manualForm.donorBirthdate || '').trim() : null,
+        donor_age: manualForm.donorType === 'different' ? getAgeFromBirthdate(manualForm.donorBirthdate) : null,
+        donor_is_minor: manualForm.donorType === 'different'
+          ? Number(getAgeFromBirthdate(manualForm.donorBirthdate)) < 18
+          : null,
       },
       photo: manualPhoto,
       donationRequirement: moduleData?.latestDonationRequirement || null,
@@ -1195,6 +1756,16 @@ export function DonorDonationStatusScreen() {
     setIsSavingManual(false);
 
     if (!result.success) {
+      if (result.errorCode === DONOR_PERMISSION_REASONS.profileIncomplete) {
+        setIsManualModalOpen(false);
+        router.navigate('/profile');
+        return;
+      }
+      if (result.errorCode === DONOR_PERMISSION_REASONS.guardianConsentRequired) {
+        setIsManualModalOpen(false);
+        router.navigate('/donor/guardian-consent');
+        return;
+      }
       setManualFeedback({ message: result.error || 'Could not save details. Please try again.', variant: 'error' });
       return;
     }
@@ -1202,17 +1773,18 @@ export function DonorDonationStatusScreen() {
     setIsManualModalOpen(false);
 
     if (result.canProceed && result.submission) {
-      setModuleFeedback({ message: 'Details saved. Starting your donation flow…', variant: 'info' });
+      setModuleFeedback({ message: 'Hair details saved. Starting your donation flow...', variant: 'info' });
       setIsGeneratingQr(true);
       const draftResult = await startIndependentDonationDraft({
         userId: user?.id,
         submission: result.submission,
         databaseUserId: profile?.user_id || null,
+        donationDriveId: selectedDonationDriveId,
       });
       setIsGeneratingQr(false);
       setModuleFeedback({
         message: draftResult.success
-          ? 'Donation details saved. Add bundles if needed, then generate your QR as the final step.'
+          ? 'Hair details saved. Tap Submit Donation to preview and generate the QR for this hair.'
           : (draftResult.error || 'Details saved but donation flow could not be started.'),
         variant: draftResult.success ? 'success' : 'error',
       });
@@ -1230,21 +1802,10 @@ export function DonorDonationStatusScreen() {
     manualPhoto,
     moduleData?.latestDonationRequirement,
     profile?.user_id,
+    router,
+    selectedDonationDriveId,
     user?.id,
   ]);
-
-  const handleOpenAddBundleModal = React.useCallback(() => {
-    if (!moduleData?.latestSubmission?.submission_id) {
-      setModuleFeedback({ message: 'No active donation record found.', variant: 'error' });
-      return;
-    }
-
-    setBundleForm(ADDITIONAL_BUNDLE_DEFAULTS);
-    setBundleErrors({});
-    setBundlePhoto(null);
-    setBundleFeedback({ message: '', variant: 'info' });
-    setIsAddBundleModalOpen(true);
-  }, [moduleData?.latestSubmission?.submission_id]);
 
   const handleUpdateBundleField = React.useCallback((field, value) => {
     setBundleForm((prev) => {
@@ -1389,12 +1950,67 @@ export function DonorDonationStatusScreen() {
       return;
     }
 
-    setModuleFeedback({ message: 'Generating your final donation QR…', variant: 'info' });
+    setIsSubmitPreviewOpen(true);
+  }, [moduleData?.latestSubmission]);
+
+  const handleSubmitDriveDonation = React.useCallback((drive) => {
+    if (!drive?.donation_drive_id) return;
+
+    setSelectedDriveForDonation(drive);
+
+    if (!isProfileComplete) {
+      setModuleFeedback({
+        message: 'Complete your donor profile before submitting hair for this donation drive.',
+        variant: 'info',
+      });
+      router.navigate('/profile');
+      return;
+    }
+
+    if (hasOngoingDonation) {
+      setModuleFeedback({
+        message: 'You already have a donation in progress. Submit its QR preview or cancel it before starting another hair submission.',
+        variant: 'info',
+      });
+      return;
+    }
+
+    const screening = moduleData?.latestScreening;
+    if (screening) {
+      const estLengthCm = Number(screening.estimated_length);
+      const estLengthIn = estLengthCm > 0 ? String((estLengthCm / 2.54).toFixed(1)) : '';
+      setManualForm({ ...MANUAL_FORM_DEFAULTS, lengthValue: estLengthIn });
+    } else {
+      setManualForm(MANUAL_FORM_DEFAULTS);
+    }
+    setManualFormErrors({});
+    setManualPhoto(null);
+    setManualFeedback({
+      message: `Add the hair details for ${drive.event_title || 'this donation drive'}. You can use manual details here, then preview before QR generation.`,
+      variant: 'info',
+    });
+    setIsManualModalOpen(true);
+    setModuleFeedback({
+      message: `Selected ${drive.event_title || 'this donation drive'}. Add hair details, then submit to preview and generate the QR.`,
+      variant: 'info',
+    });
+  }, [hasOngoingDonation, isProfileComplete, moduleData?.latestScreening, router]);
+
+  const handleConfirmGenerateDonationQr = React.useCallback(async () => {
+    const submission = moduleData?.latestSubmission;
+    if (!submission?.submission_id) {
+      setModuleFeedback({ message: 'No active donation record found.', variant: 'error' });
+      setIsSubmitPreviewOpen(false);
+      return;
+    }
+
+    setModuleFeedback({ message: 'Submitting donation and generating your QR...', variant: 'info' });
     setIsGeneratingQr(true);
     const qrResult = await ensureIndependentDonationQr({
       userId: user?.id,
       submission,
       databaseUserId: profile?.user_id || null,
+      donationDriveId: selectedDonationDriveId,
     });
     setIsGeneratingQr(false);
 
@@ -1403,14 +2019,15 @@ export function DonorDonationStatusScreen() {
       return;
     }
 
+    setIsSubmitPreviewOpen(false);
     setModuleFeedback({
-      message: 'Final QR generated. Attach it to your parcel, then submit parcel photo.',
+      message: 'Donation submitted. QR generated for this hair submission.',
       variant: 'success',
     });
     await loadModuleData();
-  }, [loadModuleData, moduleData?.latestSubmission, profile?.user_id, user?.id]);
+  }, [loadModuleData, moduleData?.latestSubmission, profile?.user_id, selectedDonationDriveId, user?.id]);
 
-  // ── Parcel photo
+  // â”€â”€ Parcel photo
   const handlePickParcelPhoto = React.useCallback(async (mode = 'library') => {
     const picker = mode === 'camera' ? ImagePicker.launchCameraAsync : ImagePicker.launchImageLibraryAsync;
     const result = await picker({ mediaTypes: ['images'], allowsEditing: true, quality: 0.72, base64: true });
@@ -1442,6 +2059,7 @@ export function DonorDonationStatusScreen() {
         userId: user?.id,
         submission,
         databaseUserId: profile?.user_id || null,
+        donationDriveId: selectedDonationDriveId,
       });
       if (!ensureRes.success) {
         setIsSavingParcel(false);
@@ -1486,7 +2104,7 @@ export function DonorDonationStatusScreen() {
     setParcelPhoto(null);
     setParcelFeedback({ message: 'Parcel photo submitted. Your donation is ready for shipment!', variant: 'success' });
     await loadModuleData();
-  }, [activeDonationQrPayload, independentQrState, loadModuleData, moduleData?.latestDetail, moduleData?.latestSubmission, parcelPhoto, profile?.user_id, user?.id]);
+  }, [activeDonationQrPayload, independentQrState, loadModuleData, moduleData?.latestDetail, moduleData?.latestSubmission, parcelPhoto, profile?.user_id, selectedDonationDriveId, user?.id]);
 
   const handleConfirmCancelDonation = React.useCallback(async () => {
     const submission = moduleData?.latestSubmission;
@@ -1516,7 +2134,7 @@ export function DonorDonationStatusScreen() {
     await loadModuleData();
   }, [loadModuleData, moduleData?.latestDetail, moduleData?.latestSubmission, profile?.user_id, user?.id]);
 
-  // ── Render
+  // â”€â”€ Render
   return (
     <DashboardLayout
       showSupportChat
@@ -1545,20 +2163,37 @@ export function DonorDonationStatusScreen() {
       {isLoading ? (
         <View style={styles.loadingBlock}>
           <ActivityIndicator color={theme.colors.brandPrimary} />
-          <Text style={styles.loadingText}>Loading donations…</Text>
+          <Text style={styles.loadingText}>Loading donationsâ€¦</Text>
         </View>
       ) : (
         <View style={styles.page}>
+          <DonationHomeOverview
+            roles={roles}
+            latestScreening={latestScreening}
+            isEligible={isAiEligible}
+            joinedDrives={joinedDrives}
+            drives={moduleData?.drives || []}
+            displayDrive={displayDrive}
+            hasOngoingDonation={hasOngoingDonation}
+            hasGeneratedDonationQr={hasGeneratedDonationQr}
+            onCheckHair={() => router.navigate('/donor/donations')}
+            onFindOrganizations={() => router.navigate('/donor/organizations')}
+            onSubmitDriveDonation={handleSubmitDriveDonation}
+            onSubmitDonation={handleGenerateDonationQr}
+            onAddHair={handleOpenManualModal}
+            onCancelDonation={() => setIsCancelModalOpen(true)}
+            isSubmittingDonation={isGeneratingQr}
+          />
 
-          {/* ── Profile gate */}
+          {/* â”€â”€ Profile gate */}
           {!isProfileComplete ? (
             <ProfilePendingCard
               roles={roles}
               completionMeta={donorProfileMeta}
               onManageProfile={() => router.navigate('/profile')}
             />
-          ) : !isHairFresh ? (
-            /* ── Hair eligibility gate */
+          ) : !isHairFresh && !selectedDriveForDonation ? (
+            /* â”€â”€ Hair eligibility gate */
             <HairEligibilityGateCard
               roles={roles}
               hasScreening={Boolean(latestScreening)}
@@ -1567,45 +2202,21 @@ export function DonorDonationStatusScreen() {
             />
           ) : (
             <>
-              {/* ── Active joined drive */}
-              {displayDrive ? (
+              {/* â”€â”€ Active joined drive */}
+              {/* â”€â”€ Donation paths (no ongoing donation) */}
+              {!hasOngoingDonation && selectedDonationDriveId ? (
                 <View style={styles.section}>
                   <SectionHeader
-                    eyebrow="Your donation drive"
-                    title={displayDrive.event_title || 'Donation drive'}
+                    eyebrow="Hair to donate"
+                    title="Add hair to donate"
                     roles={roles}
                   />
-                  <JoinedDriveCard roles={roles} drive={displayDrive} />
-                </View>
-              ) : null}
-
-              {/* ── Donation paths (no ongoing donation) */}
-              {!hasOngoingDonation ? (
-                <View style={styles.section}>
-                  <SectionHeader
-                    eyebrow="Donate your hair"
-                    title="Choose how to donate"
-                    body="Use your recent hair analysis or enter your details manually."
-                    roles={roles}
-                  />
-
-                  {latestScreening ? (
-                    <HairLogCard
-                      roles={roles}
-                      screening={latestScreening}
-                      isEligible={isAiEligible}
-                      screeningLabel={screeningLabel}
-                      ineligibilityReason={moduleData?.latestAiEligibility?.reason || ''}
-                      onProceed={handleProceedWithHairLog}
-                      isLoading={isGeneratingQr}
-                    />
-                  ) : null}
 
                   <ManualInputCard roles={roles} onOpen={handleOpenManualModal} />
                 </View>
               ) : null}
 
-              {/* ── Active donation: QR + parcel photo */}
+              {/* â”€â”€ Active donation: QR + parcel photo */}
               {hasOngoingDonation && hasGeneratedDonationQr ? (
                 <View style={styles.section}>
                   <SectionHeader
@@ -1636,20 +2247,8 @@ export function DonorDonationStatusScreen() {
                 />
               ) : null}
 
-              {/* ── Donation journey timeline */}
-              {timelineStages.length > 0 ? (
-                <View style={[styles.card, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
-                  <SectionHeader
-                    eyebrow="Donation journey"
-                    title="Track your package"
-                    body="Follow your donation from shipment to delivery."
-                    roles={roles}
-                  />
-                  <DonationJourneyTimeline roles={roles} stages={timelineStages} />
-                </View>
-              ) : null}
-
-              {/* ── Certificate */}
+              {/* â”€â”€ Donation journey timeline */}
+              {/* â”€â”€ Certificate */}
               {certificate ? (
                 <CertificateCard
                   roles={roles}
@@ -1661,63 +2260,14 @@ export function DonorDonationStatusScreen() {
             </>
           )}
 
-          <View style={[styles.card, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
-            <SectionHeader
-              eyebrow="History"
-              title="Donation history"
-              body={(moduleData?.donationHistory?.length || 0) > 0
-                ? `${moduleData.donationHistory.length} record${moduleData.donationHistory.length > 1 ? 's' : ''} saved.`
-                : 'View your completed, cancelled, and closed donation records.'}
-              roles={roles}
-            />
+          <View style={styles.historyRedirectOnly}>
             <AppButton
-              title="View history module"
+              title="View Donation History"
               variant="outline"
               fullWidth={false}
               onPress={() => router.navigate('/donor/donation-history')}
             />
           </View>
-
-          {hasOngoingDonation ? (
-            <View style={[styles.card, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
-              <SectionHeader
-                eyebrow="Last step"
-                title="Finalize donation"
-                body={hasGeneratedDonationQr
-                  ? 'Your final QR is ready. Attach it to your parcel and continue shipment steps.'
-                  : 'Add all needed bundles first. Generate QR only when bundle details are final.'}
-                roles={roles}
-              />
-              {!hasGeneratedDonationQr ? (
-                <BundlePreviewPanel roles={roles} bundles={bundlePreviewItems} />
-              ) : null}
-              <View style={styles.rowActions}>
-                {!hasGeneratedDonationQr ? (
-                  <AppButton
-                    title="Add bundle"
-                    variant="outline"
-                    fullWidth={false}
-                    onPress={handleOpenAddBundleModal}
-                  />
-                ) : null}
-                {!hasGeneratedDonationQr ? (
-                  <AppButton
-                    title={isGeneratingQr ? 'Generating QR…' : 'Generate final QR'}
-                    fullWidth={false}
-                    onPress={handleGenerateDonationQr}
-                    loading={isGeneratingQr}
-                    disabled={isGeneratingQr || bundlePreviewItems.length === 0}
-                  />
-                ) : null}
-                <AppButton
-                  title="Cancel donation"
-                  variant="danger"
-                  fullWidth={false}
-                  onPress={() => setIsCancelModalOpen(true)}
-                />
-              </View>
-            </View>
-          ) : null}
         </View>
       )}
 
@@ -1737,6 +2287,19 @@ export function DonorDonationStatusScreen() {
         onChangeField={updateManualField}
         onPickPhoto={handlePickManualPhoto}
         onSave={handleSaveManualDetails}
+      />
+
+      <DonationSubmitPreviewModal
+        visible={isSubmitPreviewOpen}
+        roles={roles}
+        submission={moduleData?.latestSubmission || null}
+        detail={moduleData?.latestDetail || null}
+        qrPayload={activeDonationQrPayload}
+        isSubmitting={isGeneratingQr}
+        onClose={() => {
+          if (!isGeneratingQr) setIsSubmitPreviewOpen(false);
+        }}
+        onConfirm={handleConfirmGenerateDonationQr}
       />
 
       <AddBundleModal
@@ -1761,8 +2324,8 @@ export function DonorDonationStatusScreen() {
 
       <ModalShell
         visible={isCancelModalOpen}
-        title="Cancel donation"
-        subtitle="This action will mark your active donation as cancelled."
+        title="Cancel donation submission"
+        subtitle="This action will mark your active hair donation submission as cancelled."
         onClose={() => {
           if (!isCancellingDonation) setIsCancelModalOpen(false);
         }}
@@ -1776,7 +2339,7 @@ export function DonorDonationStatusScreen() {
               disabled={isCancellingDonation}
             />
             <AppButton
-              title={isCancellingDonation ? 'Cancelling…' : 'Yes, cancel'}
+              title={isCancellingDonation ? 'Cancellingâ€¦' : 'Yes, cancel'}
               variant="danger"
               fullWidth={false}
               onPress={handleConfirmCancelDonation}
@@ -1787,14 +2350,14 @@ export function DonorDonationStatusScreen() {
         )}
       >
         <Text style={styles.cancelModalText}>
-          You can start a new donation after cancellation. This will close your current shipment flow and timeline.
+          You can start a new donation after cancellation. This will close your current hair submission, logistics, and tracking flow.
         </Text>
       </ModalShell>
     </DashboardLayout>
   );
 }
 
-// ─── Styles ───────────────────────────────────────────────────────────────────
+// â”€â”€â”€ Styles â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const styles = StyleSheet.create({
   page: {
@@ -1802,6 +2365,63 @@ const styles = StyleSheet.create({
   },
   section: {
     gap: theme.spacing.md,
+  },
+  flowRail: {
+    borderWidth: 1,
+    borderRadius: 22,
+    padding: theme.spacing.md,
+    gap: 0,
+  },
+  flowStep: {
+    minHeight: 68,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.spacing.md,
+  },
+  flowStepMarkerWrap: {
+    width: 28,
+    alignItems: 'center',
+    minHeight: 68,
+  },
+  flowStepMarker: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 2,
+  },
+  flowStepMarkerText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    fontWeight: theme.typography.weights.bold,
+  },
+  flowConnector: {
+    position: 'absolute',
+    top: 28,
+    bottom: 0,
+    width: 2,
+    borderRadius: theme.radius.full,
+  },
+  flowStepCopy: {
+    flex: 1,
+    minWidth: 0,
+    paddingTop: 2,
+    paddingBottom: theme.spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.borderSubtle,
+  },
+  flowStepLabel: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.semibold,
+    lineHeight: theme.typography.semantic.body * theme.typography.lineHeights.snug,
+  },
+  flowStepState: {
+    marginTop: 2,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
   },
   loadingBlock: {
     minHeight: 220,
@@ -1829,6 +2449,7 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontFamily: theme.typography.fontFamilyDisplay,
     fontSize: theme.typography.semantic.titleSm,
+    lineHeight: theme.typography.semantic.titleSm * theme.typography.lineHeights.snug,
   },
   sectionBody: {
     fontFamily: theme.typography.fontFamily,
@@ -1841,7 +2462,259 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.xxl,
     borderWidth: 1,
     padding: theme.spacing.lg,
+    gap: theme.spacing.lg,
+  },
+  donationHome: {
+    gap: theme.spacing.xl,
+  },
+  eligibleBanner: {
+    borderRadius: theme.radius.xxl,
+    padding: theme.spacing.lg,
     gap: theme.spacing.md,
+    overflow: 'hidden',
+    ...theme.shadows.soft,
+  },
+  eligibleBannerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.md,
+  },
+  eligibleBannerIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  eligibleBannerTitle: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    fontWeight: theme.typography.weights.bold,
+  },
+  eligibleStatsCard: {
+    minHeight: 88,
+    borderWidth: 1,
+    borderRadius: theme.radius.xl,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.12)',
+  },
+  eligibleStat: {
+    flex: 1,
+    gap: 4,
+    minWidth: 0,
+  },
+  eligibleStatCenter: {
+    alignItems: 'center',
+  },
+  eligibleStatEnd: {
+    alignItems: 'flex-end',
+  },
+  eligibleStatLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.bold,
+    letterSpacing: 0.45,
+  },
+  eligibleStatValue: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    fontWeight: theme.typography.weights.bold,
+  },
+  eligibleDivider: {
+    width: 1,
+    height: 36,
+    marginHorizontal: theme.spacing.sm,
+  },
+  organizationScroll: {
+    gap: theme.spacing.md,
+    paddingBottom: 2,
+  },
+  organizationMiniCard: {
+    width: 142,
+    minHeight: 166,
+    borderRadius: theme.radius.xxl,
+    borderWidth: 1,
+    padding: theme.spacing.md,
+    alignItems: 'center',
+    gap: theme.spacing.xs,
+    ...theme.shadows.soft,
+  },
+  organizationMiniLogo: {
+    width: 64,
+    height: 64,
+    borderRadius: theme.radius.full,
+    marginBottom: theme.spacing.xs,
+  },
+  organizationMiniLogoFallback: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  organizationMiniName: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+    textAlign: 'center',
+    minHeight: 38,
+  },
+  organizationMiniStatus: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.bold,
+  },
+  findMoreCard: {
+    width: 142,
+    minHeight: 166,
+    borderRadius: theme.radius.xxl,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    padding: theme.spacing.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: theme.spacing.sm,
+  },
+  findMoreIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  findMoreText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+    textAlign: 'center',
+  },
+  eventChipRow: {
+    gap: theme.spacing.sm,
+    paddingBottom: 2,
+  },
+  eventChip: {
+    borderWidth: 1,
+    borderRadius: theme.radius.full,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+  },
+  eventChipText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.bold,
+  },
+  eventList: {
+    gap: theme.spacing.md,
+  },
+  eventCard: {
+    borderRadius: theme.radius.xxl,
+    borderWidth: 1,
+    overflow: 'hidden',
+    ...theme.shadows.soft,
+  },
+  eventImage: {
+    width: '100%',
+    height: 180,
+  },
+  eventImageFallback: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  eventCopy: {
+    padding: theme.spacing.lg,
+    gap: theme.spacing.md,
+  },
+  eventHost: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+  },
+  eventTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.titleSm,
+    lineHeight: theme.typography.semantic.titleSm * theme.typography.lineHeights.snug,
+  },
+  eventMetaGrid: {
+    gap: theme.spacing.sm,
+  },
+  eventMetaItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  eventMetaText: {
+    flex: 1,
+    minWidth: 0,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+  },
+  emptyDonationCard: {
+    minHeight: 116,
+    borderRadius: theme.radius.xxl,
+    borderWidth: 1,
+    padding: theme.spacing.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: theme.spacing.sm,
+  },
+  emptyDonationText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    textAlign: 'center',
+  },
+  upcomingDonationCard: {
+    borderRadius: theme.radius.xxl,
+    borderWidth: 1,
+    padding: theme.spacing.lg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.md,
+    ...theme.shadows.soft,
+  },
+  participatedEventList: {
+    gap: theme.spacing.md,
+  },
+  upcomingDonationIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  upcomingDonationCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 4,
+  },
+  upcomingDonationActions: {
+    flexShrink: 0,
+    alignItems: 'flex-end',
+    gap: theme.spacing.sm,
+  },
+  upcomingActionButton: {
+    maxWidth: 180,
+  },
+  upcomingDonationTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  upcomingDonationBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+  },
+  upcomingStatusChip: {
+    borderRadius: theme.radius.full,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    flexShrink: 0,
+  },
+  upcomingStatusText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.bold,
   },
 
   // Profile pending
@@ -1928,7 +2801,7 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.xxl,
     borderWidth: 1,
     borderColor: theme.colors.borderSubtle,
-    backgroundColor: theme.colors.surfaceElevated,
+    backgroundColor: theme.colors.surfaceCard,
     padding: theme.spacing.lg,
     gap: theme.spacing.md,
   },
@@ -2038,6 +2911,10 @@ const styles = StyleSheet.create({
   manualSectionContent: {
     gap: theme.spacing.sm,
   },
+  donorIdentityFields: {
+    gap: theme.spacing.sm,
+    marginTop: theme.spacing.xs,
+  },
   bundleScanActions: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -2090,6 +2967,9 @@ const styles = StyleSheet.create({
     borderColor: theme.colors.brandPrimary,
     backgroundColor: theme.colors.brandPrimaryMuted,
   },
+  choiceChipDisabled: {
+    opacity: 0.45,
+  },
   choiceChipText: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.bodySm,
@@ -2099,13 +2979,21 @@ const styles = StyleSheet.create({
     color: theme.colors.brandPrimary,
     fontWeight: theme.typography.weights.semibold,
   },
+  choiceChipTextDisabled: {
+    color: theme.colors.textMuted,
+  },
+  choiceHelperText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    lineHeight: theme.typography.semantic.caption * theme.typography.lineHeights.relaxed,
+  },
 
   // Photo upload
   photoCard: {
     gap: theme.spacing.md,
     padding: theme.spacing.md,
     borderRadius: theme.radius.xl,
-    backgroundColor: theme.colors.surfaceSoft,
+    backgroundColor: theme.colors.surfaceCardMuted,
     borderWidth: 1,
     borderColor: theme.colors.borderSubtle,
   },
@@ -2122,23 +3010,39 @@ const styles = StyleSheet.create({
   },
   photoPreview: {
     width: '100%',
-    height: 220,
+    height: 228,
     borderRadius: theme.radius.xl,
     backgroundColor: theme.colors.backgroundPrimary,
   },
   photoPlaceholder: {
-    minHeight: 130,
+    minHeight: 168,
     borderRadius: theme.radius.xl,
     alignItems: 'center',
     justifyContent: 'center',
     gap: theme.spacing.sm,
     backgroundColor: theme.colors.backgroundPrimary,
-    borderWidth: 1,
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
     borderColor: theme.colors.borderSubtle,
+    padding: theme.spacing.lg,
+  },
+  uploadIconBubble: {
+    width: 48,
+    height: 48,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  photoPlaceholderTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.bold,
   },
   photoPlaceholderText: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.bodySm,
+    textAlign: 'center',
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
     color: theme.colors.textSecondary,
   },
   inputError: {
@@ -2425,6 +3329,28 @@ const styles = StyleSheet.create({
     minWidth: '46%',
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.bodySm,
+  },
+  previewQrCard: {
+    borderWidth: 1,
+    borderRadius: theme.radius.xl,
+    padding: theme.spacing.md,
+    gap: theme.spacing.sm,
+  },
+  previewQrTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  previewQrPayload: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    lineHeight: theme.typography.semantic.caption * theme.typography.lineHeights.relaxed,
+  },
+  previewQrImage: {
+    width: 180,
+    height: 180,
+    alignSelf: 'center',
+    marginTop: theme.spacing.sm,
   },
 
   // Row actions

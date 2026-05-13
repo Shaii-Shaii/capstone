@@ -158,6 +158,24 @@ const logHairQuery = (source, extras = {}) => {
   });
 };
 
+const getPhilippineDatabaseTimestamp = () => {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Manila',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date()).reduce((acc, part) => {
+    if (part.type !== 'literal') acc[part.type] = part.value;
+    return acc;
+  }, {});
+
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
+};
+
 const normalizeSubmissionUserId = (value) => {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
@@ -373,16 +391,20 @@ export const createHairSubmission = async (payload) => {
     columns: ['User_ID', 'Donation_Drive_ID', 'Submission_Code', 'Donation_Source', 'Donor_Notes', 'Status'],
   });
 
+  const insertPayload = {
+    User_ID: userId,
+    Donation_Drive_ID: payload?.donation_drive_id || null,
+    Submission_Code: payload?.submission_code || null,
+    Donation_Source: payload?.donation_source || null,
+    Donor_Notes: payload?.donor_notes || null,
+    Status: payload?.status || null,
+    Created_At: getPhilippineDatabaseTimestamp(),
+    Updated_At: getPhilippineDatabaseTimestamp(),
+  };
+
   const result = await supabase
     .from(hairSubmissionsTable)
-    .insert([{
-      User_ID: userId,
-      Donation_Drive_ID: payload?.donation_drive_id || null,
-      Submission_Code: payload?.submission_code || null,
-      Donation_Source: payload?.donation_source || null,
-      Donor_Notes: payload?.donor_notes || null,
-      Status: payload?.status || null,
-    }])
+    .insert([insertPayload])
     .select(hairSubmissionSelect)
     .single();
 
@@ -415,6 +437,8 @@ export const createHairSubmissionDetail = async (payload) => {
       Is_Rebonded: payload?.is_rebonded ?? false,
       Detail_Notes: payload?.detail_notes || null,
       Status: payload?.status || null,
+      Created_At: getPhilippineDatabaseTimestamp(),
+      Updated_At: getPhilippineDatabaseTimestamp(),
     }])
     .select(hairSubmissionDetailSelect)
     .single();
@@ -430,6 +454,7 @@ export const createHairSubmissionImages = async (rows) => {
     Submission_Detail_ID: row?.submission_detail_id || null,
     File_Path: row?.file_path || null,
     Image_Type: row?.image_type || null,
+    Uploaded_At: getPhilippineDatabaseTimestamp(),
   }));
 
   logHairQuery('createHairSubmissionImages', {
@@ -471,6 +496,7 @@ export const createAiScreening = async (payload) => {
       Damage_Level: payload?.damage_level ?? null,
       Decision: payload?.decision || null,
       Summary: payload?.summary || null,
+      Created_At: getPhilippineDatabaseTimestamp(),
     }])
     .select(aiScreeningSelect)
     .single();
@@ -487,6 +513,7 @@ export const createDonorRecommendations = async (rows) => {
     Title: row?.title || null,
     Recommendation_Text: row?.recommendation_text || null,
     Priority_Order: row?.priority_order ?? null,
+    Created_At: getPhilippineDatabaseTimestamp(),
   }));
 
   logHairQuery('createDonorRecommendations', {

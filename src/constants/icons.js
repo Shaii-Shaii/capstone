@@ -47,4 +47,8 @@ export const appIconMap = {
   services: 'apps',
   organization: 'domain',
   google: 'google',
+  checkmark: 'check',
+  'checkmark-circle': 'check-circle',
+  checkmarkCircle: 'check-circle',
+  closeCircle: 'close-circle',
 };

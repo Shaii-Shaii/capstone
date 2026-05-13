@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Pressable, StyleSheet, Switch, Text, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
@@ -11,6 +11,54 @@ import {
 import { resolveThemeRoles, theme } from '../../design-system/theme';
 
 const AI_VOICE_ASSISTANT_STORAGE_KEY = 'donivra.auth.aiVoiceAssistant.enabled';
+const EMAIL_PATTERN = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i;
+
+const wantsAssistantToType = (normalized = '') => (
+  normalized.includes('type')
+  || normalized.includes('itype')
+  || normalized.includes('input')
+  || normalized.includes('enter')
+  || normalized.includes('fill')
+  || normalized.includes('lagay')
+  || normalized.includes('ilagay')
+  || normalized.includes('isulat')
+);
+
+const resolveVoiceCommand = (spokenText = '') => {
+  const raw = String(spokenText || '').trim();
+  const normalized = raw.toLowerCase();
+  const email = raw.match(EMAIL_PATTERN)?.[0] || '';
+  const mentionsPassword = normalized.includes('password') || normalized.includes('pass word') || normalized.includes('passcode');
+
+  if (mentionsPassword && wantsAssistantToType(normalized)) {
+    return {
+      handled: true,
+      action: {
+        type: 'blocked_sensitive_field',
+        field: 'password',
+      },
+      reply: 'I cannot type or fill passwords for you. Please enter your password yourself for account security.',
+    };
+  }
+
+  if (email && wantsAssistantToType(normalized)) {
+    return {
+      handled: true,
+      action: {
+        type: 'fill_field',
+        field: 'email',
+        value: email.trim(),
+      },
+      reply: `I filled in ${email.trim()} as your email address.`,
+    };
+  }
+
+  return {
+    handled: false,
+    action: null,
+    reply: '',
+  };
+};
 
 const resolveAssistantReply = (spokenText, screen, brandName) => {
   const normalized = String(spokenText || '').toLowerCase();
@@ -56,13 +104,13 @@ const resolveAssistantReply = (spokenText, screen, brandName) => {
 
   if (screen === 'login') {
     if (wantsPassword) return 'Enter the password for your account. If you forgot it, tap Forgot password before logging in.';
-    if (wantsPatient) return 'After login, choose Patient only if you need the patient startup flow. You can enter a hospital code if you have one.';
+    if (wantsPatient) return 'After login, choose Patient only if you need the patient startup flow. You can enter your patient code if you have one.';
     if (wantsDonor) return 'After login, choose No when asked if you are a patient. The app will assign your donor role before the donor dashboard opens.';
     return 'For login, enter your email first, then your password, then tap Log in.';
   }
 
   if (wantsOtp) return 'OTP happens after signup. Register first, then enter the six digit code sent to your email.';
-  if (wantsPatient) return 'For patient setup, log in first. The app will ask if you are a patient, then request a hospital code only if you have one.';
+  if (wantsPatient) return 'For patient setup, log in first. The app will ask if you are a patient, then request your patient code only if you have one.';
   if (wantsDonor) return 'For donor setup, log in first and choose the donor path when asked if you are a patient.';
   if (wantsHair) return 'For hair analysis, log in and open CheckHair. Capture front view, side profile, and hair ends with no face or hair accessories.';
 
@@ -76,13 +124,12 @@ export const AuthVoiceAssistant = ({
   stageMessage = '',
   compact = false,
   style,
+  onAssistantAction,
 }) => {
   const roles = resolveThemeRoles(resolvedTheme);
   const brandName = resolvedTheme?.brandName || 'Donivra';
   const [isVoiceActive, setIsVoiceActive] = useState(false);
   const [isListening, setIsListening] = useState(false);
-  const [transcript, setTranscript] = useState('');
-  const [assistantReply, setAssistantReply] = useState(stageMessage || '');
   const [isAssistantEnabled, setIsAssistantEnabled] = useState(true);
   const [hasLoadedPreference, setHasLoadedPreference] = useState(false);
   const hasIntroducedRef = useRef(false);
@@ -118,7 +165,6 @@ export const AuthVoiceAssistant = ({
         if (!isMounted) return;
         if (storedValue === 'false') {
           setIsAssistantEnabled(false);
-          setAssistantReply('');
         } else if (storedValue === 'true') {
           setIsAssistantEnabled(true);
         }
@@ -134,7 +180,6 @@ export const AuthVoiceAssistant = ({
 
   useEffect(() => {
     if (!hasLoadedPreference || !stageMessage || !isAssistantEnabled) return;
-    setAssistantReply(stageMessage);
     Speech.stop();
     speak(stageMessage);
   }, [hasLoadedPreference, isAssistantEnabled, speak, stageMessage]);
@@ -151,7 +196,6 @@ export const AuthVoiceAssistant = ({
 
   useSpeechRecognitionEvent('start', () => {
     setIsListening(true);
-    setAssistantReply('Listening...');
   });
 
   useSpeechRecognitionEvent('end', () => {
@@ -162,11 +206,16 @@ export const AuthVoiceAssistant = ({
     if (!isAssistantEnabled) return;
     const nextTranscript = event.results?.[0]?.transcript || '';
     if (!nextTranscript) return;
-    setTranscript(nextTranscript);
 
     if (event.isFinal !== false) {
-      const reply = resolveAssistantReply(nextTranscript, screen, brandName);
-      setAssistantReply(reply);
+      const command = resolveVoiceCommand(nextTranscript);
+      if (command.handled) {
+        onAssistantAction?.(command.action);
+      }
+
+      const reply = command.handled
+        ? command.reply
+        : resolveAssistantReply(nextTranscript, screen, brandName);
       speak(reply);
     }
   });
@@ -184,7 +233,6 @@ export const AuthVoiceAssistant = ({
       return;
     }
     const message = event?.message || 'I could not hear that clearly. Tap the microphone and try again.';
-    setAssistantReply(message);
     speak(message);
   });
 
@@ -193,7 +241,6 @@ export const AuthVoiceAssistant = ({
     const isAvailable = ExpoSpeechRecognitionModule.isRecognitionAvailable();
     if (!isAvailable) {
       const unavailableMessage = 'Speech recognition is not available on this device.';
-      setAssistantReply(unavailableMessage);
       speak(unavailableMessage);
       return;
     }
@@ -201,12 +248,10 @@ export const AuthVoiceAssistant = ({
     const permission = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
     if (!permission.granted) {
       const permissionMessage = 'Please allow microphone and speech recognition access so I can listen to your question.';
-      setAssistantReply(permissionMessage);
       speak(permissionMessage);
       return;
     }
 
-    setTranscript('');
     ExpoSpeechRecognitionModule.start({
       lang: 'en-US',
       interimResults: true,
@@ -230,14 +275,12 @@ export const AuthVoiceAssistant = ({
     }
 
     if (hasIntroducedRef.current) {
-      setAssistantReply('Listening...');
       startListening();
       return;
     }
 
     hasIntroducedRef.current = true;
     const greeting = prompt || `Hello, welcome to ${brandName}. I am ${brandName} AI. How can I help you?`;
-    setAssistantReply(greeting);
     speak(greeting, {
       onDone: () => {
         startListening();
@@ -254,8 +297,6 @@ export const AuthVoiceAssistant = ({
       isIntentionalStopRef.current = true;
       setIsListening(false);
       setIsVoiceActive(false);
-      setTranscript('');
-      setAssistantReply('');
       await Speech.stop();
       try {
         ExpoSpeechRecognitionModule.abort();
@@ -264,171 +305,65 @@ export const AuthVoiceAssistant = ({
       }
       return;
     }
-
-    setAssistantReply('AI voice assistance is on. Tap the microphone when you need help.');
   };
 
   return (
     <View style={[styles.container, compact ? styles.containerCompact : null, style]}>
-      <View
-        style={[
-          styles.toggleRow,
-          {
-            backgroundColor: roles.supportCardBackground,
-            borderColor: roles.supportCardBorder,
-          },
-        ]}
-      >
-        <Text
-          style={[styles.toggleLabel, { color: roles.bodyText }]}
-          numberOfLines={1}
-          adjustsFontSizeToFit
-        >
-          AI voice assistance
-        </Text>
-        <Switch
-          value={isAssistantEnabled}
-          onValueChange={handleToggleAssistant}
-          trackColor={{
-            false: roles.defaultCardBorder,
-            true: roles.primaryActionBackground,
-          }}
-          thumbColor={roles.defaultCardBackground}
-        />
-      </View>
-
       <Pressable
         onPress={handlePress}
+        onLongPress={() => handleToggleAssistant(!isAssistantEnabled)}
         style={({ pressed }) => [
           styles.voiceGuide,
           compact ? styles.voiceGuideCompact : null,
           {
-            backgroundColor: roles.defaultCardBackground,
+            backgroundColor: isAssistantEnabled ? roles.primaryActionBackground : roles.supportCardBackground,
             borderColor: isListening || isVoiceActive ? roles.primaryActionBackground : roles.defaultCardBorder,
-            opacity: isAssistantEnabled ? 1 : 0.58,
+            opacity: isAssistantEnabled ? 1 : 0.72,
           },
           pressed ? styles.pressed : null,
         ]}
-        disabled={!isAssistantEnabled}
+        accessibilityRole="button"
+        accessibilityLabel="AI voice assistant"
+        accessibilityHint="Tap to speak. Long press to turn voice assistant off or on."
       >
-        <View style={[styles.voiceIcon, { backgroundColor: roles.iconPrimarySurface }]}>
-          <MaterialCommunityIcons
-            name={isListening ? 'microphone' : isVoiceActive ? 'volume-high' : 'microphone-outline'}
-            size={compact ? 18 : 20}
-            color={roles.iconPrimaryColor}
-          />
-        </View>
-        <View style={styles.voiceCopy}>
-          <Text
-            style={[styles.voiceTitle, { color: roles.headingText }]}
-            numberOfLines={1}
-            adjustsFontSizeToFit
-          >
-            {isListening ? 'Listening...' : isVoiceActive ? `${brandName} AI is speaking` : `Talk to ${brandName} AI`}
-          </Text>
-          <Text
-            style={[styles.voiceText, { color: roles.bodyText }]}
-            numberOfLines={2}
-          >
-            {isAssistantEnabled ? transcript || 'Ask for the next step.' : 'Voice guidance is off.'}
-          </Text>
-        </View>
+        <MaterialCommunityIcons
+          name={isListening ? 'microphone' : isVoiceActive ? 'volume-high' : 'microphone-outline'}
+          size={compact ? 22 : 24}
+          color={isAssistantEnabled ? roles.primaryActionText : roles.metaText}
+        />
       </Pressable>
-
-      {assistantReply && isAssistantEnabled ? (
-        <View
-          style={[
-            styles.assistantReply,
-            {
-              backgroundColor: roles.supportCardBackground,
-              borderColor: roles.supportCardBorder,
-            },
-          ]}
-        >
-          <Text style={[styles.assistantReplyText, { color: roles.bodyText }]}>
-            {assistantReply}
-          </Text>
-        </View>
-      ) : null}
     </View>
   );
 };
 
 const styles = StyleSheet.create({
   container: {
-    width: '100%',
-    gap: theme.spacing.sm,
+    alignSelf: 'center',
+    width: 54,
+    height: 54,
   },
   containerCompact: {
     marginBottom: theme.spacing.md,
   },
-  toggleRow: {
-    width: '100%',
-    minHeight: 44,
-    borderRadius: 18,
-    borderWidth: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: theme.spacing.sm,
-    paddingLeft: theme.spacing.md,
-    paddingRight: theme.spacing.sm,
-  },
-  toggleLabel: {
-    flex: 1,
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.compact.caption,
-    fontWeight: theme.typography.weights.semibold,
-  },
   voiceGuide: {
-    width: '100%',
-    minHeight: 64,
-    borderRadius: 24,
+    width: 54,
+    height: 54,
+    borderRadius: 27,
     borderWidth: 1,
-    flexDirection: 'row',
     alignItems: 'center',
-    gap: theme.spacing.xs,
-    paddingHorizontal: theme.spacing.md,
+    justifyContent: 'center',
+    shadowColor: theme.colors.shadow,
+    shadowOpacity: 0.14,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 4,
   },
   voiceGuideCompact: {
-    minHeight: 56,
-    borderRadius: 22,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
   },
   pressed: {
     opacity: 0.82,
-  },
-  voiceIcon: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-  },
-  voiceCopy: {
-    flex: 1,
-    minWidth: 0,
-    gap: 2,
-  },
-  voiceTitle: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.compact.bodySm,
-    fontWeight: theme.typography.weights.semibold,
-  },
-  voiceText: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.compact.caption,
-  },
-  assistantReply: {
-    width: '100%',
-    borderRadius: 20,
-    borderWidth: 1,
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.sm,
-  },
-  assistantReplyText: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.compact.caption,
-    lineHeight: theme.typography.compact.caption * theme.typography.lineHeights.relaxed,
   },
 });

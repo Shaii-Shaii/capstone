@@ -5,6 +5,7 @@ import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { analyzeHairPhotos } from '../features/hairAnalysis.service';
 import { getHairDonationModuleContext, saveHairSubmissionFlow } from '../features/hairSubmission.service';
 import { hairAnalysisRequiredViews } from '../features/hairSubmission.constants';
+import { canSubmitHairDonation, mapDonationPermissionError } from '../features/donorCompliance.service';
 import { logAppEvent } from '../utils/appErrors';
 
 const MAX_PHOTO_COUNT = hairAnalysisRequiredViews.length;
@@ -330,7 +331,7 @@ const mapAnalysisError = (message = '', extras = {}) => {
     || normalized.includes('headbands')
     || normalized.includes('clips')
   ) {
-    return createErrorState('Accessories detected, please remove it and re-capture', 'Accessories detected, please remove it and re-capture. Remove glasses, sunglasses, masks, caps, headbands, clips, pins, hair ties, scarves, headphones, and anything covering the face or hair.');
+    return createErrorState('Retake photos', 'The scan needs clearer hair visibility. Please retake the required views in bright light with your hair centered.');
   }
 
   if (
@@ -404,7 +405,7 @@ const mapAnalysisError = (message = '', extras = {}) => {
   }
 
   if (String(extras?.errorType || '').trim().toLowerCase() === 'photo_quality') {
-    return createErrorState('Retake Photos', message || 'Please retake the front view, side profile, and hair ends close-up in bright light with one person visible and no accessories covering the face or hair.');
+    return createErrorState('Retake Photos', message || 'Please retake the front view, side profile, and hair ends close-up in bright light with one person visible and hair centered.');
   }
 
   if (normalized.includes('does not represent a valid image')) {
@@ -457,6 +458,14 @@ const mapSaveError = (message = '') => {
 
   if (normalized.includes('run the ai analysis')) {
     return createErrorState('Analysis Needed', 'Wait for the AI result or run the analysis again before saving.');
+  }
+
+  if (normalized.includes('guardian consent') || normalized.includes('below 18')) {
+    return createErrorState('Guardian Consent Required', 'Since the donor is below 18 years old, parent or guardian consent is required before hair donation submission.');
+  }
+
+  if (normalized.includes('complete your donor profile') || normalized.includes('birthdate')) {
+    return createErrorState('Profile Incomplete', 'Please complete your donor profile, including birthdate, before continuing.');
   }
 
   if (normalized.includes('create the hair submission')) {
@@ -555,6 +564,19 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
   const hasCompletePhotoSet = completedPhotoCount === MAX_PHOTO_COUNT;
   const canAnalyze = hasCompletePhotoSet && !isAnalyzing;
 
+  const guardDonationPermission = async () => {
+    const permission = await canSubmitHairDonation(databaseUserId || userId);
+    if (permission.allowed) return true;
+
+    const mappedError = createErrorState(
+      permission.reason === 'GUARDIAN_CONSENT_REQUIRED' ? 'Guardian Consent Required' : 'Profile Incomplete',
+      mapDonationPermissionError(permission.reason),
+      { reason: permission.reason }
+    );
+    setError(mappedError);
+    return false;
+  };
+
   const progressLabel = useMemo(() => {
     if (isSaving) return 'Saving your hair log';
     if (isAnalyzing) return 'Running AI analysis';
@@ -640,6 +662,9 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
 
   const pickPhotoForSlot = async (slotIndex) => {
     try {
+      const hasPermission = await guardDonationPermission();
+      if (!hasPermission) return { success: false, error: 'Donation permission is required before uploading hair photos.' };
+
       setError(null);
       setSuccessMessage('');
       setIsPickingImages(true);
@@ -697,6 +722,9 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
 
   const capturePhotoForSlot = async (slotIndex) => {
     try {
+      const hasPermission = await guardDonationPermission();
+      if (!hasPermission) return { success: false, error: 'Donation permission is required before capturing hair photos.' };
+
       setError(null);
       setSuccessMessage('');
       setIsCapturingImages(true);
@@ -774,6 +802,9 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
   };
 
   const analyzePhotos = async ({ questionnaireAnswers, complianceContext, historyContext = null, correctedDetails = null } = {}) => {
+    const hasPermission = await guardDonationPermission();
+    if (!hasPermission) return { success: false, error: 'Donation permission is required before AI screening.' };
+
     const readyPhotos = photos.filter(Boolean);
 
     if (readyPhotos.length < MAX_PHOTO_COUNT) {

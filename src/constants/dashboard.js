@@ -270,15 +270,6 @@ export const donorDashboardNavItems = [
     accessibilityLabel: 'Donations tab',
     role: 'donor',
   },
-  {
-    key: 'profile',
-    label: 'Profile',
-    icon: 'profile',
-    activeIcon: 'profileActive',
-    route: '/profile',
-    accessibilityLabel: 'Profile tab',
-    role: 'donor',
-  },
 ];
 export const patientDashboardNavItems = [
   {

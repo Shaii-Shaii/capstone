@@ -51,6 +51,7 @@ const normalizeConditionTone = (condition = '') => {
 
 const formatModalDateLabel = (value) => (
   new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Manila',
     month: 'long',
     day: 'numeric',
     year: 'numeric',
@@ -59,6 +60,7 @@ const formatModalDateLabel = (value) => (
 
 const formatSavedDateTime = (value) => (
   new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Manila',
     month: 'short',
     day: 'numeric',
     hour: 'numeric',
@@ -68,6 +70,7 @@ const formatSavedDateTime = (value) => (
 
 const formatTimeLabel = (value) => (
   new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Manila',
     hour: 'numeric',
     minute: '2-digit',
   }).format(new Date(value))

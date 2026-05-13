@@ -52,6 +52,12 @@ const VARIANTS = {
 };
 
 const SIZES = {
+  sm: {
+    minHeight: 44,
+    paddingVertical: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.md,
+    fontSize: theme.typography.semantic.bodySm,
+  },
   md: {
     minHeight: theme.buttons.heightMd,
     paddingVertical: theme.spacing.buttonPaddingY,
@@ -166,7 +172,7 @@ export const AppButton = ({
       paddingHorizontal: metrics.paddingHorizontal,
       width: fullWidth ? '100%' : undefined,
       backgroundColor: isInactive
-        ? theme.colors.actionDisabled
+        ? (variant === 'danger' ? theme.colors.surfaceDisabled : theme.colors.actionDisabled)
         : (
           backgroundColorOverride
           || (
@@ -210,7 +216,7 @@ export const AppButton = ({
             styles.text,
             {
               color: isInactive
-                ? theme.colors.textDisabled
+                ? (variant === 'danger' ? theme.colors.textError : theme.colors.textDisabled)
                 : (
                   textColorOverride
                   || (

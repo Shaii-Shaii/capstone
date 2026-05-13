@@ -29,6 +29,27 @@ const patientSelectColumns = `
   created_at:Created_At,
   updated_at:Updated_At
 `;
+
+const normalizePatientLookupCode = (value = '') => (
+  String(value || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '')
+);
+
+const getPatientCodeLookupCandidates = (patientCode = '') => {
+  const normalizedCode = normalizePatientLookupCode(patientCode);
+  if (!normalizedCode) return [];
+
+  const candidates = new Set([normalizedCode]);
+  const numericPart = normalizedCode.replace(/^[A-Z]+/, '');
+  if (/^\d{6}$/.test(normalizedCode)) {
+    candidates.add(`PT${normalizedCode}`);
+  }
+  if (/^\d{6}$/.test(numericPart)) {
+    candidates.add(numericPart);
+    candidates.add(`PT${numericPart}`);
+  }
+
+  return [...candidates];
+};
 const hospitalStaffSelectColumns = `
   link_id:Link_ID,
   hospital_id:Hospital_ID,
@@ -1363,8 +1384,8 @@ export const fetchLatestAuditLogByAction = async ({ databaseUserId, authUserId, 
 };
 
 export const fetchPatientDetailsByCode = async (patientCode) => {
-  const normalizedCode = patientCode?.trim()?.toUpperCase();
-  if (!normalizedCode) {
+  const codeCandidates = getPatientCodeLookupCandidates(patientCode);
+  if (!codeCandidates.length) {
     return { data: null, error: new Error('Patient code is required.') };
   }
 
@@ -1373,16 +1394,16 @@ export const fetchPatientDetailsByCode = async (patientCode) => {
     phase: 'preview',
     table: patientsTable,
     columns: patientSelectColumns,
-    filter: { Patient_Code: normalizedCode },
+    filter: { Patient_Code: 'provided_patient_code' },
   });
 
   const result = await runSingleRowSelect({
     table: patientsTable,
-    filter: { Patient_Code: normalizedCode },
+    filter: { Patient_Code: 'provided_patient_code' },
     queryBuilder: supabase
       .from(patientsTable)
       .select(patientSelectColumns)
-      .ilike('Patient_Code', normalizedCode),
+      .or(codeCandidates.map((candidate) => `Patient_Code.ilike.${candidate}`).join(',')),
   });
 
   if (result.error || !result.data) {

@@ -88,7 +88,7 @@ const resolvePhase = (data, profile) => {
 
 export const DonationLogisticsFlowScreen = () => {
     const router = useRouter();
-    const { user, userProfile } = useAuth();
+    const { user, userProfile, resolvedTheme } = useAuth();
     const { showNotification } = useNotifications({
         role: userProfile?.role,
         userId: user?.id,
@@ -96,7 +96,7 @@ export const DonationLogisticsFlowScreen = () => {
         mode: 'badge',
         refreshOnMount: true,
     });
-    const roles = resolveThemeRoles(userProfile?.role);
+    const roles = resolveThemeRoles(resolvedTheme);
 
     const [phase, setPhase] = useState(PHASE.LOADING);
     const [moduleData, setModuleData] = useState(null);
@@ -298,7 +298,7 @@ export const DonationLogisticsFlowScreen = () => {
             <DashboardLayout
                 topBar={<DonorTopBar />}
                 navItems={donorDashboardNavItems}
-                activeItemKey="donations"
+                activeNavKey="donations"
             >
                 <View style={styles.centered}>
                     <ActivityIndicator size="large" color={theme.colors.brandPrimary} />
@@ -314,7 +314,7 @@ export const DonationLogisticsFlowScreen = () => {
         <DashboardLayout
             topBar={<DonorTopBar />}
             navItems={donorDashboardNavItems}
-            activeItemKey="donations"
+            activeNavKey="donations"
         >
             <ScrollView
                 style={styles.scroll}
@@ -490,7 +490,7 @@ function NeedHairCheckPhase({ roles, onCheckHair }) {
                 <View style={[styles.infoBox, { backgroundColor: roles.defaultCardBackground }]}>
                     <AppIcon name="information-circle" size="sm" state="info" />
                     <Text style={[styles.infoText, { color: roles.bodyText }]}>
-                        The Check Hair module will analyze your hair's length and condition to confirm donation eligibility.
+                        The Check Hair module will analyze your hair length and condition to confirm donation eligibility.
                     </Text>
                 </View>
 
@@ -941,7 +941,7 @@ function ActiveDonationPhase({ roles, moduleData, onShareQr, onCheckHair }) {
                 <View style={styles.qrInfoRow}>
                     <AppIcon name="information-circle-outline" size="sm" state="muted" />
                     <Text style={[styles.qrInfoText, { color: roles.metaText }]}>
-                        Don't have a printer? Just show this screen to the staff at the donation hub and they will scan it directly from your device.
+                        No printer needed. Show this screen to the donation hub staff and they can scan it directly from your device.
                     </Text>
                 </View>
             </View>
@@ -1103,7 +1103,7 @@ const styles = StyleSheet.create({
         borderRadius: theme.radius.lg,
         padding: 16,
         borderWidth: 1,
-        borderColor: theme.colors.defaultCardBorder || '#e5e0d8',
+        borderColor: theme.colors.borderSubtle,
         marginBottom: 16,
     },
     cardHeader: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 16, gap: 12 },

@@ -6,9 +6,12 @@ import * as Linking from 'expo-linking';
 import { isPasswordReuse, reusedPasswordMessage } from '../../../utils/passwordRules';
 import { logAppError, logAppEvent, writeAuditLog } from '../../../utils/appErrors';
 import { emptyResolvedTheme, theme } from '../../../design-system/theme';
+import { recordAcceptedLegalAgreements } from '../../donorCompliance.service';
 
 const isEmailConfirmed = (user) => Boolean(user?.email_confirmed_at || user?.confirmed_at);
 const loginErrorCodes = {
+  invalidCredentials: 'INVALID_CREDENTIALS',
+  roleMismatch: 'ROLE_MISMATCH',
   emailNotConfirmed: 'EMAIL_NOT_CONFIRMED',
   accountDetailsMissing: 'ACCOUNT_DETAILS_MISSING',
   accountInactive: 'ACCOUNT_INACTIVE',
@@ -79,7 +82,7 @@ const getFriendlyAuthError = (error) => {
   const normalized = msg.toLowerCase();
 
   if (normalized.includes('invalid login credentials') || normalized.includes('invalid credentials')) {
-    return buildUserFacingLoginError('Invalid Credentials');
+    return buildUserFacingLoginError('Invalid Credentials', loginErrorCodes.invalidCredentials);
   }
   if (normalized.includes('email not confirmed')) {
     return buildUserFacingLoginError('Please verify your email address before logging in.', loginErrorCodes.emailNotConfirmed);
@@ -192,7 +195,25 @@ const validateSystemUserAccount = (systemUser) => {
 };
 
 const resolveRoleMismatchError = (actualRole) => (
-  buildUserFacingLoginError(`This account is registered as a ${actualRole}. Please continue through the ${actualRole} login.`)
+  buildUserFacingLoginError(
+    `This account is registered as a ${actualRole}. Please continue through the ${actualRole} login.`,
+    loginErrorCodes.roleMismatch
+  )
+);
+
+const expectedLoginErrorCodes = new Set([
+  loginErrorCodes.invalidCredentials,
+  loginErrorCodes.roleMismatch,
+  loginErrorCodes.emailNotConfirmed,
+  loginErrorCodes.accountDetailsMissing,
+  loginErrorCodes.accountInactive,
+  loginErrorCodes.accessNotStarted,
+  loginErrorCodes.accessExpired,
+  loginErrorCodes.network,
+]);
+
+const isExpectedLoginFailure = (error) => (
+  expectedLoginErrorCodes.has(error?.code)
 );
 
 const resolveVisualTheme = ({ uiSettings = {}, preset = {} } = {}) => {
@@ -335,19 +356,28 @@ export const login = async (email, password, expectedRole) => {
       error: null,
     };
   } catch (error) {
-    logAppError('auth.login', error, {
+    const loginLogExtras = {
       email,
       expectedRole: expectedRole || null,
       errorCode: error?.code || null,
-    });
+    };
 
-    await writeAuditLog({
-      userEmail: email,
-      action: 'auth.login',
-      description: error.message || 'Login failed.',
-      resource: 'auth',
-      status: 'failed',
-    });
+    if (isExpectedLoginFailure(error)) {
+      logAppEvent('auth.login.failed', error?.message || 'Login failed.', loginLogExtras, 'warn');
+    } else {
+      logAppError('auth.login', error, loginLogExtras);
+    }
+
+    // Avoid noisy audit permission warnings for known user-level login failures.
+    if (!isExpectedLoginFailure(error)) {
+      await writeAuditLog({
+        userEmail: email,
+        action: 'auth.login',
+        description: error.message || 'Login failed.',
+        resource: 'auth',
+        status: 'failed',
+      });
+    }
     return { user: null, session: null, profile: null, role: null, error: error.message, errorCode: error.code };
   }
 };
@@ -378,11 +408,27 @@ export const register = async (email, password, additionalData = {}) => {
       const ensureSystemUserResult = await ensureProfileInfrastructure({
         authUserId: data.user.id,
         email: data.user.email || email,
-        role: additionalData.role || null,
+        role: additionalData.role || 'donor',
       });
 
       if (ensureSystemUserResult.error) {
         throw new Error(ensureSystemUserResult.error.message || authMessages.roleNotFound);
+      }
+
+      if (additionalData.acceptedLegal === true && ensureSystemUserResult.data?.user_id) {
+        const legalResult = await recordAcceptedLegalAgreements({
+          databaseUserId: ensureSystemUserResult.data.user_id,
+          authUserId: data.user.id,
+        });
+
+        if (!legalResult.success) {
+          logAppEvent('auth.signup.legal_agreement_skipped', 'Legal agreement save failed after signup. Continuing auth flow.', {
+            authUserId: data.user.id,
+            databaseUserId: ensureSystemUserResult.data.user_id,
+            email,
+            error: legalResult.error?.message || null,
+          }, 'warn');
+        }
       }
     }
 
@@ -636,11 +682,27 @@ export const verifyEmail = async (email, code) => {
       const ensureSystemUserResult = await ensureProfileInfrastructure({
         authUserId: data.user.id,
         email: data.user.email || email,
-        role: data.user.user_metadata?.role || null,
+        role: data.user.user_metadata?.role || 'donor',
       });
 
       if (ensureSystemUserResult.error) {
         throw new Error(ensureSystemUserResult.error.message || authMessages.roleNotFound);
+      }
+
+      if (ensureSystemUserResult.data?.user_id) {
+        const legalResult = await recordAcceptedLegalAgreements({
+          databaseUserId: ensureSystemUserResult.data.user_id,
+          authUserId: data.user.id,
+        });
+
+        if (!legalResult.success) {
+          logAppEvent('auth.verify_email.legal_agreement_skipped', 'Legal agreement save failed after email verification. Continuing verified account flow.', {
+            authUserId: data.user.id,
+            databaseUserId: ensureSystemUserResult.data.user_id,
+            email,
+            error: legalResult.error?.message || null,
+          }, 'warn');
+        }
       }
 
       const { profile: fetchedProfile } = await getProfile(data.user.id);

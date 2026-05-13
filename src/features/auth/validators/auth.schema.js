@@ -88,9 +88,6 @@ export const birthdateField = z.string()
   .regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD format')
   .refine((value) => calculateAgeFromBirthdate(value) !== null, {
     message: 'Enter a valid birthdate',
-  })
-  .refine((value) => (calculateAgeFromBirthdate(value) ?? 0) >= 18, {
-    message: 'You must be at least 18 years old to sign up',
   });
 export const coordinateField = z.string()
   .trim()
@@ -114,6 +111,7 @@ export const signupDefaultValues = {
   email: '',
   password: '',
   confirmPassword: '',
+  acceptedLegal: false,
 };
 
 // Login Schemas
@@ -139,6 +137,9 @@ export const baseSignupSchema = z.object({
   email: emailField,
   password: passwordField,
   confirmPassword: z.string(),
+  acceptedLegal: z.boolean().refine((value) => value === true, {
+    message: 'Please accept the Terms and Conditions to continue.',
+  }),
 }).refine((data) => data.password === data.confirmPassword, {
   message: 'Password do not match',
   path: ['confirmPassword'],

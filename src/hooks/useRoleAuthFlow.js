@@ -41,7 +41,7 @@ export const useRoleAuthFlow = (role) => {
 
   const handleSignup = async (data) => {
     clearSignupError();
-    const selectedRole = 'tentative';
+    const selectedRole = 'donor';
 
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setActiveAuthAction('signup');
@@ -49,6 +49,7 @@ export const useRoleAuthFlow = (role) => {
     try {
       const result = await register(data.email, data.password, {
         role: selectedRole,
+        acceptedLegal: data.acceptedLegal === true,
       });
 
       if (result.success) {

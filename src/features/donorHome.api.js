@@ -1,10 +1,12 @@
 import { supabase } from '../api/supabase/client';
 import { logAppError, logAppEvent } from '../utils/appErrors';
+import { canSubmitHairDonation, mapDonationPermissionError } from './donorCompliance.service';
 
 const donationDriveRequestsTable = 'Donation_Drive_Requests';
 const donationDriveRegistrationsTable = 'Donation_Drive_Registrations';
 const organizationsTable = 'Organizations';
 const organizationMembersTable = 'Organization_Members';
+const notificationTable = 'notification';
 
 const donationDriveSelect = `
   donation_drive_id:Donation_Drive_ID,
@@ -21,6 +23,8 @@ const donationDriveSelect = `
   city:City,
   province:Province,
   country:Country,
+  latitude:Latitude,
+  longitude:Longitude,
   status:Status,
   is_open_for_all:Is_Open_For_All,
   donation_setup_type:Donation_Setup_Type,
@@ -59,6 +63,7 @@ const donationDriveRegistrationSelect = `
 `;
 
 const normalizeRegistrationStatus = (value = '') => String(value || '').trim().toLowerCase();
+const normalizeDriveStatus = (value = '') => String(value || '').trim().toLowerCase();
 const getStartOfTodayIso = () => {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -66,12 +71,36 @@ const getStartOfTodayIso = () => {
 };
 
 const getDriveCompareDate = (drive) => drive?.end_date || drive?.start_date || null;
+const isDrivePublic = (drive = null) => Boolean(drive?.is_open_for_all);
+const doesDriveRequireMembership = (drive = null) => (
+  Boolean(drive?.organization_id) && !isDrivePublic(drive)
+);
 
 const isUpcomingDrive = (drive) => {
   const compareDate = getDriveCompareDate(drive);
   if (!compareDate) return false;
   return new Date(compareDate).getTime() >= new Date(getStartOfTodayIso()).getTime();
 };
+
+const sortDrivesForHome = (rows = []) => (
+  [...rows].sort((left, right) => {
+    const leftUpcoming = isUpcomingDrive(left);
+    const rightUpcoming = isUpcomingDrive(right);
+    if (leftUpcoming !== rightUpcoming) return leftUpcoming ? -1 : 1;
+
+    const leftDate = leftUpcoming
+      ? (left?.start_date || left?.end_date || left?.updated_at)
+      : (left?.updated_at || left?.end_date || left?.start_date);
+    const rightDate = rightUpcoming
+      ? (right?.start_date || right?.end_date || right?.updated_at)
+      : (right?.updated_at || right?.end_date || right?.start_date);
+    const leftTime = leftDate ? new Date(leftDate).getTime() : 0;
+    const rightTime = rightDate ? new Date(rightDate).getTime() : 0;
+
+    if (leftUpcoming) return leftTime - rightTime;
+    return rightTime - leftTime;
+  })
+);
 
 const resolveDriveQrState = (row) => {
   const attendanceStatus = normalizeRegistrationStatus(row?.attendance_status);
@@ -172,17 +201,54 @@ const normalizeDonationDriveRegistration = (row) => ({
 });
 
 const normalizeOrganizationMember = (row) => ({
+  membership_role: row?.membership_role || '',
+  membership_role_normalized: String(row?.membership_role || '').trim().toLowerCase(),
   member_id: row?.member_id || null,
   organization_id: row?.organization_id || null,
   user_id: row?.user_id || null,
-  membership_role: row?.membership_role || '',
   is_primary: Boolean(row?.is_primary),
   status: row?.status || '',
   created_by: row?.created_by || null,
   created_at: row?.created_at || null,
   updated_at: row?.updated_at || null,
   is_active: String(row?.status || '').trim().toLowerCase() === 'active',
+  is_pending: (
+    String(row?.status || '').trim().toLowerCase() === 'inactive'
+    && String(row?.membership_role || '').trim().toLowerCase().startsWith('pending')
+  ),
 });
+
+const createOrganizationJoinPendingNotification = async ({
+  databaseUserId,
+  organizationName,
+}) => {
+  if (!databaseUserId || !organizationName) return;
+
+  const nowIso = new Date().toISOString();
+  const title = 'Organization join request submitted';
+  const message = `Your request to join ${organizationName} is pending approval.`;
+
+  const result = await supabase
+    .from(notificationTable)
+    .insert({
+      user_id: databaseUserId,
+      type: 'organization_membership_pending',
+      title,
+      message,
+      status: 'Unread',
+      updated_at: nowIso,
+    })
+    .select('notification_id')
+    .maybeSingle();
+
+  if (result.error) {
+    logAppError('donor_home.organization_membership.pending_notification', result.error, {
+      table: notificationTable,
+      databaseUserId,
+      organizationName,
+    });
+  }
+};
 
 const normalizeDonationDrive = (row, organization = null, registration = null, membership = null) => ({
   id: row?.donation_drive_id || null,
@@ -202,6 +268,8 @@ const normalizeDonationDrive = (row, organization = null, registration = null, m
   city: row?.city || '',
   province: row?.province || '',
   country: row?.country || '',
+  latitude: row?.latitude ?? null,
+  longitude: row?.longitude ?? null,
   status: row?.status || '',
   is_open_for_all: row?.is_open_for_all ?? false,
   donation_setup_type: row?.donation_setup_type || '',
@@ -213,9 +281,12 @@ const normalizeDonationDrive = (row, organization = null, registration = null, m
   organization: organization || null,
   registration: registration || null,
   membership: membership || null,
-  requires_membership: Boolean(row?.organization_id),
+  is_public: isDrivePublic(row),
+  visibility_scope: isDrivePublic(row) ? 'public' : 'private',
+  requires_membership: doesDriveRequireMembership(row),
   is_member: Boolean(membership?.is_active),
-  can_join: !registration,
+  can_view: !doesDriveRequireMembership(row) || Boolean(membership?.is_active) || Boolean(registration?.registration_id),
+  can_join: !registration && (!doesDriveRequireMembership(row) || Boolean(membership?.is_active)),
 });
 
 const sortByNewestTimestamp = (rows = [], timestampFields = []) => (
@@ -432,6 +503,79 @@ export const createDonationDriveRegistration = async ({
     };
   }
 
+  const permission = await canSubmitHairDonation(databaseUserId);
+  if (!permission.allowed) {
+    const permissionError = new Error(mapDonationPermissionError(permission.reason));
+    permissionError.code = permission.reason;
+    return {
+      data: null,
+      error: permissionError,
+      alreadyRegistered: false,
+    };
+  }
+
+  const driveResult = await supabase
+    .from(donationDriveRequestsTable)
+    .select(donationDriveSelect)
+    .eq('Donation_Drive_ID', driveId)
+    .maybeSingle();
+
+  if (driveResult.error) {
+    return {
+      data: null,
+      error: driveResult.error,
+      alreadyRegistered: false,
+    };
+  }
+
+  if (!driveResult.data) {
+    return {
+      data: null,
+      error: new Error('The selected donation drive could not be found.'),
+      alreadyRegistered: false,
+    };
+  }
+
+  const driveStatus = String(driveResult.data.status || '').trim().toLowerCase();
+  if (driveStatus !== 'approved') {
+    return {
+      data: null,
+      error: new Error('This donation drive is not open for registration right now.'),
+      alreadyRegistered: false,
+    };
+  }
+
+  if (!isUpcomingDrive(driveResult.data)) {
+    return {
+      data: null,
+      error: new Error('This donation drive has already ended.'),
+      alreadyRegistered: false,
+    };
+  }
+
+  if (doesDriveRequireMembership(driveResult.data)) {
+    const membershipResult = await fetchOrganizationMembership({
+      organizationId: driveResult.data.organization_id || null,
+      databaseUserId,
+    });
+
+    if (membershipResult.error) {
+      return {
+        data: null,
+        error: membershipResult.error,
+        alreadyRegistered: false,
+      };
+    }
+
+    if (!membershipResult.data?.is_active) {
+      return {
+        data: null,
+        error: new Error('This is a private donation drive. Join the partner organization first.'),
+        alreadyRegistered: false,
+      };
+    }
+  }
+
   const existingResult = await findExistingDriveRegistration(driveId, databaseUserId);
   if (existingResult.error) {
     return {
@@ -594,6 +738,18 @@ export const joinOrganizationMembership = async ({
       data: existingResult.data,
       error: null,
       alreadyMember: true,
+      alreadyPending: false,
+      requestSubmitted: false,
+    };
+  }
+
+  if (existingResult.data?.is_pending) {
+    return {
+      data: existingResult.data,
+      error: null,
+      alreadyMember: false,
+      alreadyPending: true,
+      requestSubmitted: false,
     };
   }
 
@@ -601,9 +757,9 @@ export const joinOrganizationMembership = async ({
     const updateResult = await supabase
       .from(organizationMembersTable)
       .update({
-        Membership_Role: existingResult.data.membership_role || 'Member',
+        Membership_Role: 'Pending Approval',
         Is_Primary: false,
-        Status: 'Active',
+        Status: 'Inactive',
         Updated_At: new Date().toISOString(),
       })
       .eq('Member_ID', existingResult.data.member_id)
@@ -622,13 +778,23 @@ export const joinOrganizationMembership = async ({
         data: null,
         error: updateResult.error,
         alreadyMember: false,
+        alreadyPending: false,
+        requestSubmitted: false,
       };
     }
 
+    const normalizedUpdatedMembership = normalizeOrganizationMember(updateResult.data);
+    await createOrganizationJoinPendingNotification({
+      databaseUserId,
+      organizationName: organization.organization_name,
+    });
+
     return {
-      data: normalizeOrganizationMember(updateResult.data),
+      data: normalizedUpdatedMembership,
       error: null,
       alreadyMember: false,
+      alreadyPending: false,
+      requestSubmitted: true,
     };
   }
 
@@ -637,9 +803,9 @@ export const joinOrganizationMembership = async ({
     .insert({
       Organization_ID: organizationId,
       User_ID: databaseUserId,
-      Membership_Role: 'Member',
+      Membership_Role: 'Pending Approval',
       Is_Primary: false,
-      Status: 'Active',
+      Status: 'Inactive',
       Created_By: databaseUserId,
     })
     .select(organizationMemberSelect)
@@ -656,13 +822,98 @@ export const joinOrganizationMembership = async ({
       data: null,
       error: insertResult.error,
       alreadyMember: false,
+      alreadyPending: false,
+      requestSubmitted: false,
+    };
+  }
+
+  const normalizedInsertedMembership = normalizeOrganizationMember(insertResult.data);
+  await createOrganizationJoinPendingNotification({
+    databaseUserId,
+    organizationName: organization.organization_name,
+  });
+
+  return {
+    data: normalizedInsertedMembership,
+    error: null,
+    alreadyMember: false,
+    alreadyPending: false,
+    requestSubmitted: true,
+  };
+};
+
+export const leaveOrganizationMembership = async ({
+  organizationId,
+  databaseUserId,
+}) => {
+  if (!organizationId || !databaseUserId) {
+    return {
+      data: null,
+      error: new Error('Leaving an organization requires the organization and donor account.'),
+      alreadyLeft: false,
+    };
+  }
+
+  const existingResult = await fetchOrganizationMembership({
+    organizationId,
+    databaseUserId,
+  });
+
+  if (existingResult.error) {
+    return {
+      data: null,
+      error: existingResult.error,
+      alreadyLeft: false,
+    };
+  }
+
+  if (!existingResult.data?.member_id) {
+    return {
+      data: null,
+      error: null,
+      alreadyLeft: true,
+    };
+  }
+
+  if (!existingResult.data?.is_active) {
+    return {
+      data: existingResult.data,
+      error: null,
+      alreadyLeft: true,
+    };
+  }
+
+  const updateResult = await supabase
+    .from(organizationMembersTable)
+    .update({
+      Membership_Role: 'Former Member',
+      Is_Primary: false,
+      Status: 'Inactive',
+      Updated_At: new Date().toISOString(),
+    })
+    .eq('Member_ID', existingResult.data.member_id)
+    .select(organizationMemberSelect)
+    .maybeSingle();
+
+  if (updateResult.error) {
+    logAppError('donor_home.organization_membership.leave', updateResult.error, {
+      table: organizationMembersTable,
+      organizationId,
+      databaseUserId,
+      memberId: existingResult.data.member_id,
+    });
+
+    return {
+      data: null,
+      error: updateResult.error,
+      alreadyLeft: false,
     };
   }
 
   return {
-    data: normalizeOrganizationMember(insertResult.data),
+    data: normalizeOrganizationMember(updateResult.data),
     error: null,
-    alreadyMember: false,
+    alreadyLeft: false,
   };
 };
 
@@ -694,29 +945,30 @@ export const fetchFeaturedOrganizations = async (limit = 8) => {
   };
 };
 
-export const fetchUpcomingDonationDrives = async (limit = 6) => {
-  const today = new Date().toISOString();
+export const fetchUpcomingDonationDrives = async (limit = 6, databaseUserId = null) => {
+  const normalizedLimit = Math.max(1, Number(limit) || 6);
+  const queryLimit = Math.min(Math.max(normalizedLimit * 8, 40), 120);
 
   logAppEvent('donor_home.drives', 'Loading upcoming donation drives.', {
     table: donationDriveRequestsTable,
-    limit,
-    startDateFrom: today,
+    limit: normalizedLimit,
+    queryLimit,
+    status: 'approved',
+    databaseUserId: databaseUserId || null,
   });
 
   const result = await supabase
     .from(donationDriveRequestsTable)
     .select(donationDriveSelect)
-    .eq('Status', 'Approved')
-    .not('Start_Date', 'is', null)
-    .gte('Start_Date', today)
+    .ilike('Status', 'approved')
     .order('Start_Date', { ascending: true })
-    .limit(limit);
+    .limit(queryLimit);
 
   if (result.error) {
     logAppError('donor_home.drives', result.error, {
       table: donationDriveRequestsTable,
-      limit,
-      startDateFrom: today,
+      limit: normalizedLimit,
+      status: 'approved',
     });
 
     return {
@@ -725,15 +977,44 @@ export const fetchUpcomingDonationDrives = async (limit = 6) => {
     };
   }
 
-  const organizationIds = [...new Set((result.data || []).map((row) => row?.organization_id).filter(Boolean))];
+  const driveRows = result.data || [];
+  const organizationIds = [...new Set(driveRows.map((row) => row?.organization_id).filter(Boolean))];
   const organizationsResult = await fetchOrganizationsByIds(organizationIds);
+  const driveIds = driveRows.map((row) => row?.donation_drive_id).filter(Boolean);
+
+  const [membershipsResult, registrationsResult] = databaseUserId
+    ? await Promise.all([
+        fetchOrganizationMembershipsByUserId(databaseUserId),
+        findDriveRegistrationsByUserIdAndDriveIds(driveIds, databaseUserId),
+      ])
+    : [{ data: [], error: null }, { data: new Map(), error: null }];
+  const membershipByOrganizationId = new Map(
+    (membershipsResult.data || [])
+      .filter((membership) => membership?.is_active)
+      .map((membership) => [membership.organization_id, membership])
+  );
+  const registrationByDriveId = registrationsResult.data || new Map();
+
+  const normalizedRows = driveRows.map((row) => {
+    const membership = membershipByOrganizationId.get(row?.organization_id) || null;
+    const registration = registrationByDriveId.get(row?.donation_drive_id) || null;
+    return normalizeDonationDrive(
+      row,
+      organizationsResult.data.get(row?.organization_id) || null,
+      registration,
+      membership,
+    );
+  });
+
+  const visibleRows = normalizedRows.filter((drive) => (
+    normalizeDriveStatus(drive.status) === 'approved'
+    && drive.can_view
+    && isUpcomingDrive(drive)
+  ));
 
   return {
-    data: (result.data || []).map((row) => normalizeDonationDrive(
-      row,
-      organizationsResult.data.get(row?.organization_id) || null
-    )),
-    error: null,
+    data: sortDrivesForHome(visibleRows).slice(0, normalizedLimit),
+    error: organizationsResult.error || membershipsResult.error || registrationsResult.error || null,
   };
 };
 
@@ -821,6 +1102,7 @@ export const fetchOrganizationPreview = async (organizationId, databaseUserId = 
       .from(donationDriveRequestsTable)
       .select(donationDriveSelect)
       .eq('Organization_ID', organizationId)
+      .ilike('Status', 'approved')
       .not('Start_Date', 'is', null)
       .order('Start_Date', { ascending: true })
       .limit(Math.max(driveLimit, 24)),
@@ -860,12 +1142,14 @@ export const fetchOrganizationPreview = async (organizationId, databaseUserId = 
   ]);
 
   const membership = membershipResult.data || null;
-  const drives = driveRows.map((row) => normalizeDonationDrive(
-    row,
-    organization,
-    registrationsResult.data.get(row?.donation_drive_id) || null,
-    membership
-  ));
+  const drives = driveRows
+    .map((row) => normalizeDonationDrive(
+      row,
+      organization,
+      registrationsResult.data.get(row?.donation_drive_id) || null,
+      membership
+    ))
+    .filter((drive) => drive.can_view);
   const upcomingDrives = drives.filter(isUpcomingDrive);
   const pastDrives = drives.filter((drive) => !isUpcomingDrive(drive));
 
@@ -898,6 +1182,7 @@ export const fetchOrganizationsWithDrives = async (limit = 24, driveLimitPerOrga
     .from(donationDriveRequestsTable)
     .select(donationDriveSelect)
     .in('Organization_ID', organizationIds)
+    .ilike('Status', 'approved')
     .not('Start_Date', 'is', null)
     .order('Start_Date', { ascending: true });
 
@@ -937,9 +1222,9 @@ export const fetchOrganizationsWithDrives = async (limit = 24, driveLimitPerOrga
         ...organization,
         membership,
         drives: (drivesByOrganizationId.get(organization.organization_id) || [])
-          .filter(isUpcomingDrive)
-          .slice(0, driveLimitPerOrganization)
-          .map((row) => normalizeDonationDrive(row, organization, null, membership)),
+          .map((row) => normalizeDonationDrive(row, organization, null, membership))
+          .filter((drive) => drive.can_view && isUpcomingDrive(drive))
+          .slice(0, driveLimitPerOrganization),
       };
     }),
     error: organizationsResult.error || drivesResult.error || membershipsResult.error,
@@ -982,6 +1267,7 @@ export const fetchRelevantDonationDriveUpdates = async ({
           .from(donationDriveRequestsTable)
           .select(donationDriveSelect)
           .in('Organization_ID', organizationIds)
+          .ilike('Status', 'approved')
           .not('Start_Date', 'is', null)
           .order('Start_Date', { ascending: true })
           .limit(limit)
@@ -991,6 +1277,7 @@ export const fetchRelevantDonationDriveUpdates = async ({
           .from(donationDriveRequestsTable)
           .select(donationDriveSelect)
           .in('Donation_Drive_ID', driveIds)
+          .ilike('Status', 'approved')
           .order('Updated_At', { ascending: false })
           .limit(limit)
       : Promise.resolve({ data: [], error: null }),

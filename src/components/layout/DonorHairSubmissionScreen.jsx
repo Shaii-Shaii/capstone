@@ -1,17 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Animated, Image, Platform, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { ActivityIndicator, Animated, Image, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Controller, useForm, useWatch } from 'react-hook-form';
 import { useRouter } from 'expo-router';
 import Constants from 'expo-constants';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import * as Haptics from 'expo-haptics';
-import * as Speech from 'expo-speech';
-import {
-  ExpoSpeechRecognitionModule,
-  useSpeechRecognitionEvent,
-} from 'expo-speech-recognition';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { DashboardLayout } from './DashboardLayout';
 import { AppCard } from '../ui/AppCard';
 import { AppButton } from '../ui/AppButton';
@@ -51,7 +45,6 @@ let NativeWorklets = null;
 let nativeVisionCameraLoadError = '';
 let nativeFaceCameraLoadError = '';
 const isExpoGoRuntime = Constants?.appOwnership === 'expo';
-const CHECKHAIR_VOICE_ASSISTANT_STORAGE_KEY = 'donivra.checkhair.aiVoiceAssistant.enabled';
 
 try {
   if (Platform.OS !== 'web' && !isExpoGoRuntime) {
@@ -102,36 +95,10 @@ try {
 const PHOTO_GUIDELINE_ITEMS = [
   'Use bright, even lighting so color, shine, dryness, and frizz are visible.',
   'Keep only one person in the frame with a plain background.',
-  'Remove eyeglasses, sunglasses, masks, caps, headbands, clips, pins, hair ties, scarves, headphones, and anything covering the face or hair.',
+  'Keep hair centered and fully visible from the hairline to the ends.',
   'Capture the required front view, one side profile, and a close-up of the hair ends.',
   'Keep hair loose, centered, and visible from root or hairline to the lowest visible ends.',
 ];
-
-const PHOTO_CAPTURE_TARGETS = [
-  'Front view photo',
-  'Side profile photo',
-  'Hair ends close-up',
-];
-
-const DONATION_PREP_STEPS = [
-  'Save the CheckHair result so the app creates your submission code.',
-  'Print or write the code clearly and attach it to the outside of the parcel before shipment.',
-  'Place clean, dry hair in a sealed plastic bag before putting it inside the parcel.',
-  'Keep your courier tracking number and update staff when asked.',
-];
-
-const formatLogisticsDestination = (settings = null) => {
-  if (!settings?.destination_name && !settings?.city && !settings?.province) return '';
-
-  return [
-    settings.destination_name,
-    settings.street,
-    settings.barangay,
-    settings.city,
-    settings.province,
-    settings.country,
-  ].filter(Boolean).join(', ');
-};
 
 const isAnswered = (question, answers = {}) => {
   const value = answers?.[question?.key];
@@ -146,11 +113,21 @@ const isAnswered = (question, answers = {}) => {
   return typeof value === 'string' ? value.trim().length > 0 : Boolean(value);
 };
 
+const findFirstUnansweredQuestionIndex = (questions = [], answers = {}) => (
+  questions.findIndex((question) => !isAnswered(question, answers))
+);
+
 const formatLengthLabel = (value) => {
   const numericValue = Number(value);
   if (!Number.isFinite(numericValue) || numericValue <= 0) return 'Not detected';
   const inches = numericValue / 2.54;
   return `${numericValue.toFixed(1)} cm / ${inches.toFixed(1)} in`;
+};
+
+const cmToInches = (value) => {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue) || numericValue <= 0) return 0;
+  return numericValue / 2.54;
 };
 
 const formatScheduleDateLabel = (dateValue, startTime = '', endTime = '') => {
@@ -170,23 +147,6 @@ const formatScheduleDateLabel = (dateValue, startTime = '', endTime = '') => {
 
 void formatScheduleDateLabel;
 
-const normalizeAnalysisText = (analysis) => (
-  [
-    analysis?.summary,
-    analysis?.visible_damage_notes,
-    analysis?.invalid_image_reason,
-    ...(Array.isArray(analysis?.per_view_notes) ? analysis.per_view_notes.map((item) => item?.notes || '') : []),
-  ]
-    .filter(Boolean)
-    .join(' ')
-    .toLowerCase()
-);
-
-const hasDetectedConcern = (source, keywords = [], negativePhrases = []) => (
-  keywords.some((keyword) => source.includes(keyword))
-  && !negativePhrases.some((phrase) => source.includes(phrase))
-);
-
 const isSideProfileView = (view = {}) => String(view?.key || view?.label || '').toLowerCase().includes('side');
 const isHairEndsView = (view = {}) => String(view?.key || view?.label || '').toLowerCase().includes('ends');
 
@@ -194,7 +154,7 @@ const getInitialLiveFaceStatus = (view = null) => ({
   valid: isHairEndsView(view),
   faceCount: 0,
   message: isHairEndsView(view)
-    ? 'Frame the lowest hair ends closely. Remove ties, clips, glasses, and anything covering the face or strands.'
+    ? 'Frame the lowest hair ends closely with bright, even light.'
     : isSideProfileView(view)
       ? 'Turn to one side so your side profile and hair length are visible.'
       : 'Face the camera directly and keep your hair fully visible.',
@@ -211,7 +171,7 @@ const resolveLiveFaceStatus = (faces = [], view = null) => {
       return {
         valid: true,
         faceCount: 0,
-        message: 'Hair ends close-up ready. Keep the ends sharp, well lit, and free from accessories.',
+        message: 'Hair ends close-up ready. Keep the ends sharp and well lit.',
         tone: 'success',
       };
     }
@@ -277,7 +237,7 @@ const resolveLiveFaceStatus = (faces = [], view = null) => {
     return {
       valid: true,
       faceCount: 1,
-      message: 'Side profile detected. Keep hair length and ends visible with no glasses, clips, or headbands.',
+      message: 'Side profile detected. Keep hair length and ends visible.',
       tone: 'success',
     };
   }
@@ -296,57 +256,238 @@ const resolveLiveFaceStatus = (faces = [], view = null) => {
     faceCount: 1,
     message: expectsHairEnds
       ? 'Hair ends close-up ready. Keep the ends sharp, well lit, and uncovered.'
-      : 'Front view detected. Keep your face and hair centered, with glasses and accessories removed.',
+      : 'Front view detected. Keep your face and hair centered.',
     tone: 'success',
   };
 };
 
-const buildEligibilitySummary = ({ analysis, confirmedValues, questionnaireAnswers, donationRequirement }) => {
-  if (!analysis) return { status: 'Pending', tone: 'info', reasons: [], contextNote: '' };
+const clampPercent = (value) => Math.max(0, Math.min(100, Math.round(Number(value) || 0)));
 
-  const reasons = [];
-  const source = normalizeAnalysisText(analysis);
-  const confirmedLength = Number(confirmedValues?.declaredLength || analysis?.estimated_length);
-  const hasChemicalProcessHistory = questionnaireAnswers?.chemicalProcessHistory === 'yes';
-  const minimumDonationLength = Math.max(
-    35.56,
-    donationRequirement?.minimum_hair_length != null ? Number(donationRequirement.minimum_hair_length) : 0
-  );
+const buildLiveScanStatus = ({
+  autoCaptureEnabled = false,
+  brightness = -1,
+  completedPhotoCount = 0,
+  currentPhoto = null,
+  currentView = null,
+  isCapturing = false,
+  liveFaceStatus = null,
+  requiredCount = 1,
+}) => {
+  const viewLabel = isSideProfileView(currentView)
+    ? 'Side view'
+    : isHairEndsView(currentView)
+      ? 'Hair ends'
+      : 'Face front';
+  const brightnessKnown = Number(brightness) >= 0;
+  const brightnessReady = !brightnessKnown || Number(brightness) >= 82;
+  const progressBase = requiredCount > 0 ? (completedPhotoCount / requiredCount) * 100 : 0;
 
-  if (!analysis.is_hair_detected) reasons.push('Hair must be clearly visible in the uploaded photo set.');
-  if (analysis?.invalid_image_reason) reasons.push(analysis.invalid_image_reason);
-  if (analysis?.missing_views?.length) reasons.push(`Required views are incomplete: ${analysis.missing_views.join(', ')}.`);
-  if (Number.isFinite(confirmedLength) && confirmedLength < minimumDonationLength) {
-    reasons.push(`Donation readiness usually needs at least ${(minimumDonationLength / 2.54).toFixed(1)} inches of visible hair.`);
-  }
-  if (
-    hasChemicalProcessHistory
-    && (
-      donationRequirement?.chemical_treatment_status === false
-      || donationRequirement?.colored_hair_status === false
-      || donationRequirement?.bleached_hair_status === false
-      || donationRequirement?.rebonded_hair_status === false
-    )
-  ) {
-    reasons.push('Recent chemical processing may affect donation eligibility under the current requirement.');
-  }
-  if (hasDetectedConcern(source, ['clip', 'accessory', 'obstruction', 'blocked'], ['no clip', 'no accessory', 'not blocked'])) {
-    reasons.push('Hair accessories or other objects should not block the hair during screening.');
+  if (currentPhoto?.uri) {
+    return {
+      conditionLabel: 'Photo ready',
+      instruction: 'Photo captured',
+      lengthLabel: 'Captured',
+      progress: clampPercent(Math.max(72, progressBase)),
+      statusLabel: 'Photo ready',
+      typeLabel: viewLabel,
+    };
   }
 
-  const aiStatus = analysis.decision === 'Eligible for hair donation'
-    ? 'Eligible for hair donation'
-    : 'Improve hair condition';
-  const status = aiStatus;
-  const tone = aiStatus === 'Eligible for hair donation' && !reasons.length ? 'success' : 'info';
+  if (isCapturing) {
+    return {
+      conditionLabel: 'Saving...',
+      instruction: 'Capturing automatically...',
+      lengthLabel: 'Capturing',
+      progress: 100,
+      statusLabel: 'Capturing...',
+      typeLabel: viewLabel,
+    };
+  }
+
+  if (autoCaptureEnabled) {
+    return {
+      conditionLabel: 'Ready',
+      instruction: 'Hold still. Auto capture will run now...',
+      lengthLabel: 'Ready',
+      progress: 96,
+      statusLabel: 'Auto ready',
+      typeLabel: viewLabel,
+    };
+  }
+
+  if (!liveFaceStatus?.valid) {
+    return {
+      conditionLabel: liveFaceStatus?.message || 'Aligning...',
+      instruction: liveFaceStatus?.message || 'Center your face and hair.',
+      lengthLabel: 'Scanning',
+      progress: 38,
+      statusLabel: 'Scanning...',
+      typeLabel: viewLabel,
+    };
+  }
+
+  if (!brightnessReady) {
+    return {
+      conditionLabel: 'Need more light',
+      instruction: 'Move near bright, even lighting.',
+      lengthLabel: 'Measuring',
+      progress: 68,
+      statusLabel: 'More light',
+      typeLabel: viewLabel,
+    };
+  }
 
   return {
-    status,
-    tone,
-    reasons,
-    contextNote: donationRequirement?.donation_requirement_id
-      ? 'This check compares your answers and photos with the latest donation requirement.'
-      : 'Donation requirement data was not available, so this check used your answers and uploaded photos only.',
+    conditionLabel: 'Analyzing...',
+    instruction: 'Hold still...',
+    lengthLabel: 'Measuring',
+    progress: 82,
+    statusLabel: 'Scanning...',
+    typeLabel: viewLabel,
+  };
+};
+
+const getAnalysisHealthScore = (analysis = {}) => {
+  const confidence = Number(analysis?.confidence_score);
+  if (Number.isFinite(confidence) && confidence > 0) {
+    return Math.max(0, Math.min(100, Math.round(confidence <= 1 ? confidence * 100 : confidence)));
+  }
+
+  const shine = Math.max(0, Math.min(10, Number(analysis?.shine_level) || 6));
+  const frizz = Math.max(0, Math.min(10, Number(analysis?.frizz_level) || 4));
+  const dryness = Math.max(0, Math.min(10, Number(analysis?.dryness_level) || 4));
+  const oiliness = Math.max(0, Math.min(10, Number(analysis?.oiliness_level) || 3));
+  const damage = Math.max(0, Math.min(10, Number(analysis?.damage_level) || 4));
+  return Math.max(0, Math.min(100, Math.round(((shine + (10 - frizz) + (10 - dryness) + (10 - oiliness) + (10 - damage)) / 50) * 100)));
+};
+
+const getScoreLabel = (score) => {
+  if (score >= 80) return 'GOOD';
+  if (score >= 60) return 'FAIR';
+  return 'NEEDS CARE';
+};
+
+const buildConditionInsights = (analysis = {}) => {
+  const dryness = Number(analysis?.dryness_level);
+  const damage = Number(analysis?.damage_level);
+  const frizz = Number(analysis?.frizz_level);
+  const density = String(analysis?.detected_density || '').trim();
+
+  return [
+    {
+      key: 'scalp',
+      icon: 'check-circle-outline',
+      state: 'active',
+      tone: 'primary',
+      text: Number.isFinite(dryness) && dryness > 6 ? 'Scalp and ends need more moisture' : 'Healthy scalp',
+    },
+    {
+      key: 'dryness',
+      icon: Number.isFinite(dryness) && dryness > 5 ? 'information-outline' : 'check-circle-outline',
+      state: Number.isFinite(dryness) && dryness > 5 ? 'muted' : 'active',
+      tone: Number.isFinite(dryness) && dryness > 5 ? 'muted' : 'primary',
+      text: Number.isFinite(dryness) && dryness > 5 ? 'Slight dryness at ends' : 'Moisture level looks balanced',
+    },
+    {
+      key: 'damage',
+      icon: Number.isFinite(damage) && damage > 5 ? 'information-outline' : 'check-circle-outline',
+      state: Number.isFinite(damage) && damage > 5 ? 'muted' : 'active',
+      tone: Number.isFinite(damage) && damage > 5 ? 'muted' : 'primary',
+      text: Number.isFinite(damage) && damage > 5 ? 'Visible damage needs attention' : 'No structural damage',
+    },
+    {
+      key: 'density',
+      icon: 'check-circle-outline',
+      state: 'active',
+      tone: 'primary',
+      text: density ? `${density} thickness` : (Number.isFinite(frizz) && frizz > 6 ? 'Frizz needs smoothing' : 'Good thickness'),
+    },
+  ];
+};
+
+const getRecommendationIconName = (recommendation = {}) => {
+  const source = `${recommendation?.title || ''} ${recommendation?.recommendation_text || ''}`.toLowerCase();
+  if (source.includes('protein') || source.includes('biotin') || source.includes('keratin')) return 'test-tube';
+  if (source.includes('trim') || source.includes('cut')) return 'content-cut';
+  if (source.includes('heat') || source.includes('dry')) return 'thermometer';
+  return 'water-outline';
+};
+
+const buildDefaultRecommendations = (analysis = {}) => {
+  const dryness = Number(analysis?.dryness_level);
+  const damage = Number(analysis?.damage_level);
+  const frizz = Number(analysis?.frizz_level);
+
+  return [
+    {
+      title: 'Conditioning',
+      recommendation_text: Number.isFinite(dryness) && dryness > 5
+        ? 'Increase deep conditioning to 2x/week.'
+        : 'Maintain weekly deep conditioning.',
+      priority_order: 1,
+    },
+    {
+      title: 'Protein/Biotin',
+      recommendation_text: Number.isFinite(damage) && damage > 5
+        ? 'Add a keratin-based serum to the ends.'
+        : 'Use a light strengthening serum on wash days.',
+      priority_order: 2,
+    },
+    {
+      title: 'Trim',
+      recommendation_text: Number.isFinite(damage) && damage > 4
+        ? 'A 1-inch trim is recommended soon.'
+        : 'No urgent trim needed before donation.',
+      priority_order: 3,
+    },
+    {
+      title: 'Reduce Heat',
+      recommendation_text: Number.isFinite(frizz) && frizz > 5
+        ? 'Minimize blow-drying to preserve natural oils.'
+        : 'Keep heat styling low to preserve shine.',
+      priority_order: 4,
+    },
+  ];
+};
+
+const buildDonationAssessment = ({ analysis = {}, donationRequirement = null }) => {
+  const totalLengthCm = Number(analysis?.estimated_length);
+  const configuredMinimumCm = Number(donationRequirement?.minimum_hair_length);
+  const minimumLengthCm = Math.max(
+    35.56,
+    Number.isFinite(configuredMinimumCm) && configuredMinimumCm > 0 ? configuredMinimumCm : 0,
+  );
+  const totalInches = cmToInches(totalLengthCm);
+  const minimumInches = cmToInches(minimumLengthCm);
+  const isLengthDetected = Number.isFinite(totalLengthCm) && totalLengthCm > 0;
+  const meetsLengthRequirement = isLengthDetected && totalLengthCm >= minimumLengthCm;
+  const isDonationReady = meetsLengthRequirement && analysis?.decision !== 'Improve hair condition';
+  const donatableLengthCm = meetsLengthRequirement ? minimumLengthCm : 0;
+  const neededLengthCm = isLengthDetected ? Math.max(0, minimumLengthCm - totalLengthCm) : null;
+  const cutLineBottomPercent = meetsLengthRequirement && totalLengthCm > 0
+    ? Math.max(24, Math.min(82, (donatableLengthCm / totalLengthCm) * 100))
+    : 18;
+  const hairLengthLabel = isLengthDetected
+    ? `${totalInches.toFixed(1)} inches`
+    : 'Not detected';
+  const donatableLengthLabel = meetsLengthRequirement
+    ? `${cmToInches(donatableLengthCm).toFixed(1)} inches`
+    : isLengthDetected
+      ? `${cmToInches(neededLengthCm).toFixed(1)} inches more needed`
+      : 'Not detected';
+
+  return {
+    cutLineBottomPercent,
+    donatableLengthLabel,
+    hairLengthLabel,
+    isDonationReady,
+    meetsLengthRequirement,
+    minimumLengthLabel: `${minimumInches.toFixed(1)} inches`,
+    summary: isDonationReady
+      ? (analysis?.donation_readiness_note || 'Your hair condition and visible length are suited for donation based on this scan.')
+      : meetsLengthRequirement
+        ? 'Your scanned hair length appears long enough for donation, but the condition still needs review or improvement before proceeding.'
+        : (analysis?.donation_readiness_note || 'Your hair is not ready for donation yet. Follow the recommendations and scan again.'),
   };
 };
 
@@ -374,7 +515,19 @@ function ChoiceList({ value, options, onChange, multi = false }) {
             }}
             style={[styles.choiceCard, isActive ? styles.choiceCardActive : null]}
           >
+            <View style={[styles.choiceIconWrap, isActive ? styles.choiceIconWrapActive : null]}>
+              <MaterialCommunityIcons
+                name={isActive ? 'check-circle' : option.value === 'no' ? 'close-circle-outline' : 'check-circle-outline'}
+                size={22}
+                color={isActive ? theme.colors.textOnBrand : theme.colors.textSecondary}
+              />
+            </View>
             <Text style={[styles.choiceLabel, isActive ? styles.choiceLabelActive : null]}>{option.label}</Text>
+            <MaterialCommunityIcons
+              name="chevron-right"
+              size={20}
+              color={isActive ? theme.colors.brandPrimary : theme.colors.textMuted}
+            />
           </Pressable>
         );
       })}
@@ -383,71 +536,44 @@ function ChoiceList({ value, options, onChange, multi = false }) {
 }
 
 function LiveHairCameraPanel({
+  autoCaptureEnabled,
+  cameraFacing,
   currentView,
   currentPhoto,
-  photoIndex,
-  photos,
+  flashMode,
   requiredViews,
   completedPhotoCount,
   hasCameraPermission,
   cameraRef,
+  liveScanStatus,
   liveFaceStatus,
   canUseNativeLiveCamera,
-  liveFrameBrightness,
-  liveNoAccessories,
   isCapturing,
   isUploading,
   isAnalyzing,
-  cameraError,
-  autoCaptureEnabled,
   onCapture,
+  onToggleCamera,
+  onToggleFlash,
   onUpload,
   onRemove,
-  onSelectView,
+  onClose,
   onRequestPermission,
   onFacesChange,
 }) {
   const { width: windowWidth } = useWindowDimensions();
-  const cameraStageSize = Math.min(Math.max(windowWidth - theme.spacing.lg * 2, 292), 390);
+  const cameraStageWidth = Math.min(Math.max(windowWidth - theme.spacing.sm * 2, 320), 520);
+  const cameraStageHeight = Math.min(Math.max(windowWidth * 1.28, 460), 620);
   const scanLineProgress = useRef(new Animated.Value(0)).current;
   const statusToneStyle = liveFaceStatus?.valid
     ? styles.liveStatusPillSuccess
     : liveFaceStatus?.tone === 'error'
       ? styles.liveStatusPillError
       : styles.liveStatusPillWarning;
-  const scannerMessage = canUseNativeLiveCamera
-    ? liveFaceStatus?.message || 'Scanning face and hair visibility.'
-    : isExpoGoRuntime
-      ? 'Camera preview is active. Live face detection requires the development build, not Expo Go.'
-    : nativeVisionCameraLoadError
-      ? `Vision Camera did not load: ${nativeVisionCameraLoadError}`
-    : nativeFaceCameraLoadError
-      ? `Live face detection did not load: ${nativeFaceCameraLoadError}`
-      : 'Live face detection needs the rebuilt native app.';
-  const scannerTitle = canUseNativeLiveCamera
-    ? (liveFaceStatus?.valid ? 'Ready to scan' : isSideProfileView(currentView) ? 'Checking profile' : 'Live analysis')
-    : isExpoGoRuntime ? 'Camera preview' : 'Native scanner not active';
-  const scannerIconState = canUseNativeLiveCamera
-    ? (liveFaceStatus?.valid ? 'success' : 'warning')
-    : 'danger';
-  const resolvedScannerIconState = scannerIconState === 'warning' ? 'active' : scannerIconState;
   const liveStatusDotStyle = liveFaceStatus?.valid
     ? styles.liveStatusDotValid
     : liveFaceStatus?.tone === 'error' || !canUseNativeLiveCamera
       ? styles.liveStatusDotError
       : styles.liveStatusDotActive;
-  const angleChecklistLabel = isSideProfileView(currentView)
-    ? 'Side profile'
-    : isHairEndsView(currentView)
-      ? 'Ends visible'
-      : 'Front view';
-  const isBrightEnough = canUseNativeLiveCamera && liveFrameBrightness >= 100;
-  const liveChecklistItems = [
-    { label: 'Bright light', checked: canUseNativeLiveCamera ? isBrightEnough : Boolean(hasCameraPermission) },
-    { label: angleChecklistLabel, checked: Boolean(liveFaceStatus?.valid && canUseNativeLiveCamera) },
-    { label: 'Root to ends', checked: Boolean(currentPhoto || (liveFaceStatus?.valid && !isHairEndsView(currentView))) },
-    { label: 'No accessories', checked: Boolean(liveNoAccessories && canUseNativeLiveCamera) },
-  ];
   const shortViewHint = isSideProfileView(currentView)
     ? 'Side view'
     : isHairEndsView(currentView)
@@ -479,7 +605,7 @@ function LiveHairCameraPanel({
     };
   }, [currentPhoto?.uri, scanLineProgress]);
 
-  const scanLineTravel = Math.max(cameraStageSize - 220, 90);
+  const scanLineTravel = Math.max(cameraStageHeight - 220, 120);
   const scanLineStyle = {
     transform: [
       {
@@ -493,7 +619,7 @@ function LiveHairCameraPanel({
 
   return (
     <View style={styles.liveCameraPanel}>
-      <View style={[styles.liveCameraStage, { width: cameraStageSize, height: cameraStageSize }]}>
+      <View style={[styles.liveCameraStage, { width: cameraStageWidth, height: cameraStageHeight }]}>
         {currentPhoto?.uri ? (
           <>
             <Image source={{ uri: currentPhoto.uri }} style={styles.liveCameraPreview} resizeMode="cover" />
@@ -520,6 +646,8 @@ function LiveHairCameraPanel({
           canUseNativeLiveCamera ? (
             <NativeLiveFaceCamera
               cameraRef={cameraRef}
+              facing={cameraFacing}
+              flashMode={flashMode}
               isActive
               onFacesChange={onFacesChange}
             />
@@ -527,7 +655,9 @@ function LiveHairCameraPanel({
             <CameraView
               ref={cameraRef}
               style={styles.liveCameraPreview}
-              facing="front"
+              facing={cameraFacing}
+              enableTorch={flashMode === 'on' && cameraFacing === 'back'}
+              flash={flashMode === 'on' && cameraFacing === 'back' ? 'on' : 'off'}
               mode="picture"
               animateShutter
             />
@@ -549,26 +679,45 @@ function LiveHairCameraPanel({
         )}
 
         <View style={styles.liveCameraTopBar}>
+          <Pressable
+            onPress={currentPhoto ? onRemove : onClose}
+            disabled={isCapturing || isUploading || isAnalyzing}
+            style={styles.liveCameraOverlayIcon}
+          >
+            <AppIcon name="close" size="sm" state="inverse" />
+          </Pressable>
           <View style={[styles.liveStatusPill, statusToneStyle]}>
             <View style={[styles.liveStatusDot, liveStatusDotStyle, isAnalyzing ? styles.liveStatusDotActive : null]} />
-            <Text style={styles.liveStatusText}>{currentPhoto ? 'Photo ready' : isAnalyzing ? 'AI analyzing' : scannerTitle}</Text>
+            <Text style={styles.liveStatusText}>{isAnalyzing ? 'AI analyzing' : liveScanStatus.statusLabel}</Text>
           </View>
-          <Text style={styles.liveCounterText}>{completedPhotoCount}/{requiredViews.length}</Text>
+          <Pressable
+            onPress={onToggleFlash}
+            disabled={isCapturing || isUploading || isAnalyzing || currentPhoto?.uri}
+            style={styles.liveCameraOverlayIcon}
+          >
+            <AppIcon name={flashMode === 'on' ? 'flash' : 'flash-off'} size="sm" state="inverse" />
+          </Pressable>
         </View>
 
-        <View style={styles.liveAnalysisToast}>
-          <AppIcon name={liveFaceStatus?.valid ? 'check-circle-outline' : 'alert-circle-outline'} size="sm" state={resolvedScannerIconState} />
-          <Text numberOfLines={2} style={styles.liveAnalysisToastText}>
-            {currentPhoto ? 'Photo saved.' : scannerMessage}
-          </Text>
+        <View style={styles.liveScanFloatingCard}>
+          <View style={styles.liveScanMetricRow}>
+            <Text style={styles.liveScanMetricLabel}>Hair Length</Text>
+            <Text style={styles.liveScanMetricValue}>{liveScanStatus.lengthLabel}</Text>
+          </View>
+          <View style={styles.liveScanMetricRow}>
+            <Text style={styles.liveScanMetricLabel}>Hair Type</Text>
+            <Text style={styles.liveScanMetricValue}>{liveScanStatus.typeLabel || shortViewHint}</Text>
+          </View>
+          <View style={styles.liveScanMetricRow}>
+            <Text style={styles.liveScanMetricLabel}>Condition</Text>
+            <Text style={styles.liveScanMetricValueAccent} numberOfLines={2}>{liveScanStatus.conditionLabel}</Text>
+          </View>
+          <View style={styles.liveScanProgressTrack}>
+            <View style={[styles.liveScanProgressFill, { width: `${liveScanStatus.progress}%` }]} />
+          </View>
         </View>
 
         <View style={styles.liveFrameGuide} pointerEvents="none">
-          <View style={styles.liveLengthGuide}>
-            <Text style={styles.liveLengthGuideLabelTop}>Root</Text>
-            <View style={styles.liveLengthGuideLine} />
-            <Text style={styles.liveLengthGuideLabelBottom}>Ends</Text>
-          </View>
           {!currentPhoto ? (
             <Animated.View style={[styles.liveScanLine, scanLineStyle]} />
           ) : null}
@@ -580,86 +729,45 @@ function LiveHairCameraPanel({
 
       </View>
 
-        <View style={styles.liveCameraBottomSheet}>
-        <View style={styles.liveViewHeader}>
-          <View>
-            <Text style={styles.liveStepLabel}>View {photoIndex + 1}/{requiredViews.length}</Text>
-            <Text style={styles.liveCameraTitle}>{currentView?.label || 'Hair photo'}</Text>
-          </View>
-          <Text style={styles.liveViewHint}>{shortViewHint}</Text>
-        </View>
-
-        <View style={styles.liveChecklist}>
-          {liveChecklistItems.map((item) => (
-            <View key={item.label} style={styles.liveChecklistItem}>
-              <AppIcon
-                name={item.checked ? 'check-circle-outline' : 'circle-outline'}
-                size="sm"
-                state={item.checked ? 'success' : 'muted'}
-              />
-              <Text style={styles.liveChecklistText}>{item.label}</Text>
-            </View>
-          ))}
-        </View>
-
-        <Text style={styles.liveCameraBody}>{currentView?.helperText}</Text>
-        {!currentPhoto && autoCaptureEnabled ? (
-          <Text style={styles.liveAutoCaptureText}>Auto-capture is on. Hold still for live length scan.</Text>
-        ) : null}
-
-        {cameraError ? <Text style={styles.questionError}>{cameraError}</Text> : null}
-
-        <View style={styles.liveActionRow}>
-          <AppButton
-            title={currentPhoto ? 'Retake' : hasCameraPermission ? (isCapturing ? 'Scanning...' : 'Scan') : 'Allow'}
-            fullWidth={false}
-            leading={<AppIcon name={currentPhoto ? 'refresh' : hasCameraPermission ? 'checkHair' : 'camera'} size="md" state="inverse" />}
-            onPress={currentPhoto ? onRemove : hasCameraPermission ? onCapture : onRequestPermission}
-            loading={isCapturing}
-            disabled={isCapturing || isUploading || isAnalyzing || (!currentPhoto && canUseNativeLiveCamera && !liveFaceStatus?.valid)}
-            style={styles.livePrimaryAction}
-          />
-          <AppButton
-            title={currentPhoto ? 'Change' : 'Upload'}
-            variant="outline"
-            fullWidth={false}
-            leading={<AppIcon name="upload" size="md" state="active" />}
-            onPress={onUpload}
-            loading={isUploading}
-            disabled={isCapturing || isUploading || isAnalyzing}
-            style={styles.liveSecondaryAction}
-          />
-        </View>
-      </View>
-
-      <View style={styles.liveThumbRail}>
-        {requiredViews.map((view, index) => (
+      <View style={styles.liveCameraBottomSheet}>
+        <Text style={styles.liveHoldStillText}>{liveScanStatus.instruction}</Text>
+        <View style={styles.liveCaptureControls}>
           <Pressable
-            key={view.key}
-            onPress={() => onSelectView(index)}
+            onPress={onUpload}
+            disabled={isCapturing || isUploading || isAnalyzing}
+            style={styles.liveRoundControl}
+          >
+            <AppIcon name="image" size="md" state="inverse" />
+          </Pressable>
+          <Pressable
+            onPress={currentPhoto ? onRemove : hasCameraPermission ? onCapture : onRequestPermission}
+            disabled={isCapturing || isUploading || isAnalyzing}
             style={[
-              styles.liveThumbItem,
-              photoIndex === index ? styles.liveThumbItemActive : null,
-              photos[index] ? styles.liveThumbItemDone : null,
+              styles.liveCaptureButton,
+              autoCaptureEnabled ? styles.liveCaptureButtonReady : null,
+              (isCapturing || isAnalyzing) ? styles.liveCaptureButtonDisabled : null,
             ]}
           >
-            {photos[index]?.uri ? (
-              <Image source={{ uri: photos[index].uri }} style={styles.liveThumbImage} resizeMode="cover" />
-            ) : (
-              <AppIcon name="camera" size="sm" state={photoIndex === index ? 'active' : 'muted'} />
-            )}
-            <Text style={[styles.liveThumbLabel, photoIndex === index ? styles.liveThumbLabelActive : null]} numberOfLines={1}>
-              {index + 1}
-            </Text>
+            {isCapturing ? <ActivityIndicator color={theme.colors.brandPrimary} /> : null}
           </Pressable>
-        ))}
+          <Pressable
+            onPress={onToggleCamera}
+            disabled={isCapturing || isUploading || isAnalyzing}
+            style={styles.liveRoundControl}
+          >
+            <AppIcon name="camera-retake-outline" size="md" state="inverse" />
+          </Pressable>
+        </View>
       </View>
     </View>
   );
 }
 
-function NativeLiveFaceCamera({ cameraRef, isActive, onFacesChange }) {
-  const device = useNativeCameraDevice('front');
+function NativeLiveFaceCamera({ cameraRef, facing = 'front', flashMode = 'off', isActive, onFacesChange }) {
+  const normalizedFacing = facing === 'back' ? 'back' : 'front';
+  const device = useNativeCameraDevice(normalizedFacing);
+  const supportsTorch = Boolean(device?.hasTorch || device?.hasFlash);
+  const safeTorchMode = flashMode === 'on' && supportsTorch ? 'on' : 'off';
   const faceDetectionOptions = React.useMemo(() => ({
     performanceMode: 'fast',
     landmarkMode: 'none',
@@ -667,8 +775,8 @@ function NativeLiveFaceCamera({ cameraRef, isActive, onFacesChange }) {
     classificationMode: 'all',
     minFaceSize: 0.18,
     trackingEnabled: true,
-    cameraFacing: 'front',
-  }), []);
+    cameraFacing: normalizedFacing,
+  }), [normalizedFacing]);
   const { detectFaces, stopListeners } = useNativeFaceDetector(faceDetectionOptions);
   const handleFacesOnJs = React.useMemo(
     () => NativeWorklets.createRunOnJS((faces = [], brightness = -1) => {
@@ -711,7 +819,9 @@ function NativeLiveFaceCamera({ cameraRef, isActive, onFacesChange }) {
       <View style={styles.liveCameraPermission}>
         <AppIcon name="camera" size="xl" state="active" />
         <Text style={styles.liveCameraPermissionTitle}>Live scanner starting</Text>
-        <Text style={styles.liveCameraPermissionBody}>Camera device is not ready yet. You can still upload a photo for this view.</Text>
+        <Text style={styles.liveCameraPermissionBody}>
+          {nativeVisionCameraLoadError || nativeFaceCameraLoadError || 'Camera device is not ready yet. You can still upload a photo for this view.'}
+        </Text>
       </View>
     );
   }
@@ -725,44 +835,30 @@ function NativeLiveFaceCamera({ cameraRef, isActive, onFacesChange }) {
       photo
       frameProcessor={frameProcessor}
       pixelFormat="yuv"
+      torch={safeTorchMode}
     />
   );
 }
 
-function ResultMetricCard({ label, value }) {
+function ConditionInsightRow({ item }) {
   return (
-    <View style={styles.metricCard}>
-      <Text style={styles.metricLabel}>{label}</Text>
-      <Text style={styles.metricValue}>{value || 'Not detected'}</Text>
+    <View style={styles.conditionInsightRow}>
+      <AppIcon name={item.icon} size="md" state={item.state} />
+      <Text style={[styles.conditionInsightText, item.tone === 'muted' ? styles.conditionInsightTextMuted : null]}>{item.text}</Text>
     </View>
   );
 }
 
-function RecommendationCard({ recommendation, isTopPriority }) {
+function AiRecommendationRow({ recommendation }) {
   return (
-    <View style={[styles.recommendationCard, isTopPriority ? styles.recommendationCardPrimary : null]}>
-      <Text style={styles.recommendationPill}>{isTopPriority ? 'Top priority' : `Priority ${recommendation.priority_order}`}</Text>
-      {recommendation.title ? <Text style={styles.recommendationTitle}>{recommendation.title}</Text> : null}
-      <Text style={styles.recommendationBody}>{recommendation.recommendation_text}</Text>
-    </View>
-  );
-}
-
-function AnalysisLevelRow({ label, value, positive = false }) {
-  const level = Math.max(1, Math.min(10, Math.round(Number(value) || 1)));
-  return (
-    <View style={styles.analysisLevelRow}>
-      <Text style={styles.analysisLevelLabel}>{label}</Text>
-      <View style={styles.analysisLevelTrack}>
-        <View
-          style={[
-            styles.analysisLevelFill,
-            positive ? styles.analysisLevelFillPositive : null,
-            { width: `${level * 10}%` },
-          ]}
-        />
+    <View style={styles.aiRecommendationRow}>
+      <View style={styles.aiRecommendationIcon}>
+        <AppIcon name={getRecommendationIconName(recommendation)} size="md" state="active" />
       </View>
-      <Text style={styles.analysisLevelValue}>{level}</Text>
+      <View style={styles.aiRecommendationCopy}>
+        <Text style={styles.aiRecommendationTitle}>{recommendation.title || 'Hair care'}</Text>
+        <Text style={styles.aiRecommendationText}>{recommendation.recommendation_text}</Text>
+      </View>
     </View>
   );
 }
@@ -782,7 +878,7 @@ function AnalysisLoadingSplash({ resolvedTheme, photos = [], completedPhotoCount
       <View style={styles.analysisScanHeader}>
         <View>
           <Text style={styles.analysisSplashTitle}>Analyzing hair</Text>
-          <Text style={styles.analysisSplashText}>Checking photos, length, texture, and accessories.</Text>
+          <Text style={styles.analysisSplashText}>Checking photos, length, texture, and condition.</Text>
         </View>
         <Text style={styles.analysisScanPercent}>{progressPercent}%</Text>
       </View>
@@ -810,7 +906,7 @@ function AnalysisLoadingSplash({ resolvedTheme, photos = [], completedPhotoCount
           {[
             ['hair-dryer-outline', 'Texture'],
             ['ruler', 'Length'],
-            ['glasses', 'Accessories'],
+            ['checkHair', 'Condition'],
           ].map(([icon, label], index) => (
             <View key={label} style={styles.analysisScanCheck}>
               {index < 2 ? (
@@ -832,175 +928,6 @@ function AnalysisLoadingSplash({ resolvedTheme, photos = [], completedPhotoCount
   );
 }
 
-const resolveCheckHairVoiceReply = ({ transcript, stepIndex, currentView, completedPhotoCount, requiredCount, hasAnalysis }) => {
-  const normalized = String(transcript || '').toLowerCase();
-  if (normalized.includes('start') || normalized.includes('begin')) {
-    return stepIndex === 0
-      ? 'Answer the current hair question. I will move with you one step at a time.'
-      : 'Continue from the current CheckHair step.';
-  }
-  if (normalized.includes('photo') || normalized.includes('picture') || normalized.includes('camera')) {
-    return 'Use the square camera area. Capture the front view, side profile, and hair ends. You can retake or change each photo.';
-  }
-  if (normalized.includes('accessory') || normalized.includes('glasses') || normalized.includes('mask')) {
-    return 'Remove glasses, masks, clips, caps, and anything covering the face or hair before scanning.';
-  }
-  if (normalized.includes('side')) {
-    return 'For side profile, turn your head sideways and keep the hair visible from root area to ends.';
-  }
-  if (normalized.includes('analyze') || normalized.includes('analysis')) {
-    if (completedPhotoCount < requiredCount) return `Complete all ${requiredCount} photos first. You have ${completedPhotoCount}.`;
-    return hasAnalysis ? 'Your analysis is ready. Review the detected values and save if they look correct.' : 'Tap Analyze after the required photos are complete.';
-  }
-  if (stepIndex === 1) return 'Confirm the photo rules before opening the camera.';
-  if (stepIndex === 2) return `Current view is ${currentView?.label || 'hair photo'}. Use Scan or Upload, then move to the next view.`;
-  if (stepIndex === 3) return hasAnalysis ? 'Review the result. Save it if you are satisfied, or edit details and rerun analysis.' : 'The AI is checking your hair photos now.';
-  return 'I can guide your hair check. Ask about photos, side profile, accessories, or analysis.';
-};
-
-function CheckHairVoiceAssistant({
-  resolvedTheme,
-  stepIndex,
-  currentView,
-  completedPhotoCount,
-  requiredCount,
-  hasAnalysis,
-}) {
-  const [enabled, setEnabled] = useState(true);
-  const [loaded, setLoaded] = useState(false);
-  const [isListening, setIsListening] = useState(false);
-  const [, setReply] = useState('');
-  const intentionalStopRef = useRef(false);
-
-  const speak = React.useCallback((message) => {
-    if (!enabled || !message) return;
-    Speech.stop();
-    Speech.speak(message, { rate: 0.92, pitch: 1 });
-  }, [enabled]);
-
-  useEffect(() => {
-    let mounted = true;
-    AsyncStorage.getItem(CHECKHAIR_VOICE_ASSISTANT_STORAGE_KEY)
-      .then((value) => {
-        if (!mounted) return;
-        setEnabled(value !== 'false');
-      })
-      .finally(() => {
-        if (mounted) setLoaded(true);
-      });
-    return () => {
-      mounted = false;
-      intentionalStopRef.current = true;
-      Speech.stop();
-      try {
-        ExpoSpeechRecognitionModule.abort();
-      } catch {}
-    };
-  }, []);
-
-  useSpeechRecognitionEvent('start', () => {
-    setIsListening(true);
-    setReply('Listening...');
-  });
-
-  useSpeechRecognitionEvent('end', () => setIsListening(false));
-
-  useSpeechRecognitionEvent('result', (event) => {
-    if (!enabled) return;
-    const transcript = event.results?.[0]?.transcript || '';
-    if (!transcript || event.isFinal === false) return;
-    const nextReply = resolveCheckHairVoiceReply({
-      transcript,
-      stepIndex,
-      currentView,
-      completedPhotoCount,
-      requiredCount,
-      hasAnalysis,
-    });
-    setReply(nextReply);
-    speak(nextReply);
-  });
-
-  useSpeechRecognitionEvent('error', (event) => {
-    setIsListening(false);
-    const normalized = `${event?.error || ''} ${event?.message || ''}`.toLowerCase();
-    if (intentionalStopRef.current || normalized.includes('abort') || normalized.includes('cancel')) {
-      intentionalStopRef.current = false;
-      return;
-    }
-    const message = 'I could not hear that clearly. Tap the mic and try again.';
-    setReply(message);
-    speak(message);
-  });
-
-  const toggle = async () => {
-    const next = !enabled;
-    setEnabled(next);
-    await AsyncStorage.setItem(CHECKHAIR_VOICE_ASSISTANT_STORAGE_KEY, next ? 'true' : 'false');
-    await Haptics.selectionAsync();
-    if (!next) {
-      intentionalStopRef.current = true;
-      setIsListening(false);
-      setReply('');
-      Speech.stop();
-      try {
-        ExpoSpeechRecognitionModule.abort();
-      } catch {}
-    }
-  };
-
-  const listen = async () => {
-    if (!enabled) return;
-    await Haptics.selectionAsync();
-    const available = ExpoSpeechRecognitionModule.isRecognitionAvailable();
-    if (!available) {
-      const message = 'Speech recognition is not available on this device.';
-      setReply(message);
-      speak(message);
-      return;
-    }
-    const permission = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
-    if (!permission.granted) {
-      const message = 'Allow microphone and speech recognition access so I can guide your hair check.';
-      setReply(message);
-      speak(message);
-      return;
-    }
-    if (isListening) {
-      intentionalStopRef.current = true;
-      ExpoSpeechRecognitionModule.stop();
-      return;
-    }
-    setReply('Listening...');
-    ExpoSpeechRecognitionModule.start({ lang: 'en-US', interimResults: true, continuous: false });
-  };
-
-  if (!loaded) return null;
-
-  return (
-    <View style={styles.checkHairVoiceBar}>
-      <Pressable
-        onPress={listen}
-        disabled={!enabled}
-        style={({ pressed }) => [
-          styles.checkHairVoiceButton,
-          !enabled ? styles.checkHairVoiceButtonDisabled : null,
-          pressed ? styles.interactivePressed : null,
-        ]}
-      >
-        <AppIcon name={isListening ? 'microphone' : 'microphone-outline'} size="md" state={enabled ? 'active' : 'muted'} />
-        <Text numberOfLines={1} style={styles.checkHairVoiceText}>
-          {enabled ? (isListening ? 'Listening' : 'Ask AI') : 'Voice off'}
-        </Text>
-      </Pressable>
-      <Pressable onPress={toggle} style={styles.checkHairVoiceToggle}>
-        <AppIcon name={enabled ? 'volume-high' : 'volume-off'} size="md" state={enabled ? 'active' : 'muted'} />
-      </Pressable>
-      {isListening ? <Text numberOfLines={1} style={styles.checkHairVoiceReply}>Listening...</Text> : null}
-    </View>
-  );
-}
-
 function ProfileSetupGate({ completionMeta, onManageProfile }) {
   return (
     <Pressable onPress={onManageProfile} style={({ pressed }) => [styles.profileGateCard, pressed ? styles.interactivePressed : null]}>
@@ -1015,26 +942,6 @@ function ProfileSetupGate({ completionMeta, onManageProfile }) {
         <AppIcon name="chevronRight" size="md" state="muted" />
       </View>
     </Pressable>
-  );
-}
-
-function CorrectionChoiceField({ value, options, onChange }) {
-  return (
-    <View style={styles.choiceList}>
-      {options.map((option) => {
-        const isActive = value === option.value;
-
-        return (
-          <Pressable
-            key={option.value}
-            onPress={() => onChange(option.value)}
-            style={[styles.choiceCard, isActive ? styles.choiceCardActive : null]}
-          >
-            <Text style={[styles.choiceLabel, isActive ? styles.choiceLabelActive : null]}>{option.label}</Text>
-          </Pressable>
-        );
-      })}
-    </View>
   );
 }
 
@@ -1152,6 +1059,15 @@ const getQuestionStepsForMode = (questionnaireMode = 'first_time') => (
 const getVisibleQuestions = (answers = {}, questionnaireMode = 'first_time') => (
   getQuestionStepsForMode(questionnaireMode).filter((item) => !item.showWhen || item.showWhen(answers))
 );
+
+const getChoiceDisplayLabel = (optionsKey, value) => {
+  if (Array.isArray(value)) {
+    return value.map((item) => getChoiceDisplayLabel(optionsKey, item)).filter(Boolean).join(', ');
+  }
+
+  const option = (hairAnalyzerQuestionChoices[optionsKey] || []).find((item) => item.value === value);
+  return option?.label || value || 'Not answered';
+};
 
 const weekdayLabels = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
 
@@ -1538,16 +1454,18 @@ export function DonorHairSubmissionScreen() {
   const cameraRef = useRef(null);
   const lastTransientErrorKeyRef = useRef('');
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
-  const [isAnalyzerActive, setIsAnalyzerActive] = useState(false);
+  const [isAnalyzerActive, setIsAnalyzerActive] = useState(true);
   const [stepIndex, setStepIndex] = useState(0);
   const [questionIndex, setQuestionIndex] = useState(0);
   const [photoIndex, setPhotoIndex] = useState(0);
   const [isCapturingPhoto, setIsCapturingPhoto] = useState(false);
-  const [cameraModalError, setCameraModalError] = useState('');
+  const [, setCameraModalError] = useState('');
   const [nativeCameraPermission, setNativeCameraPermission] = useState('not-determined');
+  const [cameraFacing, setCameraFacing] = useState('front');
+  const [flashMode, setFlashMode] = useState('off');
+  const [previewImageUri, setPreviewImageUri] = useState('');
   const [liveFaceStatus, setLiveFaceStatus] = useState(getInitialLiveFaceStatus);
   const [liveFrameBrightness, setLiveFrameBrightness] = useState(-1);
-  const [liveNoAccessories, setLiveNoAccessories] = useState(false);
   const lastLiveFaceStatusKeyRef = useRef('');
   const autoCaptureTimeoutRef = useRef(null);
   const autoCaptureCooldownUntilRef = useRef(0);
@@ -1556,7 +1474,7 @@ export function DonorHairSubmissionScreen() {
   const [historyError, setHistoryError] = useState('');
   const [selectedHistoryDate, setSelectedHistoryDate] = useState('');
   const [selectedHistoryEntries, setSelectedHistoryEntries] = useState([]);
-  const [resultConfirmationMode, setResultConfirmationMode] = useState('pending');
+  const [, setResultConfirmationMode] = useState('pending');
   const [retryCountdownSeconds, setRetryCountdownSeconds] = useState(0);
   const [transientErrorNotice, setTransientErrorNotice] = useState(null);
   const { user, profile, resolvedTheme } = useAuth();
@@ -1576,7 +1494,6 @@ export function DonorHairSubmissionScreen() {
     requiredViews,
     analysis,
     donationRequirement,
-    logisticsSettings,
     error,
     successMessage,
     isLoadingContext,
@@ -1585,7 +1502,6 @@ export function DonorHairSubmissionScreen() {
     isAnalyzing,
     isSaving,
     completedPhotoCount,
-    progressLabel,
     pickPhotoForSlot,
     savePhotoAssetForSlot,
     removePhoto,
@@ -1611,11 +1527,29 @@ export function DonorHairSubmissionScreen() {
     mode: 'onChange',
     defaultValues: buildHairResultCorrectionDefaultValues(null),
   });
+  const [questionnaireDraftAnswers, setQuestionnaireDraftAnswers] = useState(() => ({
+    ...hairAnalyzerQuestionDefaultValues,
+  }));
   const questionnaireValues = useWatch({ control: questionForm.control });
   const complianceAcknowledged = useWatch({ control: complianceForm.control, name: 'acknowledged' });
   const savedHistory = useMemo(() => buildHairConditionHistory(analysisHistory), [analysisHistory]);
   const isReturningUser = savedHistory.entries.length > 0;
   const questionnaireMode = isReturningUser ? 'returning_follow_up' : 'first_time';
+  const effectiveQuestionnaireValues = useMemo(() => ({
+    ...hairAnalyzerQuestionDefaultValues,
+    ...questionForm.getValues(),
+    ...(questionnaireValues || {}),
+    ...questionnaireDraftAnswers,
+    questionnaireMode,
+  }), [questionForm, questionnaireDraftAnswers, questionnaireMode, questionnaireValues]);
+  const getCurrentQuestionnaireAnswers = React.useCallback((overrides = {}) => ({
+    ...hairAnalyzerQuestionDefaultValues,
+    ...questionForm.getValues(),
+    ...(questionnaireValues || {}),
+    ...questionnaireDraftAnswers,
+    questionnaireMode,
+    ...overrides,
+  }), [questionForm, questionnaireDraftAnswers, questionnaireMode, questionnaireValues]);
   const donorProfileCompletionMeta = useMemo(() => buildProfileCompletionMeta({
     photo_path: profile?.photo_path || profile?.avatar_url || '',
     first_name: profile?.first_name || '',
@@ -1653,6 +1587,10 @@ export function DonorHairSubmissionScreen() {
       shouldTouch: false,
       shouldValidate: false,
     });
+    setQuestionnaireDraftAnswers((current) => ({
+      ...current,
+      questionnaireMode,
+    }));
   }, [questionForm, questionnaireMode]);
 
   useEffect(() => {
@@ -1679,11 +1617,8 @@ export function DonorHairSubmissionScreen() {
   }, [canUseNativeLiveCamera]);
 
   const visibleQuestions = useMemo(
-    () => getVisibleQuestions({
-      ...(questionnaireValues || {}),
-      questionnaireMode,
-    }, questionnaireMode),
-    [questionnaireMode, questionnaireValues]
+    () => getVisibleQuestions(effectiveQuestionnaireValues, questionnaireMode),
+    [effectiveQuestionnaireValues, questionnaireMode]
   );
   const currentQuestion = visibleQuestions[questionIndex] || visibleQuestions[0];
   const currentView = requiredViews[photoIndex];
@@ -1699,26 +1634,29 @@ export function DonorHairSubmissionScreen() {
   const hasCameraPermission = canUseNativeLiveCamera
     ? nativeCameraPermission === 'granted'
     : Boolean(cameraPermission?.granted);
-
-  const eligibility = useMemo(
-    () => buildEligibilitySummary({
-      analysis,
-      confirmedValues: null,
-      questionnaireAnswers: questionnaireValues,
-      donationRequirement,
-    }),
-    [analysis, questionnaireValues, donationRequirement]
-  );
-  const logisticsDestination = useMemo(
-    () => formatLogisticsDestination(logisticsSettings),
-    [logisticsSettings]
-  );
+  const toggleCameraFacing = React.useCallback(() => {
+    setCameraFacing((current) => (current === 'front' ? 'back' : 'front'));
+    setFlashMode('off');
+    const initialStatus = getInitialLiveFaceStatus(currentView);
+    lastLiveFaceStatusKeyRef.current = '';
+    setLiveFaceStatus(initialStatus);
+    setLiveFrameBrightness(-1);
+  }, [currentView]);
+  const toggleFlashMode = React.useCallback(() => {
+    if (cameraFacing !== 'back') {
+      setFlashMode('off');
+      setCameraModalError('Flash is available only on supported rear cameras.');
+      return;
+    }
+    setCameraModalError('');
+    setFlashMode((current) => (current === 'on' ? 'off' : 'on'));
+  }, [cameraFacing]);
 
   const stepTitles = useMemo(() => ([
-    'Questions',
-    'Photo guide',
-    'Capture or upload',
-    'AI result',
+    'Hair History',
+    'Scan Readiness',
+    'Camera Scan',
+    'AI Result',
   ]), []);
   const latestAnalyzedSubmission = useMemo(
     () => analysisHistory.find((submission) => Array.isArray(submission?.ai_screenings) && submission.ai_screenings.length) || null,
@@ -1758,10 +1696,10 @@ export function DonorHairSubmissionScreen() {
       clearedRetryState: true,
     });
 
+    const currentAnswers = getCurrentQuestionnaireAnswers();
     return await analyzePhotos({
       questionnaireAnswers: {
-        ...questionForm.getValues(),
-        questionnaireMode,
+        ...currentAnswers,
       },
       complianceContext: { acknowledged: Boolean(complianceAcknowledged) },
       historyContext: buildAnalysisHistoryContext(analysisHistory),
@@ -1773,8 +1711,7 @@ export function DonorHairSubmissionScreen() {
     clearAnalysisError,
     complianceAcknowledged,
     error?.title,
-    questionForm,
-    questionnaireMode,
+    getCurrentQuestionnaireAnswers,
     error?.retryUntil,
     user?.id,
   ]);
@@ -1890,6 +1827,11 @@ export function DonorHairSubmissionScreen() {
     setSelectedHistoryEntries(entries || []);
   }, []);
 
+  const closeAnalyzerToHome = React.useCallback(() => {
+    setIsAnalyzerActive(false);
+    router.replace('/donor/donations');
+  }, [router]);
+
   useEffect(() => {
     logAppEvent('donor_hair_submission.flow', 'Donor screening flow initialized without intro wizard steps.', {
       userId: user?.id || null,
@@ -1898,20 +1840,19 @@ export function DonorHairSubmissionScreen() {
     });
   }, [profile?.user_id, stepTitles, user?.id]);
 
-  const canMovePastQuestion = isAnswered(currentQuestion, questionnaireValues);
+  const canMovePastQuestion = isAnswered(currentQuestion, effectiveQuestionnaireValues);
   const isAutoAdvanceQuestion = stepIndex === 0 && currentQuestion?.type === 'choice';
   const isCurrentPhotoComplete = Boolean(photos[photoIndex]);
-  const showFooterPrimaryAction = stepIndex !== 2 && !(stepIndex === 3 && Boolean(analysis));
+  const showFooterPrimaryAction = stepIndex !== 1 && stepIndex !== 2 && !(stepIndex === 3 && Boolean(analysis));
   const isNextDisabled = (
     (stepIndex === 0 && !canMovePastQuestion)
-    || (stepIndex === 1 && !Boolean(complianceAcknowledged))
     || (stepIndex === 2 && !isCurrentPhotoComplete)
     || (stepIndex === 3 && (!analysis || isAnalyzing || isSaving))
   );
 
   const nextButtonTitle = useMemo(() => {
     if (stepIndex === 0) return questionIndex === visibleQuestions.length - 1 ? 'Continue' : 'Next';
-    if (stepIndex === 1) return 'Continue';
+    if (stepIndex === 1) return 'Start Camera Scan';
     if (stepIndex === 2) return photoIndex === requiredViews.length - 1 ? 'Analyze' : 'Next';
     return analysis ? (isSaving ? 'Saving...' : 'Save to hair log') : 'Retry analysis';
   }, [analysis, isSaving, photoIndex, questionIndex, requiredViews.length, stepIndex, visibleQuestions.length]);
@@ -1924,16 +1865,20 @@ export function DonorHairSubmissionScreen() {
       analysisKeys: Object.keys(analysis || {}),
     });
 
-    const result = await submitSubmission(buildHairReviewDefaultValues(analysis, questionForm.getValues()), {
+    const currentAnswers = getCurrentQuestionnaireAnswers();
+    const result = await submitSubmission(buildHairReviewDefaultValues(analysis, currentAnswers), {
       questionnaireAnswers: {
-        ...questionForm.getValues(),
-        questionnaireMode,
+        ...currentAnswers,
       },
       donationModeValue: '',
     });
 
     if (result?.success) {
       questionForm.reset({
+        ...hairAnalyzerQuestionDefaultValues,
+        questionnaireMode,
+      });
+      setQuestionnaireDraftAnswers({
         ...hairAnalyzerQuestionDefaultValues,
         questionnaireMode,
       });
@@ -1944,30 +1889,14 @@ export function DonorHairSubmissionScreen() {
       setStepIndex(0);
       setResultConfirmationMode('pending');
       setIsAnalyzerActive(false);
+      router.replace('/donor/donations');
     }
   };
 
-  const handleCorrectionSubmit = correctionForm.handleSubmit(async (values) => {
-    logAppEvent('donor_hair_submission.confirmation', 'User requested AI reassessment with corrected details.', {
-      userId: user?.id || null,
-      correctedLengthUnit: values.correctedLengthUnit,
-      hasCorrectedLength: Boolean(values.correctedLengthValue),
-      correctedTexture: values.correctedTexture || '',
-      correctedDensity: values.correctedDensity || '',
-    });
-
-    const result = await runFreshAnalysisAttempt('corrected_details_retry', {
-      correctedDetails: values,
-    });
-
-    if (result?.success) {
-      setResultConfirmationMode('pending');
-    }
-  });
-
-  const goToNextQuestionStep = (answersSnapshot = questionForm.getValues(), currentQuestionKey = currentQuestion?.key) => {
+  const goToNextQuestionStep = (answersSnapshot = null, currentQuestionKey = currentQuestion?.key) => {
+    const currentAnswersSnapshot = answersSnapshot || getCurrentQuestionnaireAnswers();
     const nextVisibleQuestions = getVisibleQuestions({
-      ...answersSnapshot,
+      ...currentAnswersSnapshot,
       questionnaireMode,
     }, questionnaireMode);
     const activeQuestionIndex = nextVisibleQuestions.findIndex((item) => item.key === currentQuestionKey);
@@ -1988,13 +1917,22 @@ export function DonorHairSubmissionScreen() {
       value: nextValue,
     });
 
-    fieldOnChange(nextValue);
-
-    const nextAnswers = {
-      ...questionForm.getValues(),
+    questionForm.setValue(fieldName, nextValue, {
+      shouldDirty: true,
+      shouldTouch: true,
+      shouldValidate: false,
+    });
+    setQuestionnaireDraftAnswers((current) => ({
+      ...current,
       [fieldName]: nextValue,
-    };
-    const isValid = await questionForm.trigger(fieldName);
+      questionnaireMode,
+    }));
+    if (typeof fieldOnChange === 'function') {
+      fieldOnChange(nextValue);
+    }
+
+    const nextAnswers = getCurrentQuestionnaireAnswers({ [fieldName]: nextValue });
+    const isValid = isAnswered(currentQuestion, nextAnswers);
 
     logAppEvent('donor_hair_submission.questionnaire', 'Question choice validation completed.', {
       userId: user?.id || null,
@@ -2039,10 +1977,24 @@ export function DonorHairSubmissionScreen() {
     if (canUseNativeLiveCamera && NativeVisionCamera?.requestCameraPermission) {
       const status = await NativeVisionCamera.requestCameraPermission();
       setNativeCameraPermission(status || 'denied');
+      if (status !== 'granted' && Platform.OS !== 'web') {
+        try {
+          await Linking.openSettings();
+        } catch (_settingsError) {
+          // The app settings shortcut is best-effort; the permission message remains visible.
+        }
+      }
       return status === 'granted';
     }
 
     const permissionResult = await requestCameraPermission();
+    if (!permissionResult?.granted && Platform.OS !== 'web' && permissionResult?.canAskAgain === false) {
+      try {
+        await Linking.openSettings();
+      } catch (_settingsError) {
+        // The app settings shortcut is best-effort; the permission message remains visible.
+      }
+    }
     return Boolean(permissionResult?.granted);
   }, [canUseNativeLiveCamera, requestCameraPermission]);
 
@@ -2062,10 +2014,6 @@ export function DonorHairSubmissionScreen() {
       setLiveFaceStatus(nextStatus);
     }
     setLiveFrameBrightness(brightness);
-    const face = Array.isArray(faces) ? faces[0] : null;
-    const leftEyeProb = Number(face?.leftEyeOpenProbability ?? -1);
-    const rightEyeProb = Number(face?.rightEyeOpenProbability ?? -1);
-    setLiveNoAccessories(leftEyeProb >= 0.65 && rightEyeProb >= 0.65 && nextStatus.valid);
   }, [currentView]);
 
   useEffect(() => {
@@ -2080,9 +2028,8 @@ export function DonorHairSubmissionScreen() {
       lastLiveFaceStatusKeyRef.current = '';
       setLiveFaceStatus(initialStatus);
       setLiveFrameBrightness(-1);
-      setLiveNoAccessories(false);
     }
-  }, [currentView, photoIndex, stepIndex]);
+  }, [cameraFacing, currentView, photoIndex, stepIndex]);
 
   const renderQuestionInput = () => {
     if (!currentQuestion) return null;
@@ -2101,8 +2048,20 @@ export function DonorHairSubmissionScreen() {
               keyboardType="decimal-pad"
               variant="filled"
               helperText={currentQuestion.helperText}
-              value={field.value}
-              onChangeText={field.onChange}
+              value={effectiveQuestionnaireValues?.[fieldName] ?? field.value}
+              onChangeText={(nextValue) => {
+                questionForm.setValue(fieldName, nextValue, {
+                  shouldDirty: true,
+                  shouldTouch: true,
+                  shouldValidate: false,
+                });
+                setQuestionnaireDraftAnswers((current) => ({
+                  ...current,
+                  [fieldName]: nextValue,
+                  questionnaireMode,
+                }));
+                field.onChange(nextValue);
+              }}
               onBlur={field.onBlur}
               error={fieldError}
             />
@@ -2120,7 +2079,7 @@ export function DonorHairSubmissionScreen() {
           name={fieldName}
           render={({ field }) => (
             <ChoiceList
-              value={field.value}
+              value={effectiveQuestionnaireValues?.[fieldName] ?? field.value}
               options={hairAnalyzerQuestionChoices[currentQuestion.optionsKey]}
               onChange={(nextValue) => {
                 if (currentQuestion.type === 'choice') {
@@ -2132,6 +2091,16 @@ export function DonorHairSubmissionScreen() {
                   return;
                 }
 
+                questionForm.setValue(fieldName, nextValue, {
+                  shouldDirty: true,
+                  shouldTouch: true,
+                  shouldValidate: true,
+                });
+                setQuestionnaireDraftAnswers((current) => ({
+                  ...current,
+                  [fieldName]: nextValue,
+                  questionnaireMode,
+                }));
                 field.onChange(nextValue);
               }}
               multi={currentQuestion.type === 'multi'}
@@ -2146,7 +2115,7 @@ export function DonorHairSubmissionScreen() {
   const handleCapturePhoto = React.useCallback(async (slotIndex = photoIndex, captureSource = 'manual') => {
     if (slotIndex == null) return;
 
-    if (canUseNativeLiveCamera && !liveFaceStatus.valid) {
+    if (captureSource === 'auto' && canUseNativeLiveCamera && !liveFaceStatus.valid) {
       setCameraModalError(liveFaceStatus.message || 'Center your face and hair before scanning.');
       return;
     }
@@ -2183,12 +2152,18 @@ export function DonorHairSubmissionScreen() {
     setCameraModalError('');
 
     try {
-      const rawPhoto = typeof cameraRef.current.takePhoto === 'function'
-        ? await cameraRef.current.takePhoto({ flash: 'off' })
-        : await cameraRef.current.takePictureAsync({
-            quality: 0.8,
-            base64: true,
-          });
+      let rawPhoto;
+      try {
+        rawPhoto = typeof cameraRef.current.takePhoto === 'function'
+          ? await cameraRef.current.takePhoto({ flash: flashMode })
+          : await cameraRef.current.takePictureAsync({
+              quality: 0.8,
+              base64: true,
+            });
+      } catch (flashCaptureError) {
+        if (flashMode !== 'on' || typeof cameraRef.current.takePhoto !== 'function') throw flashCaptureError;
+        rawPhoto = await cameraRef.current.takePhoto({ flash: 'off' });
+      }
       const photo = rawPhoto?.path
         ? {
             ...rawPhoto,
@@ -2234,6 +2209,7 @@ export function DonorHairSubmissionScreen() {
     }
   }, [
     canUseNativeLiveCamera,
+    flashMode,
     hasCameraPermission,
     isCapturingPhoto,
     photoIndex,
@@ -2248,18 +2224,17 @@ export function DonorHairSubmissionScreen() {
 
   const autoCaptureEnabled = useMemo(() => {
     if (stepIndex !== 2) return false;
-    if (!canUseNativeLiveCamera) return false;
     if (!hasCameraPermission) return false;
     if (Boolean(currentPhoto)) return false;
     if (isCapturingPhoto || isCapturingImages || isPickingImages || isAnalyzing) return false;
 
-    const brightnessReady = liveFrameBrightness < 0 || liveFrameBrightness >= 92;
-    const accessoriesReady = isHairEndsView(currentView) ? true : liveNoAccessories;
-    return Boolean(liveFaceStatus?.valid && brightnessReady && accessoriesReady);
+    if (!canUseNativeLiveCamera) return true;
+
+    const brightnessReady = liveFrameBrightness < 0 || liveFrameBrightness >= 82;
+    return Boolean(liveFaceStatus?.valid && brightnessReady);
   }, [
     canUseNativeLiveCamera,
     currentPhoto,
-    currentView,
     hasCameraPermission,
     isAnalyzing,
     isCapturingImages,
@@ -2267,8 +2242,28 @@ export function DonorHairSubmissionScreen() {
     isPickingImages,
     liveFaceStatus?.valid,
     liveFrameBrightness,
-    liveNoAccessories,
     stepIndex,
+  ]);
+
+  const liveScanStatus = useMemo(() => buildLiveScanStatus({
+    autoCaptureEnabled,
+    brightness: liveFrameBrightness,
+    completedPhotoCount,
+    currentPhoto,
+    currentView,
+    isCapturing: isCapturingPhoto || isCapturingImages,
+    liveFaceStatus,
+    requiredCount: requiredViews.length,
+  }), [
+    autoCaptureEnabled,
+    completedPhotoCount,
+    currentPhoto,
+    currentView,
+    isCapturingImages,
+    isCapturingPhoto,
+    liveFaceStatus,
+    liveFrameBrightness,
+    requiredViews.length,
   ]);
 
   useEffect(() => {
@@ -2283,7 +2278,7 @@ export function DonorHairSubmissionScreen() {
     autoCaptureTimeoutRef.current = setTimeout(() => {
       autoCaptureCooldownUntilRef.current = Date.now() + 3500;
       handleCapturePhoto(photoIndex, 'auto');
-    }, 1200);
+    }, canUseNativeLiveCamera ? 1200 : 2600);
 
     return () => {
       if (autoCaptureTimeoutRef.current) {
@@ -2291,7 +2286,7 @@ export function DonorHairSubmissionScreen() {
         autoCaptureTimeoutRef.current = null;
       }
     };
-  }, [autoCaptureEnabled, handleCapturePhoto, photoIndex]);
+  }, [autoCaptureEnabled, canUseNativeLiveCamera, handleCapturePhoto, photoIndex]);
 
   const handleLiveUpload = async (slotIndex) => {
     setCameraModalError('');
@@ -2313,7 +2308,8 @@ export function DonorHairSubmissionScreen() {
   const handleNext = async () => {
     if (stepIndex === 0) {
       const fieldName = currentQuestion?.key;
-      const isValid = fieldName ? await questionForm.trigger(fieldName) : false;
+      const answersSnapshot = getCurrentQuestionnaireAnswers();
+      const isValid = fieldName ? isAnswered(currentQuestion, answersSnapshot) : false;
       if (!isValid) return;
 
       logAppEvent('donor_hair_submission.questionnaire', 'Manual question advance triggered.', {
@@ -2322,13 +2318,16 @@ export function DonorHairSubmissionScreen() {
         questionType: currentQuestion?.type || null,
       });
 
-      goToNextQuestionStep(questionForm.getValues(), fieldName);
+      goToNextQuestionStep(answersSnapshot, fieldName);
       return;
     }
 
     if (stepIndex === 1) {
-      const isValid = await complianceForm.trigger('acknowledged');
-      if (!isValid) return;
+      complianceForm.setValue('acknowledged', true, {
+        shouldDirty: true,
+        shouldTouch: true,
+        shouldValidate: true,
+      });
       setStepIndex(2);
       return;
     }
@@ -2389,93 +2388,198 @@ export function DonorHairSubmissionScreen() {
         }
 
         return (
-          <AppCard variant="elevated" radius="xl" padding="lg">
-            <Text style={styles.stepDescription}>
-              {isReturningUser
-                ? 'Follow-up check: answer a shorter set of progress questions so the AI can compare your current photos with your saved hair log.'
-                : 'First-time check: answer the full baseline hair-condition questions before the photo review.'}
-            </Text>
-            <Text style={styles.progressText}>Question {questionIndex + 1} of {visibleQuestions.length}</Text>
-            {renderQuestionInput()}
-          </AppCard>
+          <View style={styles.questionnaireStage}>
+            <View style={styles.questionProgressBlock}>
+              <View style={styles.questionProgressLabels}>
+                <Text style={styles.questionProgressText}>Step {questionIndex + 1} of {visibleQuestions.length}</Text>
+                <Text style={styles.questionProgressMeta}>Hair History</Text>
+              </View>
+              <View style={styles.questionProgressTrack}>
+                <View style={[styles.questionProgressFill, { width: `${((questionIndex + 1) / visibleQuestions.length) * 100}%` }]} />
+              </View>
+            </View>
+
+            <View style={styles.questionPanel}>
+              {renderQuestionInput()}
+            </View>
+
+            <View style={styles.questionInfoCard}>
+              <AppIcon name="information-outline" size="md" state="active" />
+              <View style={styles.questionInfoCopy}>
+                <Text style={styles.questionInfoTitle}>Why does this matter?</Text>
+                <Text style={styles.questionInfoBody}>
+                  Your answers help the AI compare your photos with donation readiness rules before it checks length, texture, dryness, and visible damage.
+                </Text>
+              </View>
+            </View>
+          </View>
         );
       case 1:
+        {
+          const reviewAnswers = getCurrentQuestionnaireAnswers();
+          const reviewVisibleQuestions = getVisibleQuestions(reviewAnswers, questionnaireMode);
+          const answerRows = reviewVisibleQuestions.map((question) => ({
+            key: question.key,
+            label: question.title,
+            value: getChoiceDisplayLabel(question.optionsKey, reviewAnswers?.[question.key]),
+          }));
+          const chemicalQuestion = reviewVisibleQuestions.find((question) => (
+            question.key === 'chemicalProcessHistory' || question.key === 'chemicalTreatmentSinceLastCheck'
+          ));
+          const textureAnswer = getChoiceDisplayLabel('hairProgress', reviewAnswers?.hairConditionProgress);
+          const bleachValue = chemicalQuestion
+            ? getChoiceDisplayLabel(chemicalQuestion.optionsKey, reviewAnswers?.[chemicalQuestion.key])
+            : 'No Bleach';
+          const heatValue = getChoiceDisplayLabel(
+            questionnaireMode === 'returning_follow_up' ? 'heatUseFrequency' : 'heatUseFrequency',
+            questionnaireMode === 'returning_follow_up'
+              ? reviewAnswers?.heatUseSinceLastCheck
+              : reviewAnswers?.heatUse
+          );
+
         return (
-          <AppCard variant="elevated" radius="xl" padding="lg">
-            <View style={styles.guideHeader}>
-              <View style={styles.guideIcon}>
-                <AppIcon name="camera" size="lg" state="active" />
+          <View style={styles.readinessStage}>
+            <View style={styles.questionProgressBlock}>
+              <View style={styles.questionProgressLabels}>
+                <Text style={styles.questionProgressText}>Step 3 of 3</Text>
+                <Text style={styles.questionProgressMeta}>Final Review</Text>
               </View>
-              <View style={styles.guideHeaderCopy}>
-                <Text style={styles.stepTitle}>Before you take photos</Text>
-                <Text style={styles.stepDescription}>Follow these rules first, then continue to camera or upload.</Text>
-              </View>
-            </View>
-
-            <View style={styles.guideGrid}>
-              <View style={styles.guidelineSection}>
-                <Text style={styles.guidelineTitle}>Photo rules</Text>
-                <View style={styles.bulletList}>
-                  {PHOTO_GUIDELINE_ITEMS.map((item) => (
-                    <View key={item} style={styles.bulletRow}>
-                      <View style={styles.bulletDot} />
-                      <Text style={styles.bulletText}>{item}</Text>
-                    </View>
-                  ))}
-                </View>
-              </View>
-
-              <View style={styles.guidelineSection}>
-                <Text style={styles.guidelineTitle}>Required views</Text>
-                <View style={styles.captureTargetList}>
-                  {PHOTO_CAPTURE_TARGETS.map((item, index) => (
-                    <View key={item} style={styles.captureTargetCard}>
-                      <View style={styles.captureTargetBadge}>
-                        <Text style={styles.captureTargetBadgeText}>{index + 1}</Text>
-                      </View>
-                      <Text style={styles.captureTargetText}>{item}</Text>
-                    </View>
-                  ))}
-                </View>
+              <View style={styles.questionProgressTrack}>
+                <View style={[styles.questionProgressFill, { width: '100%' }]} />
               </View>
             </View>
 
-            <Pressable
-              onPress={() => complianceForm.setValue('acknowledged', !complianceAcknowledged, { shouldDirty: true, shouldTouch: true, shouldValidate: true })}
-              style={styles.checkRow}
-            >
-              <View style={[styles.checkBox, complianceAcknowledged ? styles.checkBoxActive : null]}>
-                <AppIcon name={complianceAcknowledged ? 'checkbox-marked' : 'checkbox-blank-outline'} state={complianceAcknowledged ? 'inverse' : 'muted'} />
+            <View style={styles.readinessHeader}>
+              <Text style={styles.readinessTitle}>Ready to Scan</Text>
+              <Text style={styles.readinessBody}>
+                We have gathered your answers. Check the summary before opening the camera scanner.
+              </Text>
+            </View>
+
+            <View style={styles.readinessGrid}>
+              <View style={styles.recapCard}>
+                <View style={styles.recapHeader}>
+                  <AppIcon name="water-outline" size="md" state="active" />
+                  <Text style={styles.recapTitle}>Chemical History</Text>
+                </View>
+                <View style={styles.recapRow}>
+                  <Text style={styles.recapLabel}>Bleach / treatment</Text>
+                  <Text style={styles.recapPill}>{bleachValue}</Text>
+                </View>
+                <View style={styles.recapRow}>
+                  <Text style={styles.recapLabel}>Heat use</Text>
+                  <Text style={styles.recapPill}>{heatValue}</Text>
+                </View>
               </View>
-              <Text style={styles.checkLabel}>I understand the photo guide and I am ready to continue.</Text>
-            </Pressable>
-            {complianceForm.formState.errors.acknowledged?.message ? <Text style={styles.questionError}>{complianceForm.formState.errors.acknowledged.message}</Text> : null}
-          </AppCard>
+
+              <View style={styles.recapCard}>
+                <View style={styles.recapHeader}>
+                  <AppIcon name="ruler" size="md" state="active" />
+                  <Text style={styles.recapTitle}>Physical Traits</Text>
+                </View>
+                <View style={styles.recapRow}>
+                  <Text style={styles.recapLabel}>Current length</Text>
+                  <Text style={styles.recapPill}>To be scanned</Text>
+                </View>
+                <View style={styles.recapRow}>
+                  <Text style={styles.recapLabel}>Texture</Text>
+                  <Text style={styles.recapPill}>{textureAnswer || 'To be scanned'}</Text>
+                </View>
+              </View>
+            </View>
+
+            <View style={styles.tipsCard}>
+              <Text style={styles.tipsTitle}>Tips for a perfect scan</Text>
+              {PHOTO_GUIDELINE_ITEMS.slice(0, 3).map((item) => (
+                <View key={item} style={styles.tipRow}>
+                  <AppIcon name="check-circle-outline" size="sm" state="active" />
+                  <Text style={styles.tipText}>{item}</Text>
+                </View>
+              ))}
+            </View>
+
+            <View style={styles.answerSummaryCompact}>
+              {answerRows.slice(0, 3).map((item) => (
+                <Text key={item.key} numberOfLines={1} style={styles.answerSummaryItem}>
+                  {item.label}: {item.value}
+                </Text>
+              ))}
+            </View>
+
+            <AppButton
+              title="Start Camera Scan"
+              onPress={async () => {
+                const reviewAnswers = getCurrentQuestionnaireAnswers();
+                const reviewQuestions = getVisibleQuestions(reviewAnswers, questionnaireMode);
+                const firstUnansweredIndex = findFirstUnansweredQuestionIndex(reviewQuestions, reviewAnswers);
+
+                if (firstUnansweredIndex >= 0) {
+                  setQuestionIndex(firstUnansweredIndex);
+                  setStepIndex(0);
+                  return;
+                }
+
+                Object.entries(reviewAnswers).forEach(([key, value]) => {
+                  questionForm.setValue(key, value, {
+                    shouldDirty: true,
+                    shouldTouch: true,
+                    shouldValidate: false,
+                  });
+                });
+
+                const isValid = await questionForm.trigger();
+                if (!isValid) {
+                  const latestAnswers = getCurrentQuestionnaireAnswers();
+                  const latestQuestions = getVisibleQuestions(latestAnswers, questionnaireMode);
+                  const latestMissingIndex = findFirstUnansweredQuestionIndex(latestQuestions, latestAnswers);
+                  setQuestionIndex(Math.max(latestMissingIndex, 0));
+                  setStepIndex(0);
+                  return;
+                }
+
+                complianceForm.setValue('acknowledged', true, { shouldDirty: true, shouldTouch: true, shouldValidate: true });
+                await requestLiveCameraPermission();
+                setStepIndex(2);
+              }}
+              leading={<AppIcon name="camera" state="inverse" />}
+              fullWidth
+            />
+            <AppButton
+              title="Edit Answers"
+              variant="ghost"
+              onPress={() => {
+                setQuestionIndex(0);
+                setStepIndex(0);
+              }}
+              fullWidth
+            />
+          </View>
         );
+        }
       case 2:
         return (
           <LiveHairCameraPanel
+            autoCaptureEnabled={autoCaptureEnabled}
+            cameraFacing={cameraFacing}
             currentView={currentView}
             currentPhoto={currentPhoto}
-            photoIndex={photoIndex}
-            photos={photos}
+            flashMode={flashMode}
             requiredViews={requiredViews}
             completedPhotoCount={completedPhotoCount}
             hasCameraPermission={hasCameraPermission}
             cameraRef={cameraRef}
+            liveScanStatus={liveScanStatus}
             liveFaceStatus={liveFaceStatus}
             canUseNativeLiveCamera={canUseNativeLiveCamera}
-            liveFrameBrightness={liveFrameBrightness}
-            liveNoAccessories={liveNoAccessories}
             isCapturing={isCapturingPhoto || isCapturingImages}
             isUploading={isPickingImages}
             isAnalyzing={isAnalyzing}
-            cameraError={cameraModalError}
-            autoCaptureEnabled={autoCaptureEnabled}
             onCapture={() => handleCapturePhoto(photoIndex)}
+            onToggleCamera={toggleCameraFacing}
+            onToggleFlash={toggleFlashMode}
             onUpload={() => handleLiveUpload(photoIndex)}
             onRemove={() => removePhoto(photoIndex)}
-            onSelectView={setPhotoIndex}
+            onClose={closeAnalyzerToHome}
             onFacesChange={handleLiveFacesChange}
             onRequestPermission={async () => {
               const granted = await requestLiveCameraPermission();
@@ -2488,301 +2592,317 @@ export function DonorHairSubmissionScreen() {
           />
         );
       case 3:
-        return analysis ? (
-          <View style={styles.analysisResultPanel}>
-            <View style={styles.analysisResultHero}>
-              <View style={styles.analysisResultHeroCopy}>
-                <Text style={styles.analysisResultLabel}>Hair condition</Text>
-                <Text style={styles.analysisResultTitle}>{analysis.detected_condition || 'Review ready'}</Text>
-                <Text style={styles.analysisResultSummary}>{analysis.summary || 'No summary was returned for this analysis.'}</Text>
+        if (analysis) {
+          const healthScore = getAnalysisHealthScore(analysis);
+          const scoreLabel = getScoreLabel(healthScore);
+          const conditionInsights = buildConditionInsights(analysis);
+          const recommendations = (analysis.recommendations || []).length
+            ? analysis.recommendations
+            : buildDefaultRecommendations(analysis);
+          const donationAssessment = buildDonationAssessment({ analysis, donationRequirement });
+          const sideProfileIndex = requiredViews.findIndex((view) => view?.key === 'side_profile');
+          const frontViewIndex = requiredViews.findIndex((view) => view?.key === 'front_view');
+          const scanPhoto = photos[sideProfileIndex]?.uri
+            ? photos[sideProfileIndex]
+            : photos[frontViewIndex]?.uri
+              ? photos[frontViewIndex]
+              : photos.find((photo) => photo?.uri);
+
+          return (
+            <View style={styles.analysisResultPanel}>
+              <View style={styles.analysisResultTopBar}>
+                <Pressable onPress={() => setStepIndex(2)} style={styles.resultHeaderButton}>
+                  <AppIcon name="arrow-left" size="md" state="default" />
+                </Pressable>
+                <Text style={styles.analysisResultScreenTitle}>Analysis Results</Text>
+                <Pressable style={styles.resultHeaderButton}>
+                  <AppIcon name="share-variant-outline" size="md" state="default" />
+                </Pressable>
               </View>
-              <Text style={styles.analysisResultScore}>
-                {analysis.confidence_score != null ? `${Math.round(Number(analysis.confidence_score) * 100)}%` : '--'}
-              </Text>
-            </View>
-            <>
-                <StatusBanner title={eligibility.status} message={eligibility.reasons[0] || eligibility.contextNote || 'The AI screening result is ready for review.'} variant={eligibility.tone} style={styles.bannerGap} />
-                {invalidPhotoMessage ? (
-                  <StatusBanner
-                    title="Photo review note"
-                    message={invalidPhotoMessage}
-                    variant="info"
-                    style={styles.bannerGap}
+
+              <View style={styles.resultSectionCard}>
+                <View style={styles.resultSectionHeader}>
+                  <Text style={styles.resultSectionTitle}>Your Hair Condition</Text>
+                  <View style={styles.conditionBadge}>
+                    <View style={styles.conditionBadgeDot} />
+                    <Text style={styles.conditionBadgeText}>{scoreLabel}</Text>
+                  </View>
+                </View>
+                <View style={styles.healthScoreBlock}>
+                  <View style={styles.healthScoreRow}>
+                    <Text style={styles.healthScoreValue}>{healthScore}</Text>
+                    <Text style={styles.healthScoreMax}>/100</Text>
+                  </View>
+                  <View style={styles.healthScoreTrack}>
+                    <View style={[styles.healthScoreFill, { width: `${healthScore}%` }]} />
+                  </View>
+                </View>
+                <View style={styles.conditionInsightList}>
+                  {conditionInsights.map((item) => <ConditionInsightRow key={item.key} item={item} />)}
+                </View>
+              </View>
+
+              <View style={styles.resultSectionCard}>
+                <Text style={styles.resultSectionTitle}>AI Recommendations</Text>
+                <View style={styles.aiRecommendationList}>
+                  {recommendations.slice(0, 4).map((recommendation, index) => (
+                    <AiRecommendationRow
+                      key={`${recommendation.priority_order || index}-${recommendation.title || recommendation.recommendation_text}`}
+                      recommendation={recommendation}
+                    />
+                  ))}
+                </View>
+              </View>
+
+              <View style={styles.donationAssessmentCard}>
+                <Pressable
+                  onPress={scanPhoto?.uri ? () => setPreviewImageUri(scanPhoto.uri) : undefined}
+                  disabled={!scanPhoto?.uri}
+                  style={({ pressed }) => [
+                    styles.cutLineImageWrap,
+                    scanPhoto?.uri ? styles.cutLineImageTouchable : null,
+                    pressed ? styles.pressedMuted : null,
+                  ]}
+                  accessibilityRole={scanPhoto?.uri ? 'imagebutton' : 'image'}
+                  accessibilityLabel={scanPhoto?.uri ? 'Open full hair scan photo preview' : 'Hair scan photo unavailable'}
+                >
+                  {scanPhoto?.uri ? (
+                    <>
+                      <Image source={{ uri: scanPhoto.uri }} style={styles.cutLineImage} resizeMode="cover" />
+                      <View style={styles.cutLinePreviewHint} pointerEvents="none">
+                        <AppIcon name="image-search-outline" size="sm" state="inverse" />
+                        <Text style={styles.cutLinePreviewHintText}>Preview</Text>
+                      </View>
+                    </>
+                  ) : (
+                    <View style={styles.cutLineImageFallback}>
+                      <AppIcon name="image" size="xl" state="muted" />
+                    </View>
+                  )}
+                  {donationAssessment.meetsLengthRequirement ? (
+                    <>
+                      <View style={styles.cutLineLabel} pointerEvents="none">
+                        <Text style={styles.cutLineLabelText}>
+                          Cut guide - {donationAssessment.donatableLengthLabel} donatable
+                        </Text>
+                      </View>
+                      <View
+                        pointerEvents="none"
+                        style={[styles.cutLineOverlay, { bottom: `${donationAssessment.cutLineBottomPercent}%` }]}
+                      >
+                        <View style={styles.cutLineDashed} />
+                        <View style={styles.cutLineScissorBadge}>
+                          <AppIcon name="content-cut" size="sm" state="inverse" />
+                        </View>
+                        <View style={styles.cutLineDashed} />
+                      </View>
+                    </>
+                  ) : null}
+                </Pressable>
+                <View style={styles.donationAssessmentBody}>
+                  <Text style={styles.resultSectionTitle}>Hair Donation Assessment</Text>
+                  <View style={styles.assessmentRows}>
+                    <View style={styles.assessmentRow}>
+                      <Text style={styles.assessmentLabel}>Donatable Length</Text>
+                      <Text style={styles.assessmentValue}>{donationAssessment.donatableLengthLabel}</Text>
+                    </View>
+                    <View style={styles.assessmentRow}>
+                      <Text style={styles.assessmentLabel}>Hair Length</Text>
+                      <Text style={styles.assessmentValue}>{donationAssessment.hairLengthLabel}</Text>
+                    </View>
+                  </View>
+                  <View style={styles.assessmentNote}>
+                    <AppIcon name="donations" size="md" state="active" />
+                    <Text style={styles.assessmentNoteText}>{donationAssessment.summary}</Text>
+                  </View>
+                </View>
+              </View>
+
+              {invalidPhotoMessage ? (
+                <StatusBanner
+                  title="Photo review note"
+                  message={invalidPhotoMessage}
+                  variant="info"
+                  style={styles.bannerGap}
+                />
+              ) : null}
+
+              <View style={styles.resultActions}>
+                {donationAssessment.isDonationReady ? (
+                  <AppButton
+                    title="Find Donation Drives"
+                    onPress={() => router.replace('/donor/home?tab=drives')}
+                    disabled={isSaving || isAnalyzing}
+                    fullWidth
                   />
                 ) : null}
-
-                <View style={styles.analysisFactsRow}>
-                  <ResultMetricCard label="Length" value={formatLengthLabel(analysis.estimated_length)} />
-                  <ResultMetricCard label="Color" value={analysis.detected_color} />
-                  <ResultMetricCard label="Texture" value={analysis.detected_texture} />
-                </View>
-
-                <View style={styles.analysisLevels}>
-                  <AnalysisLevelRow label="Shine" value={analysis.shine_level} positive />
-                  <AnalysisLevelRow label="Frizz" value={analysis.frizz_level} />
-                  <AnalysisLevelRow label="Dryness" value={analysis.dryness_level} />
-                  <AnalysisLevelRow label="Oiliness" value={analysis.oiliness_level} />
-                  <AnalysisLevelRow label="Damage" value={analysis.damage_level} />
-                </View>
-
-                {analysis.visible_damage_notes || analysis.length_assessment || analysis.history_assessment ? (
-                  <View style={styles.analysisNoteBlock}>
-                    {analysis.visible_damage_notes ? <Text style={styles.analysisNoteText}>{analysis.visible_damage_notes}</Text> : null}
-                    {analysis.length_assessment ? <Text style={styles.analysisNoteText}>{analysis.length_assessment}</Text> : null}
-                    {analysis.history_assessment ? <Text style={styles.analysisNoteText}>{analysis.history_assessment}</Text> : null}
-                  </View>
-                ) : null}
-
-                {(analysis?.recommendations || []).length ? (
-                  <View style={styles.analysisRecommendationBlock}>
-                    <Text style={styles.summaryLabel}>Improvement advice</Text>
-                    <View style={styles.recommendationList}>
-                      {(analysis.recommendations || []).map((recommendation, index) => (
-                        <RecommendationCard key={`${recommendation.priority_order}-${recommendation.title || recommendation.recommendation_text.slice(0, 20)}`} recommendation={recommendation} isTopPriority={index === 0} />
-                      ))}
-                    </View>
-                  </View>
-                ) : null}
-
-                <View style={styles.donationInstructionCard}>
-                  <View style={styles.donationInstructionHeader}>
-                    <View style={styles.donationInstructionIcon}>
-                      <AppIcon name="package-variant-closed" size="md" state="active" />
-                    </View>
-                    <View style={styles.donationInstructionCopy}>
-                      <Text style={styles.donationInstructionTitle}>Donation and parcel guide</Text>
-                      <Text style={styles.donationInstructionBody}>
-                        After saving, use the generated submission code as the parcel QR/code reference.
-                      </Text>
-                    </View>
-                  </View>
-                  <View style={styles.donationSteps}>
-                    {DONATION_PREP_STEPS.map((item, index) => (
-                      <View key={item} style={styles.donationStepRow}>
-                        <View style={styles.donationStepBadge}>
-                          <Text style={styles.donationStepBadgeText}>{index + 1}</Text>
-                        </View>
-                        <Text style={styles.donationStepText}>{item}</Text>
-                      </View>
-                    ))}
-                  </View>
-                  {logisticsDestination ? (
-                    <View style={styles.destinationBox}>
-                      <Text style={styles.destinationLabel}>Ship or deliver to</Text>
-                      <Text style={styles.destinationText}>{logisticsDestination}</Text>
-                      {logisticsSettings?.contact_person || logisticsSettings?.contact_number ? (
-                        <Text style={styles.destinationMeta}>
-                          {[logisticsSettings.contact_person, logisticsSettings.contact_number].filter(Boolean).join(' - ')}
-                        </Text>
-                      ) : null}
-                    </View>
-                  ) : null}
-                </View>
-
-                <View style={styles.confirmResultBlock}>
-                  <Text style={styles.summaryLabel}>Confirm result</Text>
-                  <View style={styles.postAnalysisActions}>
-                    <AppButton
-                      title={isSaving ? 'Saving...' : 'Yes, continue'}
-                      fullWidth={false}
-                      onPress={saveConfirmedAnalysis}
-                      loading={isSaving}
-                      disabled={isSaving || isAnalyzing}
-                    />
-                    <AppButton
-                      title="No, edit details"
-                      variant="outline"
-                      fullWidth={false}
-                      onPress={() => setResultConfirmationMode('editing')}
-                      disabled={isSaving || isAnalyzing}
-                    />
-                  </View>
-                </View>
-                {resultConfirmationMode === 'editing' ? (
-                  <AppCard variant="soft" radius="xl" padding="lg" style={styles.bannerGap}>
-                    <Text style={styles.summaryLabel}>Refine detected details</Text>
-                    <Text style={styles.stepDescription}>
-                      Update only the details that look inaccurate. The AI will reassess the final result using these corrected inputs together with your uploaded photos.
-                    </Text>
-
-                    <Controller
-                      control={correctionForm.control}
-                      name="correctedLengthValue"
-                      render={({ field: { onChange, onBlur, value } }) => (
-                        <View style={styles.correctionFieldGroup}>
-                          <Text style={styles.correctionFieldLabel}>Hair length</Text>
-                          <View style={styles.correctionLengthRow}>
-                            <View style={styles.correctionLengthInputWrap}>
-                              <AppInput
-                                value={value}
-                                onChangeText={onChange}
-                                onBlur={onBlur}
-                                keyboardType="decimal-pad"
-                                placeholder="Enter length"
-                              />
-                            </View>
-                            <View style={styles.correctionUnitWrap}>
-                              <Controller
-                                control={correctionForm.control}
-                                name="correctedLengthUnit"
-                                render={({ field: { onChange: onUnitChange, value: unitValue } }) => (
-                                  <CorrectionChoiceField
-                                    value={unitValue}
-                                    options={hairAnalyzerQuestionChoices.correctionLengthUnit}
-                                    onChange={onUnitChange}
-                                  />
-                                )}
-                              />
-                            </View>
-                          </View>
-                          {correctionForm.formState.errors.correctedLengthValue?.message ? (
-                            <Text style={styles.questionError}>{correctionForm.formState.errors.correctedLengthValue.message}</Text>
-                          ) : null}
-                        </View>
-                      )}
-                    />
-
-                    <Controller
-                      control={correctionForm.control}
-                      name="correctedTexture"
-                      render={({ field: { onChange, value } }) => (
-                        <View style={styles.correctionFieldGroup}>
-                          <Text style={styles.correctionFieldLabel}>Hair texture</Text>
-                          <CorrectionChoiceField
-                            value={value}
-                            options={hairAnalyzerQuestionChoices.hairTexture}
-                            onChange={onChange}
-                          />
-                          {correctionForm.formState.errors.correctedTexture?.message ? (
-                            <Text style={styles.questionError}>{correctionForm.formState.errors.correctedTexture.message}</Text>
-                          ) : null}
-                        </View>
-                      )}
-                    />
-
-                    <Controller
-                      control={correctionForm.control}
-                      name="correctedDensity"
-                      render={({ field: { onChange, value } }) => (
-                        <View style={styles.correctionFieldGroup}>
-                          <Text style={styles.correctionFieldLabel}>Hair density</Text>
-                          <CorrectionChoiceField
-                            value={value}
-                            options={hairAnalyzerQuestionChoices.hairDensity}
-                            onChange={onChange}
-                          />
-                          {correctionForm.formState.errors.correctedDensity?.message ? (
-                            <Text style={styles.questionError}>{correctionForm.formState.errors.correctedDensity.message}</Text>
-                          ) : null}
-                        </View>
-                      )}
-                    />
-
-                    <View style={styles.postAnalysisActions}>
-              <AppButton
-                title={isAnalyzing ? 'Re-analyzing...' : 'Re-run AI analysis'}
-                fullWidth={false}
-                onPress={handleCorrectionSubmit}
-                loading={isAnalyzing}
-                disabled={isAnalyzing || isSaving || isRetryCooldownActive}
-              />
-                      <AppButton
-                        title="Cancel edits"
-                        variant="ghost"
-                        fullWidth={false}
-                        onPress={() => {
-                          correctionForm.reset(buildHairResultCorrectionDefaultValues(analysis));
-                          setResultConfirmationMode('pending');
-                        }}
-                        disabled={isAnalyzing || isSaving}
-                      />
-                    </View>
-                  </AppCard>
-                ) : null}
-              </>
-          </View>
-        ) : pageErrorState ? (
-          <AppCard variant="elevated" radius="xl" padding="lg">
-            <View style={styles.errorStateHeader}>
-              <View style={styles.errorStateIcon}>
-                <AppIcon name="camera" size="lg" state="danger" />
-              </View>
-              <View style={styles.errorStateCopy}>
-                <Text style={styles.stepTitle}>{pageErrorState.title || 'Hair analysis unavailable'}</Text>
-                <Text style={styles.stepDescription}>
-                  {countdownErrorMessage || error?.message || 'Cannot analyze hair right now. Please try again later.'}
-                </Text>
+                <AppButton
+                  title={isSaving ? 'Saving...' : 'Save Results'}
+                  variant={donationAssessment.isDonationReady ? 'outline' : 'primary'}
+                  onPress={saveConfirmedAnalysis}
+                  loading={isSaving}
+                  disabled={isSaving || isAnalyzing}
+                  fullWidth
+                />
+                <Pressable
+                  onPress={() => {
+                    resetFlow();
+                    correctionForm.reset(buildHairResultCorrectionDefaultValues(null));
+                    setResultConfirmationMode('pending');
+                    setPhotoIndex(0);
+                    setQuestionIndex(0);
+                    setStepIndex(0);
+                  }}
+                  disabled={isSaving || isAnalyzing}
+                  style={styles.scanAgainLink}
+                >
+                  <Text style={styles.scanAgainText}>Scan Again</Text>
+                </Pressable>
               </View>
             </View>
-            <View style={styles.postAnalysisActions}>
-              <AppButton
-                title="Retake photos"
-                variant="outline"
-                fullWidth={false}
+          );
+        }
+
+        return pageErrorState ? (
+          <View style={styles.analysisResultPanel}>
+            <View style={styles.analysisResultTopBar}>
+              <Pressable
                 onPress={() => {
                   setStepIndex(2);
                   setPhotoIndex(0);
                   clearAnalysisError();
                 }}
-                disabled={isAnalyzing || isSaving}
-              />
-              <AppButton
-                title={isRetryCooldownActive
-                  ? `Try again in ${retryCountdownSeconds}s`
-                  : isAnalyzing
-                    ? 'Retrying...'
-                    : 'Try again'}
-                fullWidth={false}
-                onPress={async () => {
-                  await runFreshAnalysisAttempt('error_card_retry');
-                }}
-                loading={isAnalyzing}
-                disabled={isAnalyzing || isSaving || isRetryCooldownActive}
-              />
+                style={styles.resultHeaderButton}
+              >
+                <AppIcon name="arrow-left" size="md" state="default" />
+              </Pressable>
+              <Text style={styles.analysisResultScreenTitle}>Analysis Results</Text>
+              <View style={styles.resultHeaderButtonPlaceholder} />
             </View>
-          </AppCard>
+
+            <View style={styles.resultSectionCard}>
+              <View style={styles.resultSectionHeader}>
+                <Text style={styles.resultSectionTitle}>Analysis needs a clearer scan</Text>
+                <View style={styles.conditionBadge}>
+                  <View style={styles.conditionBadgeDotWarning} />
+                  <Text style={styles.conditionBadgeText}>RETAKE</Text>
+                </View>
+              </View>
+              <Text style={styles.resultErrorBody}>
+                The AI could not complete a reliable hair result from the current photos. Retake the required views in bright light with your hair centered, then run the analysis again.
+              </Text>
+              <View style={styles.resultActions}>
+                <AppButton
+                  title="Retake photos"
+                  variant="outline"
+                  onPress={() => {
+                    setStepIndex(2);
+                    setPhotoIndex(0);
+                    clearAnalysisError();
+                  }}
+                  disabled={isAnalyzing || isSaving}
+                  fullWidth
+                />
+                <AppButton
+                  title={isRetryCooldownActive
+                    ? `Try again in ${retryCountdownSeconds}s`
+                    : isAnalyzing
+                      ? 'Retrying...'
+                      : 'Try again'}
+                  onPress={async () => {
+                    await runFreshAnalysisAttempt('error_result_retry');
+                  }}
+                  loading={isAnalyzing}
+                  disabled={isAnalyzing || isSaving || isRetryCooldownActive}
+                  fullWidth
+                />
+              </View>
+            </View>
+          </View>
         ) : (
-          <AppCard variant="elevated" radius="xl" padding="lg">
-            <Text style={styles.stepTitle}>Ready for AI analysis</Text>
-            <Text style={styles.stepDescription}>
-              Your answers and hair photos are ready. Run the analysis to continue.
-            </Text>
-            <View style={styles.postAnalysisActions}>
+          <View style={styles.analysisResultPanel}>
+            <View style={styles.analysisResultTopBar}>
+              <Pressable onPress={() => setStepIndex(2)} style={styles.resultHeaderButton}>
+                <AppIcon name="arrow-left" size="md" state="default" />
+              </Pressable>
+              <Text style={styles.analysisResultScreenTitle}>Analysis Results</Text>
+              <View style={styles.resultHeaderButtonPlaceholder} />
+            </View>
+            <View style={styles.resultSectionCard}>
+              <Text style={styles.resultSectionTitle}>Ready for AI analysis</Text>
+              <Text style={styles.resultErrorBody}>
+                Your answers and hair photos are ready. Run the analysis to generate your hair condition, recommendations, and donation assessment.
+              </Text>
               <AppButton
                 title={isAnalyzing ? 'Analyzing...' : 'Run analysis'}
-                fullWidth={false}
                 onPress={async () => {
                   await runFreshAnalysisAttempt('ready_state_retry');
                 }}
                 loading={isAnalyzing}
                 disabled={isAnalyzing || isSaving}
+                fullWidth
               />
             </View>
-          </AppCard>
+          </View>
         );
       default:
         return null;
     }
   };
 
-  const latestSavedTone = normalizeConditionTone(latestSavedScreening?.detected_condition);
-  const summaryHeroTitle = isReturningUser ? 'Start follow-up hair check' : 'Start first hair check';
+  if (isDonorProfileComplete && isAnalyzerActive) {
+    const analyzerContent = (
+      <View style={stepIndex === 2 ? styles.cameraWizardStage : styles.wizardStage}>
+        {stepIndex === 2 ? null : (
+          <View style={styles.closeOnlyHeader}>
+            <Pressable onPress={closeAnalyzerToHome} style={styles.iconNavButton}>
+              <AppIcon name="close" size="md" state="muted" />
+            </Pressable>
+          </View>
+        )}
 
-  const handleAddAnotherBundle = React.useCallback(() => {
-    resetFlow();
-    questionForm.reset({
-      ...hairAnalyzerQuestionDefaultValues,
-      questionnaireMode,
-    });
-    complianceForm.reset(hairAnalyzerComplianceDefaultValues);
-    correctionForm.reset(buildHairResultCorrectionDefaultValues(null));
-    setQuestionIndex(0);
-    setPhotoIndex(0);
-    setStepIndex(0);
-    setResultConfirmationMode('pending');
-    setIsAnalyzerActive(true);
-    setTransientErrorNotice(null);
-  }, [complianceForm, correctionForm, questionForm, questionnaireMode, resetFlow]);
+        <View style={styles.stepContentWrap}>
+          {renderStepContent()}
+        </View>
+
+        {stepIndex === 1 || stepIndex === 2 || stepIndex === 3 ? null : (
+          <View style={styles.footerNav}>
+            <Pressable
+              onPress={goPrevious}
+              disabled={stepIndex === 0 && questionIndex === 0 && photoIndex === 0}
+              style={[styles.iconNavButton, stepIndex === 0 && questionIndex === 0 && photoIndex === 0 ? styles.iconNavButtonDisabled : null]}
+            >
+              <AppIcon name="arrow-left" size="md" state="muted" />
+            </Pressable>
+            {!isAutoAdvanceQuestion && showFooterPrimaryAction ? (
+              <AppButton
+                title={nextButtonTitle}
+                fullWidth={false}
+                onPress={handleNext}
+                loading={(stepIndex === 2 || stepIndex === 3) && isAnalyzing}
+                disabled={isNextDisabled}
+              />
+            ) : null}
+          </View>
+        )}
+      </View>
+    );
+
+    return (
+      <View style={styles.analyzerStandalone}>
+        {stepIndex === 2 ? analyzerContent : (
+          <ScrollView
+            style={styles.analyzerScroll}
+            contentContainerStyle={styles.analyzerScrollContent}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
+            {analyzerContent}
+          </ScrollView>
+        )}
+      </View>
+    );
+  }
 
   return (
     <DashboardLayout
@@ -2826,17 +2946,6 @@ export function DonorHairSubmissionScreen() {
         />
       ) : null}
       {successMessage ? <StatusBanner message={successMessage} variant="success" title="Hair check saved" style={styles.bannerGap} /> : null}
-      {successMessage && !isAnalyzerActive ? (
-        <AppCard variant="soft" radius="xl" padding="md" style={styles.bannerGap}>
-          <View style={styles.bundleActionRow}>
-            <View style={styles.bundleActionCopy}>
-              <Text style={styles.bundleActionTitle}>Add another hair bundle</Text>
-              <Text style={styles.bundleActionBody}>Start a new hair scan and save an additional bundle to your hair log.</Text>
-            </View>
-            <AppButton title="Add bundle" fullWidth={false} onPress={handleAddAnotherBundle} />
-          </View>
-        </AppCard>
-      ) : null}
       {historyError ? <StatusBanner message={historyError} variant="info" style={styles.bannerGap} /> : null}
       {isLoadingContext ? <StatusBanner title="Loading CheckHair" message="Preparing your analyzer context." variant="info" style={styles.bannerGap} /> : null}
 
@@ -2874,70 +2983,41 @@ export function DonorHairSubmissionScreen() {
               )}
             </View>
           ) : null}
-
-          <Pressable
-            onPress={() => setIsAnalyzerActive(true)}
-            disabled={isLoadingHistory}
-            style={({ pressed }) => [styles.startHairWidget, pressed ? styles.interactivePressed : null]}
-          >
-            <View style={styles.summaryIconWrap}>
-              <AppIcon name="chart-timeline-variant" size="lg" state="active" />
-            </View>
-            <View style={styles.startHairCopy}>
-              <Text style={styles.summaryHeroTitle}>{summaryHeroTitle}</Text>
-              <Text style={styles.summaryHeroBody}>
-                {hasSavedAnalysis ? `Latest: ${latestSavedTone.label}` : 'Answer, capture, analyze.'}
-              </Text>
-            </View>
-            <AppIcon name="chevronRight" size="md" state="muted" />
-          </Pressable>
         </View>
       ) : (
-        <View style={styles.wizardStage}>
-          <View style={styles.progressHeader}>
-            <View>
-              <Text style={styles.progressText}>Step {stepIndex + 1} of {stepTitles.length}</Text>
-              <Text style={styles.progressHelper}>{stepTitles[stepIndex] || progressLabel}</Text>
+        <View style={stepIndex === 2 ? styles.cameraWizardStage : styles.wizardStage}>
+          {stepIndex === 2 ? null : (
+            <View style={styles.closeOnlyHeader}>
+              <Pressable onPress={closeAnalyzerToHome} style={styles.iconNavButton}>
+                <AppIcon name="close" size="md" state="muted" />
+              </Pressable>
             </View>
-            <Pressable onPress={() => setIsAnalyzerActive(false)} style={styles.iconNavButton}>
-              <AppIcon name="close" size="md" state="muted" />
-            </Pressable>
-          </View>
-          <View style={styles.stepProgressTrack} accessibilityRole="progressbar">
-            <View style={[styles.stepProgressFill, { width: `${((stepIndex + 1) / stepTitles.length) * 100}%` }]} />
-          </View>
-
-          <CheckHairVoiceAssistant
-            resolvedTheme={resolvedTheme}
-            stepIndex={stepIndex}
-            currentView={currentView}
-            completedPhotoCount={completedPhotoCount}
-            requiredCount={requiredViews.length}
-            hasAnalysis={Boolean(analysis)}
-          />
+          )}
 
           <View style={styles.stepContentWrap}>
             {renderStepContent()}
           </View>
 
-          <View style={styles.footerNav}>
-            <Pressable
-              onPress={goPrevious}
-              disabled={stepIndex === 0 && questionIndex === 0 && photoIndex === 0}
-              style={[styles.iconNavButton, stepIndex === 0 && questionIndex === 0 && photoIndex === 0 ? styles.iconNavButtonDisabled : null]}
-            >
-              <AppIcon name="arrow-left" size="md" state="muted" />
-            </Pressable>
-            {!isAutoAdvanceQuestion && showFooterPrimaryAction ? (
-              <AppButton
-                title={nextButtonTitle}
-                fullWidth={false}
-                onPress={handleNext}
-                loading={(stepIndex === 2 || stepIndex === 3) && isAnalyzing}
-                disabled={isNextDisabled}
-              />
-            ) : null}
-          </View>
+          {stepIndex === 1 || stepIndex === 2 || stepIndex === 3 ? null : (
+            <View style={styles.footerNav}>
+              <Pressable
+                onPress={goPrevious}
+                disabled={stepIndex === 0 && questionIndex === 0 && photoIndex === 0}
+                style={[styles.iconNavButton, stepIndex === 0 && questionIndex === 0 && photoIndex === 0 ? styles.iconNavButtonDisabled : null]}
+              >
+                <AppIcon name="arrow-left" size="md" state="muted" />
+              </Pressable>
+              {!isAutoAdvanceQuestion && showFooterPrimaryAction ? (
+                <AppButton
+                  title={nextButtonTitle}
+                  fullWidth={false}
+                  onPress={handleNext}
+                  loading={(stepIndex === 2 || stepIndex === 3) && isAnalyzing}
+                  disabled={isNextDisabled}
+                />
+              ) : null}
+            </View>
+          )}
         </View>
       )}
 
@@ -2950,11 +3030,55 @@ export function DonorHairSubmissionScreen() {
           setSelectedHistoryEntries([]);
         }}
       />
+
+      <Modal
+        transparent
+        visible={Boolean(previewImageUri)}
+        animationType="fade"
+        presentationStyle="overFullScreen"
+        statusBarTranslucent
+        onRequestClose={() => setPreviewImageUri('')}
+      >
+        <View style={styles.imagePreviewOverlay}>
+          <Pressable style={styles.imagePreviewBackdrop} onPress={() => setPreviewImageUri('')} />
+          <View style={styles.imagePreviewCard}>
+            <View style={styles.imagePreviewHeader}>
+              <Text style={styles.imagePreviewTitle}>Photo Preview</Text>
+              <Pressable
+                onPress={() => setPreviewImageUri('')}
+                style={({ pressed }) => [styles.imagePreviewClose, pressed ? styles.pressedMuted : null]}
+                accessibilityRole="button"
+                accessibilityLabel="Close photo preview"
+              >
+                <AppIcon name="close" size="sm" state="inverse" />
+              </Pressable>
+            </View>
+            {previewImageUri ? (
+              <Image source={{ uri: previewImageUri }} style={styles.imagePreviewImage} resizeMode="contain" />
+            ) : null}
+          </View>
+        </View>
+      </Modal>
     </DashboardLayout>
   );
 }
 
 const styles = StyleSheet.create({
+  analyzerStandalone: {
+    flex: 1,
+    minHeight: '100%',
+    backgroundColor: theme.colors.backgroundSecondary,
+    paddingHorizontal: theme.spacing.md,
+    paddingTop: theme.spacing.md,
+    paddingBottom: theme.spacing.lg,
+  },
+  analyzerScroll: {
+    flex: 1,
+  },
+  analyzerScrollContent: {
+    flexGrow: 1,
+    paddingBottom: 120,
+  },
   wizardStage: {
     width: '100%',
     maxWidth: theme.layout.contentMaxWidth,
@@ -2962,32 +3086,19 @@ const styles = StyleSheet.create({
     gap: theme.spacing.sm,
     paddingBottom: theme.spacing.md,
   },
+  cameraWizardStage: {
+    width: '100%',
+    alignSelf: 'center',
+    paddingBottom: 0,
+  },
+  closeOnlyHeader: {
+    alignItems: 'flex-end',
+  },
   summaryStage: {
     gap: theme.spacing.md,
     width: '100%',
     maxWidth: theme.layout.contentMaxWidth,
     alignSelf: 'center',
-  },
-  bundleActionRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: theme.spacing.md,
-  },
-  bundleActionCopy: {
-    flex: 1,
-    gap: 3,
-  },
-  bundleActionTitle: {
-    fontFamily: theme.typography.fontFamilyDisplay,
-    fontSize: theme.typography.semantic.body,
-    color: theme.colors.textPrimary,
-  },
-  bundleActionBody: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    color: theme.colors.textSecondary,
-    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
   },
   flowRail: {
     flexDirection: 'row',
@@ -3228,15 +3339,16 @@ const styles = StyleSheet.create({
     textAlign: 'left',
   },
   startHairWidget: {
-    minHeight: 90,
+    minHeight: 96,
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.spacing.md,
-    padding: theme.spacing.md,
+    padding: theme.spacing.lg,
     borderRadius: theme.radius.xl,
     backgroundColor: theme.colors.backgroundPrimary,
     borderWidth: 1,
     borderColor: theme.colors.borderSubtle,
+    ...theme.shadows.soft,
   },
   startHairCopy: {
     flex: 1,
@@ -3321,11 +3433,11 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   emptyCalendarState: {
-    minHeight: 112,
+    minHeight: 124,
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.spacing.md,
-    padding: theme.spacing.md,
+    padding: theme.spacing.lg,
     borderRadius: theme.radius.xl,
     backgroundColor: theme.colors.backgroundPrimary,
     borderWidth: 1,
@@ -3361,11 +3473,12 @@ const styles = StyleSheet.create({
     marginBottom: theme.spacing.sm,
   },
   calendarWidget: {
-    padding: theme.spacing.md,
+    padding: theme.spacing.lg,
     borderRadius: theme.radius.xl,
     backgroundColor: theme.colors.backgroundPrimary,
     borderWidth: 1,
     borderColor: theme.colors.borderSubtle,
+    ...theme.shadows.soft,
   },
   calendarLeadCard: {
     flexDirection: 'row',
@@ -3376,7 +3489,7 @@ const styles = StyleSheet.create({
     paddingVertical: theme.spacing.sm,
     borderWidth: 1,
     borderColor: theme.colors.borderSubtle,
-    backgroundColor: theme.colors.surfaceSoft,
+    backgroundColor: theme.colors.surfaceCardMuted,
     borderRadius: theme.radius.xl,
   },
   calendarLeadIconWrap: {
@@ -3505,8 +3618,8 @@ const styles = StyleSheet.create({
   calendarCellWeek: {
     flex: 1,
     width: undefined,
-    minHeight: 90,
-    borderRadius: 22,
+    minHeight: 86,
+    borderRadius: 20,
   },
   calendarCellActive: {
     backgroundColor: theme.colors.surfaceSoft,
@@ -3584,16 +3697,23 @@ const styles = StyleSheet.create({
   calendarModeSwitch: {
     flexDirection: 'row',
     borderRadius: theme.radius.pill,
-    backgroundColor: theme.colors.surfaceSoft,
-    padding: 3,
+    backgroundColor: theme.colors.surfaceCardMuted,
+    padding: 4,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
   },
   calendarModeButton: {
-    paddingHorizontal: theme.spacing.sm,
+    minHeight: 34,
+    minWidth: 68,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: theme.spacing.md,
     paddingVertical: 7,
     borderRadius: theme.radius.pill,
   },
   calendarModeButtonActive: {
     backgroundColor: theme.colors.brandPrimary,
+    ...theme.shadows.pressed,
   },
   calendarModeText: {
     fontFamily: theme.typography.fontFamily,
@@ -3729,6 +3849,10 @@ const styles = StyleSheet.create({
     gap: theme.spacing.sm,
   },
   choiceCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
     paddingHorizontal: theme.spacing.md,
     paddingVertical: theme.spacing.md,
     borderRadius: theme.radius.xl,
@@ -3741,12 +3865,193 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.brandPrimaryMuted,
   },
   choiceLabel: {
+    flex: 1,
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.body,
     color: theme.colors.textPrimary,
   },
   choiceLabelActive: {
     fontWeight: theme.typography.weights.semibold,
+  },
+  choiceIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.surfaceSoft,
+  },
+  choiceIconWrapActive: {
+    backgroundColor: theme.colors.brandPrimary,
+  },
+  questionnaireStage: {
+    gap: theme.spacing.lg,
+  },
+  questionProgressBlock: {
+    gap: theme.spacing.xs,
+  },
+  questionProgressLabels: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+  },
+  questionProgressText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textSecondary,
+    textTransform: 'uppercase',
+  },
+  questionProgressMeta: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.brandPrimary,
+    textTransform: 'uppercase',
+  },
+  questionProgressTrack: {
+    height: 8,
+    borderRadius: theme.radius.full,
+    overflow: 'hidden',
+    backgroundColor: theme.colors.surfaceSoft,
+  },
+  questionProgressFill: {
+    height: '100%',
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.brandPrimary,
+  },
+  questionPanel: {
+    padding: theme.spacing.lg,
+    borderRadius: theme.radius.xl,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+    backgroundColor: theme.colors.backgroundPrimary,
+    ...theme.shadows.soft,
+  },
+  questionInfoCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.spacing.sm,
+    padding: theme.spacing.md,
+    borderRadius: theme.radius.xl,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+    backgroundColor: theme.colors.surfaceSoft,
+  },
+  questionInfoCopy: {
+    flex: 1,
+    gap: 3,
+  },
+  questionInfoTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.bold,
+    color: theme.colors.textPrimary,
+  },
+  questionInfoBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textSecondary,
+  },
+  readinessStage: {
+    gap: theme.spacing.lg,
+  },
+  readinessHeader: {
+    alignItems: 'center',
+    gap: theme.spacing.xs,
+  },
+  readinessTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.titleLg,
+    fontWeight: theme.typography.weights.bold,
+    color: theme.colors.brandPrimary,
+    textAlign: 'center',
+  },
+  readinessBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textSecondary,
+    textAlign: 'center',
+  },
+  readinessGrid: {
+    gap: theme.spacing.md,
+  },
+  recapCard: {
+    gap: theme.spacing.sm,
+    padding: theme.spacing.md,
+    borderRadius: theme.radius.xl,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+    backgroundColor: theme.colors.backgroundPrimary,
+    ...theme.shadows.soft,
+  },
+  recapHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+    marginBottom: theme.spacing.xs,
+  },
+  recapTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.bold,
+    color: theme.colors.textPrimary,
+  },
+  recapRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+    paddingVertical: 8,
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.borderSubtle,
+  },
+  recapLabel: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    color: theme.colors.textSecondary,
+  },
+  recapPill: {
+    overflow: 'hidden',
+    borderRadius: theme.radius.full,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: 5,
+    backgroundColor: theme.colors.surfaceSoft,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.brandPrimary,
+  },
+  tipsCard: {
+    gap: theme.spacing.sm,
+    padding: theme.spacing.md,
+    borderRadius: theme.radius.xl,
+    backgroundColor: theme.colors.surfaceSoft,
+  },
+  tipsTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.bold,
+    color: theme.colors.brandPrimary,
+  },
+  tipRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.spacing.xs,
+  },
+  tipText: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textSecondary,
+  },
+  answerSummaryCompact: {
+    gap: theme.spacing.xs,
   },
   progressHeader: {
     flexDirection: 'row',
@@ -3865,10 +4170,13 @@ const styles = StyleSheet.create({
     gap: theme.spacing.sm,
     paddingBottom: 0,
     alignItems: 'center',
+    borderRadius: 28,
+    backgroundColor: '#111111',
+    overflow: 'hidden',
   },
   liveCameraStage: {
     alignSelf: 'center',
-    borderRadius: 24,
+    borderRadius: 0,
     overflow: 'hidden',
     backgroundColor: theme.colors.backgroundDark,
     position: 'relative',
@@ -3904,33 +4212,46 @@ const styles = StyleSheet.create({
   },
   liveCameraTopBar: {
     position: 'absolute',
-    top: theme.spacing.md,
-    left: theme.spacing.md,
-    right: theme.spacing.md,
+    top: 0,
+    left: 0,
+    right: 0,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     gap: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.md,
+    paddingTop: theme.spacing.md,
+    paddingBottom: theme.spacing.xl,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    zIndex: 4,
+  },
+  liveCameraOverlayIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.16)',
   },
   liveStatusPill: {
     flexShrink: 1,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 7,
-    maxWidth: '78%',
+    maxWidth: '52%',
     paddingHorizontal: theme.spacing.md,
     paddingVertical: 8,
     borderRadius: theme.radius.pill,
-    backgroundColor: 'rgba(255,255,255,0.88)',
+    backgroundColor: 'rgba(17,17,17,0.58)',
   },
   liveStatusPillSuccess: {
-    backgroundColor: 'rgba(235,255,241,0.93)',
+    backgroundColor: 'rgba(17,17,17,0.58)',
   },
   liveStatusPillWarning: {
-    backgroundColor: 'rgba(255,248,225,0.94)',
+    backgroundColor: 'rgba(17,17,17,0.58)',
   },
   liveStatusPillError: {
-    backgroundColor: 'rgba(255,236,236,0.94)',
+    backgroundColor: 'rgba(17,17,17,0.58)',
   },
   liveStatusDot: {
     width: 8,
@@ -3952,7 +4273,7 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.caption,
     fontWeight: theme.typography.weights.semibold,
-    color: theme.colors.textPrimary,
+    color: theme.colors.textInverse,
   },
   liveCounterText: {
     paddingHorizontal: theme.spacing.md,
@@ -3967,10 +4288,10 @@ const styles = StyleSheet.create({
   },
   liveFrameGuide: {
     position: 'absolute',
-    top: 78,
-    left: 42,
-    right: 42,
-    bottom: 58,
+    top: 118,
+    left: 48,
+    right: 48,
+    bottom: 210,
     borderRadius: 18,
   },
   liveLengthGuide: {
@@ -4010,8 +4331,8 @@ const styles = StyleSheet.create({
     top: 16,
     height: 2,
     borderRadius: theme.radius.full,
-    backgroundColor: 'rgba(86, 194, 113, 0.95)',
-    shadowColor: '#56c271',
+    backgroundColor: theme.colors.brandPrimary,
+    shadowColor: theme.colors.brandPrimary,
     shadowOpacity: 0.45,
     shadowRadius: 5,
     shadowOffset: { width: 0, height: 0 },
@@ -4025,7 +4346,7 @@ const styles = StyleSheet.create({
     height: 44,
     borderTopWidth: 3,
     borderLeftWidth: 3,
-    borderColor: theme.colors.backgroundPrimary,
+    borderColor: theme.colors.brandPrimary,
     borderTopLeftRadius: 22,
   },
   liveFrameCornerTopRight: {
@@ -4036,7 +4357,7 @@ const styles = StyleSheet.create({
     height: 44,
     borderTopWidth: 3,
     borderRightWidth: 3,
-    borderColor: theme.colors.backgroundPrimary,
+    borderColor: theme.colors.brandPrimary,
     borderTopRightRadius: 22,
   },
   liveFrameCornerBottomLeft: {
@@ -4047,7 +4368,7 @@ const styles = StyleSheet.create({
     height: 44,
     borderBottomWidth: 3,
     borderLeftWidth: 3,
-    borderColor: theme.colors.backgroundPrimary,
+    borderColor: theme.colors.brandPrimary,
     borderBottomLeftRadius: 22,
   },
   liveFrameCornerBottomRight: {
@@ -4058,17 +4379,107 @@ const styles = StyleSheet.create({
     height: 44,
     borderBottomWidth: 3,
     borderRightWidth: 3,
-    borderColor: theme.colors.backgroundPrimary,
+    borderColor: theme.colors.brandPrimary,
     borderBottomRightRadius: 22,
   },
   liveCameraBottomSheet: {
     width: '100%',
-    padding: theme.spacing.sm,
-    borderRadius: 18,
+    padding: theme.spacing.md,
+    borderRadius: 0,
     borderWidth: 1,
-    borderColor: theme.colors.borderSubtle,
-    backgroundColor: theme.colors.backgroundPrimary,
+    borderColor: 'rgba(255,255,255,0.16)',
+    backgroundColor: '#111111',
     gap: theme.spacing.xs,
+  },
+  liveScanFloatingCard: {
+    position: 'absolute',
+    left: theme.spacing.md,
+    right: theme.spacing.md,
+    bottom: 118,
+    zIndex: 3,
+    gap: theme.spacing.xs,
+    padding: theme.spacing.md,
+    borderRadius: theme.radius.xl,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.24)',
+    backgroundColor: 'rgba(255,255,255,0.86)',
+  },
+  liveScanMetricRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+  },
+  liveScanMetricLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textSecondary,
+    textTransform: 'uppercase',
+  },
+  liveScanMetricValue: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textPrimary,
+  },
+  liveScanMetricValueAccent: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.brandPrimary,
+  },
+  liveScanProgressTrack: {
+    height: 7,
+    borderRadius: theme.radius.full,
+    overflow: 'hidden',
+    marginTop: theme.spacing.xs,
+    backgroundColor: theme.colors.surfaceSoft,
+  },
+  liveScanProgressFill: {
+    height: '100%',
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.brandPrimary,
+  },
+  liveHoldStillText: {
+    textAlign: 'center',
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    color: theme.colors.textInverse,
+    marginTop: theme.spacing.xs,
+  },
+  liveCaptureControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: theme.spacing.lg,
+    paddingVertical: theme.spacing.sm,
+  },
+  liveRoundControl: {
+    width: 48,
+    height: 48,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.16)',
+  },
+  liveCaptureButton: {
+    width: 68,
+    height: 68,
+    borderRadius: theme.radius.full,
+    borderWidth: 5,
+    borderColor: theme.colors.brandPrimary,
+    backgroundColor: theme.colors.backgroundPrimary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...theme.shadows.md,
+  },
+  liveCaptureButtonReady: {
+    borderColor: theme.colors.textSuccess,
+    shadowColor: theme.colors.textSuccess,
+  },
+  liveCaptureButtonDisabled: {
+    opacity: 0.6,
   },
   liveAnalysisToast: {
     position: 'absolute',
@@ -4118,13 +4529,13 @@ const styles = StyleSheet.create({
   liveCameraTitle: {
     fontFamily: theme.typography.fontFamilyDisplay,
     fontSize: theme.typography.semantic.bodyLg,
-    color: theme.colors.textPrimary,
+    color: theme.colors.textInverse,
   },
   liveCameraBody: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.bodySm,
     lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
-    color: theme.colors.textSecondary,
+    color: 'rgba(255,255,255,0.78)',
   },
   liveChecklist: {
     flexDirection: 'row',
@@ -4139,12 +4550,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: theme.spacing.sm,
     paddingVertical: 6,
     borderRadius: theme.radius.pill,
-    backgroundColor: theme.colors.surfaceSoft,
+    backgroundColor: 'rgba(255,255,255,0.14)',
   },
   liveChecklistText: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.caption,
-    color: theme.colors.textPrimary,
+    color: theme.colors.textInverse,
   },
   liveAutoCaptureText: {
     fontFamily: theme.typography.fontFamily,
@@ -4205,8 +4616,8 @@ const styles = StyleSheet.create({
     minHeight: 54,
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: theme.colors.borderSubtle,
-    backgroundColor: theme.colors.backgroundPrimary,
+    borderColor: 'rgba(255,255,255,0.18)',
+    backgroundColor: 'rgba(255,255,255,0.10)',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 4,
@@ -4226,7 +4637,7 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.caption,
     fontWeight: theme.typography.weights.bold,
-    color: theme.colors.textSecondary,
+    color: theme.colors.textInverse,
   },
   liveThumbLabelActive: {
     color: theme.colors.brandPrimary,
@@ -4429,7 +4840,354 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.brandPrimary,
   },
   analysisResultPanel: {
+    width: '100%',
+    maxWidth: 600,
+    alignSelf: 'center',
+    gap: theme.spacing.lg,
+    paddingBottom: theme.spacing.xl,
+  },
+  analysisResultTopBar: {
+    minHeight: 56,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     gap: theme.spacing.md,
+  },
+  resultHeaderButton: {
+    width: 40,
+    height: 40,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.surfaceSoft,
+  },
+  analysisResultScreenTitle: {
+    flex: 1,
+    textAlign: 'center',
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodyLg,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textPrimary,
+  },
+  resultSectionCard: {
+    gap: theme.spacing.md,
+    padding: theme.spacing.lg,
+    borderRadius: 16,
+    backgroundColor: theme.colors.backgroundPrimary,
+    ...theme.shadows.soft,
+  },
+  resultSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: theme.spacing.md,
+  },
+  resultSectionTitle: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodyLg,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textPrimary,
+  },
+  conditionBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: 5,
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.surfaceCardMuted,
+  },
+  conditionBadgeDot: {
+    width: 8,
+    height: 8,
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.brandPrimary,
+  },
+  conditionBadgeDotWarning: {
+    width: 8,
+    height: 8,
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.textError,
+  },
+  conditionBadgeText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.bold,
+    color: theme.colors.brandPrimary,
+  },
+  healthScoreBlock: {
+    gap: theme.spacing.xs,
+  },
+  healthScoreRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: theme.spacing.xs,
+  },
+  healthScoreValue: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: 38,
+    lineHeight: 44,
+    fontWeight: theme.typography.weights.bold,
+    color: theme.colors.brandPrimary,
+  },
+  healthScoreMax: {
+    paddingBottom: 5,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodyLg,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textSecondary,
+  },
+  healthScoreTrack: {
+    height: 8,
+    borderRadius: theme.radius.full,
+    overflow: 'hidden',
+    backgroundColor: theme.colors.surfaceSoft,
+  },
+  healthScoreFill: {
+    height: '100%',
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.brandPrimary,
+  },
+  conditionInsightList: {
+    gap: theme.spacing.sm,
+  },
+  conditionInsightRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  conditionInsightText: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    color: theme.colors.textPrimary,
+  },
+  conditionInsightTextMuted: {
+    color: theme.colors.textSecondary,
+  },
+  aiRecommendationList: {
+    gap: theme.spacing.md,
+  },
+  aiRecommendationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.md,
+  },
+  aiRecommendationIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.surfaceSoft,
+  },
+  aiRecommendationCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  aiRecommendationTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textPrimary,
+  },
+  aiRecommendationText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textSecondary,
+  },
+  donationAssessmentCard: {
+    overflow: 'hidden',
+    borderRadius: 16,
+    backgroundColor: theme.colors.backgroundPrimary,
+    ...theme.shadows.soft,
+  },
+  cutLineImageWrap: {
+    height: 224,
+    backgroundColor: theme.colors.surfaceSoft,
+    position: 'relative',
+  },
+  cutLineImageTouchable: {
+    overflow: 'hidden',
+  },
+  cutLineImage: {
+    width: '100%',
+    height: '100%',
+  },
+  cutLinePreviewHint: {
+    position: 'absolute',
+    right: theme.spacing.sm,
+    bottom: theme.spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.xs,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: 6,
+    borderRadius: theme.radius.full,
+    backgroundColor: 'rgba(0, 0, 0, 0.58)',
+  },
+  cutLinePreviewHintText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textInverse,
+  },
+  cutLineImageFallback: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cutLineOverlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  cutLineDashed: {
+    flex: 1,
+    borderTopWidth: 2,
+    borderStyle: 'dashed',
+    borderColor: theme.colors.brandPrimary,
+  },
+  cutLineScissorBadge: {
+    width: 34,
+    height: 34,
+    marginHorizontal: theme.spacing.xs,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.brandPrimary,
+    ...theme.shadows.soft,
+  },
+  cutLineLabel: {
+    position: 'absolute',
+    top: theme.spacing.sm,
+    alignSelf: 'center',
+    maxWidth: '88%',
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: 6,
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.brandPrimary,
+    ...theme.shadows.soft,
+  },
+  cutLineLabelText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textOnBrand,
+  },
+  donationAssessmentBody: {
+    gap: theme.spacing.md,
+    padding: theme.spacing.lg,
+  },
+  imagePreviewOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.xl,
+    backgroundColor: 'rgba(0, 0, 0, 0.88)',
+  },
+  imagePreviewBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  imagePreviewCard: {
+    flex: 1,
+    maxHeight: '92%',
+    borderRadius: 18,
+    overflow: 'hidden',
+  },
+  imagePreviewHeader: {
+    minHeight: 52,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: theme.spacing.sm,
+    paddingBottom: theme.spacing.sm,
+  },
+  imagePreviewTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textInverse,
+  },
+  imagePreviewClose: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.16)',
+  },
+  imagePreviewImage: {
+    flex: 1,
+    width: '100%',
+    height: '100%',
+  },
+  assessmentRows: {
+    gap: theme.spacing.xs,
+  },
+  assessmentRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.md,
+    paddingBottom: theme.spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.borderSubtle,
+  },
+  assessmentLabel: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    color: theme.colors.textSecondary,
+  },
+  assessmentValue: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textPrimary,
+  },
+  assessmentNote: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.spacing.sm,
+    padding: theme.spacing.md,
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.brandPrimaryMuted,
+  },
+  assessmentNoteText: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textPrimary,
+  },
+  resultActions: {
+    gap: theme.spacing.md,
+    marginTop: theme.spacing.xs,
+  },
+  resultErrorBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    lineHeight: theme.typography.semantic.body * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textSecondary,
+  },
+  resultHeaderButtonPlaceholder: {
+    width: 40,
+    height: 40,
+  },
+  scanAgainLink: {
+    alignItems: 'center',
+    paddingVertical: theme.spacing.sm,
+  },
+  scanAgainText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.bold,
+    color: theme.colors.brandPrimary,
   },
   analysisResultHero: {
     flexDirection: 'row',

@@ -7,9 +7,9 @@ const fontFamily = Platform.select({
 });
 
 const fontFamilyDisplay = Platform.select({
-  ios: 'Georgia',
-  android: 'serif',
-  default: 'Georgia',
+  ios: 'System',
+  android: 'sans-serif-medium',
+  default: 'System',
 });
 
 export const typography = {
@@ -33,7 +33,9 @@ export const typography = {
     label: 13,
     bodySm: 14,
     body: 15,
+    bodyMd: 16,
     bodyLg: 17,
+    title: 26,
     titleSm: 22,
     titleMd: 30,
     titleLg: 38,
@@ -44,6 +46,7 @@ export const typography = {
     label: 12,
     bodySm: 13,
     body: 14,
+    bodyMd: 15,
     bodyLg: 16,
     titleSm: 20,
     titleMd: 26,

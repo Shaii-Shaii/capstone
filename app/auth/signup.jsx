@@ -1,18 +1,16 @@
-import React, { useState } from 'react';
-import { Image, StyleSheet, Text, View } from 'react-native';
+import React from 'react';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
-import { AuthScreenLayout, authLayoutStyles } from '../../src/components/auth/AuthScreenLayout';
-import { AuthFormFooter } from '../../src/components/auth/AuthFormFooter';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { ScreenContainer } from '../../src/components/ui/ScreenContainer';
 import { SignupForm } from '../../src/components/auth/SignupForm';
-import { AuthVoiceAssistant } from '../../src/components/auth/AuthVoiceAssistant';
 import { unifiedSignupSchema } from '../../src/features/auth/validators/auth.schema';
 import { useRoleAuthFlow } from '../../src/hooks/useRoleAuthFlow';
-import { resolveBrandLogoSource, resolveThemeRoles, theme } from '../../src/design-system/theme';
+import { resolveThemeRoles, theme } from '../../src/design-system/theme';
 
 export default function SignupScreen() {
   const router = useRouter();
   const {
-    config,
     handleSignup,
     isLoading,
     activeAuthAction,
@@ -21,130 +19,201 @@ export default function SignupScreen() {
     resolvedTheme,
   } = useRoleAuthFlow('signup');
 
-  const [imageFailed, setImageFailed] = useState(false);
-  const [assistantStageMessage, setAssistantStageMessage] = useState('');
-  const logoSource = resolveBrandLogoSource(resolvedTheme, imageFailed);
+  const assistantEmail = '';
   const roles = resolveThemeRoles(resolvedTheme);
   const brandName = resolvedTheme?.brandName || 'Donivra';
 
   return (
-    <AuthScreenLayout role="access" resolvedTheme={resolvedTheme}>
-      {/* Brand Identity */}
-      <View style={styles.brandSection}>
-        <View
-          style={[
-            styles.logoContainer,
-            {
-              backgroundColor: roles.defaultCardBackground,
-              borderColor: roles.defaultCardBorder,
-            },
-          ]}
-        >
-          <Image
-            source={logoSource}
-            style={styles.logoImage}
-            resizeMode="contain"
-            onError={() => setImageFailed(true)}
-          />
+    <ScreenContainer
+      scrollable
+      safeArea
+      variant="auth"
+      contentStyle={[styles.screenContent, { backgroundColor: roles.pageBackground }]}
+    >
+      <View style={[styles.topBar, { backgroundColor: roles.defaultCardBackground }]}>
+        <View style={styles.topBrand}>
+          <MaterialCommunityIcons name="content-cut" size={26} color={roles.primaryActionBackground} />
+          <Text style={[styles.topBrandText, { color: roles.primaryActionBackground }]}>{brandName}</Text>
         </View>
-
-        <Text
-          style={[
-            styles.brandName,
-            {
-              color: roles.headingText,
-              fontFamily:
-                resolvedTheme?.secondaryFontFamily ||
-                theme.typography.fontFamilyDisplay,
-            },
-          ]}
-        >
-          Create Account
-        </Text>
-
-        <Text
-          style={[
-            styles.brandTagline,
-            {
-              color: roles.bodyText,
-              fontFamily: resolvedTheme?.fontFamily || theme.typography.fontFamily,
-            },
-          ]}
-        >
-          Create a new account to get started with {brandName}.
-        </Text>
       </View>
 
-      {/* Signup form */}
-      <View style={authLayoutStyles.formSection}>
-        <AuthVoiceAssistant
-          screen="signup"
-          resolvedTheme={resolvedTheme}
-          compact
-          stageMessage={assistantStageMessage}
-        />
-        <SignupForm
-          schema={unifiedSignupSchema}
-          onSubmit={(data) => {
-            setAssistantStageMessage('Good. I will send your signup request now. If it succeeds, the next step is to check your email and enter the OTP.');
-            return handleSignup(data);
-          }}
-          isLoading={isLoading}
-          activeAuthAction={activeAuthAction}
-          buttonText={config.signup.buttonText}
-          submitError={signupError}
-          onFieldEdit={clearSignupError}
-          onFieldFocus={(fieldName) => {
-            if (fieldName === 'email') setAssistantStageMessage('Enter the email address you want to use for your Donivra account.');
-            if (fieldName === 'password') setAssistantStageMessage('Now enter a strong password with uppercase, lowercase, a number, and a special character.');
-            if (fieldName === 'confirmPassword') setAssistantStageMessage('Confirm your password by typing the same password again.');
-          }}
-          resolvedTheme={resolvedTheme}
-        />
+      <View style={styles.signupCanvas}>
+        <View style={[styles.signupCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
+          <View style={[styles.cardAccent, { backgroundColor: roles.primaryActionBackground }]} />
+
+          <View style={styles.brandSection}>
+            <View style={[styles.logoContainer, { backgroundColor: roles.iconPrimarySurface }]}>
+              <MaterialCommunityIcons name="heart-outline" size={34} color={roles.primaryActionBackground} />
+            </View>
+
+            <Text
+              style={[
+                styles.brandName,
+                {
+                  color: roles.headingText,
+                  fontFamily: resolvedTheme?.secondaryFontFamily || theme.typography.fontFamilyDisplay,
+                },
+              ]}
+            >
+              Join {brandName}
+            </Text>
+
+            <Text
+              style={[
+                styles.brandTagline,
+                {
+                  color: roles.bodyText,
+                  fontFamily: resolvedTheme?.fontFamily || theme.typography.fontFamily,
+                },
+              ]}
+            >
+              {'Start your journey of making every strand count. We are glad you are here.'}
+            </Text>
+          </View>
+
+          <SignupForm
+            schema={unifiedSignupSchema}
+            onSubmit={(data) => handleSignup(data)}
+            isLoading={isLoading}
+            activeAuthAction={activeAuthAction}
+            buttonText="Create Account"
+            submitError={signupError}
+            onFieldEdit={clearSignupError}
+            autofillEmail={assistantEmail}
+            onFieldFocus={() => {}}
+            resolvedTheme={resolvedTheme}
+          />
+
+          <View style={[styles.loginBlock, { borderTopColor: roles.defaultCardBorder }]}>
+            <Text style={[styles.loginText, { color: roles.bodyText }]}>
+              Already have an account?{' '}
+            </Text>
+            <Pressable onPress={() => router.replace('/auth/access')}>
+              <Text style={[styles.loginLink, { color: roles.primaryActionBackground }]}>Log In</Text>
+            </Pressable>
+          </View>
+        </View>
       </View>
 
-      <AuthFormFooter
-        questionText={config.signup.footerQuestion}
-        linkText={config.signup.footerLink}
-        onLinkPress={() => router.replace('/auth/access')}
-      />
-    </AuthScreenLayout>
+      <View style={[styles.footer, { backgroundColor: roles.supportCardBackground }]}>
+        <Text style={[styles.footerBrand, { color: roles.primaryActionBackground }]}>{brandName}</Text>
+        <Text style={[styles.footerText, { color: roles.bodyText }]}>Every strand counts.</Text>
+      </View>
+    </ScreenContainer>
   );
 }
 
 const styles = StyleSheet.create({
+  screenContent: {
+    flexGrow: 1,
+    paddingHorizontal: 0,
+    paddingTop: 0,
+    paddingBottom: 0,
+  },
+  topBar: {
+    width: '100%',
+    minHeight: 64,
+    paddingHorizontal: theme.spacing.lg,
+    justifyContent: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.borderSubtle,
+  },
+  topBrand: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  topBrandText: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.title,
+    fontWeight: theme.typography.weights.bold,
+  },
+  signupCanvas: {
+    flex: 1,
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: theme.spacing.lg,
+    paddingVertical: theme.spacing.section,
+  },
+  signupCard: {
+    width: '100%',
+    maxWidth: 430,
+    borderWidth: 1,
+    borderRadius: theme.radius.xxl,
+    paddingHorizontal: theme.spacing.xl,
+    paddingTop: theme.spacing.xxxl,
+    paddingBottom: theme.spacing.xl,
+    overflow: 'hidden',
+    shadowColor: theme.colors.shadow,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.08,
+    shadowRadius: 26,
+    elevation: 6,
+  },
+  cardAccent: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 8,
+  },
   brandSection: {
     alignItems: 'center',
     marginBottom: theme.spacing.lg,
+    gap: theme.spacing.xs,
   },
   logoContainer: {
     width: 64,
     height: 64,
-    borderRadius: 18,
-    borderWidth: 1,
+    borderRadius: theme.radius.full,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: theme.spacing.md,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.07,
-    shadowRadius: 8,
-    elevation: 3,
-  },
-  logoImage: {
-    width: 42,
-    height: 42,
   },
   brandName: {
-    fontSize: 24,
+    fontSize: 32,
+    lineHeight: 40,
     fontWeight: theme.typography.weights.bold,
     textAlign: 'center',
-    marginBottom: theme.spacing.xs,
   },
   brandTagline: {
-    fontSize: theme.typography.compact.bodySm,
+    fontSize: theme.typography.semantic.body,
     textAlign: 'center',
-    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
-    maxWidth: 260,
+    lineHeight: theme.typography.semantic.body * theme.typography.lineHeights.relaxed,
+    maxWidth: 320,
+  },
+  loginBlock: {
+    marginTop: theme.spacing.lg,
+    paddingTop: theme.spacing.md,
+    borderTopWidth: 1,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    flexWrap: 'wrap',
+  },
+  loginText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+  },
+  loginLink: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  footer: {
+    width: '100%',
+    alignItems: 'center',
+    gap: theme.spacing.xs,
+    paddingHorizontal: theme.spacing.lg,
+    paddingVertical: theme.spacing.lg,
+  },
+  footerBrand: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  footerText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
   },
 });

@@ -1,5 +1,6 @@
 import React from 'react';
 import { View, StyleSheet } from 'react-native';
+import Animated, { FadeInUp } from 'react-native-reanimated';
 import { theme, resolveThemeRoles } from '../../design-system/theme';
 import { useAuth } from '../../providers/AuthProvider';
 
@@ -120,9 +121,12 @@ export const AppCard = ({
   ];
 
   return (
-    <View style={cardStyles}>
+    <Animated.View
+      entering={FadeInUp.duration(theme.motion.cardEnter).delay(enteringDelay)}
+      style={cardStyles}
+    >
       <View style={contentStyle}>{children}</View>
-    </View>
+    </Animated.View>
   );
 };
 

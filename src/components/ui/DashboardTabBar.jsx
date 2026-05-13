@@ -13,7 +13,7 @@ import { AppIcon } from './AppIcon';
 import { theme, resolveThemeRoles } from '../../design-system/theme';
 import { useAuth } from '../../providers/AuthProvider';
 
-export const DASHBOARD_TAB_BAR_HEIGHT = 72;
+export const DASHBOARD_TAB_BAR_HEIGHT = 76;
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
@@ -88,7 +88,7 @@ export function DashboardTabBar({ items, activeKey, onPress, variant = 'donor' }
   const { width } = useWindowDimensions();
   const isCompact = width < 390;
   const horizontalInset = isCompact ? theme.spacing.md : theme.spacing.lg;
-  const bottomOffset = Math.max(isCompact ? theme.spacing.xs : theme.spacing.sm, 8);
+  const bottomOffset = Math.max(isCompact ? theme.spacing.sm : theme.spacing.md, 10);
   const activeIndex = Math.max(items.findIndex((item) => item.key === activeKey), 0);
   const slotProgress = useSharedValue(activeIndex);
   const [surfaceWidth, setSurfaceWidth] = React.useState(0);
@@ -180,8 +180,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: theme.spacing.xs,
-    paddingVertical: 6,
-    borderRadius: 28,
+    paddingVertical: theme.spacing.sm,
+    borderRadius: 30,
     borderWidth: 1,
     ...theme.shadows.hero,
   },
@@ -195,7 +195,7 @@ const styles = StyleSheet.create({
   tabItem: {
     flex: 1,
     minWidth: 0,
-    minHeight: 52,
+    minHeight: 56,
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: theme.radius.pill,
@@ -204,7 +204,7 @@ const styles = StyleSheet.create({
     minHeight: 40,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 2,
+    gap: 3,
     paddingHorizontal: theme.spacing.xs,
     zIndex: 2,
   },
@@ -218,7 +218,7 @@ const styles = StyleSheet.create({
   },
   label: {
     fontFamily: theme.typography.fontFamily,
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: theme.typography.weights.semibold,
   },
   badge: {
