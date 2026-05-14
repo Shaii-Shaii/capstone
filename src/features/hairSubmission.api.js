@@ -449,6 +449,44 @@ export const createHairSubmissionDetail = async (payload) => {
   };
 };
 
+export const updateHairSubmissionDetailById = async (submissionDetailId, payload) => {
+  if (!submissionDetailId) {
+    return { data: null, error: new Error('Submission detail ID is required.') };
+  }
+
+  logHairQuery('updateHairSubmissionDetailById', {
+    table: hairSubmissionDetailsTable,
+    phase: 'update',
+    filters: { Submission_Detail_ID: submissionDetailId },
+    columns: ['Declared_Length', 'Declared_Color', 'Declared_Texture', 'Declared_Density', 'Declared_Condition', 'Detail_Notes', 'Status'],
+  });
+
+  const result = await supabase
+    .from(hairSubmissionDetailsTable)
+    .update({
+      Declared_Length: payload?.declared_length ?? undefined,
+      Declared_Color: payload?.declared_color ?? undefined,
+      Declared_Texture: payload?.declared_texture ?? undefined,
+      Declared_Density: payload?.declared_density ?? undefined,
+      Declared_Condition: payload?.declared_condition ?? undefined,
+      Is_Chemically_Treated: payload?.is_chemically_treated ?? undefined,
+      Is_Colored: payload?.is_colored ?? undefined,
+      Is_Bleached: payload?.is_bleached ?? undefined,
+      Is_Rebonded: payload?.is_rebonded ?? undefined,
+      Detail_Notes: payload?.detail_notes ?? undefined,
+      Status: payload?.status ?? undefined,
+      Updated_At: getPhilippineDatabaseTimestamp(),
+    })
+    .eq('Submission_Detail_ID', submissionDetailId)
+    .select(hairSubmissionDetailSelect)
+    .maybeSingle();
+
+  return {
+    data: result.data ? normalizeHairSubmissionDetail(result.data) : null,
+    error: result.error,
+  };
+};
+
 export const createHairSubmissionImages = async (rows) => {
   const insertRows = rows.map((row) => ({
     Submission_Detail_ID: row?.submission_detail_id || null,

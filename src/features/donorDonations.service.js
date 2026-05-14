@@ -1,3 +1,5 @@
+import * as FileSystem from 'expo-file-system/legacy';
+import * as MediaLibrary from 'expo-media-library';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { logAppError } from '../utils/appErrors';
@@ -14,6 +16,7 @@ import {
     fetchLatestDonationCertificateByUserId,
     fetchLatestDonationRequirement,
     getHairSubmissionImageSignedUrl,
+    updateHairSubmissionDetailById,
     updateHairSubmissionById,
     updateHairSubmissionLogisticsById,
     uploadHairSubmissionImage,
@@ -37,6 +40,15 @@ const QR_META_START = '[DONIVRA_QR_META]';
 const QR_META_END = '[/DONIVRA_QR_META]';
 
 const escapeRegExp = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const sanitizeFileName = (value = 'donivra-qr') => (
+  String(value || 'donivra-qr')
+    .trim()
+    .replace(/[^a-z0-9._-]+/gi, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80)
+  || 'donivra-qr'
+);
 
 const escapeHtml = (value = '') => String(value)
   .replaceAll('&', '&amp;')
@@ -737,9 +749,17 @@ const buildAdditionalBundleNotes = ({
   donorType = 'own',
   inputMethod = 'manual',
   detailNotes = '',
+  donorName = '',
+  donorBirthdate = '',
+  donorAge = null,
+  donorIsMinor = null,
 }) => (
   [
     `Additional hair owner: ${donorType === 'different' ? 'Other person' : 'Account owner'}.`,
+    donorType === 'different' ? `Donor name: ${donorName || 'Not provided'}` : '',
+    donorType === 'different' ? `Donor birthdate: ${donorBirthdate || 'Not provided'}` : '',
+    donorType === 'different' && donorAge != null ? `Donor age: ${donorAge}` : '',
+    donorType === 'different' && donorIsMinor != null ? `Minor donor: ${donorIsMinor ? 'Yes' : 'No'}` : '',
     `Additional bundle input method: ${inputMethod === 'scan' ? 'Live scan' : 'Manual details'}.`,
     detailNotes || '',
   ].filter(Boolean).join(' ')
@@ -810,6 +830,7 @@ const getSubmissionParcelImages = (submission = null) => (
 
 const hasCurrentFlowStatus = (submission = null) => (
   [
+    'submitted',
     'qr inactive',
     'qr active',
     'qr pending activation',
@@ -944,6 +965,23 @@ const resolveCurrentFlowSubmission = ({
       || [INDEPENDENT_DONATION_SOURCE, DRIVE_DONATION_SOURCE].includes(String(submission?.donation_source || '').trim().toLowerCase())
       || hasCurrentFlowStatus(submission)
     )) || null;
+};
+
+const resolveCurrentFlowSubmissions = ({
+  submissions = [],
+  certificate = null,
+} = {}) => {
+  const sortedSubmissions = sortSubmissionsByCreatedAt(submissions);
+
+  return sortedSubmissions
+    .filter((submission) => !isSubmissionCompleted({ submission, certificate }))
+    .filter((submission) => (
+      Boolean(submission?.donation_drive_id)
+      || Boolean(getIndependentQrMetadata(submission)?.reference)
+      || Boolean(getSubmissionParcelImages(submission).length)
+      || [INDEPENDENT_DONATION_SOURCE, DRIVE_DONATION_SOURCE].includes(String(submission?.donation_source || '').trim().toLowerCase())
+      || hasCurrentFlowStatus(submission)
+    ));
 };
 
 const resolveActiveDonationRecord = ({ aiRecord = null, manualRecord = null }) => (
@@ -1235,23 +1273,27 @@ export const buildDriveInvitationQrPayload = ({ drive, registration }) => (
 
 export const buildIndependentDonationQrPayload = ({
   submission,
+  detail = null,
 }) => (
   JSON.stringify({
     type: 'hair_submission',
     submission_id: submission?.submission_id || null,
     submission_code: submission?.submission_code || '',
+    submission_detail_id: detail?.submission_detail_id || null,
     donation_drive_id: submission?.donation_drive_id || null,
   })
 );
 
 export const buildDonationTrackingQrPayload = ({
   submission = null,
+  detail = null,
   drive = null,
 } = {}) => {
   return JSON.stringify({
     type: 'hair_submission',
     submission_id: submission?.submission_id || null,
     submission_code: submission?.submission_code || '',
+    submission_detail_id: detail?.submission_detail_id || null,
     donation_drive_id: submission?.donation_drive_id || drive?.donation_drive_id || null,
   });
 };
@@ -1272,6 +1314,7 @@ const parseDonationTrackingQrPayload = (payloadText = '') => {
         return {
           submission_id: parsed?.submission_id != null ? String(parsed.submission_id) : '',
           submission_code: parsed?.submission_code || '',
+          submission_detail_id: parsed?.submission_detail_id != null ? String(parsed.submission_detail_id) : '',
           user_id: parsed?.user_id != null ? String(parsed.user_id) : '',
           donation_source: parsed?.donation_source || '',
           donation_status: parsed?.status || parsed?.tracking_status || '',
@@ -1288,6 +1331,8 @@ const parseDonationTrackingQrPayload = (payloadText = '') => {
       || getDonationQrPayloadValue(payloadText, 'Submission_ID'),
     submission_code: getDonationQrPayloadValue(payloadText, 'Hair_Submissions.Submission_Code')
       || getDonationQrPayloadValue(payloadText, 'Submission_Code'),
+    submission_detail_id: getDonationQrPayloadValue(payloadText, 'Hair_Submission_Details.Submission_Detail_ID')
+      || getDonationQrPayloadValue(payloadText, 'Submission_Detail_ID'),
     user_id: getDonationQrPayloadValue(payloadText, 'Hair_Submissions.User_ID')
       || getDonationQrPayloadValue(payloadText, 'User_ID'),
     donation_source: getDonationQrPayloadValue(payloadText, 'Hair_Submissions.Donation_Source')
@@ -1461,6 +1506,54 @@ export const shareDonationQrPdf = async (uri) => {
   });
 };
 
+export const saveDonationQrPngToDevice = async ({
+  qrPayloadText,
+  fileName = 'donivra-donation-qr',
+  size = 720,
+}) => {
+  if (!qrPayloadText) {
+    return { success: false, error: 'A valid QR payload is required before saving.' };
+  }
+
+  try {
+    const permission = await MediaLibrary.requestPermissionsAsync();
+    if (!permission.granted) {
+      return {
+        success: false,
+        error: 'Allow photo library access so Donivra can save the QR image to this device.',
+      };
+    }
+
+    if (!FileSystem.cacheDirectory) {
+      return { success: false, error: 'Device storage cache is not available right now.' };
+    }
+
+    const safeFileName = sanitizeFileName(fileName);
+    const targetUri = `${FileSystem.cacheDirectory}${safeFileName}-${Date.now()}.png`;
+    const downloadResult = await FileSystem.downloadAsync(
+      buildQrImageUrl(qrPayloadText, size),
+      targetUri
+    );
+
+    const asset = await MediaLibrary.createAssetAsync(downloadResult.uri);
+    return {
+      success: true,
+      uri: asset?.uri || downloadResult.uri,
+      asset,
+    };
+  } catch (error) {
+    logAppError('donor_donations.qr.save_png', error, {
+      fileName,
+      hasPayload: Boolean(qrPayloadText),
+    });
+
+    return {
+      success: false,
+      error: error?.message || 'Unable to save the QR image to this device.',
+    };
+  }
+};
+
 export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driveLimit = 6 }) => {
   if (!userId) {
     return {
@@ -1523,6 +1616,10 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
     fallbackRecord: latestQualifiedRecord,
   });
   const activeFlowSubmission = resolveCurrentFlowSubmission({
+    submissions,
+    certificate: certificateResult.data || null,
+  });
+  const activeFlowSubmissions = resolveCurrentFlowSubmissions({
     submissions,
     certificate: certificateResult.data || null,
   });
@@ -1620,6 +1717,7 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
     latestDonationRequirement: donationRequirementResult.data || null,
     latestManualDonation: manualRecord,
     latestSubmission: activeSubmission,
+    activeSubmissions: activeFlowSubmissions,
     latestDetail: activeDetail,
     latestRecommendations: activeRecord?.recommendations || latestAnalysisEntry?.recommendations || [],
     activeQualificationSource: activeRecord?.source || '',
@@ -2034,11 +2132,11 @@ export const ensureIndependentDonationQr = async ({
       databaseUserId,
       submission,
       qrMetadata: parseQrMetadata(submission?.donor_notes || ''),
-      status: 'Pending',
-      logisticsStatus: 'Pending',
+      status: 'Submitted',
+      logisticsStatus: currentQr.is_activated ? 'QR Active' : 'Submitted',
       logisticsNotes: currentQr.is_activated
-        ? 'Your donation QR is active and ready for shipment tracking.'
-        : 'Your donation QR is saved and inactive until you scan it to activate donation tracking.',
+        ? 'Donation submitted and the QR has been scanned by staff.'
+        : 'Donation submitted. Attach the generated QR to the matching hair plastic for staff scanning.',
       shouldTrack: false,
       shouldNotify: false,
       donationDriveId,
@@ -2074,11 +2172,11 @@ export const ensureIndependentDonationQr = async ({
     databaseUserId,
     submission,
     qrMetadata: nextMetadata,
-    status: 'Pending',
-    logisticsStatus: 'Pending',
-    logisticsNotes: 'Your donation QR is saved and inactive until you scan it to activate donation tracking.',
-    trackingTitle: 'Donation QR ready',
-    trackingDescription: 'A donation QR was generated for the donor shipment flow and saved to the current donation record.',
+    status: 'Submitted',
+    logisticsStatus: 'Submitted',
+    logisticsNotes: 'Donation submitted. QR generated for staff scanning at the donation drive.',
+    trackingTitle: 'Donation submitted',
+    trackingDescription: 'The donor confirmed the hair submission and generated its QR.',
     shouldTrack: true,
     shouldNotify: true,
     donationDriveId,
@@ -2267,6 +2365,10 @@ export const addDonationBundleFromAnalysis = async ({
   screening = null,
   referenceDetail = null,
   donorType = 'own',
+  donorName = '',
+  donorBirthdate = '',
+  donorAge = null,
+  donorIsMinor = null,
 }) => {
   if (!userId || !databaseUserId) {
     return { success: false, error: 'Your session is not ready.' };
@@ -2282,6 +2384,10 @@ export const addDonationBundleFromAnalysis = async ({
     donorType,
     inputMethod: 'scan',
     detailNotes: screening?.summary || '',
+    donorName,
+    donorBirthdate,
+    donorAge,
+    donorIsMinor,
   });
 
   const detailResult = await createHairSubmissionDetail({
@@ -2384,7 +2490,12 @@ export const addDonationBundleFromManualDetails = async ({
         bundle_quantity: 1,
       },
       evaluation: null,
+      donorType,
     }),
+    donorName: manualDetails?.donor_name || '',
+    donorBirthdate: manualDetails?.donor_birthdate || '',
+    donorAge: manualDetails?.donor_age ?? null,
+    donorIsMinor: manualDetails?.donor_is_minor ?? null,
   });
 
   const detailResult = await createHairSubmissionDetail({
@@ -2491,6 +2602,122 @@ export const addDonationBundleFromManualDetails = async ({
 
   return {
     success: true,
+    submission: submissionResult.data || submission,
+    detail: detailResult.data,
+  };
+};
+
+export const updateManualDonationDetail = async ({
+  userId = null,
+  databaseUserId = null,
+  submission = null,
+  detail = null,
+  manualDetails = null,
+  photo = null,
+  donorType = 'own',
+  donationRequirement = null,
+}) => {
+  if (!userId || !databaseUserId) {
+    return { success: false, error: 'Your session is not ready.' };
+  }
+  if (!submission?.submission_id || !detail?.submission_detail_id) {
+    return { success: false, error: 'No saved hair detail was found to edit.' };
+  }
+  if (!manualDetails) {
+    return { success: false, error: 'Manual hair details are required.' };
+  }
+
+  const evaluation = evaluateManualDonationEligibility({
+    manualDetails,
+    donationRequirement,
+  });
+  const detailNotes = buildManualDonationNotes({ manualDetails, evaluation, donorType });
+  const detailResult = await updateHairSubmissionDetailById(detail.submission_detail_id, {
+    declared_length: evaluation.normalized_length_inches,
+    declared_color: manualDetails?.hair_color || null,
+    declared_texture: manualDetails?.texture || null,
+    declared_density: manualDetails?.density || null,
+    declared_condition: donorType === 'different'
+      ? 'Other person hair'
+      : (evaluation.isQualified ? 'Ready for donation' : (evaluation.reason || 'Needs review')),
+    is_chemically_treated: normalizeYesNoChoice(manualDetails?.treated),
+    is_colored: normalizeYesNoChoice(manualDetails?.colored),
+    is_bleached: false,
+    is_rebonded: false,
+    detail_notes: detailNotes,
+    status: 'Pending',
+  });
+
+  if (detailResult.error || !detailResult.data?.submission_detail_id) {
+    return {
+      success: false,
+      error: detailResult.error?.message || 'Unable to update this hair detail right now.',
+    };
+  }
+
+  if (photo) {
+    const uploadPayload = await getPhotoUploadPayload(photo);
+    const filePath = `${userId}/${submission.submission_id}/manual-hair-edit-${detail.submission_detail_id}-${Date.now()}.jpg`;
+    const uploadResult = await uploadHairSubmissionImage({
+      path: filePath,
+      fileBody: uploadPayload.fileBody,
+      contentType: uploadPayload.contentType,
+      bucket: hairSubmissionStorageBucket,
+    });
+
+    if (uploadResult.error) {
+      return {
+        success: false,
+        error: uploadResult.error.message || 'Hair details were updated but the new photo could not be uploaded.',
+      };
+    }
+
+    const imageInsertResult = await createHairSubmissionImages([{
+      submission_detail_id: detail.submission_detail_id,
+      file_path: filePath,
+      image_type: MANUAL_HAIR_PHOTO_IMAGE_TYPE,
+    }]);
+
+    if (imageInsertResult.error) {
+      return {
+        success: false,
+        error: imageInsertResult.error.message || 'Hair details were updated but the new photo record could not be saved.',
+      };
+    }
+  }
+
+  const submissionResult = await updateHairSubmissionById(submission.submission_id, {
+    donor_notes: mergeDonationNotes(
+      submission?.donor_notes || '',
+      [
+        'Manual hair donation details edited from the donor Donations module.',
+        detailNotes,
+      ],
+      parseQrMetadata(submission?.donor_notes || ''),
+    ),
+    status: 'Pending',
+  });
+
+  if (submissionResult.error) {
+    return {
+      success: false,
+      error: submissionResult.error?.message || 'Hair detail was updated but the donation record could not be refreshed.',
+    };
+  }
+
+  await createHairBundleTrackingEntry({
+    submission_id: submission.submission_id,
+    submission_detail_id: detail.submission_detail_id,
+    status: 'Pending',
+    title: 'Hair details edited',
+    description: 'The donor updated the saved hair donation details before QR submission.',
+    changed_by: databaseUserId,
+  });
+
+  return {
+    success: true,
+    canProceed: evaluation.isQualified,
+    qualification: evaluation,
     submission: submissionResult.data || submission,
     detail: detailResult.data,
   };
