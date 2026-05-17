@@ -177,8 +177,8 @@ export const useNotifications = ({
     channel.on('postgres_changes', {
       event: '*',
       schema: 'public',
-      table: 'notification',
-      filter: `user_id=eq.${databaseUserId}`,
+      table: 'Notification',
+      filter: `User_ID=eq.${databaseUserId}`,
     }, () => {
       refreshNotifications({ silent: true, force: true });
     });

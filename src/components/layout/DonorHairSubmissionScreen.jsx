@@ -47,7 +47,7 @@ let nativeFaceCameraLoadError = '';
 const isExpoGoRuntime = Constants?.appOwnership === 'expo';
 
 try {
-  if (Platform.OS !== 'web' && !isExpoGoRuntime) {
+  if (!isExpoGoRuntime) {
     const visionCameraModule = require('react-native-vision-camera');
     NativeVisionCamera = visionCameraModule?.Camera || null;
     useNativeCameraDevice = visionCameraModule?.useCameraDevice || null;
@@ -61,7 +61,7 @@ try {
 }
 
 try {
-  if (Platform.OS !== 'web' && !isExpoGoRuntime) {
+  if (!isExpoGoRuntime) {
     const faceDetectorModule = require('react-native-vision-camera-face-detector');
     NativeFaceCamera = faceDetectorModule?.Camera || null;
     useNativeFaceDetector = faceDetectorModule?.useFaceDetector || null;
@@ -72,7 +72,7 @@ try {
   nativeFaceCameraLoadError = error?.message || 'Face detector module could not be loaded.';
 }
 
-if (!NativeFaceCamera && Platform.OS !== 'web' && !isExpoGoRuntime) {
+if (!NativeFaceCamera && !isExpoGoRuntime) {
   try {
     const faceDetectorCameraModule = require('react-native-vision-camera-face-detector/lib/commonjs/Camera');
     NativeFaceCamera = faceDetectorCameraModule?.Camera || null;
@@ -83,7 +83,7 @@ if (!NativeFaceCamera && Platform.OS !== 'web' && !isExpoGoRuntime) {
 }
 
 try {
-  if (Platform.OS !== 'web' && !isExpoGoRuntime) {
+  if (!isExpoGoRuntime) {
     const workletsModule = require('react-native-worklets-core');
     NativeWorklets = workletsModule?.Worklets || null;
   }
@@ -849,6 +849,14 @@ function ConditionInsightRow({ item }) {
   );
 }
 
+const cleanRecommendationText = (value = '') => (
+  String(value || '')
+    .replace(/\s+/g, ' ')
+    .replace(/Philippine product options? to consider:.*?(?:\.|$)/gi, '')
+    .replace(/\b(Dove|Cream Silk|Human Nature|Vitress|Pantene(?:\s+Pro-V)?|Watsons|Lazada(?:\.ph)?|Shopee(?:\.ph)?)\b/gi, 'a suitable product type')
+    .trim()
+);
+
 function AiRecommendationRow({ recommendation }) {
   return (
     <View style={styles.aiRecommendationRow}>
@@ -856,8 +864,8 @@ function AiRecommendationRow({ recommendation }) {
         <AppIcon name={getRecommendationIconName(recommendation)} size="md" state="active" />
       </View>
       <View style={styles.aiRecommendationCopy}>
-        <Text style={styles.aiRecommendationTitle}>{recommendation.title || 'Hair care'}</Text>
-        <Text style={styles.aiRecommendationText}>{recommendation.recommendation_text}</Text>
+        <Text style={styles.aiRecommendationTitle}>{cleanRecommendationText(recommendation.title) || 'Hair care'}</Text>
+        <Text style={styles.aiRecommendationText}>{cleanRecommendationText(recommendation.recommendation_text)}</Text>
       </View>
     </View>
   );
@@ -1283,6 +1291,101 @@ const buildRetryCountdownMessage = (errorState, secondsRemaining) => {
   return `Cannot analyze hair, please try again in ${secondsRemaining} seconds.`;
 };
 
+const WEEKLY_SCAN_INTERVAL_DAYS = 7;
+const WEEKLY_SCAN_INTERVAL_MS = WEEKLY_SCAN_INTERVAL_DAYS * 24 * 60 * 60 * 1000;
+
+const formatWeeklyScanDateTime = (value) => {
+  if (!value) return 'next week';
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return 'next week';
+
+  return new Intl.DateTimeFormat('en-PH', {
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(date);
+};
+
+const getLatestAiRecommendation = (entry = null) => {
+  const recommendations = Array.isArray(entry?.recommendations)
+    ? [...entry.recommendations].sort((left, right) => (
+      Number(left?.priority_order || 99) - Number(right?.priority_order || 99)
+    ))
+    : [];
+
+  return recommendations.find((recommendation) => (
+    String(recommendation?.recommendation_text || recommendation?.title || '').trim()
+  )) || null;
+};
+
+const buildWeeklyScanTip = (latestEntry = null) => {
+  const screening = latestEntry?.screening || null;
+  const condition = String(screening?.detected_condition || '').trim();
+  const summary = String(screening?.summary || '').trim();
+  const recommendation = getLatestAiRecommendation(latestEntry);
+  const recommendationTitle = String(recommendation?.title || '').trim();
+  const recommendationText = String(recommendation?.recommendation_text || '').trim();
+  const normalizedCondition = condition.toLowerCase();
+  const isHealthy = normalizedCondition.includes('healthy')
+    && !normalizedCondition.includes('dry')
+    && !normalizedCondition.includes('damage')
+    && !normalizedCondition.includes('frizz')
+    && !normalizedCondition.includes('oily');
+
+  if (isHealthy) {
+    if (recommendationText) {
+      return `Your last AI scan marked your hair as ${condition}. To maintain it this week: ${recommendationText}`;
+    }
+    if (summary) {
+      return `Your last AI scan marked your hair as ${condition}. Keep the same routine this week and avoid extra heat or chemical treatment so the next scan can compare your progress clearly.`;
+    }
+    return 'Your last AI scan looked healthy. Maintain your current routine this week, protect the ends, and avoid extra heat styling before your next scan.';
+  }
+
+  if (recommendationText) {
+    return `Based on your last AI result${condition ? ` showing ${condition}` : ''}, focus on this before the next scan: ${recommendationTitle ? `${recommendationTitle} - ` : ''}${recommendationText}`;
+  }
+
+  if (summary) {
+    return `Your last AI scan noted: ${summary} Use this week to follow the care advice from your saved result before scanning again.`;
+  }
+
+  return 'Use this week to follow your saved hair-care recommendations before scanning again, so the next AI result can show a more meaningful change.';
+};
+
+const buildWeeklyScanLimitState = (latestEntry = null, now = Date.now()) => {
+  const latestScanTime = new Date(latestEntry?.screening?.created_at || 0).getTime();
+  if (!Number.isFinite(latestScanTime) || latestScanTime <= 0) {
+    return {
+      isLocked: false,
+      nextScanDate: null,
+      nextScanLabel: '',
+      lastScanLabel: '',
+      tip: '',
+      message: '',
+    };
+  }
+
+  const nextScanDate = new Date(latestScanTime + WEEKLY_SCAN_INTERVAL_MS);
+  const isLocked = now < nextScanDate.getTime();
+  const nextScanLabel = formatWeeklyScanDateTime(nextScanDate);
+  const lastScanLabel = formatWeeklyScanDateTime(new Date(latestScanTime));
+  const tip = buildWeeklyScanTip(latestEntry);
+
+  return {
+    isLocked,
+    nextScanDate,
+    nextScanLabel,
+    lastScanLabel,
+    tip,
+    message: isLocked
+      ? `You already used your AI hair scan for this week. You can scan again on ${nextScanLabel}. Fun fact: weekly scanning gives your hair enough time to show clearer changes in length, shine, dryness, frizz, and visible damage.`
+      : '',
+  };
+};
+
 function HairConditionLogCard({ submissions, onOpenAnalyzer, onSelectDate, trendLabel = '' }) {
   const history = useMemo(() => buildHairConditionHistory(submissions), [submissions]);
   const [visibleMonth, setVisibleMonth] = useState(() => new Date());
@@ -1624,8 +1727,7 @@ export function DonorHairSubmissionScreen() {
   const currentView = requiredViews[photoIndex];
   const currentPhoto = photos[photoIndex];
   const canUseNativeLiveCamera = Boolean(
-    Platform.OS !== 'web'
-    && NativeVisionCamera
+    NativeVisionCamera
     && useNativeCameraDevice
     && useNativeFrameProcessor
     && useNativeFaceDetector
@@ -1665,6 +1767,10 @@ export function DonorHairSubmissionScreen() {
   const latestSavedScreening = latestAnalyzedSubmission?.ai_screenings?.[0] || null;
   const hasSavedAnalysis = Boolean(latestAnalyzedSubmission && latestSavedScreening);
   const latestTrendLabel = useMemo(() => buildHistoryTrendLabel(analysisHistory), [analysisHistory]);
+  const weeklyScanLimit = useMemo(
+    () => buildWeeklyScanLimitState(savedHistory.latestEntry),
+    [savedHistory.latestEntry]
+  );
   const isRetryCooldownActive = Boolean(error?.retryUntil && retryCountdownSeconds > 0);
   const countdownErrorMessage = useMemo(
     () => buildRetryCountdownMessage(error, retryCountdownSeconds),
@@ -1679,6 +1785,21 @@ export function DonorHairSubmissionScreen() {
   );
 
   const runFreshAnalysisAttempt = React.useCallback(async (source, options = {}) => {
+    if (weeklyScanLimit.isLocked) {
+      logAppEvent('donor_hair_submission.weekly_limit', 'Weekly AI hair scan limit prevented a new provider request.', {
+        userId: user?.id || null,
+        source,
+        latestCheckAt: savedHistory.latestScreening?.created_at || null,
+        nextScanAt: weeklyScanLimit.nextScanDate?.toISOString?.() || null,
+      }, 'info');
+      return {
+        success: false,
+        error: weeklyScanLimit.message,
+        weeklyLimit: true,
+        nextScanDate: weeklyScanLimit.nextScanDate,
+      };
+    }
+
     logAppEvent('donor_hair_submission.analysis_retry', 'Retry button tapped for a fresh donor hair analysis attempt.', {
       userId: user?.id || null,
       source,
@@ -1713,7 +1834,11 @@ export function DonorHairSubmissionScreen() {
     error?.title,
     getCurrentQuestionnaireAnswers,
     error?.retryUntil,
+    savedHistory.latestScreening?.created_at,
     user?.id,
+    weeklyScanLimit.isLocked,
+    weeklyScanLimit.message,
+    weeklyScanLimit.nextScanDate,
   ]);
 
   const runFreshAnalysisAttemptRef = useRef(null);
@@ -1977,7 +2102,7 @@ export function DonorHairSubmissionScreen() {
     if (canUseNativeLiveCamera && NativeVisionCamera?.requestCameraPermission) {
       const status = await NativeVisionCamera.requestCameraPermission();
       setNativeCameraPermission(status || 'denied');
-      if (status !== 'granted' && Platform.OS !== 'web') {
+      if (status !== 'granted') {
         try {
           await Linking.openSettings();
         } catch (_settingsError) {
@@ -1988,7 +2113,7 @@ export function DonorHairSubmissionScreen() {
     }
 
     const permissionResult = await requestCameraPermission();
-    if (!permissionResult?.granted && Platform.OS !== 'web' && permissionResult?.canAskAgain === false) {
+    if (!permissionResult?.granted && permissionResult?.canAskAgain === false) {
       try {
         await Linking.openSettings();
       } catch (_settingsError) {
@@ -2371,6 +2496,60 @@ export function DonorHairSubmissionScreen() {
           photos={photos}
           completedPhotoCount={completedPhotoCount}
         />
+      );
+    }
+
+    if (weeklyScanLimit.isLocked) {
+      return (
+        <View style={styles.analysisResultPanel}>
+          <View style={styles.analysisResultTopBar}>
+            <Pressable onPress={closeAnalyzerToHome} style={styles.resultHeaderButton}>
+              <AppIcon name="arrow-left" size="md" state="default" />
+            </Pressable>
+            <Text style={styles.analysisResultScreenTitle}>Weekly AI Scan</Text>
+            <View style={styles.resultHeaderButtonPlaceholder} />
+          </View>
+
+          <View style={[styles.resultSectionCard, styles.weeklyLimitCard]}>
+            <View style={styles.weeklyLimitIconWrap}>
+              <AppIcon name="calendar-clock" size="lg" state="active" />
+            </View>
+            <Text style={styles.weeklyLimitTitle}>You already scanned this week</Text>
+            <Text style={styles.weeklyLimitBody}>{weeklyScanLimit.message}</Text>
+
+            <View style={styles.weeklyLimitDateBox}>
+              <Text style={styles.weeklyLimitDateLabel}>Next AI scan available</Text>
+              <Text style={styles.weeklyLimitDateValue}>{weeklyScanLimit.nextScanLabel}</Text>
+            </View>
+
+            {weeklyScanLimit.tip ? (
+              <View style={styles.weeklyLimitTipBox}>
+                <Text style={styles.weeklyLimitTipLabel}>AI tip from your last log</Text>
+                <Text style={styles.weeklyLimitTipText}>{weeklyScanLimit.tip}</Text>
+              </View>
+            ) : null}
+
+            <View style={styles.resultActions}>
+              <AppButton
+                title="Back to hair log"
+                onPress={closeAnalyzerToHome}
+                fullWidth
+              />
+              {savedHistory.latestEntry ? (
+                <AppButton
+                  title="View latest result"
+                  variant="outline"
+                  onPress={() => {
+                    const latestDateKey = toLocalDateKey(savedHistory.latestEntry.screening.created_at);
+                    openHistoryDate(latestDateKey, [savedHistory.latestEntry]);
+                    setIsAnalyzerActive(false);
+                  }}
+                  fullWidth
+                />
+              ) : null}
+            </View>
+          </View>
+        </View>
       );
     }
 
@@ -2865,7 +3044,7 @@ export function DonorHairSubmissionScreen() {
           {renderStepContent()}
         </View>
 
-        {stepIndex === 1 || stepIndex === 2 || stepIndex === 3 ? null : (
+        {weeklyScanLimit.isLocked || stepIndex === 1 || stepIndex === 2 || stepIndex === 3 ? null : (
           <View style={styles.footerNav}>
             <Pressable
               onPress={goPrevious}
@@ -2945,9 +3124,36 @@ export function DonorHairSubmissionScreen() {
           }}
         />
       ) : null}
-      {successMessage ? <StatusBanner message={successMessage} variant="success" title="Hair check saved" style={styles.bannerGap} /> : null}
-      {historyError ? <StatusBanner message={historyError} variant="info" style={styles.bannerGap} /> : null}
-      {isLoadingContext ? <StatusBanner title="Loading CheckHair" message="Preparing your analyzer context." variant="info" style={styles.bannerGap} /> : null}
+      {successMessage ? (
+        <StatusBanner
+          message={successMessage}
+          variant="success"
+          title="Hair check saved"
+          presentation="floating"
+          visible={Boolean(successMessage)}
+          autoDismissMs={3000}
+        />
+      ) : null}
+      {historyError ? (
+        <StatusBanner
+          message={historyError}
+          variant="info"
+          presentation="floating"
+          visible={Boolean(historyError)}
+          autoDismissMs={3000}
+          onDismiss={() => setHistoryError('')}
+        />
+      ) : null}
+      {isLoadingContext ? (
+        <StatusBanner
+          title="Loading CheckHair"
+          message="Preparing your analyzer context."
+          variant="info"
+          presentation="floating"
+          visible={isLoadingContext}
+          autoDismissMs={3000}
+        />
+      ) : null}
 
       {!isDonorProfileComplete ? (
         <View style={styles.summaryStage}>
@@ -2998,7 +3204,7 @@ export function DonorHairSubmissionScreen() {
             {renderStepContent()}
           </View>
 
-          {stepIndex === 1 || stepIndex === 2 || stepIndex === 3 ? null : (
+          {weeklyScanLimit.isLocked || stepIndex === 1 || stepIndex === 2 || stepIndex === 3 ? null : (
             <View style={styles.footerNav}>
               <Pressable
                 onPress={goPrevious}
@@ -5178,6 +5384,68 @@ const styles = StyleSheet.create({
   resultHeaderButtonPlaceholder: {
     width: 40,
     height: 40,
+  },
+  weeklyLimitCard: {
+    alignItems: 'stretch',
+  },
+  weeklyLimitIconWrap: {
+    width: 48,
+    height: 48,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.brandPrimaryMuted,
+  },
+  weeklyLimitTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.titleSm,
+    lineHeight: theme.typography.semantic.titleSm * theme.typography.lineHeights.tight,
+    fontWeight: theme.typography.weights.bold,
+    color: theme.colors.textPrimary,
+  },
+  weeklyLimitBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    lineHeight: theme.typography.semantic.body * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textSecondary,
+  },
+  weeklyLimitDateBox: {
+    gap: 4,
+    padding: theme.spacing.md,
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.surfaceSoft,
+  },
+  weeklyLimitDateLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textSecondary,
+    textTransform: 'uppercase',
+  },
+  weeklyLimitDateValue: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.bold,
+    color: theme.colors.textPrimary,
+  },
+  weeklyLimitTipBox: {
+    gap: theme.spacing.xs,
+    padding: theme.spacing.md,
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.brandPrimaryMuted,
+  },
+  weeklyLimitTipLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.bold,
+    color: theme.colors.brandPrimary,
+    textTransform: 'uppercase',
+  },
+  weeklyLimitTipText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textPrimary,
   },
   scanAgainLink: {
     alignItems: 'center',

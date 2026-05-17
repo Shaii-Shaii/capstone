@@ -24,7 +24,6 @@ import { logAppEvent } from '../../utils/appErrors';
 const DONOR_COMPLETION_GUARD_ROUTES = new Set([
   '/donor/status',
   '/donor/donations',
-  '/donor/appointment',
 ]);
 
 function renderDashboardSection({ section, content, role, onItemPress, onActionPress }) {

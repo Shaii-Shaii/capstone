@@ -1,5 +1,5 @@
 import React from 'react';
-import { ActivityIndicator, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -11,22 +11,7 @@ import { resolveThemeRoles, theme } from '../../design-system/theme';
 import { signupDefaultValues } from '../../features/auth/validators/auth.schema';
 import { fetchActiveLegalDocument } from '../../features/donorCompliance.service';
 
-const termsLabel = 'Terms and Conditions';
-
-function PdfFrame({ source }) {
-  if (!source || Platform.OS !== 'web') return null;
-  return React.createElement('iframe', {
-    src: source,
-    title: 'Terms and Conditions PDF',
-    style: {
-      width: '100%',
-      height: '100%',
-      border: '0',
-      borderRadius: 16,
-      backgroundColor: '#FFFFFF',
-    },
-  });
-}
+const termsLabel = 'Terms of Service and Privacy Policy';
 
 function LegalDetailsModal({ visible, onClose, roles, document, error, isLoading, onOpenPdf }) {
   const title = document?.title || termsLabel;
@@ -74,29 +59,25 @@ function LegalDetailsModal({ visible, onClose, roles, document, error, isLoading
                 <Text style={[styles.pdfStateText, { color: roles.bodyText }]}>{error}</Text>
               </View>
             ) : pdfUrl ? (
-              Platform.OS === 'web' ? (
-                <PdfFrame source={pdfUrl} />
-              ) : (
-                <View style={styles.pdfState}>
-                  <AppIcon name="shield" size="lg" color={roles.primaryActionBackground} />
-                  <Text style={[styles.pdfStateTitle, { color: roles.headingText }]}>Terms PDF is ready</Text>
-                  <Text style={[styles.pdfStateText, { color: roles.bodyText }]}>
-                    Open the PDF to review the Terms and Conditions before signing up.
-                  </Text>
-                  <AppButton
-                    title="Open PDF"
-                    onPress={onOpenPdf}
-                    backgroundColorOverride={roles.primaryActionBackground}
-                    textColorOverride={roles.primaryActionText}
-                    borderColorOverride={roles.primaryActionBackground}
-                    style={styles.openPdfButton}
-                  />
-                </View>
-              )
+              <View style={styles.pdfState}>
+                <AppIcon name="shield" size="lg" color={roles.primaryActionBackground} />
+                <Text style={[styles.pdfStateTitle, { color: roles.headingText }]}>Terms PDF is ready</Text>
+                <Text style={[styles.pdfStateText, { color: roles.bodyText }]}>
+                  Open the PDF to review this document before signing up.
+                </Text>
+                <AppButton
+                  title="Open PDF"
+                  onPress={onOpenPdf}
+                  backgroundColorOverride={roles.primaryActionBackground}
+                  textColorOverride={roles.primaryActionText}
+                  borderColorOverride={roles.primaryActionBackground}
+                  style={styles.openPdfButton}
+                />
+              </View>
             ) : (
               <ScrollView contentContainerStyle={styles.modalScrollContent}>
                 <Text style={[styles.modalBody, { color: roles.bodyText }]}>
-                  {document?.content || document?.summary || 'Terms and Conditions are not available yet.'}
+                  {document?.content || document?.summary || 'Legal documents are not available yet.'}
                 </Text>
               </ScrollView>
             )}
@@ -160,15 +141,37 @@ export const SignupForm = ({
 
     setTermsError('');
     setIsLoadingTerms(true);
-    const result = await fetchActiveLegalDocument('Terms and Conditions');
-    setIsLoadingTerms(false);
+    const documentTypes = ['Terms of Service', 'Privacy Policy'];
+    const documentResults = await Promise.all(
+      documentTypes.map((documentType) => fetchActiveLegalDocument(documentType))
+    );
 
-    if (result.error) {
-      setTermsError(result.error.message || 'Terms and Conditions could not be loaded.');
+    const loadedDocuments = documentResults
+      .map((result) => result.data)
+      .filter(Boolean);
+
+    if (!loadedDocuments.length) {
+      const fallbackResult = await fetchActiveLegalDocument('Terms and Conditions');
+      setIsLoadingTerms(false);
+      if (fallbackResult.error) {
+        setTermsError(fallbackResult.error.message || 'Legal documents could not be loaded.');
+        return;
+      }
+
+      setTermsDocument(fallbackResult.data);
       return;
     }
 
-    setTermsDocument(result.data);
+    setIsLoadingTerms(false);
+    setTermsDocument({
+      title: termsLabel,
+      content: loadedDocuments
+        .map((document) => [
+          document.title || document.document_type,
+          document.content || document.summary || '',
+        ].filter(Boolean).join('\n\n'))
+        .join('\n\n'),
+    });
   }, [isLoadingTerms, termsDocument]);
 
   const handleOpenPdf = React.useCallback(async () => {
@@ -278,15 +281,7 @@ export const SignupForm = ({
         name="acceptedLegal"
         render={({ field: { onChange, value } }) => (
           <View style={styles.legalBlock}>
-            <View
-              style={[
-                styles.legalRow,
-                {
-                  borderColor: errors.acceptedLegal?.message ? theme.colors.textError : roles.defaultCardBorder,
-                  backgroundColor: roles.defaultCardBackground,
-                },
-              ]}
-            >
+            <View style={styles.legalRow}>
               <Pressable
                 accessibilityRole="checkbox"
                 accessibilityState={{ checked: Boolean(value), disabled: isLoading }}
@@ -306,20 +301,25 @@ export const SignupForm = ({
               >
                 {value ? <AppIcon name="checkmark" size="xs" state="inverse" /> : null}
               </Pressable>
-              <View style={styles.legalCopy}>
-                <Text style={[styles.legalText, { color: roles.bodyText }]}>
-                  I agree to the Terms of Service and Privacy Policy. I understand how my donation data is handled.
-                </Text>
-                <Pressable
-                  accessibilityRole="button"
+              <Text style={[styles.legalText, { color: roles.bodyText }]}>
+                I agree to the{' '}
+                <Text
+                  accessibilityRole="link"
                   onPress={openTermsModal}
-                  style={({ pressed }) => [styles.legalLinkHitArea, pressed ? styles.pressed : null]}
+                  style={[styles.legalInlineLink, { color: roles.primaryActionBackground }]}
                 >
-                  <Text style={[styles.legalLinkText, { color: roles.primaryActionBackground }]}>
-                    View Terms PDF
-                  </Text>
-                </Pressable>
-              </View>
+                  Terms of Service
+                </Text>
+                {' '}and{' '}
+                <Text
+                  accessibilityRole="link"
+                  onPress={openTermsModal}
+                  style={[styles.legalInlineLink, { color: roles.primaryActionBackground }]}
+                >
+                  Privacy Policy
+                </Text>
+                . I understand how my donation data is handled.
+              </Text>
             </View>
             {errors.acceptedLegal?.message ? (
               <Text style={styles.legalErrorText}>{errors.acceptedLegal.message}</Text>
@@ -390,40 +390,27 @@ const styles = StyleSheet.create({
     marginBottom: theme.spacing.sm,
   },
   legalRow: {
-    minHeight: 56,
-    borderWidth: 1,
-    borderRadius: theme.radius.lg,
-    paddingVertical: 10,
-    paddingHorizontal: theme.spacing.sm,
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.spacing.sm,
+    alignItems: 'flex-start',
+    gap: 10,
   },
   checkbox: {
-    width: 22,
-    height: 22,
-    borderRadius: 6,
+    width: 18,
+    height: 18,
+    borderRadius: 4,
     borderWidth: 1.5,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  legalCopy: {
-    flex: 1,
-    gap: 2,
+    marginTop: 1,
   },
   legalText: {
+    flex: 1,
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.bodySm,
-    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.normal,
   },
-  legalLinkHitArea: {
-    alignSelf: 'flex-start',
-    minHeight: 24,
-    justifyContent: 'center',
-  },
-  legalLinkText: {
+  legalInlineLink: {
     fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.compact.caption,
     fontWeight: theme.typography.weights.semibold,
   },
   legalErrorText: {

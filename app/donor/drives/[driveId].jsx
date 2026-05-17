@@ -29,6 +29,8 @@ import {
   joinOrganizationMembership,
 } from '../../../src/features/donorHome.api';
 import {
+  buildDriveInvitationQrPayload,
+  buildQrImageUrl,
   getDonorDonationsModuleData,
 } from '../../../src/features/donorDonations.service';
 import { DONOR_PERMISSION_REASONS } from '../../../src/features/donorCompliance.service';
@@ -87,6 +89,18 @@ const isApprovedRegistration = (registration = null) => (
     String(registration?.registration_status || '').trim().toLowerCase()
   )
 );
+
+const normalizeRsvpStatus = (value = '') => (
+  String(value || '').trim().toLowerCase().replace(/[_-]+/g, ' ')
+);
+
+const isPresentRegistration = (registration = null) => {
+  if (!registration) return false;
+  if (registration?.attendance_marked_at) return true;
+  return ['present', 'attended', 'checked in', 'marked'].includes(
+    normalizeRsvpStatus(registration?.attendance_status)
+  );
+};
 
 const initialsFromName = (value = '') => (
   String(value || 'D')
@@ -339,24 +353,30 @@ export default function DonorDriveDetailRoute() {
   const [donationFlowState, setDonationFlowState] = React.useState({
     hasOngoingDonation: false,
     ongoingDonationMessage: '',
-    hasRecentHairEligibility: false,
+    hasHairScanLog: false,
+    hairEligibilityMessage: '',
+    hasSubmittedDonationForDrive: false,
   });
 
   const driveImageUrl = drive?.event_image_url || drive?.organization_logo_url || '';
   const requiresMembership = Boolean(drive?.requires_membership);
   const isMembershipPending = Boolean(drive?.membership?.is_pending);
   const hasOngoingDonation = Boolean(donationFlowState.hasOngoingDonation);
-  const hasRecentHairEligibility = Boolean(donationFlowState.hasRecentHairEligibility);
+  const hasHairScanLog = Boolean(donationFlowState.hasHairScanLog);
+  const hasSubmittedDonationForDrive = Boolean(donationFlowState.hasSubmittedDonationForDrive);
   const ended = isDriveEnded(drive);
+  const driveQrImageUrl = driveQrPayload ? buildQrImageUrl(driveQrPayload, 420) : '';
   const ongoingDonationMessage = donationFlowState.ongoingDonationMessage
     || 'You already have an ongoing donation. Please complete or wait for the current donation process to finish before starting a new one.';
+  const hairEligibilityMessage = donationFlowState.hairEligibilityMessage
+    || 'Scan your hair first so the system can confirm if you are eligible to join this donation event.';
 
   const loadRegistrationCount = React.useCallback(async () => {
     if (!Number.isFinite(numericDriveId) || numericDriveId <= 0) return;
     const countResult = await supabase
-      .from('Donation_Drive_Registrations')
-      .select('Registration_ID', { count: 'exact', head: true })
-      .eq('Donation_Drive_ID', numericDriveId);
+      .from('Event_Attendees')
+      .select('Event_Attendee_ID', { count: 'exact', head: true })
+      .eq('Event_Application_ID', numericDriveId);
 
     if (!countResult.error && Number.isFinite(countResult.count)) {
       setRegistrationCount(countResult.count || 0);
@@ -364,9 +384,9 @@ export default function DonorDriveDetailRoute() {
     }
 
     const rowsResult = await supabase
-      .from('Donation_Drive_Registrations')
-      .select('Registration_ID,User_ID')
-      .eq('Donation_Drive_ID', numericDriveId)
+      .from('Event_Attendees')
+      .select('Event_Attendee_ID,User_ID')
+      .eq('Event_Application_ID', numericDriveId)
       .limit(500);
 
     if (!rowsResult.error) {
@@ -407,17 +427,31 @@ export default function DonorDriveDetailRoute() {
 
     const nextDrive = driveResult.data || null;
     setDrive(nextDrive);
+    if (nextDrive?.registration?.registration_id) {
+      setDriveQrPayload(buildDriveInvitationQrPayload({
+        drive: nextDrive,
+        registration: nextDrive.registration,
+      }));
+    } else {
+      setDriveQrPayload('');
+    }
     setRegistrationCount((current) => Math.max(
       current || 0,
       nextDrive?.registration?.registration_id ? 1 : 0
     ));
+    const hasSubmittedDonationForDrive = [
+      ...(Array.isArray(donationModuleResult.activeSubmissions) ? donationModuleResult.activeSubmissions : []),
+      donationModuleResult.latestSubmission,
+    ].filter(Boolean).some((submission) => Number(submission?.donation_drive_id) === Number(numericDriveId));
+
     setDonationFlowState({
       hasOngoingDonation: Boolean(donationModuleResult.hasOngoingDonation),
       ongoingDonationMessage: donationModuleResult.ongoingDonationMessage || '',
-      hasRecentHairEligibility: Boolean(
-        donationModuleResult.latestScreening?.created_at
-        && Date.now() - new Date(donationModuleResult.latestScreening.created_at).getTime() <= 30 * 24 * 60 * 60 * 1000
-      ),
+      hasHairScanLog: Boolean(donationModuleResult.latestScreening && donationModuleResult.latestAnalysisEntry?.submission),
+      hairEligibilityMessage: donationModuleResult.latestScreening
+        ? 'Your latest hair scan will be used for this donation.'
+        : 'Scan your hair first so the system can confirm if you are eligible to join this donation event.',
+      hasSubmittedDonationForDrive,
     });
     setIsLoading(false);
   }, [driveId, loadRegistrationCount, numericDriveId, profile?.user_id, user?.id]);
@@ -483,27 +517,21 @@ export default function DonorDriveDetailRoute() {
       .on('postgres_changes', {
         event: '*',
         schema: 'public',
-        table: 'Donation_Drive_Requests',
-        filter: `Donation_Drive_ID=eq.${numericDriveId}`,
+        table: 'Event_Applications',
+        filter: `Event_Application_ID=eq.${numericDriveId}`,
       }, onRealtimeEvent)
       .on('postgres_changes', {
         event: '*',
         schema: 'public',
-        table: 'Donation_Drive_Registrations',
-        filter: `Donation_Drive_ID=eq.${numericDriveId}`,
+        table: 'Event_Attendees',
+        filter: `Event_Application_ID=eq.${numericDriveId}`,
       }, onRegistrationRealtimeEvent)
       .on('postgres_changes', {
         event: '*',
         schema: 'public',
-        table: 'Donation_Drive_Registrations',
+        table: 'Event_Attendees',
         filter: `User_ID=eq.${profile.user_id}`,
       }, onRegistrationRealtimeEvent)
-      .on('postgres_changes', {
-        event: '*',
-        schema: 'public',
-        table: 'Organization_Members',
-        filter: `User_ID=eq.${profile.user_id}`,
-      }, onRealtimeEvent)
       .subscribe();
 
     return () => {
@@ -574,6 +602,13 @@ export default function DonorDriveDetailRoute() {
   const handleDriveRsvp = React.useCallback(async () => {
     if (!drive?.donation_drive_id || ended) return;
 
+    if (!hasHairScanLog && !drive.registration?.registration_id) {
+      setFeedbackMessage(hairEligibilityMessage);
+      setFeedbackVariant('info');
+      router.navigate('/donor/donations');
+      return;
+    }
+
     if (requiresMembership && !drive.membership?.is_active) {
       if (drive.membership?.is_pending) {
         setFeedbackMessage('Your membership request is still pending approval.');
@@ -584,22 +619,33 @@ export default function DonorDriveDetailRoute() {
       return;
     }
 
-    if (!hasRecentHairEligibility) {
-      setFeedbackMessage('Please complete CheckHair first. Hair eligibility must be assessed within the last month before joining this event.');
-      setFeedbackVariant('info');
-      router.navigate('/donor/donations');
-      return;
-    }
-
     if (hasOngoingDonation && !drive.registration?.registration_id) {
       setFeedbackMessage(ongoingDonationMessage);
       setFeedbackVariant('info');
       return;
     }
 
-    if (drive.registration?.registration_id) {
-      setDriveQrPayload('');
+    if (hasOngoingDonation && drive.registration?.registration_id && hasSubmittedDonationForDrive) {
+      setDriveQrPayload(buildDriveInvitationQrPayload({
+        drive,
+        registration: drive.registration,
+      }));
       router.navigate(`/donor/status?driveId=${drive.donation_drive_id}`);
+      return;
+    }
+
+    if (drive.registration?.registration_id) {
+      const isPresent = isPresentRegistration(drive.registration);
+      setDriveQrPayload(buildDriveInvitationQrPayload({
+        drive,
+        registration: drive.registration,
+      }));
+      if (isPresent) {
+        router.navigate(`/donor/status?driveId=${drive.donation_drive_id}`);
+        return;
+      }
+      setFeedbackMessage('Show this RSVP QR at event check-in. You can submit your donation only after staff marks you as Present.');
+      setFeedbackVariant('info');
       return;
     }
 
@@ -613,6 +659,7 @@ export default function DonorDriveDetailRoute() {
     const result = await createDonationDriveRegistration({
       driveId: drive.donation_drive_id,
       databaseUserId: profile.user_id,
+      hasEligibleHairScan: hasHairScanLog,
     });
     setIsSubmittingRsvp(false);
 
@@ -631,17 +678,26 @@ export default function DonorDriveDetailRoute() {
     }
 
     await loadRegistrationCount();
-    await refreshDriveRegistration();
-    setDriveQrPayload('');
+    const refreshedDrive = await refreshDriveRegistration();
+    const registeredDrive = refreshedDrive || {
+      ...drive,
+      registration: result.data,
+    };
+    setDriveQrPayload(buildDriveInvitationQrPayload({
+      drive: registeredDrive,
+      registration: registeredDrive.registration || result.data,
+    }));
     setRegistrationCount((current) => Math.max(current || 0, 1));
-    setFeedbackMessage(result.alreadyRegistered ? 'You are already registered for this drive.' : 'Registration saved. Submit hair from the Donations tab to generate a hair submission QR.');
+    setFeedbackMessage(result.alreadyRegistered ? 'You are already registered for this drive.' : 'Registration saved. Show this RSVP QR at event check-in.');
     setFeedbackVariant('success');
   }, [
     drive,
     ended,
     handleRequestJoinOrganization,
+    hairEligibilityMessage,
     hasOngoingDonation,
-    hasRecentHairEligibility,
+    hasHairScanLog,
+    hasSubmittedDonationForDrive,
     loadRegistrationCount,
     ongoingDonationMessage,
     profile?.user_id,
@@ -652,17 +708,21 @@ export default function DonorDriveDetailRoute() {
 
   const actionTitle = ended
     ? 'Event ended'
+    : !hasHairScanLog && !drive?.registration?.registration_id
+      ? 'Scan hair first'
     : requiresMembership && isMembershipPending
       ? 'Membership Pending'
     : requiresMembership && !drive?.membership?.is_active
       ? isJoiningOrganization ? 'Joining...' : 'Join Organization'
-      : !hasRecentHairEligibility
-        ? 'Start CheckHair'
+    : hasOngoingDonation && hasSubmittedDonationForDrive && drive?.registration?.registration_id
+          ? 'View My Donation'
         : drive?.registration?.registration_id
-          ? 'Submit my donation'
+          ? isPresentRegistration(drive.registration)
+            ? 'Submit hair donation'
+            : driveQrPayload ? 'RSVP QR Ready' : 'Show RSVP QR'
           : 'Register to Attend';
 
-  const actionDisabled = isLoading || ended || isMembershipPending || (hasOngoingDonation && !drive?.registration?.registration_id);
+  const actionDisabled = isLoading || ended || isMembershipPending || (hasOngoingDonation && hasSubmittedDonationForDrive && !drive?.registration?.registration_id);
   const isRegisteredForDrive = Boolean(drive?.registration?.registration_id);
   const isOrganizationMember = Boolean(drive?.membership?.is_active);
   const shownRegistrationCount = Math.max(registrationCount, isRegisteredForDrive ? 1 : 0);
@@ -682,8 +742,26 @@ export default function DonorDriveDetailRoute() {
         bounces={false}
         showsVerticalScrollIndicator={false}
       >
-        {errorMessage ? <StatusBanner message={errorMessage} variant="info" style={styles.bannerGap} /> : null}
-        {feedbackMessage ? <StatusBanner message={feedbackMessage} variant={feedbackVariant} style={styles.bannerGap} /> : null}
+        {errorMessage ? (
+          <StatusBanner
+            message={errorMessage}
+            variant="info"
+            presentation="floating"
+            visible={Boolean(errorMessage)}
+            autoDismissMs={3000}
+            onDismiss={() => setErrorMessage('')}
+          />
+        ) : null}
+        {feedbackMessage ? (
+          <StatusBanner
+            message={feedbackMessage}
+            variant={feedbackVariant}
+            presentation="floating"
+            visible={Boolean(feedbackMessage)}
+            autoDismissMs={3000}
+            onDismiss={() => setFeedbackMessage('')}
+          />
+        ) : null}
 
         {isLoading ? (
           <AppCard variant="default" radius="xl" padding="lg">
@@ -763,7 +841,37 @@ export default function DonorDriveDetailRoute() {
           />
           <HostCard drive={drive} />
 
-          {driveQrPayload ? null : null}
+          {driveQrPayload ? (
+            <AppCard variant="default" radius="xl" padding="lg" style={styles.sectionGap}>
+              <Text style={[styles.sectionTitle, { color: roles.headingText }]}>RSVP Attendance QR</Text>
+              <View style={styles.qrWrap}>
+                {driveQrImageUrl ? (
+                  <Image
+                    source={{ uri: driveQrImageUrl }}
+                    style={styles.qrImage}
+                    resizeMode="contain"
+                    accessibilityLabel="Donation drive RSVP QR code"
+                  />
+                ) : null}
+                <Text style={[styles.qrHelper, { color: roles.bodyText }]}>
+                  Show this QR at the event check-in desk. This QR is for attendance only; hair donation QR codes are generated after submitting hair details.
+                </Text>
+                {!isPresentRegistration(drive.registration) ? (
+                  <StatusBanner
+                    variant="info"
+                    message="Waiting for staff to mark your attendance as Present. Donation submission unlocks after that status is saved."
+                    style={styles.qrStatusBanner}
+                  />
+                ) : (
+                  <StatusBanner
+                    variant="success"
+                    message="Your attendance is marked Present. You can now submit your hair donation."
+                    style={styles.qrStatusBanner}
+                  />
+                )}
+              </View>
+            </AppCard>
+          ) : null}
         </>
       ) : (
         <Text style={[styles.emptyText, { color: roles.bodyText }]}>Drive details are not available right now.</Text>
@@ -1181,6 +1289,10 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.caption,
     lineHeight: theme.typography.compact.caption * theme.typography.lineHeights.relaxed,
+  },
+  qrStatusBanner: {
+    width: '100%',
+    marginTop: theme.spacing.md,
   },
   joinModalOverlay: {
     flex: 1,

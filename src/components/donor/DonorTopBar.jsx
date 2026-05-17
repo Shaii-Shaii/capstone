@@ -1,10 +1,12 @@
 import React from 'react';
 import { Image, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useRouter } from 'expo-router';
 import { AppIcon } from '../ui/AppIcon';
 import { AppCard } from '../ui/AppCard';
 import { AppButton } from '../ui/AppButton';
 import { resolveThemeRoles, theme } from '../../design-system/theme';
 import { useAuth } from '../../providers/AuthProvider';
+import { useAuthActions } from '../../features/auth/hooks/useAuthActions';
 
 export function DonorTopBar({
   title,
@@ -12,6 +14,11 @@ export function DonorTopBar({
   avatarInitials = '',
   avatarUri = '',
   unreadCount = 0,
+  showBack = false,
+  showProfileAction = true,
+  showNotificationsAction = true,
+  showLogoutAction = true,
+  onBackPress,
   onProfilePress,
   onNotificationsPress,
   onLogoutPress,
@@ -19,47 +26,71 @@ export function DonorTopBar({
   style,
 }) {
   const { resolvedTheme } = useAuth();
+  const router = useRouter();
+  const { logout: fallbackLogout, isLoading: isFallbackLoggingOut } = useAuthActions();
   const roles = resolveThemeRoles(resolvedTheme);
   const [imageFailed, setImageFailed] = React.useState(false);
   const [isLogoutModalOpen, setIsLogoutModalOpen] = React.useState(false);
+  const effectiveIsLoggingOut = Boolean(isLoggingOut || (!onLogoutPress && isFallbackLoggingOut));
 
   React.useEffect(() => {
     setImageFailed(false);
   }, [avatarUri]);
 
   const openLogoutModal = React.useCallback(() => {
-    if (isLoggingOut) return;
+    if (effectiveIsLoggingOut) return;
     setIsLogoutModalOpen(true);
-  }, [isLoggingOut]);
+  }, [effectiveIsLoggingOut]);
 
   const closeLogoutModal = React.useCallback(() => {
-    if (isLoggingOut) return;
+    if (effectiveIsLoggingOut) return;
     setIsLogoutModalOpen(false);
-  }, [isLoggingOut]);
+  }, [effectiveIsLoggingOut]);
 
-  const confirmLogout = React.useCallback(() => {
+  const confirmLogout = React.useCallback(async () => {
     setIsLogoutModalOpen(false);
-    onLogoutPress?.();
-  }, [onLogoutPress]);
+    if (onLogoutPress) {
+      const result = await onLogoutPress();
+      if (result?.success && !result?.error) {
+        router.replace('/auth/access');
+      }
+      return;
+    }
+
+    const result = await fallbackLogout();
+    if (result?.success && !result?.error) {
+      router.replace('/auth/access');
+    }
+  }, [fallbackLogout, onLogoutPress, router]);
 
   return (
     <>
       <View style={[styles.headerRow, style]}>
-        <Pressable onPress={onProfilePress} style={styles.headerIdentity}>
-          <View style={[styles.headerAvatar, { backgroundColor: roles.supportCardBackground, borderColor: roles.supportCardBorder }]}>
-            {avatarUri && !imageFailed ? (
-              <Image
-                source={{ uri: avatarUri }}
-                style={styles.headerAvatarImage}
-                resizeMode="cover"
-                onError={() => setImageFailed(true)}
-              />
-            ) : avatarInitials ? (
-              <Text style={[styles.headerAvatarText, { color: roles.headingText }]}>{avatarInitials}</Text>
-            ) : (
-              <AppIcon name="profile" size="md" state="default" color={roles.headingText} />
-            )}
-          </View>
+        <Pressable
+          onPress={showBack ? onBackPress : onProfilePress}
+          disabled={showBack ? !onBackPress : !onProfilePress}
+          style={styles.headerIdentity}
+        >
+          {showBack ? (
+            <View style={[styles.headerIconButton, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
+              <AppIcon name="arrowLeft" size="md" state="default" color={roles.headingText} />
+            </View>
+          ) : showProfileAction ? (
+            <View style={[styles.headerAvatar, { backgroundColor: roles.supportCardBackground, borderColor: roles.supportCardBorder }]}>
+              {avatarUri && !imageFailed ? (
+                <Image
+                  source={{ uri: avatarUri }}
+                  style={styles.headerAvatarImage}
+                  resizeMode="cover"
+                  onError={() => setImageFailed(true)}
+                />
+              ) : avatarInitials ? (
+                <Text style={[styles.headerAvatarText, { color: roles.headingText }]}>{avatarInitials}</Text>
+              ) : (
+                <AppIcon name="profile" size="md" state="default" color={roles.headingText} />
+              )}
+            </View>
+          ) : null}
 
           <View style={styles.headerCopy}>
             <Text numberOfLines={1} style={[styles.headerTitle, { color: roles.headingText }]}>
@@ -74,27 +105,31 @@ export function DonorTopBar({
         </Pressable>
 
         <View style={styles.headerActions}>
-          <Pressable
-            onPress={onNotificationsPress}
-            style={[styles.headerIconButton, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}
-          >
-            <AppIcon name="notifications" size="md" state="default" color={roles.headingText} />
-            {unreadCount ? (
-              <View style={[styles.headerBadge, { backgroundColor: roles.primaryActionBackground }]}>
-                <Text style={[styles.headerBadgeText, { color: roles.primaryActionText }]}>
-                  {Math.min(unreadCount, 99)}
-                </Text>
-              </View>
-            ) : null}
-          </Pressable>
+          {showNotificationsAction ? (
+            <Pressable
+              onPress={onNotificationsPress}
+              style={[styles.headerIconButton, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}
+            >
+              <AppIcon name="notifications" size="md" state="default" color={roles.headingText} />
+              {unreadCount ? (
+                <View style={[styles.headerBadge, { backgroundColor: roles.primaryActionBackground }]}>
+                  <Text style={[styles.headerBadgeText, { color: roles.primaryActionText }]}>
+                    {Math.min(unreadCount, 99)}
+                  </Text>
+                </View>
+              ) : null}
+            </Pressable>
+          ) : null}
 
-          <Pressable
-            onPress={openLogoutModal}
-            disabled={isLoggingOut}
-            style={[styles.headerIconButton, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}
-          >
-            <AppIcon name="signOut" size="md" state="default" color={roles.headingText} />
-          </Pressable>
+          {showLogoutAction ? (
+            <Pressable
+              onPress={openLogoutModal}
+              disabled={effectiveIsLoggingOut}
+              style={[styles.headerIconButton, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}
+            >
+              <AppIcon name="signOut" size="md" state="default" color={roles.headingText} />
+            </Pressable>
+          ) : null}
         </View>
       </View>
       <Modal transparent visible={isLogoutModalOpen} animationType="fade" onRequestClose={closeLogoutModal}>
@@ -105,7 +140,7 @@ export function DonorTopBar({
             <Text style={styles.logoutModalBody}>Are you sure you want to log out?</Text>
             <View style={styles.logoutModalActions}>
               <AppButton title="Cancel" variant="outline" fullWidth={false} onPress={closeLogoutModal} />
-              <AppButton title="Log out" fullWidth={false} onPress={confirmLogout} loading={isLoggingOut} />
+              <AppButton title="Log out" fullWidth={false} onPress={confirmLogout} loading={effectiveIsLoggingOut} />
             </View>
           </AppCard>
         </View>

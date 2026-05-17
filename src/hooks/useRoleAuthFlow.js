@@ -41,7 +41,7 @@ export const useRoleAuthFlow = (role) => {
 
   const handleSignup = async (data) => {
     clearSignupError();
-    const selectedRole = 'donor';
+    const selectedRole = 'tentative';
 
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setActiveAuthAction('signup');

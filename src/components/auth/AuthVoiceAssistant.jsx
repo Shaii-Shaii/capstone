@@ -104,14 +104,14 @@ const resolveAssistantReply = (spokenText, screen, brandName) => {
 
   if (screen === 'login') {
     if (wantsPassword) return 'Enter the password for your account. If you forgot it, tap Forgot password before logging in.';
-    if (wantsPatient) return 'After login, choose Patient only if you need the patient startup flow. You can enter your patient code if you have one.';
-    if (wantsDonor) return 'After login, choose No when asked if you are a patient. The app will assign your donor role before the donor dashboard opens.';
+    if (wantsPatient) return 'After login, choose the wig support option. You can enter your patient code if you have one.';
+    if (wantsDonor) return 'After login, choose the hair donation option to continue to your donation dashboard.';
     return 'For login, enter your email first, then your password, then tap Log in.';
   }
 
   if (wantsOtp) return 'OTP happens after signup. Register first, then enter the six digit code sent to your email.';
-  if (wantsPatient) return 'For patient setup, log in first. The app will ask if you are a patient, then request your patient code only if you have one.';
-  if (wantsDonor) return 'For donor setup, log in first and choose the donor path when asked if you are a patient.';
+  if (wantsPatient) return 'For wig support, log in first. The app will ask what you need and request your patient code only if you have one.';
+  if (wantsDonor) return 'For hair donation, log in first and choose the donation path when asked what you need.';
   if (wantsHair) return 'For hair analysis, log in and open CheckHair. Capture front view, side profile, and hair ends with no face or hair accessories.';
 
   return `I can help with login, signup, OTP, donor setup, patient setup, or hair analysis. What would you like to do in ${brandName}?`;

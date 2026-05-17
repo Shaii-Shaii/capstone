@@ -10,8 +10,6 @@ import { logAppEvent } from '../utils/appErrors';
 
 const MAX_PHOTO_COUNT = hairAnalysisRequiredViews.length;
 const IMAGE_MEDIA_TYPES = ['images'];
-const WEB_SLOT_IMAGE_MAX_SIZE = 1200;
-const WEB_SLOT_IMAGE_QUALITY = 0.68;
 const NATIVE_SLOT_IMAGE_MAX_SIZE = 1280;
 const NATIVE_SLOT_IMAGE_QUALITY = 0.72;
 
@@ -22,37 +20,6 @@ const createErrorState = (title, message, extras = {}) => ({
 });
 
 const createEmptyPhotoSlots = () => Array.from({ length: MAX_PHOTO_COUNT }, () => null);
-
-const supportsMobileWebCameraCapture = () => {
-  if (typeof navigator === 'undefined') return false;
-
-  const userAgent = navigator.userAgent || '';
-  return /android|iphone|ipad|ipod/i.test(userAgent);
-};
-
-const readWebFileAsDataUrl = (file) => new Promise((resolve, reject) => {
-  const reader = new FileReader();
-
-  reader.onload = () => resolve(reader.result);
-  reader.onerror = () => reject(new Error('Unable to read the selected hair image.'));
-  reader.readAsDataURL(file);
-});
-
-const buildDataUrlFromAsset = (asset) => {
-  if (typeof asset?.dataUrl === 'string' && asset.dataUrl.startsWith('data:')) {
-    return asset.dataUrl;
-  }
-
-  if (typeof asset?.uri === 'string' && asset.uri.startsWith('data:')) {
-    return asset.uri;
-  }
-
-  if (asset?.base64) {
-    return `data:${asset.mimeType || 'image/jpeg'};base64,${asset.base64}`;
-  }
-
-  return '';
-};
 
 const buildResizeAction = ({ width, height, maxSize }) => {
   const resolvedWidth = Number(width || 0);
@@ -71,67 +38,7 @@ const buildResizeAction = ({ width, height, maxSize }) => {
   }];
 };
 
-const normalizeWebAssetForHairAnalysis = async (asset) => {
-  if (Platform.OS !== 'web') return asset;
-  if (typeof window === 'undefined' || typeof document === 'undefined') return asset;
-
-  const sourceDataUrl = buildDataUrlFromAsset(asset);
-  if (!sourceDataUrl) {
-    throw new Error('The selected hair photo could not be prepared for analysis.');
-  }
-
-  return await new Promise((resolve, reject) => {
-    const previewImage = new Image();
-
-    previewImage.onload = () => {
-      try {
-        const width = Number(previewImage.naturalWidth || previewImage.width || 0);
-        const height = Number(previewImage.naturalHeight || previewImage.height || 0);
-
-        if (!width || !height) {
-          reject(new Error('The selected hair photo could not be prepared for analysis.'));
-          return;
-        }
-
-        const scale = Math.min(1, WEB_SLOT_IMAGE_MAX_SIZE / Math.max(width, height));
-        const targetWidth = Math.max(1, Math.round(width * scale));
-        const targetHeight = Math.max(1, Math.round(height * scale));
-        const canvas = document.createElement('canvas');
-        canvas.width = targetWidth;
-        canvas.height = targetHeight;
-
-        const context = canvas.getContext('2d');
-        if (!context) {
-          reject(new Error('The selected hair photo could not be prepared for analysis.'));
-          return;
-        }
-
-        context.drawImage(previewImage, 0, 0, targetWidth, targetHeight);
-        const normalizedDataUrl = canvas.toDataURL('image/jpeg', WEB_SLOT_IMAGE_QUALITY);
-        const [, normalizedBase64 = ''] = normalizedDataUrl.split(',');
-
-        resolve({
-          ...asset,
-          uri: normalizedDataUrl,
-          dataUrl: normalizedDataUrl,
-          base64: normalizedBase64,
-          mimeType: 'image/jpeg',
-          file: null,
-          width: targetWidth,
-          height: targetHeight,
-        });
-      } catch (error) {
-        reject(error);
-      }
-    };
-
-    previewImage.onerror = () => reject(new Error('The selected hair photo could not be processed for AI analysis.'));
-    previewImage.src = sourceDataUrl;
-  });
-};
-
 const normalizeNativeAssetForHairAnalysis = async (asset) => {
-  if (Platform.OS === 'web') return asset;
   if (!asset?.uri) return asset;
 
   const normalizedAsset = await manipulateAsync(
@@ -165,69 +72,7 @@ const normalizeNativeAssetForHairAnalysis = async (asset) => {
   };
 };
 
-const normalizeAssetForHairAnalysis = async (asset) => (
-  Platform.OS === 'web'
-    ? await normalizeWebAssetForHairAnalysis(asset)
-    : await normalizeNativeAssetForHairAnalysis(asset)
-);
-
-const pickWebImageAsset = async ({ capture = false } = {}) => {
-  if (typeof document === 'undefined') {
-    throw new Error(capture
-      ? 'Camera capture is not available in this environment.'
-      : 'Image upload is not available in this environment.');
-  }
-
-  if (capture && !supportsMobileWebCameraCapture()) {
-    throw new Error('Camera capture is not available in this browser. Use Upload instead.');
-  }
-
-  return new Promise((resolve, reject) => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = 'image/*';
-
-    if (capture) {
-      input.setAttribute('capture', 'environment');
-    }
-
-    input.onchange = async () => {
-      const file = input.files?.[0];
-
-      if (!file) {
-        resolve({ canceled: true });
-        return;
-      }
-
-      try {
-        const dataUrl = await readWebFileAsDataUrl(file);
-        const [, base64 = ''] = String(dataUrl).split(',');
-
-        resolve({
-          canceled: false,
-          assets: [{
-            uri: dataUrl,
-            base64,
-            mimeType: file.type || 'image/jpeg',
-            assetId: file.name || `${Date.now()}`,
-            file,
-            fileName: file.name || '',
-            width: undefined,
-            height: undefined,
-          }],
-        });
-      } catch (error) {
-        reject(error);
-      }
-    };
-
-    input.onerror = () => reject(new Error(capture
-      ? 'Unable to open the camera right now.'
-      : 'Unable to open the image picker right now.'));
-
-    input.click();
-  });
-};
+const normalizeAssetForHairAnalysis = async (asset) => normalizeNativeAssetForHairAnalysis(asset);
 
 const mapImagePickerError = (message = '') => {
   const normalized = message.toLowerCase();
@@ -736,34 +581,23 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
         platform: Platform.OS,
       });
 
-      let result;
+      const permission = await ImagePicker.requestCameraPermissionsAsync();
+      logAppEvent('donor_hair_submission.photo_camera', 'Camera permission resolved for hair photo slot.', {
+        userId,
+        slotIndex,
+        granted: permission.granted,
+      });
 
-      if (Platform.OS === 'web') {
-        logAppEvent('donor_hair_submission.photo_camera', 'Web camera capture handler invoked for hair photo slot.', {
-          userId,
-          slotIndex,
-          viewKey: hairAnalysisRequiredViews[slotIndex]?.key || null,
-        });
-        result = await pickWebImageAsset({ capture: true });
-      } else {
-        const permission = await ImagePicker.requestCameraPermissionsAsync();
-        logAppEvent('donor_hair_submission.photo_camera', 'Camera permission resolved for hair photo slot.', {
-          userId,
-          slotIndex,
-          granted: permission.granted,
-        });
-
-        if (!permission.granted) {
-          throw new Error('Please allow camera access to take guided hair photos.');
-        }
-
-        result = await ImagePicker.launchCameraAsync({
-          mediaTypes: IMAGE_MEDIA_TYPES,
-          quality: 1,
-          base64: true,
-          cameraType: ImagePicker.CameraType.back,
-        });
+      if (!permission.granted) {
+        throw new Error('Please allow camera access to take guided hair photos.');
       }
+
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: IMAGE_MEDIA_TYPES,
+        quality: 1,
+        base64: true,
+        cameraType: ImagePicker.CameraType.back,
+      });
 
       setIsCapturingImages(false);
       if (result.canceled) {

@@ -10,7 +10,8 @@ export const DONOR_PERMISSION_REASONS = {
 
 export const GUARDIAN_CONSENT_TEXT = 'I confirm that I am the parent or legal guardian of this minor donor. I allow the minor donor to participate in the hair donation process through Donivra. I understand that the system may collect and process the minor donor’s profile information, hair donation details, and submitted hair images for AI-assisted initial screening, donation tracking, and coordination with authorized personnel. I understand that final acceptance of donated hair will still be reviewed by authorized personnel.';
 
-const activeLegalDocumentTypes = ['Terms and Conditions'];
+const activeLegalDocumentTypes = ['Terms of Service', 'Privacy Policy'];
+const fallbackLegalDocumentTypes = ['Terms and Conditions'];
 const legalDocumentsTable = 'legal_documents';
 const userLegalAgreementsTable = 'user_legal_agreements';
 const guardianConsentsTable = 'guardian_consents';
@@ -178,6 +179,7 @@ export const saveGuardianConsent = async ({
   guardianEmail = '',
   guardianContactNumber,
   publicPostingAllowed = false,
+  consentTextSnapshot = GUARDIAN_CONSENT_TEXT,
 }) => {
   try {
     const userIdResult = await normalizeDatabaseUserId(userId);
@@ -193,7 +195,7 @@ export const saveGuardianConsent = async ({
       guardian_contact_number: String(guardianContactNumber || '').trim(),
       consent_status: 'Active',
       consent_method: 'Electronic Checkbox',
-      consent_text_snapshot: GUARDIAN_CONSENT_TEXT,
+      consent_text_snapshot: String(consentTextSnapshot || GUARDIAN_CONSENT_TEXT).trim(),
       minor_donation_allowed: true,
       ai_image_processing_allowed: true,
       public_posting_allowed: Boolean(publicPostingAllowed),
@@ -229,7 +231,7 @@ export const recordAcceptedLegalAgreements = async ({ databaseUserId, authUserId
       throw new Error('User account is required.');
     }
 
-    const documentResult = await supabase
+    let documentResult = await supabase
       .from(legalDocumentsTable)
       .select(`
         legal_document_id,
@@ -243,8 +245,25 @@ export const recordAcceptedLegalAgreements = async ({ databaseUserId, authUserId
 
     if (documentResult.error) throw documentResult.error;
 
-    const documents = documentResult.data || [];
+    let documents = documentResult.data || [];
     if (documents.length < activeLegalDocumentTypes.length) {
+      documentResult = await supabase
+        .from(legalDocumentsTable)
+        .select(`
+          legal_document_id,
+          document_type,
+          title,
+          version,
+          content
+        `)
+        .in('document_type', fallbackLegalDocumentTypes)
+        .eq('is_active', true);
+
+      if (documentResult.error) throw documentResult.error;
+      documents = documentResult.data || [];
+    }
+
+    if (!documents.length) {
       throw new Error('Legal documents are not ready. Please contact support.');
     }
 
@@ -329,7 +348,7 @@ export const fetchActiveLegalDocument = async (documentType = 'Terms and Conditi
     });
     return {
       data: null,
-      error: new Error('Terms and Conditions could not be loaded. Please try again.'),
+      error: new Error(`${documentType} document could not be loaded. Please try again.`),
     };
   }
 };

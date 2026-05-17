@@ -33,15 +33,6 @@ export const donorDashboardContent = {
         route: '/donor/donations',
       },
       {
-        key: 'appointment',
-        title: 'Visit',
-        description: 'Manage your visit.',
-        badgeText: 'Book',
-        meta: 'Appointment',
-        icon: 'appointment',
-        route: '/donor/appointment',
-      },
-      {
         key: 'profile',
         title: 'Profile',
         description: 'Manage account.',
@@ -64,15 +55,6 @@ export const donorDashboardContent = {
         meta: 'Prep in 1 day',
         icon: 'success',
         route: '/donor/donations',
-      },
-      {
-        key: 'visit',
-        title: 'Appointment Ready',
-        description: 'Confirm the next salon or collection step before your donation visit.',
-        badgeText: 'Visit',
-        meta: 'Scheduling step',
-        icon: 'appointment',
-        route: '/donor/appointment',
       },
       {
         key: 'review',
@@ -254,20 +236,20 @@ export const donorDashboardNavItems = [
   },
   {
     key: 'checkhair',
-    label: 'CheckHair',
+    label: 'Analysis',
     icon: 'checkHair',
     activeIcon: 'checkHairActive',
     route: '/donor/donations',
-    accessibilityLabel: 'CheckHair tab',
+    accessibilityLabel: 'Hair analysis tab',
     role: 'donor',
   },
   {
     key: 'donations',
-    label: 'Donations',
+    label: 'Donate',
     icon: 'donations',
     activeIcon: 'donationsActive',
     route: '/donor/status',
-    accessibilityLabel: 'Donations tab',
+    accessibilityLabel: 'Donate tab',
     role: 'donor',
   },
 ];
@@ -346,28 +328,6 @@ export const donorPlaceholderModules = {
       items: [
         { key: 'one', title: 'Tracking Ready', description: 'This route is live and prepared for donor status widgets.', badgeText: 'Live', meta: 'Scalable route', icon: 'success' },
         { key: 'two', title: 'Shared Layout', description: 'The same signed-in shell, tabs, and safe-area handling already apply.', badgeText: 'Shared', meta: 'Reusable architecture', icon: 'shield' },
-      ],
-    },
-  },
-  appointment: {
-    activeNavKey: 'appointment',
-    title: 'Appointment',
-    subtitle: 'Keep salon coordination, preferred schedules, and future partner booking tools together.',
-    summary: 'This area is ready for real donor appointment workflows while already behaving like a complete signed-in destination.',
-    featured: {
-      title: 'Appointment Hub',
-      description: 'Swipe through the future booking and scheduling surfaces prepared for donor appointments.',
-      items: [
-        { key: 'calendar', title: 'Booking View', description: 'Partner salon slots and booking windows will live here.', badgeText: 'Soon', meta: 'Scheduling flow', ctaLabel: 'Preview layout', icon: 'appointment' },
-        { key: 'visit', title: 'Visit Notes', description: 'Preparation details, arrival reminders, and cut guidance can be added here next.', badgeText: 'Next', meta: 'Visit support', ctaLabel: 'Read notes', icon: 'support' },
-      ],
-    },
-    highlights: {
-      title: 'Why This Route Exists',
-      description: 'A real route now exists so donor tabs are complete instead of dead placeholders.',
-      items: [
-        { key: 'one', title: 'Future Booking', description: 'Ready for actual booking widgets and salon partner integrations.', badgeText: 'Ready', meta: 'Scalable module', icon: 'appointment' },
-        { key: 'two', title: 'Mobile Safe', description: 'Uses the same premium tab shell and safe-area handling as the rest of the app.', badgeText: 'Safe', meta: 'Shared behavior', icon: 'shield' },
       ],
     },
   },

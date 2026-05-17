@@ -1117,6 +1117,9 @@ export function PatientWigRequestScreen() {
           message={successMessage}
           variant="success"
           title="Request updated"
+          presentation="floating"
+          visible={Boolean(successMessage)}
+          autoDismissMs={3000}
         />
       ) : null}
 

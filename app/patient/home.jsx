@@ -71,6 +71,9 @@ export default function PatientHomeScreen() {
           title="Loading request status"
           message="Checking your latest wig request."
           variant="info"
+          presentation="floating"
+          visible={isLoadingContext || isLoadingTracking}
+          autoDismissMs={3000}
         />
       ) : null}
 
@@ -79,6 +82,9 @@ export default function PatientHomeScreen() {
           title="Status unavailable"
           message={error?.message || trackingError || 'We could not load your request status right now.'}
           variant="error"
+          presentation="floating"
+          visible={Boolean(error || trackingError)}
+          autoDismissMs={3000}
         />
       ) : null}
 

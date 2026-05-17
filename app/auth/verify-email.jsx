@@ -17,7 +17,7 @@ export default function VerifyEmailScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
   const { email, role } = params;
-  const { refreshProfile, resolvedTheme } = useAuth();
+  const { resolvedTheme } = useAuth();
   const roles = resolveThemeRoles(resolvedTheme);
   const brandName = resolvedTheme?.brandName || 'Donivra';
 
@@ -43,12 +43,7 @@ export default function VerifyEmailScreen() {
 
   if (!email) return null;
 
-  const routeAfterVerify = (nextRole = '') => {
-    if (String(nextRole || role || '').trim().toLowerCase() === 'donor') {
-      router.replace('/profile');
-      return;
-    }
-
+  const routeAfterVerify = () => {
     router.replace('/auth/access');
   };
 
@@ -66,7 +61,7 @@ export default function VerifyEmailScreen() {
     }
 
     await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    setStatusMessage('Email verified. Preparing your donor profile...');
+    setStatusMessage('Email verified. Preparing your account...');
 
     if (session?.user?.id && email) {
       const syncResult = await syncPendingSignupDraft({
@@ -80,14 +75,12 @@ export default function VerifyEmailScreen() {
       }
     }
 
-    const nextRole = verifiedRole || role;
-    if (session?.user?.id && String(nextRole || '').trim().toLowerCase() === 'donor') {
-      await refreshProfile(session.user.id);
-    } else if (session) {
+    if (session) {
       await logout();
     }
 
-    setTimeout(() => routeAfterVerify(nextRole), 900);
+    setStatusMessage('Email verified. Please log in to continue.');
+    setTimeout(routeAfterVerify, 900);
   };
 
   const handleResend = async () => {

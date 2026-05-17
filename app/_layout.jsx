@@ -3,6 +3,7 @@ import { ActivityIndicator, Image, StyleSheet, Text, View } from 'react-native';
 import { Slot } from 'expo-router';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { StatusBar } from 'expo-status-bar';
+import * as NavigationBar from 'expo-navigation-bar';
 import { AuthProvider, useAuth } from '../src/providers/AuthProvider';
 import { useRoleRedirect } from '../src/hooks/useRoleRedirect';
 import { normalizeResolvedTheme, resolveBrandLogoSource, theme } from '../src/design-system/theme';
@@ -67,6 +68,19 @@ function RootLayoutNav() {
   const { resolvedTheme } = useAuth();
 
   useRoleRedirect();
+
+  useEffect(() => {
+    const hideSystemNavigation = async () => {
+      try {
+        await NavigationBar.setBehaviorAsync('overlay-swipe');
+        await NavigationBar.setVisibilityAsync('hidden');
+      } catch (_error) {
+        // Navigation bar control is Android-only and may be unavailable in some runtimes.
+      }
+    };
+
+    hideSystemNavigation();
+  }, []);
 
   useEffect(() => {
     const timeoutId = setTimeout(() => {

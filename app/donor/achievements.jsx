@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
-  ImageBackground,
   Linking,
   Modal,
   Pressable,
@@ -10,30 +9,80 @@ import {
   Text,
   View,
 } from 'react-native';
+import * as Print from 'expo-print';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { DashboardLayout } from '../../src/components/layout/DashboardLayout';
-import { DashboardHeader } from '../../src/components/ui/DashboardHeader';
-import { AppButton } from '../../src/components/ui/AppButton';
-import { AppCard } from '../../src/components/ui/AppCard';
 import { AppIcon } from '../../src/components/ui/AppIcon';
-import { DashboardSectionHeader } from '../../src/components/ui/DashboardSectionHeader';
 import { StatusBanner } from '../../src/components/ui/StatusBanner';
 import { donorDashboardNavItems } from '../../src/constants/dashboard';
-import { fetchDonationCertificatesByUserId, fetchHairSubmissionsByUserId } from '../../src/features/hairSubmission.api';
+import {
+  fetchDonationCertificatesByUserId,
+  fetchDonorPatientImpactByBundleIds,
+  fetchHairSubmissionsByUserId,
+} from '../../src/features/hairSubmission.api';
 import { fetchOrganizationPreview } from '../../src/features/donorHome.api';
 import {
+  buildDonorCertificateHtml,
   buildDonorCertificateModel,
   buildDonorFullName,
   generateDonorCertificatePdf,
-  getCertificateMetaValueFontSize,
-  getCertificateRecipientFontSize,
   isCertificateSharingSupported,
   shareDonorCertificatePdf,
 } from '../../src/features/donorCertificate.service';
-import { theme } from '../../src/design-system/theme';
+import { resolveThemeRoles, theme } from '../../src/design-system/theme';
 import { useAuth } from '../../src/providers/AuthProvider';
 
-const certificateTemplate = require('../../src/assets/images/donivra_certificate_template.png');
+const withOpacity = (color, opacity) => {
+  if (!color || typeof color !== 'string') return color;
+  if (/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(color)) {
+    const raw = color.slice(1);
+    const expanded = raw.length === 3
+      ? raw.split('').map((part) => part + part).join('')
+      : raw;
+    const red = parseInt(expanded.slice(0, 2), 16);
+    const green = parseInt(expanded.slice(2, 4), 16);
+    const blue = parseInt(expanded.slice(4, 6), 16);
+    return `rgba(${red}, ${green}, ${blue}, ${opacity})`;
+  }
+  if (color.startsWith('rgb(')) {
+    return color.replace('rgb(', 'rgba(').replace(')', `, ${opacity})`);
+  }
+  return color;
+};
+
+const buildCertificateColors = (resolvedTheme) => {
+  const roles = resolveThemeRoles(resolvedTheme);
+  const primary = roles.primaryActionBackground;
+  const surface = roles.defaultCardBackground;
+  const supportSurface = roles.supportCardBackground;
+  const accentSurface = roles.accentCardBackground;
+
+  return {
+    background: roles.pageBackground,
+    surface,
+    surfaceLow: supportSurface,
+    surfaceHigh: accentSurface,
+    surfaceHighest: roles.defaultCardBorder,
+    primary,
+    primaryContainer: roles.primaryActionBackground,
+    onPrimary: roles.primaryActionText,
+    onSurface: roles.headingText,
+    onSurfaceVariant: roles.bodyText,
+    secondary: roles.bodyText,
+    outline: roles.metaText,
+    outlineVariant: roles.defaultCardBorder,
+    tertiary: roles.tertiaryAccentText,
+    gold: resolvedTheme?.tertiaryColor || primary,
+    successBg: roles.badgeStrongBackground,
+    successText: roles.badgeStrongText,
+    shadow: theme.colors.palette.black,
+    bannerWatermark: withOpacity(roles.primaryActionText, 0.16),
+    headerSurface: withOpacity(roles.pageBackground, 0.92),
+    statLabel: withOpacity(roles.primaryActionText, 0.9),
+    impactIconSurface: roles.iconPrimarySurface,
+  };
+};
 
 const formatDateLabel = (value) => {
   if (!value) return 'Date not available';
@@ -49,227 +98,301 @@ const formatDateLabel = (value) => {
   }
 };
 
-function CertificatePreviewModal({
+const toNumber = (value) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const getLengthLabel = (certificate) => {
+  const length = toNumber(certificate?.declaredLength ?? certificate?.estimatedLength);
+  return length > 0 ? `${length.toFixed(length % 1 ? 1 : 0)} inches` : 'Recorded';
+};
+
+const getBundleLabel = (certificate) => (
+  certificate?.bundleId ? `Bundle #${certificate.bundleId}` : 'No bundle yet'
+);
+
+const currentYear = new Date().getFullYear();
+const FILTER_OPTIONS = [
+  { key: 'all', label: 'All' },
+  { key: 'this_year', label: 'This Year' },
+  { key: String(currentYear - 1), label: String(currentYear - 1) },
+  { key: String(currentYear - 2), label: String(currentYear - 2) },
+];
+
+const SORT_OPTIONS = [
+  { key: 'recent', label: 'Most Recent' },
+  { key: 'oldest', label: 'Oldest' },
+];
+
+const getCertificateYear = (certificate) => {
+  const date = new Date(certificate?.issuedAt || certificate?.donationDate || '');
+  return Number.isFinite(date.getTime()) ? date.getFullYear() : null;
+};
+
+const filterCertificateRows = (rows, filterKey) => {
+  if (filterKey === 'all') return rows;
+
+  const targetYear = filterKey === 'this_year'
+    ? currentYear
+    : Number(filterKey);
+
+  return rows.filter((certificate) => getCertificateYear(certificate) === targetYear);
+};
+
+const sortCertificateRows = (rows, sortKey) => {
+  const direction = sortKey === 'oldest' ? 1 : -1;
+  return [...rows].sort((left, right) => {
+    const leftTime = new Date(left?.issuedAt || left?.donationDate || 0).getTime() || 0;
+    const rightTime = new Date(right?.issuedAt || right?.donationDate || 0).getTime() || 0;
+    return (leftTime - rightTime) * direction;
+  });
+};
+
+const getConditionLabel = (certificate) => certificate?.detectedCondition || certificate?.decision || 'Verified';
+
+function CertificateCanvas({ certificate, colors, styles }) {
+  return (
+    <View collapsable={false} style={styles.certificateCanvas}>
+      <View style={styles.certificatePattern} pointerEvents="none" />
+      <View style={styles.canvasHeader}>
+        <Text style={styles.canvasBrand}>Donivra</Text>
+        <Text style={styles.canvasTitle}>Certificate of Donation</Text>
+        <View style={styles.goldRule} />
+      </View>
+
+      <View style={styles.canvasBody}>
+        <Text style={styles.canvasIntro}>This is to certify that</Text>
+        <Text style={styles.canvasName} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.62}>
+          {certificate?.donorName || 'Full name required'}
+        </Text>
+        <Text style={styles.canvasCopy}>
+          Has generously donated {getLengthLabel(certificate)} of hair on {certificate?.donationDateLabel || certificate?.issuedAtLabel}.
+          {'\n'}Your contribution brings hope and confidence to patients experiencing hair loss.
+        </Text>
+      </View>
+
+      <View style={styles.canvasFooter}>
+        <View style={styles.signatureBlock}>
+          <View style={styles.signatureLine} />
+          <Text style={styles.signatureLabel}>Authorized Signature</Text>
+        </View>
+        <View style={styles.seal}>
+          <MaterialCommunityIcons name="check-decagram" size={48} color={colors.gold} />
+        </View>
+        <View style={styles.qrBox}>
+          <MaterialCommunityIcons name="qrcode" size={36} color={colors.onSurfaceVariant} />
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function CertificateDetailModal({
   certificate,
   visible,
-  canDownload,
-  isDownloading,
+  isBusy,
+  colors,
+  styles,
   onClose,
-  onDownload,
+  onPrint,
+  onSharePdf,
 }) {
   if (!certificate) return null;
 
-  const recipientFontSize = getCertificateRecipientFontSize(certificate.donorName, {
-    max: 24,
-    min: 14,
-  });
-  const certificateNumberFontSize = getCertificateMetaValueFontSize(certificate.certificateNumber || '', {
-    max: 12,
-    min: 8,
-  });
-  const issuedFontSize = getCertificateMetaValueFontSize(certificate.issuedAtLabel || '', {
-    max: 12,
-    min: 8,
-  });
   return (
-    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
-      <View style={styles.modalOverlay}>
-        <Pressable style={styles.modalBackdrop} onPress={onClose} />
+    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
+      <View style={styles.detailScreen}>
+        <View style={styles.detailHeader}>
+          <Pressable accessibilityLabel="Go back" style={styles.headerIconButton} onPress={onClose}>
+            <MaterialCommunityIcons name="arrow-left" size={24} color={colors.primary} />
+          </Pressable>
+          <Text style={styles.detailHeaderTitle}>Certificate</Text>
+          <Pressable accessibilityLabel="Share" style={styles.headerIconButton} onPress={() => onSharePdf(certificate)}>
+            <MaterialCommunityIcons name="share-variant-outline" size={24} color={colors.primary} />
+          </Pressable>
+        </View>
 
-        <AppCard variant="elevated" radius="xl" padding="lg" style={styles.modalCard}>
-          <View style={styles.modalHeader}>
-            <View style={styles.modalHeaderCopy}>
-              <Text style={styles.modalTitle}>Certificate Preview</Text>
-              <Text style={styles.modalSubtitle}>{certificate.certificateType || 'Certificate of Donation'}</Text>
-            </View>
-            <Pressable style={styles.closeButton} onPress={onClose}>
-              <AppIcon name="close" state="muted" />
-            </Pressable>
+        <ScrollView contentContainerStyle={styles.detailContent} showsVerticalScrollIndicator={false}>
+          {!certificate.donorName ? (
+            <StatusBanner
+              variant="info"
+              title="Name needed"
+              message="Complete your donor full name in Profile before generating this certificate."
+            />
+          ) : null}
+
+          <View style={styles.canvasWrap}>
+            <CertificateCanvas certificate={certificate} colors={colors} styles={styles} />
           </View>
 
-          <ScrollView
-            style={styles.modalScroll}
-            contentContainerStyle={styles.modalScrollContent}
-            showsVerticalScrollIndicator={false}
-          >
-            {!certificate.donorName ? (
-              <StatusBanner
-                variant="info"
-                title="Name needed"
-                message="Complete your donor full name in Profile before generating this certificate."
-              />
-            ) : null}
+          <View style={styles.badgeRow}>
+            <View style={styles.infoBadge}>
+              <MaterialCommunityIcons name="check-circle" size={16} color={colors.primary} />
+              <Text style={styles.infoBadgeText}>Verified Certificate</Text>
+            </View>
+            <View style={styles.infoBadge}>
+              <MaterialCommunityIcons name="calendar-blank" size={16} color={colors.secondary} />
+              <Text style={styles.infoBadgeText}>Issued {certificate.issuedAtLabel}</Text>
+            </View>
+          </View>
 
-            <View style={styles.previewWrap}>
-              <ImageBackground
-                source={certificateTemplate}
-                resizeMode="contain"
-                style={styles.certificatePreview}
-                imageStyle={styles.certificatePreviewImage}
+          <View style={styles.impactCard}>
+            <View style={styles.impactIconWrap}>
+              <MaterialCommunityIcons name="heart" size={24} color={colors.primary} />
+            </View>
+            <View style={styles.impactCopy}>
+              <Text style={styles.impactTitle}>Your Impact</Text>
+              <Text style={styles.impactText}>
+                Your {getLengthLabel(certificate)} donation contributes toward creating a medical-grade wig for a patient in need.
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.detailGrid}>
+            <View style={styles.infoPanel}>
+              <Text style={styles.panelTitle}>Donation Details</Text>
+              <InfoPair label="Donor Name" value={certificate.donorName || 'Full name required'} styles={styles} />
+          <InfoPair label="Donation Date" value={certificate.donationDateLabel || certificate.issuedAtLabel} styles={styles} />
+          <InfoPair label="Length Donated" value={getLengthLabel(certificate)} styles={styles} />
+          <InfoPair label="Hair Bundle" value={getBundleLabel(certificate)} styles={styles} />
+          <InfoPair label="Hair Condition" value={getConditionLabel(certificate)} chip styles={styles} />
+              <InfoPair label="Receiving Organization" value={certificate.organizationName || 'Hair for Hope'} styles={styles} />
+              <InfoPair label="Certificate ID" value={certificate.certificateNumber || 'Pending certificate number'} styles={styles} />
+            </View>
+
+            <View style={styles.actionsPanel}>
+              <Text style={[styles.panelTitle, styles.centerText]}>Actions</Text>
+              <Pressable disabled={isBusy} style={styles.primaryAction} onPress={() => onPrint(certificate)}>
+                <MaterialCommunityIcons name="printer-outline" size={20} color={colors.onPrimary} />
+                <Text style={styles.primaryActionText}>{isBusy ? 'Preparing...' : 'Print Certificate'}</Text>
+              </Pressable>
+              <Pressable
+                disabled={isBusy || !certificate.donorName}
+                style={[styles.secondaryAction, (!certificate.donorName || isBusy) ? styles.disabledAction : null]}
+                onPress={() => onSharePdf(certificate)}
               >
-                <View style={styles.previewMetaCard}>
-                  <Text style={styles.previewMetaLabel}>Certificate No.</Text>
-                  <Text
-                    style={[styles.previewMetaValue, { fontSize: certificateNumberFontSize }]}
-                    numberOfLines={2}
-                  >
-                    {certificate.certificateNumber || 'Pending certificate number'}
-                  </Text>
-                  <Text style={styles.previewMetaLabel}>Issued</Text>
-                  <Text
-                    style={[styles.previewMetaValue, styles.previewMetaValueLast, { fontSize: issuedFontSize }]}
-                    numberOfLines={2}
-                  >
-                    {certificate.issuedAtLabel}
-                  </Text>
-                </View>
-
-                <View style={styles.previewRecipientBlock}>
-                  <Text
-                    style={[
-                      styles.previewRecipientName,
-                      { fontSize: recipientFontSize, lineHeight: Math.round(recipientFontSize * 1.05) },
-                    ]}
-                    numberOfLines={2}
-                    adjustsFontSizeToFit
-                    minimumFontScale={0.75}
-                  >
-                    {certificate.donorName || 'Full name required'}
-                  </Text>
-                </View>
-              </ImageBackground>
-            </View>
-
-            <View style={styles.detailCard}>
-              <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>Certificate</Text>
-                <Text style={styles.detailValue}>{certificate.certificateType || 'Certificate of Donation'}</Text>
-              </View>
-              <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>Certificate number</Text>
-                <Text style={styles.detailValue}>{certificate.certificateNumber || 'Pending certificate number'}</Text>
-              </View>
-              <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>Issued</Text>
-                <Text style={styles.detailValue}>{certificate.issuedAtLabel}</Text>
-              </View>
-              {certificate.organizationName ? (
-                <View style={styles.detailRow}>
-                  <Text style={styles.detailLabel}>Organization</Text>
-                  <Text style={styles.detailValue}>{certificate.organizationName}</Text>
-                </View>
-              ) : null}
-              <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>Submission</Text>
-                <Text style={styles.detailValue}>{certificate.submissionCode || 'No linked submission'}</Text>
+                <MaterialCommunityIcons name="download-outline" size={20} color={colors.primary} />
+                <Text style={styles.secondaryActionText}>Save as PDF</Text>
+              </Pressable>
+              <View style={styles.socialRow}>
+                <Pressable disabled={isBusy} style={styles.socialButton} onPress={() => onSharePdf(certificate)}>
+                  <MaterialCommunityIcons name="share-variant-outline" size={20} color={colors.primary} />
+                </Pressable>
+                <Pressable disabled={isBusy} style={styles.socialButton} onPress={() => onSharePdf(certificate)}>
+                  <MaterialCommunityIcons name="file-pdf-box" size={20} color={colors.primary} />
+                </Pressable>
               </View>
             </View>
-
-            <View style={styles.modalActions}>
-              <AppButton
-                title={isDownloading ? 'Preparing PDF...' : 'Download PDF'}
-                loading={isDownloading}
-                disabled={!canDownload}
-                onPress={() => onDownload(certificate)}
-              />
-            </View>
-          </ScrollView>
-        </AppCard>
+          </View>
+        </ScrollView>
       </View>
     </Modal>
   );
 }
 
-function CertificateRow({ item, canDownload, onView, onDownload, onOpenStoredFile }) {
+function InfoPair({ label, value, chip = false, styles }) {
   return (
-    <AppCard variant="elevated" radius="xl" padding="lg">
-      <View style={styles.certificateHeader}>
-        <View style={styles.certificateIconWrap}>
-          <AppIcon name="sparkle" state="active" />
+    <View style={styles.infoPair}>
+      <Text style={styles.infoLabel}>{label}</Text>
+      {chip ? (
+        <View style={styles.conditionChip}>
+          <View style={styles.conditionDot} />
+          <Text style={styles.infoValue}>{value}</Text>
         </View>
-        <View style={styles.certificateCopy}>
-          <Text style={styles.certificateTitle}>{item.certificateType || 'Certificate of Donation'}</Text>
-          <Text style={styles.certificateMeta}>{item.certificateNumber || 'Pending certificate number'}</Text>
-        </View>
+      ) : (
+        <Text style={styles.infoValue}>{value}</Text>
+      )}
+    </View>
+  );
+}
+
+function MilestoneBadge({ icon, label, locked = false, colors, styles }) {
+  return (
+    <View style={[styles.milestoneItem, locked ? styles.lockedMilestone : null]}>
+      <View style={[styles.milestoneCircle, locked ? styles.milestoneCircleLocked : null]}>
+        <MaterialCommunityIcons name={locked ? 'lock-outline' : icon} size={30} color={locked ? colors.outline : colors.primary} />
+      </View>
+      <Text style={[styles.milestoneLabel, locked ? styles.lockedText : null]}>{label}</Text>
+    </View>
+  );
+}
+
+function CertificateRow({ item, onView, onOpenStoredFile, colors, styles }) {
+  return (
+    <Pressable style={styles.certificateCard} onPress={() => onView(item)}>
+      <View style={styles.certificateThumb}>
+        <MaterialCommunityIcons name="flower-tulip-outline" size={26} color={colors.primary} />
+        <View style={styles.thumbLine} />
+        <View style={[styles.thumbLine, styles.thumbLineShort]} />
+        <MaterialCommunityIcons name="medal" size={22} color={colors.tertiary} style={styles.thumbMedal} />
       </View>
 
-      <View style={styles.detailList}>
-        <View style={styles.detailRow}>
-          <Text style={styles.detailLabel}>Issued</Text>
-          <Text style={styles.detailValue}>{item.issuedAtLabel}</Text>
-        </View>
-        {item.organizationName ? (
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Organization</Text>
-            <Text style={styles.detailValue}>{item.organizationName}</Text>
+      <View style={styles.cardDetails}>
+        <View style={styles.cardTopRow}>
+          <View style={styles.verifiedPill}>
+            <MaterialCommunityIcons name="check-decagram-outline" size={14} color={colors.successText} />
+            <Text style={styles.verifiedText}>Verified</Text>
           </View>
-        ) : null}
-        <View style={styles.detailRow}>
-          <Text style={styles.detailLabel}>Submission</Text>
-          <Text style={styles.detailValue}>{item.submissionCode || 'No linked submission'}</Text>
+          <Text style={styles.cardDate}>{item.issuedAtLabel}</Text>
         </View>
-        <View style={styles.detailRow}>
-          <Text style={styles.detailLabel}>Status</Text>
-          <Text style={styles.detailValue}>{item.statusLabel}</Text>
+
+        <View>
+          <Text style={styles.cardTitle}>{item.certificateType || 'Certificate of Donation'}</Text>
+          <Text style={styles.cardSubtitle}>{item.organizationName || 'Hair for Hope'}</Text>
+        </View>
+
+        <View style={styles.cardMetaRow}>
+          <View style={styles.cardMetaItem}>
+            <Text style={styles.cardMetaLabel}>Length</Text>
+            <Text style={styles.cardMetaValue}>{getLengthLabel(item)}</Text>
+          </View>
+          <View style={[styles.cardMetaItem, styles.cardMetaWide]}>
+            <Text style={styles.cardMetaLabel}>Bundle</Text>
+            <Text style={styles.cardMetaValue} numberOfLines={1}>{getBundleLabel(item)}</Text>
+          </View>
+        </View>
+
+        <View style={styles.cardActions}>
+          <Text style={styles.viewLink}>View certificate</Text>
+          {item.fileUrl ? (
+            <Pressable onPress={() => onOpenStoredFile(item.fileUrl)}>
+              <Text style={styles.openStoredLink}>Stored file</Text>
+            </Pressable>
+          ) : null}
         </View>
       </View>
-
-      {item.remarks ? <Text style={styles.certificateRemarks}>{item.remarks}</Text> : null}
-
-      {!item.donorName ? (
-        <Text style={styles.missingNameText}>Complete your donor full name in Profile before generating this certificate.</Text>
-      ) : null}
-
-      <View style={styles.actionRow}>
-        <AppButton
-          title="View Certificate"
-          variant="outline"
-          fullWidth={false}
-          onPress={() => onView(item)}
-        />
-        <AppButton
-          title="Download PDF"
-          fullWidth={false}
-          disabled={!canDownload}
-          onPress={() => onDownload(item)}
-        />
-      </View>
-
-      {item.fileUrl ? (
-        <Pressable style={styles.linkRow} onPress={() => onOpenStoredFile(item.fileUrl)}>
-          <Text style={styles.linkText}>Open stored certificate</Text>
-          <AppIcon name="chevronRight" state="muted" size="sm" />
-        </Pressable>
-      ) : null}
-    </AppCard>
+    </Pressable>
   );
 }
 
 export default function DonorAchievementsScreen() {
   const router = useRouter();
-  const { user, profile } = useAuth();
+  const { user, profile, resolvedTheme } = useAuth();
+  const colors = useMemo(() => buildCertificateColors(resolvedTheme), [resolvedTheme]);
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [state, setState] = useState({
     isLoading: true,
     error: '',
     certificates: [],
+    patientHelpedCount: 0,
   });
   const [feedback, setFeedback] = useState(null);
   const [selectedCertificate, setSelectedCertificate] = useState(null);
-  const [isDownloading, setIsDownloading] = useState(false);
+  const [isBusy, setIsBusy] = useState(false);
   const [isSharingAvailable, setIsSharingAvailable] = useState(false);
+  const [activeFilter, setActiveFilter] = useState('all');
+  const [activeSort, setActiveSort] = useState('recent');
 
   useEffect(() => {
     let cancelled = false;
 
     const loadCapabilities = async () => {
       const supported = await isCertificateSharingSupported();
-      if (!cancelled) {
-        setIsSharingAvailable(supported);
-      }
+      if (!cancelled) setIsSharingAvailable(supported);
     };
 
     loadCapabilities();
-
     return () => {
       cancelled = true;
     };
@@ -284,15 +407,12 @@ export default function DonorAchievementsScreen() {
           isLoading: false,
           error: 'Your donor session is not ready yet.',
           certificates: [],
+          patientHelpedCount: 0,
         });
         return;
       }
 
-      setState((current) => ({
-        ...current,
-        isLoading: true,
-        error: '',
-      }));
+      setState((current) => ({ ...current, isLoading: true, error: '' }));
 
       const [certificateResult, submissionsResult] = await Promise.all([
         fetchDonationCertificatesByUserId(user.id, 24),
@@ -301,20 +421,12 @@ export default function DonorAchievementsScreen() {
 
       if (cancelled) return;
 
-      if (certificateResult.error) {
+      if (certificateResult.error || submissionsResult.error) {
         setState({
           isLoading: false,
-          error: certificateResult.error.message || 'Unable to load donor achievements right now.',
+          error: certificateResult.error?.message || submissionsResult.error?.message || 'Unable to load donor achievements right now.',
           certificates: [],
-        });
-        return;
-      }
-
-      if (submissionsResult.error) {
-        setState({
-          isLoading: false,
-          error: submissionsResult.error.message || 'Unable to load donor achievements right now.',
-          certificates: [],
+          patientHelpedCount: 0,
         });
         return;
       }
@@ -323,7 +435,6 @@ export default function DonorAchievementsScreen() {
       const submissionsById = Object.fromEntries(
         (submissionsResult.data || []).map((submission) => [submission.submission_id, submission])
       );
-
       const organizationIds = [
         ...new Set(
           (certificateResult.data || [])
@@ -365,21 +476,43 @@ export default function DonorAchievementsScreen() {
         };
       });
 
+      const bundleIds = certificates.map((certificate) => certificate.bundleId).filter(Boolean);
+      const patientImpactResult = await fetchDonorPatientImpactByBundleIds(bundleIds);
+
+      if (cancelled) return;
+
+      const patientIds = [
+        ...new Set([
+          ...(patientImpactResult.data?.patientIds || []),
+          ...certificates.map((certificate) => certificate.recipientPatientId).filter(Boolean),
+        ]),
+      ];
+
       setState({
         isLoading: false,
         error: '',
         certificates,
+        patientHelpedCount: patientIds.length,
       });
     };
 
     loadAchievements();
-
     return () => {
       cancelled = true;
     };
   }, [profile, user?.email, user?.id]);
 
-  const certificateRows = useMemo(() => state.certificates, [state.certificates]);
+  const certificateRows = useMemo(
+    () => sortCertificateRows(filterCertificateRows(state.certificates, activeFilter), activeSort),
+    [activeFilter, activeSort, state.certificates]
+  );
+  const activeSortLabel = SORT_OPTIONS.find((option) => option.key === activeSort)?.label || SORT_OPTIONS[0].label;
+  const totalAchievements = state.certificates.length;
+  const patientsHelped = state.patientHelpedCount;
+
+  const toggleSort = () => {
+    setActiveSort((current) => (current === 'recent' ? 'oldest' : 'recent'));
+  };
 
   const handleNavPress = (item) => {
     if (!item?.route) return;
@@ -388,11 +521,7 @@ export default function DonorAchievementsScreen() {
 
   const handleOpenStoredCertificate = async (url) => {
     if (!url) {
-      setFeedback({
-        type: 'info',
-        title: 'No stored file',
-        message: 'There is no uploaded certificate file for this record yet.',
-      });
+      setFeedback({ type: 'info', title: 'No stored file', message: 'There is no uploaded certificate file for this record yet.' });
       return;
     }
 
@@ -402,42 +531,43 @@ export default function DonorAchievementsScreen() {
       return;
     }
 
-    setFeedback({
-      type: 'error',
-      title: 'Cannot open file',
-      message: 'This certificate file could not be opened on this device.',
-    });
+    setFeedback({ type: 'error', title: 'Cannot open file', message: 'This certificate file could not be opened on this device.' });
   };
 
-  const handleDownloadCertificate = async (certificate) => {
+  const ensureDonorName = (certificate) => {
+    if (!certificate?.donorName) {
+      throw new Error('Complete your donor full name in Profile before generating this certificate.');
+    }
+  };
+
+  const handleSharePdf = async (certificate) => {
     try {
-      if (!certificate?.donorName) {
-        throw new Error('Complete your donor full name in Profile before generating a certificate.');
-      }
-
-      if (!isSharingAvailable) {
-        throw new Error('PDF sharing is not available on this device right now.');
-      }
-
-      setIsDownloading(true);
+      ensureDonorName(certificate);
+      if (!isSharingAvailable) throw new Error('Sharing is not available on this device right now.');
+      setIsBusy(true);
       setFeedback(null);
-
-      const file = await generateDonorCertificatePdf(certificate);
+      const file = await generateDonorCertificatePdf(certificate, { colors });
       await shareDonorCertificatePdf(file.uri);
-
-      setFeedback({
-        type: 'success',
-        title: 'Certificate ready',
-        message: 'Your certificate PDF has been prepared and opened in the share sheet.',
-      });
+      setFeedback({ type: 'success', title: 'Certificate ready', message: 'Your certificate PDF has been opened in the share sheet.' });
     } catch (error) {
-      setFeedback({
-        type: 'error',
-        title: 'Certificate unavailable',
-        message: error.message || 'Unable to generate the donor certificate PDF right now.',
-      });
+      setFeedback({ type: 'error', title: 'Certificate unavailable', message: error.message || 'Unable to prepare the certificate right now.' });
     } finally {
-      setIsDownloading(false);
+      setIsBusy(false);
+    }
+  };
+
+  const handlePrintCertificate = async (certificate) => {
+    try {
+      ensureDonorName(certificate);
+      setIsBusy(true);
+      setFeedback(null);
+      const html = await buildDonorCertificateHtml(certificate, { colors });
+      await Print.printAsync({ html });
+      setFeedback({ type: 'success', title: 'Print ready', message: 'The print dialog has been opened for this certificate.' });
+    } catch (error) {
+      setFeedback({ type: 'error', title: 'Print unavailable', message: error.message || 'Unable to open the print dialog right now.' });
+    } finally {
+      setIsBusy(false);
     }
   };
 
@@ -448,40 +578,76 @@ export default function DonorAchievementsScreen() {
       activeNavKey="profile"
       navVariant="donor"
       onNavPress={handleNavPress}
-      header={(
-        <DashboardHeader
-          title="Achievements"
-          subtitle=""
-          variant="donor"
-          showAvatar={false}
-        />
-      )}
+      header={null}
     >
-      {feedback ? (
-        <StatusBanner
-          variant={feedback.type}
-          title={feedback.title}
-          message={feedback.message}
-          dismissible
-          onDismiss={() => setFeedback(null)}
-        />
-      ) : null}
+      <View style={styles.screen}>
+        <View style={styles.topBar}>
+          <Pressable style={styles.topBarButton} onPress={() => router.back()}>
+            <MaterialCommunityIcons name="arrow-left" size={24} color={colors.onSurfaceVariant} />
+          </Pressable>
+          <Text style={styles.screenTitle}>My Achievements</Text>
+          <View style={styles.topBarButton}>
+            <MaterialCommunityIcons name="filter-variant" size={24} color={colors.onSurfaceVariant} />
+          </View>
+        </View>
 
-      <AppCard variant="elevated" radius="xl" padding="lg">
-        <Pressable style={styles.backRow} onPress={() => router.back()}>
-          <AppIcon name="arrowLeft" state="muted" />
-          <Text style={styles.backText}>Back</Text>
-        </Pressable>
+        {feedback ? (
+          <StatusBanner
+            variant={feedback.type}
+            title={feedback.title}
+            message={feedback.message}
+            dismissible
+            onDismiss={() => setFeedback(null)}
+          />
+        ) : null}
 
-        <DashboardSectionHeader
-          title="Certificates"
-          description="Your donor certificates and recognition milestones."
-          style={styles.sectionHeader}
-        />
+        <View style={styles.impactBanner}>
+          <View style={styles.bannerHeader}>
+            <MaterialCommunityIcons name="trophy" size={38} color={colors.onPrimary} />
+            <Text style={styles.bannerTitle}>Donation Impact</Text>
+          </View>
+          <View style={styles.statsGrid}>
+            <StatBlock value={String(totalAchievements)} label="Achievements" styles={styles} />
+            <StatBlock value={String(patientsHelped)} label="Patients Helped" styles={styles} />
+          </View>
+          <MaterialCommunityIcons name="trophy" size={128} color={colors.bannerWatermark} style={styles.bannerWatermark} />
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Milestones</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.milestonesRow}>
+            <MilestoneBadge icon="certificate" label="First Donation" locked={certificateRows.length < 1} colors={colors} styles={styles} />
+            <MilestoneBadge icon="star-four-points" label="5 Donations" locked={certificateRows.length < 5} colors={colors} styles={styles} />
+            <MilestoneBadge icon="trophy-award" label="10 Donations" locked={certificateRows.length < 10} colors={colors} styles={styles} />
+          </ScrollView>
+        </View>
+
+        <View style={styles.section}>
+          <View style={styles.sectionHeadingRow}>
+            <Text style={styles.sectionTitle}>Certificates</Text>
+            <Pressable style={styles.sortPill} onPress={toggleSort}>
+              <Text style={styles.sortText}>{activeSortLabel}</Text>
+              <MaterialCommunityIcons name="chevron-down" size={18} color={colors.onSurfaceVariant} />
+            </Pressable>
+          </View>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
+            {FILTER_OPTIONS.map((option) => (
+              <Pressable
+                key={option.key}
+                style={[styles.filterPill, activeFilter === option.key ? styles.filterPillActive : null]}
+                onPress={() => setActiveFilter(option.key)}
+              >
+                <Text style={[styles.filterText, activeFilter === option.key ? styles.filterTextActive : null]}>
+                  {option.label}
+                </Text>
+              </Pressable>
+            ))}
+          </ScrollView>
+        </View>
 
         {state.isLoading ? (
           <View style={styles.stateWrap}>
-            <ActivityIndicator color={theme.colors.brandPrimary} />
+            <ActivityIndicator color={colors.primary} />
             <Text style={styles.stateText}>Loading donor achievements...</Text>
           </View>
         ) : state.error ? (
@@ -489,15 +655,15 @@ export default function DonorAchievementsScreen() {
             <Text style={styles.stateText}>{state.error}</Text>
           </View>
         ) : certificateRows.length ? (
-          <View style={styles.list}>
+          <View style={styles.cardsGrid}>
             {certificateRows.map((item) => (
               <CertificateRow
                 key={String(item.id)}
                 item={item}
-                canDownload={isSharingAvailable}
                 onView={setSelectedCertificate}
-                onDownload={handleDownloadCertificate}
                 onOpenStoredFile={handleOpenStoredCertificate}
+                colors={colors}
+                styles={styles}
               />
             ))}
           </View>
@@ -506,285 +672,708 @@ export default function DonorAchievementsScreen() {
             <View style={styles.emptyIconWrap}>
               <AppIcon name="sparkle" state="muted" />
             </View>
-            <Text style={styles.emptyTitle}>No achievements yet</Text>
-            <Text style={styles.emptyMessage}>Your certificates will appear here once available.</Text>
+            <Text style={styles.emptyTitle}>{state.certificates.length ? 'No certificates in this filter' : 'No achievements yet'}</Text>
+            <Text style={styles.emptyMessage}>
+              {state.certificates.length ? 'Change the filter to see other certificate records.' : 'Your certificates will appear here once available.'}
+            </Text>
           </View>
         )}
-      </AppCard>
+      </View>
 
-      <CertificatePreviewModal
+      <CertificateDetailModal
         certificate={selectedCertificate}
         visible={Boolean(selectedCertificate)}
-        canDownload={isSharingAvailable && !isDownloading}
-        isDownloading={isDownloading}
+        isBusy={isBusy}
+        colors={colors}
+        styles={styles}
         onClose={() => setSelectedCertificate(null)}
-        onDownload={handleDownloadCertificate}
+        onPrint={handlePrintCertificate}
+        onSharePdf={handleSharePdf}
       />
     </DashboardLayout>
   );
 }
 
-const styles = StyleSheet.create({
-  backRow: {
+function StatBlock({ value, label, styles }) {
+  return (
+    <View style={styles.statBlock}>
+      <Text style={styles.statValue}>{value}</Text>
+      <Text style={styles.statLabel}>{label}</Text>
+    </View>
+  );
+}
+
+const makeStyles = (colors) => StyleSheet.create({
+  screen: {
+    gap: 24,
+    paddingBottom: 24,
+  },
+  topBar: {
+    minHeight: 56,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: theme.spacing.xs,
-    marginBottom: theme.spacing.md,
+    justifyContent: 'space-between',
   },
-  backText: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    color: theme.colors.textSecondary,
-  },
-  sectionHeader: {
-    marginBottom: theme.spacing.md,
-  },
-  list: {
-    gap: theme.spacing.md,
-  },
-  certificateHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.spacing.md,
-    marginBottom: theme.spacing.md,
-  },
-  certificateIconWrap: {
-    width: 42,
-    height: 42,
-    borderRadius: theme.radius.full,
+  topBarButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: theme.colors.brandPrimaryMuted,
+    backgroundColor: colors.surfaceLow,
   },
-  certificateCopy: {
+  screenTitle: {
+    flex: 1,
+    textAlign: 'center',
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: 24,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  impactBanner: {
+    position: 'relative',
+    overflow: 'hidden',
+    gap: 16,
+    padding: 24,
+    borderRadius: 12,
+    backgroundColor: colors.primaryContainer,
+    shadowColor: colors.shadow,
+    shadowOpacity: 1,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 4,
+  },
+  bannerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  bannerTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 20,
+    fontWeight: '700',
+    color: colors.onPrimary,
+  },
+  bannerWatermark: {
+    position: 'absolute',
+    right: -24,
+    bottom: -32,
+  },
+  statsGrid: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  statBlock: {
     flex: 1,
     gap: 2,
   },
-  certificateTitle: {
+  statValue: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: 30,
+    lineHeight: 38,
+    fontWeight: '700',
+    color: colors.onPrimary,
+  },
+  statLabel: {
     fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.body,
-    fontWeight: theme.typography.weights.semibold,
-    color: theme.colors.textPrimary,
+    fontSize: 13,
+    lineHeight: 18,
+    color: colors.statLabel,
   },
-  certificateMeta: {
+  section: {
+    gap: 8,
+  },
+  sectionTitle: {
     fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    color: theme.colors.textSecondary,
+    fontSize: 20,
+    lineHeight: 28,
+    fontWeight: '700',
+    color: colors.onSurface,
   },
-  detailList: {
-    gap: theme.spacing.sm,
+  milestonesRow: {
+    gap: 16,
+    paddingVertical: 6,
   },
-  detailRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: theme.spacing.md,
+  milestoneItem: {
+    width: 86,
+    alignItems: 'center',
+    gap: 8,
   },
-  detailLabel: {
-    flex: 1,
+  lockedMilestone: {
+    opacity: 0.55,
+  },
+  milestoneCircle: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surfaceHigh,
+    shadowColor: colors.shadow,
+    shadowOpacity: 1,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 3,
+  },
+  milestoneCircleLocked: {
+    backgroundColor: colors.surface,
+    borderWidth: 2,
+    borderStyle: 'dashed',
+    borderColor: colors.outlineVariant,
+    shadowOpacity: 0,
+    elevation: 0,
+  },
+  milestoneLabel: {
+    textAlign: 'center',
     fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.caption,
-    fontWeight: theme.typography.weights.semibold,
-    color: theme.colors.textSecondary,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '700',
     textTransform: 'uppercase',
-    letterSpacing: 0.3,
+    color: colors.onSurfaceVariant,
   },
-  detailValue: {
-    flex: 1,
-    textAlign: 'right',
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    color: theme.colors.textPrimary,
+  lockedText: {
+    color: colors.outline,
   },
-  certificateRemarks: {
-    marginTop: theme.spacing.md,
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
-    color: theme.colors.textSecondary,
-  },
-  missingNameText: {
-    marginTop: theme.spacing.md,
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    color: theme.colors.textSecondary,
-  },
-  actionRow: {
-    marginTop: theme.spacing.md,
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: theme.spacing.sm,
-  },
-  linkRow: {
-    marginTop: theme.spacing.sm,
+  sectionHeadingRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: 12,
   },
-  linkText: {
+  sortPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.outlineVariant,
+    backgroundColor: colors.surface,
+  },
+  sortText: {
     fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    color: theme.colors.brandPrimary,
+    fontSize: 13,
+    color: colors.onSurface,
+  },
+  filterRow: {
+    gap: 8,
+    paddingVertical: 4,
+  },
+  filterPill: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.outlineVariant,
+    backgroundColor: colors.surfaceLow,
+  },
+  filterPillActive: {
+    backgroundColor: colors.primaryContainer,
+    borderColor: colors.primaryContainer,
+  },
+  filterText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    color: colors.onSurfaceVariant,
+  },
+  filterTextActive: {
+    color: colors.onPrimary,
+  },
+  cardsGrid: {
+    gap: 16,
+  },
+  certificateCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 16,
+    padding: 16,
+    borderRadius: 12,
+    backgroundColor: colors.surface,
+    shadowColor: colors.shadow,
+    shadowOpacity: 1,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 7 },
+    elevation: 4,
+  },
+  certificateThumb: {
+    width: 92,
+    height: 124,
+    flexShrink: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.outlineVariant,
+    backgroundColor: colors.surfaceLow,
+  },
+  thumbLine: {
+    width: '100%',
+    height: 4,
+    borderRadius: 2,
+    marginTop: 7,
+    backgroundColor: colors.outlineVariant,
+  },
+  thumbLineShort: {
+    width: '74%',
+    marginTop: 5,
+  },
+  thumbMedal: {
+    position: 'absolute',
+    right: 8,
+    bottom: 8,
+  },
+  cardDetails: {
+    flex: 1,
+    gap: 10,
+  },
+  cardTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 8,
+  },
+  verifiedPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: colors.successBg,
+  },
+  verifiedText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 11,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    color: colors.successText,
+  },
+  cardDate: {
+    flexShrink: 1,
+    textAlign: 'right',
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 13,
+    color: colors.onSurfaceVariant,
+  },
+  cardTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 18,
+    lineHeight: 25,
+    fontWeight: '700',
+    color: colors.onSurface,
+  },
+  cardSubtitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 14,
+    lineHeight: 20,
+    color: colors.secondary,
+  },
+  cardMetaRow: {
+    flexDirection: 'row',
+    gap: 16,
+    paddingTop: 9,
+    borderTopWidth: 1,
+    borderTopColor: colors.surfaceHighest,
+  },
+  cardMetaItem: {
+    gap: 2,
+  },
+  cardMetaWide: {
+    flex: 1,
+  },
+  cardMetaLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 11,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    color: colors.outline,
+  },
+  cardMetaValue: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.onSurface,
+  },
+  cardActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  viewLink: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  openStoredLink: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 13,
+    color: colors.secondary,
   },
   stateWrap: {
     alignItems: 'center',
     justifyContent: 'center',
-    gap: theme.spacing.sm,
-    paddingVertical: theme.spacing.xl,
+    gap: 8,
+    paddingVertical: 48,
   },
   stateText: {
     textAlign: 'center',
     fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    color: theme.colors.textSecondary,
+    fontSize: 14,
+    color: colors.secondary,
   },
   emptyState: {
     alignItems: 'center',
     justifyContent: 'center',
-    gap: theme.spacing.xs,
-    paddingVertical: theme.spacing.xxl,
+    gap: 8,
+    paddingVertical: 56,
   },
   emptyIconWrap: {
-    width: 46,
-    height: 46,
-    borderRadius: theme.radius.full,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: theme.colors.surfaceSoft,
+    backgroundColor: colors.surfaceLow,
   },
   emptyTitle: {
     fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.body,
-    fontWeight: theme.typography.weights.semibold,
-    color: theme.colors.textPrimary,
+    fontSize: 16,
+    fontWeight: '700',
+    color: colors.onSurface,
   },
   emptyMessage: {
     textAlign: 'center',
     fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
-    color: theme.colors.textSecondary,
+    fontSize: 14,
+    lineHeight: 20,
+    color: colors.secondary,
   },
-  modalOverlay: {
+  detailScreen: {
     flex: 1,
-    justifyContent: 'center',
-    padding: theme.spacing.lg,
-    backgroundColor: theme.colors.overlay,
+    backgroundColor: colors.background,
   },
-  modalBackdrop: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  modalCard: {
-    width: '100%',
-    maxWidth: 520,
-    alignSelf: 'center',
-    maxHeight: '88%',
-  },
-  modalHeader: {
+  detailHeader: {
+    height: 64,
+    paddingHorizontal: 20,
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     justifyContent: 'space-between',
-    gap: theme.spacing.sm,
-    marginBottom: theme.spacing.md,
+    backgroundColor: colors.headerSurface,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.surfaceHighest,
   },
-  modalHeaderCopy: {
-    flex: 1,
-    gap: 2,
+  headerIconButton: {
+    width: 42,
+    height: 42,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 21,
   },
-  modalTitle: {
+  detailHeaderTitle: {
     fontFamily: theme.typography.fontFamilyDisplay,
-    fontSize: theme.typography.semantic.titleSm,
-    color: theme.colors.textPrimary,
+    fontSize: 24,
+    fontWeight: '700',
+    color: colors.primary,
   },
-  modalSubtitle: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    color: theme.colors.textSecondary,
+  detailContent: {
+    gap: 24,
+    padding: 20,
+    paddingBottom: 40,
   },
-  closeButton: {
-    width: 36,
-    height: 36,
-    borderRadius: theme.radius.full,
+  canvasWrap: {
     alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: theme.colors.surfaceSoft,
   },
-  modalScroll: {
-    flexGrow: 0,
-  },
-  modalScrollContent: {
-    gap: theme.spacing.md,
-    paddingBottom: theme.spacing.sm,
-  },
-  previewWrap: {
-    borderRadius: theme.radius.xl,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: theme.colors.borderSubtle,
-    backgroundColor: theme.colors.surfaceSoft,
-  },
-  certificatePreview: {
+  certificateCanvas: {
+    position: 'relative',
     width: '100%',
-    aspectRatio: 1.41,
-    justifyContent: 'flex-start',
-  },
-  certificatePreviewImage: {
-    resizeMode: 'cover',
-  },
-  previewMetaCard: {
-    position: 'absolute',
-    top: '18%',
-    right: '24%',
-    width: '21%',
-    paddingHorizontal: theme.spacing.sm,
-    paddingVertical: theme.spacing.sm,
-    borderRadius: theme.radius.lg,
-    backgroundColor: 'rgba(255,255,255,0.92)',
-  },
-  previewMetaLabel: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: 10,
-    fontWeight: theme.typography.weights.semibold,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    color: '#5b7fc7',
-    marginBottom: 2,
-  },
-  previewMetaValue: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: 12,
-    color: '#253041',
-    marginBottom: theme.spacing.xs,
-    lineHeight: 14,
-  },
-  previewMetaValueLast: {
-    marginBottom: 0,
-  },
-  previewRecipientBlock: {
-    position: 'absolute',
-    top: '36%',
-    left: '8%',
-    width: '58%',
-    minHeight: '14%',
+    maxWidth: 800,
+    aspectRatio: 1.414,
+    overflow: 'hidden',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: theme.spacing.sm,
+    padding: 24,
+    borderRadius: 12,
+    borderWidth: 3,
+    borderColor: colors.gold,
+    backgroundColor: colors.surface,
   },
-  previewRecipientName: {
+  certificatePattern: {
+    ...StyleSheet.absoluteFillObject,
+    opacity: 0.08,
+    backgroundColor: colors.surfaceLow,
+  },
+  canvasHeader: {
+    width: '100%',
+    alignItems: 'center',
+    zIndex: 1,
+  },
+  canvasBrand: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: 30,
+    lineHeight: 38,
+    fontWeight: '800',
+    color: colors.primary,
+  },
+  canvasTitle: {
+    marginTop: 10,
     textAlign: 'center',
     fontFamily: theme.typography.fontFamilyDisplay,
     fontSize: 24,
-    color: '#1d1d1f',
-    letterSpacing: 0.2,
+    lineHeight: 31,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 2,
+    color: colors.onSurface,
   },
-  detailCard: {
-    gap: theme.spacing.sm,
-    padding: theme.spacing.md,
-    borderRadius: theme.radius.lg,
-    backgroundColor: theme.colors.surfaceSoft,
+  goldRule: {
+    width: 96,
+    height: 4,
+    marginTop: 12,
+    borderRadius: 2,
+    backgroundColor: colors.gold,
+  },
+  canvasBody: {
+    zIndex: 1,
+    width: '100%',
+    alignItems: 'center',
+    gap: 10,
+  },
+  canvasIntro: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 15,
+    fontStyle: 'italic',
+    color: colors.secondary,
+  },
+  canvasName: {
+    width: '100%',
+    textAlign: 'center',
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: 42,
+    lineHeight: 48,
+    fontWeight: '800',
+    color: colors.primary,
+  },
+  canvasCopy: {
+    maxWidth: 520,
+    textAlign: 'center',
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 13,
+    lineHeight: 20,
+    color: colors.secondary,
+  },
+  canvasFooter: {
+    zIndex: 1,
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+  },
+  signatureBlock: {
+    alignItems: 'center',
+  },
+  signatureLine: {
+    width: 128,
+    height: 1,
+    marginBottom: 8,
+    backgroundColor: colors.outline,
+  },
+  signatureLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 10,
+    lineHeight: 14,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    color: colors.secondary,
+  },
+  seal: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  qrBox: {
+    width: 58,
+    height: 58,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surfaceHigh,
+  },
+  badgeRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  infoBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 999,
+    backgroundColor: colors.surfaceLow,
+  },
+  infoBadgeText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.onSurface,
+  },
+  impactCard: {
+    flexDirection: 'row',
+    gap: 14,
+    padding: 20,
+    borderRadius: 12,
+    backgroundColor: colors.surfaceHigh,
+  },
+  impactIconWrap: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.impactIconSurface,
+  },
+  impactCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  impactTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 18,
+    fontWeight: '700',
+    color: colors.onSurface,
+  },
+  impactText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 14,
+    lineHeight: 21,
+    color: colors.onSurfaceVariant,
+  },
+  detailGrid: {
+    gap: 16,
+  },
+  infoPanel: {
+    gap: 14,
+    padding: 20,
+    borderRadius: 12,
+    backgroundColor: colors.surface,
+    shadowColor: colors.shadow,
+    shadowOpacity: 1,
+    shadowRadius: 15,
+    shadowOffset: { width: 0, height: 7 },
+    elevation: 3,
+  },
+  actionsPanel: {
+    gap: 12,
+    padding: 20,
+    borderRadius: 12,
+    backgroundColor: colors.surface,
+    shadowColor: colors.shadow,
+    shadowOpacity: 1,
+    shadowRadius: 15,
+    shadowOffset: { width: 0, height: 7 },
+    elevation: 3,
+  },
+  panelTitle: {
+    paddingBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.outlineVariant,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 18,
+    fontWeight: '700',
+    color: colors.onSurface,
+  },
+  centerText: {
+    textAlign: 'center',
+  },
+  infoPair: {
+    gap: 5,
+  },
+  infoLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 11,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    color: colors.secondary,
+  },
+  infoValue: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 15,
+    color: colors.onSurface,
+  },
+  conditionChip: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: colors.surfaceHigh,
+  },
+  conditionDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: colors.primary,
+  },
+  primaryAction: {
+    minHeight: 48,
+    borderRadius: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: colors.primary,
+  },
+  primaryActionText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 13,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    color: colors.onPrimary,
+  },
+  secondaryAction: {
+    minHeight: 48,
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: theme.colors.borderSubtle,
+    borderColor: colors.primary,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
   },
-  modalActions: {
-    marginTop: theme.spacing.xs,
+  disabledAction: {
+    opacity: 0.48,
+  },
+  secondaryActionText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 13,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    color: colors.primary,
+  },
+  socialRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 14,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: colors.outlineVariant,
+  },
+  socialButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surfaceLow,
   },
 });

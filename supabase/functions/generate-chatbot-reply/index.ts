@@ -52,12 +52,9 @@ const instructions = [
   'Keep replies concise — 2-4 sentences unless the user explicitly asks for more detail.',
   'Answer only based on the provided FAQs, user context, and recent conversation.',
   'Do not invent policies, statuses, contact details, medical claims, or database values not in the provided context.',
-  'If the user asks about hair care products or what to use for their hair condition: suggest up to 3 real hair care products available in the Philippines (at Watsons, SM, Robinsons, Lazada.ph, or Shopee.ph).',
-  'For product suggestions, include: a real product name available in PH (e.g. "Pantene Pro-V Moisture Boost Shampoo"), a short one-sentence description of what it does, where to buy (e.g. "Watsons, SM, Shopee.ph"), typical price range in PHP (e.g. "₱180–₱350"), and a Shopee.ph search URL built as https://shopee.ph/search?keyword=<url-encoded-product-name>.',
-  'Choose products appropriate for the detected hair condition from the user context (e.g. moisturizing products for dry hair, strengthening products for damaged hair, clarifying for oily hair).',
-  'For non-product queries, return an empty products array.',
   'If the user asks about salon locations, nearby drop-offs, or how to get somewhere: include helpful Google Maps search links in map_links (e.g. https://www.google.com/maps/search/?api=1&query=hair+salon+near+manila). For all other queries, return an empty map_links array.',
   'If the answer is not supported by the provided context, say warmly that you do not have that information yet and suggest contacting support.',
+  'Do not mention brand names, company names, store names, marketplaces, shopping links, prices, or advertised product names. For hair-care suggestions, mention only generic product types or ingredients such as moisturizing conditioner, clarifying shampoo, anti-dandruff shampoo, anti-frizz serum, deep-conditioning mask, glycerin, aloe, panthenol, protein, argan oil, coconut oil, or shea butter. Always return an empty products array.',
   'Return JSON only per the provided schema.',
 ].join(' ');
 
@@ -126,7 +123,13 @@ Deno.serve(async (request) => {
       mapLinkCount: Array.isArray(result?.reply?.map_links) ? result.reply.map_links.length : 0,
     });
 
-    return createJsonResponse(result);
+    return createJsonResponse({
+      ...result,
+      reply: {
+        ...(result?.reply || {}),
+        products: [],
+      },
+    });
   } catch (error) {
     console.error('[generate-chatbot-reply]', error);
 

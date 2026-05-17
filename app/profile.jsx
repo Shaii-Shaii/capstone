@@ -33,8 +33,11 @@ import {
 } from '../src/constants/profile';
 import { changePasswordSchema, profileUpdateSchema } from '../src/features/profile/profile.schema';
 import { donorDashboardNavItems, patientDashboardNavItems } from '../src/constants/dashboard';
+import { fetchOrganizationMembershipsByUserId } from '../src/features/donorHome.api';
+import { fetchDonationCertificatesByUserId, fetchHairSubmissionsByUserId } from '../src/features/hairSubmission.api';
 import {
   fetchActiveGuardianConsent,
+  fetchActiveLegalDocument,
   getDonorProfileBadge,
   GUARDIAN_CONSENT_TEXT,
   saveGuardianConsent,
@@ -43,6 +46,7 @@ import {
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 const MINIMUM_BIRTHDATE = new Date(1900, 0, 1);
 const REQUIRED_PROFILE_FIELDS = new Set(['firstName', 'lastName', 'birthdate', 'gender', 'phone']);
+const APP_VERSION_LABEL = 'Donivra v1.0.0';
 
 const getMaximumBirthdate = () => {
   const today = new Date();
@@ -110,6 +114,52 @@ function ActionRow({ item, onPress, roles = null }) {
   );
 }
 
+function ProfileMenuRow({ icon, title, description, badge, danger = false, onPress }) {
+  const scale = useSharedValue(1);
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+  }));
+
+  return (
+    <AnimatedPressable
+      onPress={onPress}
+      onPressIn={() => {
+        scale.value = withSpring(0.985, theme.motion.spring);
+      }}
+      onPressOut={() => {
+        scale.value = withSpring(1, theme.motion.spring);
+      }}
+      style={[styles.profileMenuRow, animatedStyle]}
+    >
+      <View style={[styles.profileMenuIconWrap, danger ? styles.profileMenuIconDanger : null]}>
+        <AppIcon name={icon} size="md" color={danger ? theme.colors.textError : theme.colors.brandPrimary} />
+      </View>
+      <View style={styles.profileMenuCopy}>
+        <Text style={[styles.profileMenuTitle, danger ? styles.profileMenuTitleDanger : null]}>{title}</Text>
+        {description ? <Text style={styles.profileMenuDescription}>{description}</Text> : null}
+      </View>
+      {badge != null ? (
+        <View style={styles.profileMenuBadge}>
+          <Text style={styles.profileMenuBadgeText}>{badge}</Text>
+        </View>
+      ) : null}
+      <AppIcon name="chevronRight" state="muted" />
+    </AnimatedPressable>
+  );
+}
+
+function ProfileMoreRow({ title, onPress }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [styles.profileMoreRow, { opacity: pressed ? 0.72 : 1 }]}
+    >
+      <Text style={styles.profileMoreText}>{title}</Text>
+      <AppIcon name="chevronRight" size="sm" state="muted" />
+    </Pressable>
+  );
+}
+
 export default function ProfileScreen() {
   const router = useRouter();
   const { height: viewportHeight } = useWindowDimensions();
@@ -131,6 +181,7 @@ export default function ProfileScreen() {
     saveSharedProfile,
     uploadAvatar,
     changePassword,
+    logout,
   } = useProfileActions();
   const normalizedRole = String(profile?.role || '').trim().toLowerCase();
   const resolvedRole = normalizedRole === 'patient' ? 'patient' : 'donor';
@@ -144,17 +195,22 @@ export default function ProfileScreen() {
   const [guardianConsent, setGuardianConsent] = useState(null);
   const [isGuardianConsentModalOpen, setIsGuardianConsentModalOpen] = useState(false);
   const [isSavingGuardianConsent, setIsSavingGuardianConsent] = useState(false);
+  const [guardianConsentDocument, setGuardianConsentDocument] = useState(null);
+  const [guardianConsentDocumentError, setGuardianConsentDocumentError] = useState('');
+  const [isLoadingGuardianConsentDocument, setIsLoadingGuardianConsentDocument] = useState(false);
   const [guardianConsentForm, setGuardianConsentForm] = useState({
     guardianFullName: '',
     guardianRelationship: '',
     guardianContactNumber: '',
     guardianEmail: '',
-    minorDonationConsent: false,
-    aiImageProcessingConsent: false,
-    publicPostingAllowed: false,
-    signature: '',
+    guardianAgreementAccepted: false,
   });
   const [guardianConsentErrors, setGuardianConsentErrors] = useState({});
+  const [donorStats, setDonorStats] = useState({
+    donations: 0,
+    organizations: 0,
+    achievements: 0,
+  });
   const successTimerRef = useRef(null);
 
   const profileForm = useForm({
@@ -202,6 +258,47 @@ export default function ProfileScreen() {
     };
   }, [profile?.user_id, role]);
 
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadDonorStats = async () => {
+      if (role !== 'donor' || !user?.id) {
+        if (isMounted) {
+          setDonorStats({ donations: 0, organizations: 0, achievements: 0 });
+        }
+        return;
+      }
+
+      const [submissionsResult, membershipsResult, certificatesResult] = await Promise.all([
+        fetchHairSubmissionsByUserId(user.id, 100),
+        fetchOrganizationMembershipsByUserId(profile?.user_id || null),
+        fetchDonationCertificatesByUserId(user.id, 100),
+      ]);
+
+      if (!isMounted) return;
+
+      const activeMemberships = (membershipsResult.data || []).filter((membership) => {
+        const status = String(membership?.status || '').trim().toLowerCase();
+        return status === 'active' || membership?.is_active;
+      });
+
+      setDonorStats({
+        donations: (submissionsResult.data || []).filter((submission) => {
+          const status = String(submission?.status || '').trim().toLowerCase();
+          return status && !['cancelled', 'canceled', 'rejected'].includes(status);
+        }).length,
+        organizations: activeMemberships.length,
+        achievements: (certificatesResult.data || []).length,
+      });
+    };
+
+    loadDonorStats();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [profile?.user_id, role, user?.id]);
+
   useEffect(() => () => {
     if (successTimerRef.current) {
       clearTimeout(successTimerRef.current);
@@ -220,6 +317,9 @@ export default function ProfileScreen() {
   const avatarUri = profile?.avatar_url || profile?.photo_path || patientProfile?.patient_picture || '';
   const avatarInitials = `${firstName?.[0] || ''}${lastName?.[0] || ''}`.trim();
   const fullName = [firstName, middleName, lastName, suffix].filter(Boolean).join(' ');
+  const profileLocation = [profile?.city, profile?.province || profile?.region, profile?.country || 'Philippines']
+    .filter(Boolean)
+    .join(', ');
   const donorAgeBadge = useMemo(() => (
     getDonorProfileBadge({ birthdate: profile?.birthdate, guardianConsent })
   ), [guardianConsent, profile?.birthdate]);
@@ -342,37 +442,7 @@ export default function ProfileScreen() {
   ), [guardianConsent, watchedBirthdate]);
   const isMinorProfileDraft = setupDonorAgeBadge && setupDonorAgeBadge.category !== 'Adult';
   const hasActiveGuardianConsent = Boolean(guardianConsent?.guardian_consent_id || guardianConsent?.Guardian_Consent_ID);
-  const editablePreviewRows = useMemo(() => (
-    [
-      fullName ? { key: 'preview_name', label: 'Name', value: fullName } : null,
-      profile?.birthdate ? { key: 'preview_birthdate', label: 'Birthdate', value: profile.birthdate } : null,
-      (profile?.contact_number || profile?.phone)
-        ? { key: 'preview_phone', label: 'Contact Number', value: profile?.contact_number || profile?.phone }
-        : null,
-      [profile?.street, profile?.barangay, profile?.city, profile?.province, profile?.region, profile?.country]
-        .filter(Boolean)
-        .length
-        ? {
-            key: 'preview_address',
-            label: 'Address',
-            value: [profile?.street, profile?.barangay, profile?.city, profile?.province, profile?.region, profile?.country]
-              .filter(Boolean)
-              .join(', '),
-          }
-        : null,
-    ].filter(Boolean)
-  ), [
-    fullName,
-    profile?.birthdate,
-    profile?.contact_number,
-    profile?.phone,
-    profile?.street,
-    profile?.barangay,
-    profile?.city,
-    profile?.province,
-    profile?.region,
-    profile?.country,
-  ]);
+  const guardianConsentText = guardianConsentDocument?.content || guardianConsentDocument?.summary || GUARDIAN_CONSENT_TEXT;
   const donorActionItems = useMemo(() => (
     [
       {
@@ -489,18 +559,11 @@ export default function ProfileScreen() {
     const fullName = guardianConsentForm.guardianFullName.trim();
     const relationship = guardianConsentForm.guardianRelationship.trim();
     const contactNumber = guardianConsentForm.guardianContactNumber.trim();
-    const signature = guardianConsentForm.signature.trim();
 
     if (!fullName) nextErrors.guardianFullName = 'Guardian full name is required.';
     if (!relationship) nextErrors.guardianRelationship = 'Relationship is required.';
     if (!contactNumber) nextErrors.guardianContactNumber = 'Guardian contact number is required.';
-    if (!guardianConsentForm.minorDonationConsent) nextErrors.minorDonationConsent = 'Minor donation consent is required.';
-    if (!guardianConsentForm.aiImageProcessingConsent) nextErrors.aiImageProcessingConsent = 'AI image processing consent is required.';
-    if (!signature) {
-      nextErrors.signature = 'Typed guardian name is required.';
-    } else if (fullName && signature.toLowerCase() !== fullName.toLowerCase()) {
-      nextErrors.signature = 'Signature must match the guardian full name.';
-    }
+    if (!guardianConsentForm.guardianAgreementAccepted) nextErrors.guardianAgreementAccepted = 'Please confirm guardian consent to continue.';
 
     setGuardianConsentErrors(nextErrors);
     return Object.keys(nextErrors).length === 0;
@@ -511,6 +574,23 @@ export default function ProfileScreen() {
     setIsGuardianConsentModalOpen(false);
     setGuardianConsentErrors({});
   }, [isSavingGuardianConsent]);
+
+  const openGuardianConsentModal = useCallback(async () => {
+    setIsGuardianConsentModalOpen(true);
+    if (guardianConsentDocument || isLoadingGuardianConsentDocument) return;
+
+    setGuardianConsentDocumentError('');
+    setIsLoadingGuardianConsentDocument(true);
+    const result = await fetchActiveLegalDocument('Guardian Consent');
+    setIsLoadingGuardianConsentDocument(false);
+
+    if (result.error) {
+      setGuardianConsentDocumentError(result.error.message || 'Guardian consent document could not be loaded.');
+      return;
+    }
+
+    setGuardianConsentDocument(result.data);
+  }, [guardianConsentDocument, isLoadingGuardianConsentDocument]);
 
   const submitGuardianConsent = useCallback(async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -531,7 +611,8 @@ export default function ProfileScreen() {
       guardianRelationship: guardianConsentForm.guardianRelationship,
       guardianContactNumber: guardianConsentForm.guardianContactNumber,
       guardianEmail: guardianConsentForm.guardianEmail,
-      publicPostingAllowed: guardianConsentForm.publicPostingAllowed,
+      publicPostingAllowed: false,
+      consentTextSnapshot: guardianConsentText,
     });
     setIsSavingGuardianConsent(false);
 
@@ -549,14 +630,11 @@ export default function ProfileScreen() {
       guardianRelationship: '',
       guardianContactNumber: '',
       guardianEmail: '',
-      minorDonationConsent: false,
-      aiImageProcessingConsent: false,
-      publicPostingAllowed: false,
-      signature: '',
+      guardianAgreementAccepted: false,
     });
     setIsGuardianConsentModalOpen(false);
     setFloatingFeedback('success', 'Consent Completed', 'Guardian consent is now saved for this donor account.');
-  }, [guardianConsentForm, profile?.user_id, setFloatingFeedback, validateGuardianConsentForm]);
+  }, [guardianConsentForm, guardianConsentText, profile?.user_id, setFloatingFeedback, validateGuardianConsentForm]);
 
   const closeEditModal = useCallback(() => {
     profileForm.reset(defaultValues);
@@ -636,7 +714,7 @@ export default function ProfileScreen() {
         return;
       }
       if (item.key === 'history') {
-        router.navigate('/donor/hair-history');
+        router.navigate('/donor/donation-history');
         return;
       }
       if (item.key === 'password') {
@@ -653,11 +731,27 @@ export default function ProfileScreen() {
       return;
     }
     if (item.key === 'details') {
-      setMode('details');
+      setMode(role === 'donor' ? 'edit' : 'details');
       return;
     }
     setMode(item.key === 'edit' ? 'edit' : 'password');
   };
+
+  const handleMorePress = useCallback((label) => {
+    setFloatingFeedback('info', label, `${label} settings will be available in the next update.`);
+  }, [setFloatingFeedback]);
+
+  const handleLogoutPress = useCallback(async () => {
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    const result = await logout();
+    if (result?.success && !result?.error) {
+      router.replace('/auth/access');
+      return;
+    }
+    if (result?.error) {
+      setFloatingFeedback('error', 'Logout Failed', result.error || 'Unable to log out right now.');
+    }
+  }, [logout, router, setFloatingFeedback]);
 
   const submitProfile = async (values) => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -736,55 +830,59 @@ export default function ProfileScreen() {
   }, [defaultValues, mode, passwordForm, profileForm]);
 
   const renderDonorProfileContent = () => (
-    <View style={[styles.donorProfileShell, { backgroundColor: roles.pageBackground }]}>
-      <View style={[styles.donorProfileHeader, { backgroundColor: roles.heroBackground, borderColor: roles.heroBorder }]}>
-        <View style={styles.donorTopRow}>
-          <View>
-            <Text style={[styles.donorHeaderEyebrow, { color: roles.heroMetaText }]}>{resolvedTheme?.brandName || 'Donivra'}</Text>
-            <Text style={[styles.donorHeaderTitle, { color: roles.heroHeadingText }]}>Profile</Text>
+    <View style={styles.profileMainShell}>
+      <View style={styles.profileTopAppBar}>
+        <Pressable
+          accessibilityLabel="Go to donor home"
+          onPress={() => router.navigate('/donor/home')}
+          style={({ pressed }) => [styles.profileTopIconButton, { opacity: pressed ? 0.72 : 1 }]}
+        >
+          <AppIcon name="menu" size="lg" state="muted" />
+        </Pressable>
+        <Text style={styles.profileBrandTitle}>{resolvedTheme?.brandName || 'Donivra'}</Text>
+        <Pressable
+          accessibilityLabel="Open settings"
+          onPress={() => setMode('password')}
+          style={({ pressed }) => [styles.profileTopIconButton, { opacity: pressed ? 0.72 : 1 }]}
+        >
+          <AppIcon name="settings" size="lg" state="muted" />
+        </Pressable>
+      </View>
+
+      <View style={styles.profileHeroPanel}>
+        <View style={styles.profileHeroDecorOne} />
+        <View style={styles.profileHeroDecorTwo} />
+        <Pressable
+          onPress={handlePhotoPress}
+          disabled={isUploadingAvatar}
+          style={({ pressed }) => [styles.profileHeroPhotoButton, { opacity: pressed ? 0.86 : 1 }]}
+        >
+          <View style={styles.profileHeroPhoto}>
+            {avatarUri ? (
+              <Image source={{ uri: avatarUri }} style={styles.profileHeroAvatarImage} resizeMode="cover" />
+            ) : (
+              <Text style={styles.profileHeroAvatarText}>{(avatarInitials || 'DN').toUpperCase().slice(0, 2)}</Text>
+            )}
           </View>
-          <Pressable
-            onPress={handlePhotoPress}
-            disabled={isUploadingAvatar}
-            style={({ pressed }) => [
-              styles.donorHeaderIconButton,
-              {
-                backgroundColor: roles.headerUtilityBackground,
-                borderColor: roles.heroBorder,
-                opacity: pressed ? 0.82 : 1,
-              },
-            ]}
-          >
-            <AppIcon name="camera" size="sm" color={roles.headerUtilityText} />
-          </Pressable>
-        </View>
+          <View style={styles.profileHeroCameraBadge}>
+            <AppIcon name="camera" size="sm" color={theme.colors.surfaceCard} />
+          </View>
+        </Pressable>
 
-        <View style={styles.donorIdentityBlock}>
-          <Pressable
-            onPress={handlePhotoPress}
-            disabled={isUploadingAvatar}
-            style={({ pressed }) => [styles.donorAvatarButton, { opacity: pressed ? 0.88 : 1 }]}
-          >
-            <View style={[styles.donorProfileAvatar, { borderColor: roles.headerUtilityBackground }]}>
-              {avatarUri ? (
-                <Image source={{ uri: avatarUri }} style={styles.profileHeroAvatarImage} resizeMode="cover" />
-              ) : (
-                <Text style={[styles.profileHeroAvatarText, { color: roles.primaryActionBackground }]}>
-                  {(avatarInitials || 'DN').toUpperCase().slice(0, 2)}
-                </Text>
-              )}
-            </View>
-            <View style={[styles.avatarEditBadge, { backgroundColor: roles.primaryActionBackground }]}>
-              <AppIcon name="camera" size="sm" color={roles.primaryActionText} />
-            </View>
-          </Pressable>
-
-          <Text numberOfLines={2} style={[styles.donorProfileName, { color: roles.heroHeadingText }]}>
+        <View style={styles.profileHeroCopyCentered}>
+          <Text numberOfLines={2} style={styles.profileHeroDisplayName}>
             {fullName || 'Complete your donor profile'}
           </Text>
-          <Text numberOfLines={1} style={[styles.donorProfileMeta, { color: roles.heroBodyText }]}>
-            {profile?.contact_number || profile?.phone || user?.email || 'No contact linked'}
-          </Text>
+          <View style={styles.profileRolePill}>
+            <Text style={styles.profileRolePillText}>{roleLabel}</Text>
+          </View>
+          <Text numberOfLines={1} style={styles.profileHeroEmailText}>{user?.email || 'No email linked'}</Text>
+          {profileLocation ? (
+            <View style={styles.profileLocationRow}>
+              <AppIcon name="location" size="sm" state="muted" />
+              <Text numberOfLines={1} style={styles.profileLocationText}>{profileLocation}</Text>
+            </View>
+          ) : null}
           {donorAgeBadge ? (
             <View
               style={[
@@ -805,56 +903,81 @@ export default function ProfileScreen() {
         </View>
       </View>
 
-      <View
-        style={[
-          styles.donorActionPanel,
-          {
-            backgroundColor: roles.pageBackground,
-            borderColor: roles.defaultCardBorder,
-          },
-        ]}
-      >
-        <View style={styles.donorActionHeader}>
-          <Text style={[styles.donorActionTitle, { color: roles.headingText }]}>Account Overview</Text>
-          <Text style={[styles.donorActionSubtitle, { color: roles.bodyText }]}>Manage profile, achievements, history, and security.</Text>
-        </View>
+      <View style={styles.profileStatsGrid}>
+        {[
+          { key: 'donations', label: 'Donations', value: donorStats.donations },
+          { key: 'organizations', label: 'Organizations', value: donorStats.organizations },
+          { key: 'achievements', label: 'Achievements', value: donorStats.achievements },
+        ].map((item) => (
+          <View key={item.key} style={styles.profileStatTile}>
+            <Text style={styles.profileStatValue}>{item.value}</Text>
+            <Text numberOfLines={1} style={styles.profileStatLabel}>{item.label}</Text>
+          </View>
+        ))}
+      </View>
 
-        <View style={styles.actionList}>
-          {donorActionItems.map((item) => (
-            <ActionRow key={item.key} item={item} onPress={handleActionPress} roles={roles} />
-          ))}
+      <View style={styles.profileSection}>
+        <Text style={styles.profileSectionEyebrow}>Account</Text>
+        <ProfileMenuRow
+          icon="editProfile"
+          title="Edit Profile"
+          description="Update personal information"
+          onPress={() => setMode('edit')}
+        />
+        <ProfileMenuRow
+          icon="role"
+          title="Account Details"
+          description="Manage contact and address"
+          onPress={() => setMode('edit')}
+        />
+        <ProfileMenuRow
+          icon="changePassword"
+          title="Change Password"
+          description="Update your security credentials"
+          onPress={() => setMode('password')}
+        />
+        <ProfileMenuRow
+          icon="updates"
+          title="History"
+          description="View past donations"
+          badge={donorStats.donations}
+          onPress={() => router.navigate('/donor/donation-history')}
+        />
+        <ProfileMenuRow
+          icon="sparkle"
+          title="Achievements"
+          description="Milestones reached"
+          badge={donorStats.achievements}
+          onPress={() => router.navigate('/donor/achievements')}
+        />
+      </View>
+
+      <View style={styles.profileSection}>
+        <Text style={styles.profileSectionEyebrow}>More</Text>
+        <View style={styles.profileMoreCard}>
+          <ProfileMoreRow title="Notifications" onPress={() => router.navigate('/donor/notifications')} />
+          <ProfileMoreRow title="Privacy" onPress={() => handleMorePress('Privacy')} />
+          <ProfileMoreRow title="Help" onPress={() => handleMorePress('Help')} />
+          <ProfileMoreRow title="About" onPress={() => handleMorePress('About')} />
+          <ProfileMoreRow title="Terms" onPress={() => handleMorePress('Terms')} />
         </View>
+      </View>
+
+      <View style={styles.profileLogoutSection}>
+        <AppButton
+          title="Logout"
+          variant="outline"
+          fullWidth
+          onPress={handleLogoutPress}
+          leading={<AppIcon name="signOut" state="danger" />}
+          style={styles.profileLogoutButton}
+          textColorOverride={theme.colors.textError}
+          borderColorOverride={theme.colors.textError}
+        />
+        <Text style={styles.profileVersionText}>{APP_VERSION_LABEL}</Text>
       </View>
     </View>
   );
-
-  const renderConsentCheckbox = (field, label, required = false) => {
-    const checked = Boolean(guardianConsentForm[field]);
-    return (
-      <View style={styles.guardianConsentCheckWrap}>
-        <Pressable
-          onPress={() => updateGuardianConsentField(field, !checked)}
-          style={({ pressed }) => [
-            styles.guardianConsentCheckRow,
-            {
-              opacity: pressed ? 0.78 : 1,
-            },
-          ]}
-        >
-          <View style={[styles.guardianConsentCheckBox, checked ? styles.guardianConsentCheckBoxActive : null]}>
-            {checked ? <AppIcon name="success" size="sm" color={theme.colors.surfaceCard} /> : null}
-          </View>
-          <Text style={styles.guardianConsentCheckLabel}>
-            {label}
-            {required ? <Text style={styles.requiredInline}> *</Text> : null}
-          </Text>
-        </Pressable>
-        {guardianConsentErrors[field] ? (
-          <Text style={styles.guardianConsentError}>{guardianConsentErrors[field]}</Text>
-        ) : null}
-      </View>
-    );
-  };
 
   return (
     <>
@@ -950,7 +1073,7 @@ export default function ProfileScreen() {
         <Modal transparent visible={isPopupVisible} animationType="fade" onRequestClose={handleModalClose}>
           <KeyboardAvoidingView
             style={styles.modalKeyboardWrap}
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           >
             <View style={styles.modalOverlay}>
               <Pressable style={styles.modalBackdrop} onPress={handleModalClose} />
@@ -1042,18 +1165,6 @@ export default function ProfileScreen() {
                       keyboardDismissMode="interactive"
                       nestedScrollEnabled={true}
                     >
-                      <View style={styles.editPreviewCard}>
-                        <Text style={styles.editPreviewTitle}>Current</Text>
-                        <View style={styles.editPreviewList}>
-                          {editablePreviewRows.map((row) => (
-                            <View key={row.key} style={styles.editPreviewRow}>
-                              <Text style={styles.editPreviewLabel}>{row.label}</Text>
-                              <Text style={styles.editPreviewValue}>{row.value}</Text>
-                            </View>
-                          ))}
-                        </View>
-                      </View>
-
                       {profileFieldConfig.map((field) => {
                         if (field.formKey === 'street') {
                           return (
@@ -1128,41 +1239,6 @@ export default function ProfileScreen() {
                                         </View>
                                       </View>
                                     ) : null}
-                                    {isMinorProfileDraft ? (
-                                      <Pressable
-                                        onPress={async () => {
-                                          await Haptics.selectionAsync();
-                                          if (hasActiveGuardianConsent) return;
-                                          setIsGuardianConsentModalOpen(true);
-                                        }}
-                                        style={({ pressed }) => [
-                                          styles.setupConsentPrompt,
-                                          hasActiveGuardianConsent ? styles.setupConsentPromptDone : null,
-                                          { opacity: pressed ? 0.84 : 1 },
-                                        ]}
-                                      >
-                                        <View style={styles.setupConsentPromptIcon}>
-                                          <AppIcon
-                                            name={hasActiveGuardianConsent ? 'success' : 'shield'}
-                                            size="sm"
-                                            color={hasActiveGuardianConsent ? '#1E7A42' : theme.colors.brandPrimary}
-                                          />
-                                        </View>
-                                        <View style={styles.setupConsentPromptCopy}>
-                                          <Text style={styles.setupConsentPromptTitle}>
-                                            {hasActiveGuardianConsent ? 'Guardian consent completed' : 'Complete guardian consent'}
-                                          </Text>
-                                          <Text style={styles.setupConsentPromptText}>
-                                            {hasActiveGuardianConsent
-                                              ? 'This account can continue to donation steps after the profile is saved.'
-                                              : 'Open the consent form for the parent or legal guardian.'}
-                                          </Text>
-                                        </View>
-                                        {!hasActiveGuardianConsent ? (
-                                          <AppIcon name="chevronRight" size="sm" color={theme.colors.brandPrimary} />
-                                        ) : null}
-                                      </Pressable>
-                                    ) : null}
                                   </View>
                                 );
                               }
@@ -1221,6 +1297,42 @@ export default function ProfileScreen() {
                           />
                         );
                       })}
+
+                      {isMinorProfileDraft ? (
+                        <Pressable
+                          onPress={async () => {
+                            await Haptics.selectionAsync();
+                            if (hasActiveGuardianConsent) return;
+                            openGuardianConsentModal();
+                          }}
+                          style={({ pressed }) => [
+                            styles.setupConsentPrompt,
+                            hasActiveGuardianConsent ? styles.setupConsentPromptDone : null,
+                            { opacity: pressed ? 0.84 : 1 },
+                          ]}
+                        >
+                          <View style={styles.setupConsentPromptIcon}>
+                            <AppIcon
+                              name={hasActiveGuardianConsent ? 'success' : 'shield'}
+                              size="sm"
+                              color={hasActiveGuardianConsent ? '#1E7A42' : theme.colors.brandPrimary}
+                            />
+                          </View>
+                          <View style={styles.setupConsentPromptCopy}>
+                            <Text style={styles.setupConsentPromptTitle}>
+                              {hasActiveGuardianConsent ? 'Guardian consent completed' : 'Guardian consent needed'}
+                            </Text>
+                            <Text style={styles.setupConsentPromptText}>
+                              {hasActiveGuardianConsent
+                                ? 'This account can continue to donation steps after the profile is saved.'
+                                : 'Ask a parent or legal guardian to review and complete this before saving.'}
+                            </Text>
+                          </View>
+                          {!hasActiveGuardianConsent ? (
+                            <AppIcon name="chevronRight" size="sm" color={theme.colors.brandPrimary} />
+                          ) : null}
+                        </Pressable>
+                      ) : null}
 
                       <View style={styles.formActions}>
                         <AppButton
@@ -1324,7 +1436,7 @@ export default function ProfileScreen() {
         >
           <KeyboardAvoidingView
             style={styles.modalKeyboardWrap}
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           >
             <View style={styles.modalOverlay}>
               <Pressable style={styles.modalBackdrop} onPress={closeGuardianConsentModal} />
@@ -1362,10 +1474,6 @@ export default function ProfileScreen() {
                   keyboardDismissMode="interactive"
                   nestedScrollEnabled={true}
                 >
-                  <View style={styles.guardianConsentNotice}>
-                    <Text style={styles.guardianConsentNoticeText}>{GUARDIAN_CONSENT_TEXT}</Text>
-                  </View>
-
                   <AppInput
                     label="Guardian Full Name"
                     required
@@ -1404,22 +1512,48 @@ export default function ProfileScreen() {
                     onChangeText={(value) => updateGuardianConsentField('guardianEmail', value)}
                   />
 
-                  <View style={styles.guardianConsentChecks}>
-                    {renderConsentCheckbox('minorDonationConsent', 'I allow this minor donor to participate in Donivra hair donation.', true)}
-                    {renderConsentCheckbox('aiImageProcessingConsent', 'I allow AI-assisted processing of submitted hair images for initial screening.', true)}
-                    {renderConsentCheckbox('publicPostingAllowed', 'I allow public recognition or posting when applicable.', false)}
+                  <View style={styles.guardianConsentNotice}>
+                    <Text style={styles.guardianConsentNoticeTitle}>
+                      {guardianConsentDocument?.title || 'Guardian Consent Agreement'}
+                    </Text>
+                    <Text style={styles.guardianConsentNoticeText}>
+                      {isLoadingGuardianConsentDocument
+                        ? 'Loading guardian consent document...'
+                        : guardianConsentDocumentError || guardianConsentText}
+                    </Text>
                   </View>
 
-                  <AppInput
-                    label="E-signature"
-                    required
-                    placeholder="Type guardian full name"
-                    variant="filled"
-                    value={guardianConsentForm.signature}
-                    onChangeText={(value) => updateGuardianConsentField('signature', value)}
-                    error={guardianConsentErrors.signature}
-                    helperText="The typed name must match the guardian full name."
-                  />
+                  <View style={styles.guardianAgreementBlock}>
+                    <Pressable
+                      accessibilityRole="checkbox"
+                      accessibilityState={{ checked: Boolean(guardianConsentForm.guardianAgreementAccepted), disabled: isSavingGuardianConsent }}
+                      disabled={isSavingGuardianConsent}
+                      onPress={() => updateGuardianConsentField('guardianAgreementAccepted', !guardianConsentForm.guardianAgreementAccepted)}
+                      style={({ pressed }) => [
+                        styles.guardianAgreementRow,
+                        pressed ? styles.pressed : null,
+                      ]}
+                    >
+                      <View
+                        style={[
+                          styles.guardianAgreementCheckbox,
+                          guardianConsentForm.guardianAgreementAccepted ? styles.guardianAgreementCheckboxActive : null,
+                        ]}
+                      >
+                        {guardianConsentForm.guardianAgreementAccepted ? (
+                          <AppIcon name="checkmark" size="xs" state="inverse" />
+                        ) : null}
+                      </View>
+                      <Text style={styles.guardianAgreementText}>
+                        As a guardian, I agree to the{' '}
+                        <Text style={styles.guardianAgreementLink}>Guardian Consent</Text>
+                        {' '}terms and confirm that the information I provided is true.
+                      </Text>
+                    </Pressable>
+                    {guardianConsentErrors.guardianAgreementAccepted ? (
+                      <Text style={styles.guardianConsentError}>{guardianConsentErrors.guardianAgreementAccepted}</Text>
+                    ) : null}
+                  </View>
 
                   <View style={styles.formActions}>
                     <AppButton
@@ -1451,6 +1585,290 @@ export default function ProfileScreen() {
 }
 
 const styles = StyleSheet.create({
+  profileMainShell: {
+    gap: theme.spacing.xl,
+    paddingTop: theme.spacing.sm,
+  },
+  profileTopAppBar: {
+    minHeight: 58,
+    borderRadius: 28,
+    paddingHorizontal: theme.spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: 'rgba(255, 255, 255, 0.86)',
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+    ...theme.shadows.soft,
+  },
+  profileTopIconButton: {
+    width: 44,
+    height: 44,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.surfaceCard,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+  },
+  profileBrandTitle: {
+    flex: 1,
+    textAlign: 'center',
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.titleSm,
+    fontWeight: theme.typography.weights.bold,
+    color: theme.colors.brandPrimary,
+  },
+  profileHeroPanel: {
+    position: 'relative',
+    overflow: 'hidden',
+    borderRadius: 24,
+    alignItems: 'center',
+    paddingHorizontal: theme.spacing.lg,
+    paddingVertical: theme.spacing.xl,
+    backgroundColor: theme.colors.backgroundSecondary,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+    ...theme.shadows.soft,
+  },
+  profileHeroDecorOne: {
+    position: 'absolute',
+    right: -36,
+    top: -42,
+    width: 128,
+    height: 128,
+    borderRadius: 64,
+    backgroundColor: 'rgba(104, 26, 46, 0.08)',
+  },
+  profileHeroDecorTwo: {
+    position: 'absolute',
+    left: -34,
+    bottom: -48,
+    width: 128,
+    height: 128,
+    borderRadius: 64,
+    backgroundColor: 'rgba(104, 26, 46, 0.12)',
+  },
+  profileHeroPhotoButton: {
+    position: 'relative',
+    marginBottom: theme.spacing.md,
+  },
+  profileHeroPhoto: {
+    width: 96,
+    height: 96,
+    borderRadius: theme.radius.full,
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.surfaceCard,
+    borderWidth: 4,
+    borderColor: theme.colors.surfaceCard,
+  },
+  profileHeroCameraBadge: {
+    position: 'absolute',
+    right: 2,
+    bottom: 2,
+    width: 32,
+    height: 32,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.brandPrimary,
+    borderWidth: 2,
+    borderColor: theme.colors.surfaceCard,
+  },
+  profileHeroCopyCentered: {
+    alignItems: 'center',
+    gap: theme.spacing.xs,
+    width: '100%',
+  },
+  profileHeroDisplayName: {
+    maxWidth: '94%',
+    textAlign: 'center',
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodyLg,
+    lineHeight: theme.typography.semantic.bodyLg * theme.typography.lineHeights.snug,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textPrimary,
+  },
+  profileRolePill: {
+    borderRadius: theme.radius.full,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: 7,
+    backgroundColor: theme.colors.brandPrimary,
+  },
+  profileRolePillText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.bold,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    color: theme.colors.textOnBrand,
+  },
+  profileHeroEmailText: {
+    maxWidth: '100%',
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    color: theme.colors.textSecondary,
+    textAlign: 'center',
+  },
+  profileLocationRow: {
+    maxWidth: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+  },
+  profileLocationText: {
+    flexShrink: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    color: theme.colors.textSecondary,
+  },
+  profileStatsGrid: {
+    flexDirection: 'row',
+    gap: theme.spacing.sm,
+  },
+  profileStatTile: {
+    flex: 1,
+    minHeight: 96,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: theme.spacing.md,
+    backgroundColor: theme.colors.surfaceCard,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+    ...theme.shadows.soft,
+  },
+  profileStatValue: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.titleMd,
+    fontWeight: theme.typography.weights.bold,
+    color: theme.colors.brandPrimary,
+  },
+  profileStatLabel: {
+    marginTop: 2,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    fontWeight: theme.typography.weights.semibold,
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+    color: theme.colors.textSecondary,
+  },
+  profileSection: {
+    gap: theme.spacing.sm,
+  },
+  profileSectionEyebrow: {
+    paddingHorizontal: theme.spacing.xs,
+    marginBottom: 2,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.bold,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    color: theme.colors.textSecondary,
+  },
+  profileMenuRow: {
+    minHeight: 78,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.md,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    borderRadius: 18,
+    backgroundColor: theme.colors.surfaceCard,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+    ...theme.shadows.soft,
+  },
+  profileMenuIconWrap: {
+    width: 42,
+    height: 42,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.surfaceSoft,
+  },
+  profileMenuIconDanger: {
+    backgroundColor: '#FBE8EC',
+  },
+  profileMenuCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  profileMenuTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textPrimary,
+  },
+  profileMenuTitleDanger: {
+    color: theme.colors.textError,
+  },
+  profileMenuDescription: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.snug,
+    color: theme.colors.textSecondary,
+  },
+  profileMenuBadge: {
+    minWidth: 26,
+    height: 24,
+    paddingHorizontal: 8,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.brandPrimary,
+  },
+  profileMenuBadgeText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    fontWeight: theme.typography.weights.bold,
+    color: theme.colors.textOnBrand,
+  },
+  profileMoreCard: {
+    overflow: 'hidden',
+    borderRadius: 18,
+    paddingVertical: theme.spacing.xs,
+    backgroundColor: theme.colors.surfaceCard,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+    ...theme.shadows.soft,
+  },
+  profileMoreRow: {
+    minHeight: 50,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: theme.spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.colors.borderSubtle,
+  },
+  profileMoreText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    color: theme.colors.textSecondary,
+  },
+  profileLogoutSection: {
+    alignItems: 'center',
+    gap: theme.spacing.md,
+    paddingTop: theme.spacing.sm,
+    paddingBottom: theme.spacing.lg,
+  },
+  profileLogoutButton: {
+    borderRadius: 14,
+    backgroundColor: theme.colors.surfaceCard,
+  },
+  profileVersionText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.semibold,
+    letterSpacing: 0.4,
+    color: theme.colors.textMuted,
+  },
   donorProfileShell: {
     overflow: 'hidden',
     borderRadius: 30,
@@ -2006,7 +2424,7 @@ const styles = StyleSheet.create({
     minHeight: 0,
   },
   modalBodyContent: {
-    paddingBottom: theme.spacing.xl,
+    paddingBottom: theme.spacing.giant,
   },
   guardianConsentModalCard: {
     width: '100%',
@@ -2068,6 +2486,13 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.surfaceSoft,
     borderWidth: 1,
     borderColor: theme.colors.borderSubtle,
+    gap: theme.spacing.xs,
+  },
+  guardianConsentNoticeTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    fontWeight: theme.typography.weights.bold,
+    color: theme.colors.textPrimary,
   },
   guardianConsentNoticeText: {
     fontFamily: theme.typography.fontFamily,
@@ -2075,56 +2500,47 @@ const styles = StyleSheet.create({
     lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
     color: theme.colors.textSecondary,
   },
-  guardianConsentChecks: {
-    gap: theme.spacing.sm,
+  guardianAgreementBlock: {
+    gap: 4,
     marginBottom: theme.spacing.sm,
   },
-  guardianConsentCheckWrap: {
-    gap: 4,
-  },
-  guardianConsentCheckRow: {
+  guardianAgreementRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: theme.spacing.sm,
-    minHeight: 48,
-    borderRadius: 18,
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.sm,
-    backgroundColor: theme.colors.surfaceSoft,
-    borderWidth: 1,
-    borderColor: theme.colors.borderSubtle,
+    gap: 10,
   },
-  guardianConsentCheckBox: {
-    width: 24,
-    height: 24,
-    borderRadius: 8,
+  guardianAgreementCheckbox: {
+    width: 18,
+    height: 18,
+    borderRadius: 4,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
+    borderWidth: 1.5,
     borderColor: theme.colors.borderSubtle,
     backgroundColor: theme.colors.surfaceCard,
     marginTop: 1,
   },
-  guardianConsentCheckBoxActive: {
+  guardianAgreementCheckboxActive: {
     backgroundColor: theme.colors.brandPrimary,
     borderColor: theme.colors.brandPrimary,
   },
-  guardianConsentCheckLabel: {
+  guardianAgreementText: {
     flex: 1,
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.bodySm,
-    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.normal,
     color: theme.colors.textPrimary,
   },
+  guardianAgreementLink: {
+    fontFamily: theme.typography.fontFamily,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.brandPrimary,
+  },
   guardianConsentError: {
-    marginLeft: 36,
+    marginLeft: 28,
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.caption,
     color: theme.colors.textError,
-  },
-  requiredInline: {
-    color: theme.colors.textError,
-    fontWeight: theme.typography.weights.bold,
   },
   modalKeyboardWrap: {
     flex: 1,
@@ -2139,42 +2555,5 @@ const styles = StyleSheet.create({
   },
   modalBackdrop: {
     ...StyleSheet.absoluteFillObject,
-  },
-  editPreviewCard: {
-    marginBottom: theme.spacing.md,
-    marginTop: theme.spacing.xs,
-    borderRadius: theme.radius.lg,
-    backgroundColor: theme.colors.surfaceSoft,
-    borderWidth: 1,
-    borderColor: theme.colors.borderSubtle,
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.md,
-    gap: theme.spacing.sm,
-  },
-  editPreviewTitle: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.body,
-    fontWeight: theme.typography.weights.semibold,
-    color: theme.colors.textPrimary,
-  },
-  editPreviewList: {
-    gap: theme.spacing.sm,
-  },
-  editPreviewRow: {
-    gap: 2,
-  },
-  editPreviewLabel: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.caption,
-    fontWeight: theme.typography.weights.semibold,
-    letterSpacing: 0.3,
-    textTransform: 'uppercase',
-    color: theme.colors.textSecondary,
-  },
-  editPreviewValue: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
-    color: theme.colors.textPrimary,
   },
 });

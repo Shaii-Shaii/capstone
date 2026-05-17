@@ -1,12 +1,9 @@
 import 'react-native-url-polyfill/auto';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Platform } from 'react-native';
 import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = (process.env.EXPO_PUBLIC_SUPABASE_URL || '').trim();
 const supabasePublishableKey = (process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY || '').trim();
-const isWeb = Platform.OS === 'web';
-const canUseBrowserStorage = typeof window !== 'undefined';
 const hasSupabaseConfig = Boolean(supabaseUrl && supabasePublishableKey);
 const missingSupabaseConfigMessage = 'Supabase environment variables are not configured.';
 
@@ -82,21 +79,6 @@ const createSanitizedAuthStorage = (storage) => ({
     await storage.removeItem(key);
   },
 });
-
-const webStorage = {
-  async getItem(key) {
-    if (!canUseBrowserStorage) return null;
-    return window.localStorage.getItem(key);
-  },
-  async setItem(key, value) {
-    if (!canUseBrowserStorage) return;
-    window.localStorage.setItem(key, value);
-  },
-  async removeItem(key) {
-    if (!canUseBrowserStorage) return;
-    window.localStorage.removeItem(key);
-  },
-};
 
 const createSupabaseConfigError = () => new Error(missingSupabaseConfigMessage);
 
@@ -209,7 +191,7 @@ const createFallbackSupabaseClient = () => ({
 export const supabase = hasSupabaseConfig
   ? createClient(supabaseUrl, supabasePublishableKey, {
       auth: {
-        storage: createSanitizedAuthStorage(isWeb ? webStorage : AsyncStorage),
+        storage: createSanitizedAuthStorage(AsyncStorage),
         autoRefreshToken: false,
         persistSession: true,
         detectSessionInUrl: false,
@@ -306,7 +288,7 @@ const isInvalidRefreshTokenError = (error) => {
   );
 };
 
-const getAuthStorage = () => (isWeb ? webStorage : AsyncStorage);
+const getAuthStorage = () => AsyncStorage;
 
 const getPersistedAuthStorageKey = () => {
   if (!supabaseUrl) return '';

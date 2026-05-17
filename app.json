@@ -16,6 +16,7 @@
     },
     "android": {
       "minSdkVersion": 26,
+      "softwareKeyboardLayoutMode": "resize",
       "permissions": [
         "android.permission.CAMERA"
       ],
@@ -39,10 +40,6 @@
       "barStyle": "light-content",
       "backgroundColor": "#080808",
       "enforceContrast": false
-    },
-    "web": {
-      "output": "static",
-      "favicon": "./src/assets/images/donivra_logo_no_text.png"
     },
     "plugins": [
       "expo-router",

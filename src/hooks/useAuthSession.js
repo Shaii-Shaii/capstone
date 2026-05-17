@@ -41,6 +41,7 @@ export const useAuthSession = () => {
 
   useEffect(() => {
     let mounted = true;
+    let subscription = null;
 
     async function handleSessionData(newSession) {
       if (!newSession?.user) {
@@ -99,22 +100,31 @@ export const useAuthSession = () => {
       }
     }
 
-    // Initial load
-    setIsLoading(true);
-    ensureActiveSession()
-      .then(({ session: activeSession }) => {
-        handleSessionData(activeSession || null);
-      })
-      .catch(() => {
-        handleSessionData(null);
-      });
+    async function bootstrapAuthSession() {
+      setIsLoading(true);
 
-    // Handle updates
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (_event, newSession) => {
-        handleSessionData(newSession);
+      let activeSession = null;
+      try {
+        const activeSessionResult = await ensureActiveSession();
+        activeSession = activeSessionResult?.session || null;
+      } catch (_error) {
+        activeSession = null;
       }
-    );
+
+      await handleSessionData(activeSession);
+
+      if (!mounted) return;
+
+      const authStateResult = supabase.auth.onAuthStateChange(
+        (_event, newSession) => {
+          handleSessionData(newSession);
+        }
+      );
+
+      subscription = authStateResult?.data?.subscription || null;
+    }
+
+    bootstrapAuthSession();
 
     return () => {
       mounted = false;

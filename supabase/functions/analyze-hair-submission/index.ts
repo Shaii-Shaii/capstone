@@ -310,40 +310,54 @@ const MIN_DONATION_LENGTH_CM = 35.56;
 const MIN_ELIGIBILITY_CONFIDENCE = 0.55;
 const ELIGIBLE_STATUS = 'Eligible for hair donation';
 const IMPROVE_STATUS = 'Improve hair condition';
-const PHILIPPINE_PRODUCT_OPTIONS: Record<string, string[]> = {
+const NON_ADVERTISING_CARE_OPTIONS: Record<string, string[]> = {
   dry: [
-    'Human Nature Moisturizing Plus Shampoo and Conditioner',
-    'Dove Hair Therapy Intense Repair Shampoo and Conditioner',
+    'a moisturizing shampoo and conditioner with glycerin, aloe, or panthenol',
+    'a weekly deep-conditioning mask for the mid-lengths and ends',
   ],
   damage: [
-    'Cream Silk Triple Keratin Rescue Ultimate Repair & Shine',
-    'Dove Hair Therapy Intense Repair Shampoo and Conditioner',
+    'a protein or bond-support treatment used occasionally',
+    'a silicone-free or lightweight conditioner focused on damaged ends',
   ],
   frizz: [
-    'Cream Silk Triple Keratin Rescue Ultimate Straight',
-    'Vitress Hair Polish or a lightweight anti-frizz serum',
+    'a lightweight anti-frizz serum or leave-on conditioner',
+    'a smoothing conditioner with argan oil, coconut oil, or shea butter',
   ],
   oily: [
-    'Human Nature Clarifying Shampoo',
+    'a gentle clarifying shampoo used mainly on the scalp',
     'a light daily shampoo used mainly on the scalp, not the ends',
   ],
   flakes: [
-    'Head & Shoulders anti-dandruff shampoo',
-    'Selsun Blue anti-dandruff shampoo if flakes are persistent',
+    'an anti-dandruff shampoo with zinc pyrithione, selenium sulfide, or ketoconazole',
+    'a gentle scalp cleanser for visible buildup or flakes',
   ],
   treated: [
-    'Cream Silk Triple Keratin Rescue Ultimate Color Revive',
+    'a color-safe shampoo and conditioner',
     'a color-safe conditioner plus weekly repair mask',
   ],
   healthy: [
-    'Human Nature Daily Hair Treatment or conditioner',
+    'a gentle daily conditioner',
     'a lightweight leave-on serum only on the ends',
   ],
   length: [
-    'Human Nature Strengthening Plus Shampoo and Conditioner',
+    'a strengthening shampoo and conditioner with protein or panthenol',
     'a gentle conditioner focused on the mid-lengths and ends',
   ],
 };
+const advertisedNamePatterns = [
+  /\bHuman Nature\b/gi,
+  /\bDove\b/gi,
+  /\bCream Silk\b/gi,
+  /\bVitress\b/gi,
+  /\bHead\s*&\s*Shoulders\b/gi,
+  /\bSelsun Blue\b/gi,
+  /\bPantene(?:\s+Pro-V)?\b/gi,
+  /\bWatsons\b/gi,
+  /\bSM\b/g,
+  /\bRobinsons\b/gi,
+  /\bLazada(?:\.ph)?\b/gi,
+  /\bShopee(?:\.ph)?\b/gi,
+];
 const canonicalViewAliases: Record<string, string> = {
   'front view photo': 'Front View Photo',
   front_view: 'Front View Photo',
@@ -477,6 +491,8 @@ const instructions = [
   // Safety
   'Use safe wording: "this check suggests", "based on the visible photos", "the photos show", "observed in the images".',
   'Do not diagnose medical conditions. Do not invent characteristics not visible in the images.',
+  'Do not mention brand names, company names, store names, shopping links, or advertised product names in recommendations.',
+  'If product guidance is needed, mention only generic product types or ingredients such as moisturizing conditioner, clarifying shampoo, anti-dandruff shampoo, glycerin, aloe, panthenol, protein, argan oil, coconut oil, or shea butter.',
   'If a field cannot be determined from the photos, return an empty string or null.',
   'This is AI-assisted screening guidance only, not medical advice.',
 ].join('\n');
@@ -531,7 +547,7 @@ const analysisInstructions = [
   'Return exactly 3 recommendations when hair is visible enough to analyze.',
   'Recommendations should be specific to the observed condition, such as reducing heat exposure, improving scalp care, adjusting wash routine, improving moisture care, trimming damaged ends when appropriate, and avoiding harsh chemical processing.',
   'If the visible hair is too short for donation, include guidance about length retention, healthy growth habits, or reducing breakage. If the hair is dry, recommendations must address dryness. If the hair appears healthy, recommendations must focus on maintenance rather than damage repair.',
-  'When recommending products, include 1-2 commonly available Philippine product options that match the observed concern. Present them as examples to consider, not as medical treatment or guaranteed results.',
+  'When recommending products, do not name brands, companies, stores, marketplaces, shopping links, or advertised product lines. Mention only generic product types or ingredients that match the observed concern.',
   `For donation eligibility, require confidence_score >= ${MIN_ELIGIBILITY_CONFIDENCE}. If confidence is lower, use "${IMPROVE_STATUS}" and explain what must be clearer.`,
   'Be conservative with eligibility: if root-to-end length, ends condition, chemical treatment status, or required views are uncertain, do not mark the donor eligible.',
   'Do not diagnose disease. Use careful phrases such as "the photos show", "this check suggests", and "based on the visible images".',
@@ -541,6 +557,17 @@ const analysisInstructions = [
 const normalizeString = (value: unknown) => (
   typeof value === 'string' ? value.trim() : ''
 );
+
+const removeAdvertisedNames = (value: string) => {
+  let cleaned = normalizeString(value);
+  advertisedNamePatterns.forEach((pattern) => {
+    cleaned = cleaned.replace(pattern, 'generic');
+  });
+  return cleaned
+    .replace(/\bgeneric\s+generic\b/gi, 'generic')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+};
 
 const normalizeViewLabel = (value: unknown) => {
   const normalized = normalizeString(value).toLowerCase();
@@ -627,8 +654,8 @@ const normalizeRecommendationsV2 = (source: unknown) => {
   const rows = Array.isArray(source)
     ? source
       .map((item, index) => ({
-        title: normalizeString(item?.title) || `Recommendation ${index + 1}`,
-        recommendation_text: normalizeString(item?.recommendation_text),
+        title: removeAdvertisedNames(normalizeString(item?.title) || `Recommendation ${index + 1}`),
+        recommendation_text: removeAdvertisedNames(normalizeString(item?.recommendation_text)),
         priority_order: Number.isFinite(Number(item?.priority_order)) && Number(item?.priority_order) > 0
           ? Number(item?.priority_order)
           : index + 1,
@@ -800,8 +827,8 @@ const inferRecommendationConcerns = ({
 };
 
 const productLineForConcern = (concern: string) => {
-  const options = PHILIPPINE_PRODUCT_OPTIONS[concern] || PHILIPPINE_PRODUCT_OPTIONS.healthy;
-  return `Philippine product options to consider: ${options.slice(0, 2).join(' or ')}.`;
+  const options = NON_ADVERTISING_CARE_OPTIONS[concern] || NON_ADVERTISING_CARE_OPTIONS.healthy;
+  return `Ingredient or product-type options to consider: ${options.slice(0, 2).join(' or ')}.`;
 };
 
 const buildFallbackRecommendations = ({
@@ -909,12 +936,13 @@ const enhanceRecommendations = ({
 
   return rows.slice(0, 3).map((item, index) => {
     const concern = concerns[index] || concerns[0] || 'healthy';
-    const hasProductLine = item.recommendation_text.toLowerCase().includes('philippine product options');
+    const hasProductLine = item.recommendation_text.toLowerCase().includes('ingredient or product-type options');
     return {
       ...item,
-      recommendation_text: hasProductLine
+      title: removeAdvertisedNames(item.title),
+      recommendation_text: removeAdvertisedNames(hasProductLine
         ? item.recommendation_text
-        : `${item.recommendation_text} ${productLineForConcern(concern)}`,
+        : `${item.recommendation_text} ${productLineForConcern(concern)}`),
       priority_order: index + 1,
     };
   });
@@ -1568,7 +1596,7 @@ Deno.serve(async (request) => {
       `Use "${ELIGIBLE_STATUS}" only when visible condition is suitable and length appears to meet the 14-inch rule.`,
       `Use "${ELIGIBLE_STATUS}" only when confidence_score is at least ${MIN_ELIGIBILITY_CONFIDENCE} and all required views are clearly visible.`,
       'If donation requirements disallow colored, bleached, rebonded, or chemically treated hair and the photos or questionnaire suggest that treatment, mark the result as needing improvement or manual review.',
-      'Include practical product examples commonly available in the Philippines when they fit the visible concern, such as moisturizing, repair, anti-frizz, clarifying, or anti-dandruff options.',
+      'Include only generic product types or ingredients when they fit the visible concern, such as moisturizing conditioner, repair mask, anti-frizz serum, clarifying shampoo, anti-dandruff shampoo, glycerin, aloe, panthenol, protein, argan oil, coconut oil, or shea butter. Do not include brand names, company names, store names, marketplaces, shopping links, or advertised product names.',
       `Use "${IMPROVE_STATUS}" when length is too short, condition needs work, or confidence is too low.`,
     ].join('\n');
 

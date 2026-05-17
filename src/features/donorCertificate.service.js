@@ -2,6 +2,7 @@ import { Asset } from 'expo-asset';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import { theme } from '../design-system/theme';
 import { fetchHairSubmissionsByUserId, fetchLatestDonationCertificateByUserId } from './hairSubmission.api';
 
 const escapeHtml = (value = '') => String(value)
@@ -26,6 +27,14 @@ const formatCertificateDate = (value) => {
 };
 
 const clampNumber = (value, min, max) => Math.min(max, Math.max(min, value));
+
+const buildCertificateHtmlColors = (colors = {}) => ({
+  pageBackground: colors.background || theme.colors.backgroundCanvas,
+  cardBackground: colors.surface || theme.colors.backgroundPrimary,
+  nameText: colors.primary || theme.colors.brandPrimary,
+  metaLabel: colors.secondary || theme.colors.textSecondary,
+  metaText: colors.onSurface || theme.colors.textPrimary,
+});
 
 export const getCertificateRecipientFontSize = (value = '', { max = 52, min = 32 } = {}) => {
   const normalizedLength = String(value || '').trim().length;
@@ -112,8 +121,14 @@ export const buildDonorCertificateModel = ({
     organizationName: organizationName || '',
     submissionId: submission?.submission_id || certificateRow?.submission_id || null,
     submissionCode: submission?.submission_code || certificateRow?.certificate_number || 'Pending submission code',
+    bundleId: submission?.bundle_id || null,
+    recipientPatientId: submission?.recipient_patient_id || null,
     donationDate: submission?.created_at || certificateRow?.issued_at || null,
     donationDateLabel: formatCertificateDate(submission?.created_at || certificateRow?.issued_at || ''),
+    declaredLength: Array.isArray(submission?.submission_details)
+      ? submission.submission_details[0]?.declared_length ?? null
+      : submission?.submission_details?.declared_length ?? null,
+    estimatedLength: screening?.estimated_length ?? null,
     bundleQuantity: submission?.bundle_quantity || 0,
     donationStatus: submission?.status || '',
     decision: screening?.decision || '',
@@ -178,8 +193,9 @@ export const getLatestQualifiedDonationCertificate = async ({ userId, profile })
   }
 };
 
-export const buildDonorCertificateHtml = async (certificate) => {
+export const buildDonorCertificateHtml = async (certificate, options = {}) => {
   const templateDataUri = await getCertificateTemplateDataUri();
+  const colors = buildCertificateHtmlColors(options.colors);
   const certificateNumber = certificate?.certificateNumber || 'Pending certificate number';
   const issuedDate = certificate?.issuedAtLabel || formatCertificateDate(certificate?.issuedAt || '');
   const donorName = String(certificate?.donorName || '').trim();
@@ -203,7 +219,7 @@ export const buildDonorCertificateHtml = async (certificate) => {
           body {
             margin: 0;
             font-family: Georgia, "Times New Roman", serif;
-            background: #ffffff;
+            background: ${colors.pageBackground};
           }
           .page {
             width: 1123px;
@@ -231,7 +247,7 @@ export const buildDonorCertificateHtml = async (certificate) => {
             text-align: center;
             font-size: ${recipientFontSize}px;
             font-weight: 700;
-            color: #1d1d1f;
+            color: ${colors.nameText};
             line-height: 1.04;
             letter-spacing: 0.2px;
             word-break: break-word;
@@ -243,20 +259,19 @@ export const buildDonorCertificateHtml = async (certificate) => {
             width: 208px;
             padding: 14px 16px 12px;
             border-radius: 18px;
-            background: rgba(255, 255, 255, 0.92);
-            box-shadow: 0 8px 24px rgba(40, 76, 140, 0.08);
+            background: ${colors.cardBackground};
             box-sizing: border-box;
           }
           .meta-label {
             font-size: 11px;
-            color: #5b7fc7;
+            color: ${colors.metaLabel};
             text-transform: uppercase;
             letter-spacing: 0.8px;
             margin-bottom: 2px;
           }
           .meta-value {
             font-size: 16px;
-            color: #1f2530;
+            color: ${colors.metaText};
             margin-bottom: 10px;
             line-height: 1.2;
             word-break: break-word;
@@ -283,8 +298,8 @@ export const buildDonorCertificateHtml = async (certificate) => {
   `;
 };
 
-export const generateDonorCertificatePdf = async (certificate) => {
-  const html = await buildDonorCertificateHtml(certificate);
+export const generateDonorCertificatePdf = async (certificate, options = {}) => {
+  const html = await buildDonorCertificateHtml(certificate, options);
   return await Print.printToFileAsync({
     html,
     base64: false,

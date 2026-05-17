@@ -868,7 +868,16 @@ export default function DonorOrganizationsRoute() {
         />
       )}
     >
-      {errorMessage ? <StatusBanner message={errorMessage} variant="info" style={styles.bannerGap} /> : null}
+      {errorMessage ? (
+        <StatusBanner
+          message={errorMessage}
+          variant="info"
+          presentation="floating"
+          visible={Boolean(errorMessage)}
+          autoDismissMs={3000}
+          onDismiss={() => setErrorMessage('')}
+        />
+      ) : null}
 
       {!isDonorProfileComplete ? (
         <ProfileSetupGate

@@ -1,11 +1,29 @@
 import React from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { ScreenContainer } from '../../src/components/ui/ScreenContainer';
 import { LoginForm } from '../../src/components/auth/LoginForm';
 import { useRoleAuthFlow } from '../../src/hooks/useRoleAuthFlow';
-import { resolveThemeRoles, theme } from '../../src/design-system/theme';
+import { resolveBrandLogoSource, resolveThemeRoles, theme } from '../../src/design-system/theme';
+
+function AccessBrandLogo({ resolvedTheme }) {
+  const [imageFailed, setImageFailed] = React.useState(false);
+  const logoSource = resolveBrandLogoSource(resolvedTheme, imageFailed);
+
+  React.useEffect(() => {
+    setImageFailed(false);
+  }, [resolvedTheme?.logoIcon]);
+
+  return (
+    <Image
+      source={logoSource}
+      style={styles.brandLogo}
+      resizeMode="contain"
+      onError={() => setImageFailed(true)}
+    />
+  );
+}
 
 function SocialLoginButton({
   label,
@@ -71,7 +89,7 @@ export default function AccessScreen() {
         <View style={[styles.loginCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
           <View style={styles.brandHeader}>
             <View style={styles.brandRow}>
-              <MaterialCommunityIcons name="content-cut" size={28} color={roles.primaryActionBackground} />
+              <AccessBrandLogo resolvedTheme={resolvedTheme} />
               <Text style={[styles.brandText, { color: roles.primaryActionBackground }]}>{brandName}</Text>
             </View>
 
@@ -177,6 +195,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: theme.spacing.sm,
     marginBottom: theme.spacing.lg,
+  },
+  brandLogo: {
+    width: 38,
+    height: 38,
+    borderRadius: 9,
   },
   brandText: {
     fontFamily: theme.typography.fontFamilyDisplay,

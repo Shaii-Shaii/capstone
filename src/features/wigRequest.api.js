@@ -6,7 +6,7 @@ const wigRequestsTable = 'Wig_Requests';
 const wigRequestSpecificationsTable = 'Wig_Request_Specifications';
 const wigAllocationsTable = 'Wig_Allocations';
 const wigsTable = 'Wigs';
-const wigPhysicalSpecificationsTable = 'Wig_Physical_Specifications';
+const wigPhysicalSpecificationsTable = 'Wig_Specifications';
 const patientsTable = 'Patients';
 
 const wigRequestSelect = `
@@ -58,12 +58,14 @@ const wigSelect = `
 `;
 
 const wigPhysicalSpecificationSelect = `
-  color:Color,
-  length:Length,
+  wig_specification_id:Wig_Specification_ID,
+  wig_id:Wig_ID,
+  color:Hair_Color,
+  length:Hair_Length,
   hair_texture:Hair_Texture,
+  hair_density:Hair_Density,
   cap_size:Cap_Size,
-  style:Style,
-  notes:Notes
+  style:Style
 `;
 
 const patientPictureSelect = `

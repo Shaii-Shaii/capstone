@@ -1,5 +1,5 @@
 import React from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { DashboardLayout } from './DashboardLayout';
 import { AppCard } from '../ui/AppCard';
@@ -7,6 +7,7 @@ import { AppButton } from '../ui/AppButton';
 import { AppIcon } from '../ui/AppIcon';
 import { StatusBanner } from '../ui/StatusBanner';
 import { NotificationListItem } from '../notifications/NotificationListItem';
+import { DonorTopBar } from '../donor/DonorTopBar';
 import { useNotifications } from '../../hooks/useNotifications';
 import { useAuth } from '../../providers/AuthProvider';
 import { donorDashboardNavItems, patientDashboardNavItems } from '../../constants/dashboard';
@@ -72,28 +73,32 @@ const groupNotificationsByDate = (notifications = []) => {
   return sections;
 };
 
-function DonorNotificationsHeader({ role, unreadCount, onBackPress, onRefreshPress, isRefreshing }) {
-  const subtitle = unreadCount
-    ? `${unreadCount} unread`
-    : (role === 'patient' ? 'Recent patient updates' : 'Recent donor updates');
+const getVisibleNotifications = (notifications = []) => {
+  const seen = new Set();
 
-  return (
-    <View style={styles.topBar}>
-      <Pressable onPress={onBackPress} style={styles.topBarButton}>
-        <AppIcon name="arrowLeft" size="md" state="default" />
-      </Pressable>
+  return (Array.isArray(notifications) ? notifications : []).filter((notification) => {
+    if (!notification || (!notification.title && !notification.message)) {
+      return false;
+    }
 
-      <View style={styles.topBarCopy}>
-        <Text style={styles.topBarTitle}>Notifications</Text>
-        <Text style={styles.topBarSubtitle}>{subtitle}</Text>
-      </View>
+    const title = String(notification.title || '').trim().toLowerCase();
+    const message = String(notification.message || '').trim().toLowerCase();
+    const key = [
+      notification.type || 'notification',
+      notification.referenceType || '',
+      notification.referenceId || '',
+      title,
+      message,
+    ].join('|');
 
-      <Pressable onPress={onRefreshPress} style={styles.topBarButton}>
-        <AppIcon name="refresh" size="md" state={isRefreshing ? 'active' : 'muted'} />
-      </Pressable>
-    </View>
-  );
-}
+    if (seen.has(key)) {
+      return false;
+    }
+
+    seen.add(key);
+    return true;
+  });
+};
 
 function DonorNotificationsEmptyState({ role }) {
   return (
@@ -123,15 +128,20 @@ function DonorNotificationsContent({
   onNotificationPress,
 }) {
   const sections = React.useMemo(
-    () => groupNotificationsByDate(notifications),
+    () => groupNotificationsByDate(getVisibleNotifications(notifications)),
     [notifications]
   );
 
   return (
     <>
-      <View style={styles.actionRow}>
-        <Text style={styles.sectionLead}>Latest updates that matter</Text>
-        <View style={styles.actionButtons}>
+      <View style={styles.toolbar}>
+        <View style={styles.toolbarCopy}>
+          <Text style={styles.toolbarTitle}>{unreadCount ? `${unreadCount} unread` : 'All caught up'}</Text>
+          <Text style={styles.toolbarSubtitle}>
+            {role === 'patient' ? 'Request and allocation updates only' : 'Hair check, donation, and joined drive updates only'}
+          </Text>
+        </View>
+        <View style={styles.toolbarActions}>
           <AppButton
             title="Refresh"
             variant="secondary"
@@ -156,7 +166,7 @@ function DonorNotificationsContent({
           title="Notification sync"
           message={notificationError}
           variant="info"
-          style={styles.bannerGap}
+          presentation="floating"
         />
       ) : null}
 
@@ -170,22 +180,17 @@ function DonorNotificationsContent({
         <View style={styles.sectionsWrap}>
           {sections.map((section) => (
             <View key={section.key} style={styles.sectionBlock}>
-              <View style={styles.sectionHeader}>
-                <Text style={styles.sectionTitle}>{section.label}</Text>
-              </View>
+              <Text style={styles.sectionTitle}>{section.label}</Text>
 
               <AppCard variant="default" radius="xl" padding="md" style={styles.sectionCard}>
-                {section.items.map((notification, index) => (
-                  <View
-                    key={notification.renderKey}
-                    style={index < section.items.length - 1 ? styles.notificationRowDivider : null}
-                  >
+                {section.items.map((notification) => (
+                  <React.Fragment key={notification.renderKey}>
                     <NotificationListItem
                       notification={notification}
                       onPress={onNotificationPress}
                       compact
                     />
-                  </View>
+                  </React.Fragment>
                 ))}
               </AppCard>
             </View>
@@ -240,61 +245,23 @@ export function NotificationCenterScreen({ role }) {
     }
   };
 
-  if (role !== 'donor') {
-    return (
-      <DashboardLayout
-        showSupportChat={false}
-        navItems={navItems}
-        activeNavKey="notifications"
-        navVariant={role}
-        onNavPress={handleNavPress}
-        screenVariant="default"
-        header={(
-          <DonorNotificationsHeader
-            role={role}
-            unreadCount={unreadCount}
-            onBackPress={() => router.back()}
-            onRefreshPress={() => refreshNotifications({ silent: true, force: true })}
-            isRefreshing={isRefreshingNotifications}
-          />
-        )}
-      >
-        <ScrollView
-          style={styles.screenScroll}
-          contentContainerStyle={styles.screenContent}
-          showsVerticalScrollIndicator={false}
-        >
-          <DonorNotificationsContent
-            role={role}
-            notifications={notifications}
-            unreadCount={unreadCount}
-            isLoadingNotifications={isLoadingNotifications}
-            isRefreshingNotifications={isRefreshingNotifications}
-            notificationError={notificationError}
-            onRefresh={refreshNotifications}
-            onMarkAllRead={readAllNotifications}
-            onNotificationPress={handleNotificationPress}
-          />
-        </ScrollView>
-      </DashboardLayout>
-    );
-  }
-
   return (
     <DashboardLayout
       showSupportChat={false}
       navItems={navItems}
       activeNavKey="notifications"
-      navVariant="donor"
+      navVariant={role === 'donor' ? 'donor' : 'patient'}
       onNavPress={handleNavPress}
       screenVariant="default"
       header={(
-        <DonorNotificationsHeader
-          role={role}
-          unreadCount={unreadCount}
+        <DonorTopBar
+          title="Notifications"
+          subtitle={unreadCount ? `${unreadCount} unread` : (role === 'patient' ? 'Recent patient updates' : 'Recent donor updates')}
+          showBack
+          showProfileAction={false}
+          showNotificationsAction={false}
+          showLogoutAction={false}
           onBackPress={() => router.back()}
-          onRefreshPress={() => refreshNotifications({ silent: true, force: true })}
-          isRefreshing={isRefreshingNotifications}
         />
       )}
     >
@@ -320,37 +287,6 @@ export function NotificationCenterScreen({ role }) {
 }
 
 const styles = StyleSheet.create({
-  topBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.spacing.sm,
-    paddingTop: theme.spacing.xs,
-    paddingBottom: theme.spacing.xs,
-  },
-  topBarButton: {
-    width: 38,
-    height: 38,
-    borderRadius: theme.radius.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: theme.colors.backgroundPrimary,
-    borderWidth: 1,
-    borderColor: theme.colors.borderSubtle,
-  },
-  topBarCopy: {
-    flex: 1,
-    gap: 2,
-  },
-  topBarTitle: {
-    fontFamily: theme.typography.fontFamilyDisplay,
-    fontSize: theme.typography.semantic.bodyLg,
-    color: theme.colors.textPrimary,
-  },
-  topBarSubtitle: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.compact.caption,
-    color: theme.colors.textSecondary,
-  },
   screenScroll: {
     flex: 1,
   },
@@ -358,23 +294,36 @@ const styles = StyleSheet.create({
     paddingBottom: theme.spacing.xl,
     gap: theme.spacing.md,
   },
-  actionRow: {
-    gap: theme.spacing.sm,
-    marginBottom: theme.spacing.md,
-  },
-  sectionLead: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    color: theme.colors.textSecondary,
-  },
-  actionButtons: {
+  toolbar: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    justifyContent: 'flex-start',
-    gap: theme.spacing.sm,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.md,
+    paddingHorizontal: theme.spacing.xs,
+    paddingBottom: theme.spacing.sm,
   },
-  bannerGap: {
-    marginBottom: theme.spacing.md,
+  toolbarCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  toolbarTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textPrimary,
+  },
+  toolbarSubtitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    color: theme.colors.textSecondary,
+  },
+  toolbarActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-end',
+    gap: theme.spacing.sm,
   },
   loadingCard: {
     alignItems: 'center',
@@ -398,9 +347,6 @@ const styles = StyleSheet.create({
   sectionBlock: {
     gap: theme.spacing.sm,
   },
-  sectionHeader: {
-    paddingHorizontal: theme.spacing.xs,
-  },
   sectionTitle: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.label,
@@ -408,13 +354,10 @@ const styles = StyleSheet.create({
     color: theme.colors.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 0.4,
+    paddingHorizontal: theme.spacing.xs,
   },
   sectionCard: {
     gap: 0,
-  },
-  notificationRowDivider: {
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.borderSubtle,
   },
   emptyState: {
     alignItems: 'center',

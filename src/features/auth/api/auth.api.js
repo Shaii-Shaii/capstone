@@ -152,6 +152,15 @@ export const signInWithGoogle = async () => {
 };
 
 export const logoutUser = async () => {
+  try {
+    const localResult = await supabase.auth.signOut({ scope: 'local' });
+    if (!localResult?.error) {
+      return localResult;
+    }
+  } catch (_error) {
+    // Fall back to default sign-out below.
+  }
+
   return await supabase.auth.signOut();
 };
 

@@ -3,14 +3,35 @@ import { hairAnalysisFunctionName } from './hairSubmission.constants';
 import { normalizeHairAnalyzerAnswers } from './hairSubmission.schema';
 import { getErrorMessage, logAppError, logAppEvent } from '../utils/appErrors';
 
-const WEB_ANALYSIS_IMAGE_MAX_SIZE = 1400;
-const WEB_ANALYSIS_IMAGE_QUALITY = 0.8;
 const HAIR_ANALYSIS_MAX_INVOKE_ATTEMPTS = 3;
 const HAIR_ANALYSIS_RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 
 const waitFor = async (milliseconds = 0) => (
   await new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(milliseconds) || 0)))
 );
+
+const advertisedNamePatterns = [
+  /\bHuman Nature\b/gi,
+  /\bDove\b/gi,
+  /\bCream Silk\b/gi,
+  /\bVitress\b/gi,
+  /\bHead\s*&\s*Shoulders\b/gi,
+  /\bSelsun Blue\b/gi,
+  /\bPantene(?:\s+Pro-V)?\b/gi,
+  /\bWatsons\b/gi,
+  /\bSM\b/g,
+  /\bRobinsons\b/gi,
+  /\bLazada(?:\.ph)?\b/gi,
+  /\bShopee(?:\.ph)?\b/gi,
+];
+
+const removeAdvertisedNames = (value = '') => {
+  let cleaned = String(value || '').trim();
+  advertisedNamePatterns.forEach((pattern) => {
+    cleaned = cleaned.replace(pattern, 'generic');
+  });
+  return cleaned.replace(/\bgeneric\s+generic\b/gi, 'generic').replace(/\s{2,}/g, ' ').trim();
+};
 
 const resolveRetryDelayMs = ({ attempt = 1, retryAfterSeconds = null }) => {
   const retryAfter = Number(retryAfterSeconds);
@@ -29,8 +50,8 @@ const normalizeRecommendations = (source = []) => (
       const parsedPriority = Number(item?.priority_order ?? item?.priority ?? item?.rank);
 
       return {
-        title: item?.title || item?.heading || '',
-        recommendation_text: recommendationText.trim(),
+        title: removeAdvertisedNames(item?.title || item?.heading || ''),
+        recommendation_text: removeAdvertisedNames(recommendationText),
         priority_order: Number.isFinite(parsedPriority) && parsedPriority > 0 ? parsedPriority : index + 1,
       };
     })
@@ -145,67 +166,7 @@ const resolvePhotoQualityIssueMessage = (analysis = {}) => {
   return rawMessage;
 };
 
-const optimizeWebImageForAnalysis = async (image) => {
-  if (typeof window === 'undefined' || typeof document === 'undefined') {
-    return image;
-  }
-
-  if (typeof image?.dataUrl !== 'string' || !image.dataUrl.startsWith('data:')) {
-    return image;
-  }
-
-  const optimizedAsset = await new Promise((resolve, reject) => {
-    const previewImage = new Image();
-    previewImage.onload = () => {
-      try {
-        const width = Number(previewImage.naturalWidth || previewImage.width || 0);
-        const height = Number(previewImage.naturalHeight || previewImage.height || 0);
-
-        if (!width || !height) {
-          resolve(image);
-          return;
-        }
-
-        const scale = Math.min(1, WEB_ANALYSIS_IMAGE_MAX_SIZE / Math.max(width, height));
-        const targetWidth = Math.max(1, Math.round(width * scale));
-        const targetHeight = Math.max(1, Math.round(height * scale));
-        const canvas = document.createElement('canvas');
-        canvas.width = targetWidth;
-        canvas.height = targetHeight;
-
-        const context = canvas.getContext('2d');
-        if (!context) {
-          resolve(image);
-          return;
-        }
-
-        context.drawImage(previewImage, 0, 0, targetWidth, targetHeight);
-        const optimizedDataUrl = canvas.toDataURL('image/jpeg', WEB_ANALYSIS_IMAGE_QUALITY);
-        const [, optimizedBase64 = ''] = optimizedDataUrl.split(',');
-
-        resolve({
-          ...image,
-          uri: optimizedDataUrl,
-          dataUrl: optimizedDataUrl,
-          base64: optimizedBase64,
-          mimeType: 'image/jpeg',
-          width: targetWidth,
-          height: targetHeight,
-        });
-      } catch (error) {
-        reject(error);
-      }
-    };
-    previewImage.onerror = () => reject(new Error('The uploaded hair photo could not be prepared for analysis.'));
-    previewImage.src = image.dataUrl;
-  });
-
-  return optimizedAsset;
-};
-
-const prepareImagesForAnalysis = async (images = []) => (
-  await Promise.all((images || []).map((image) => optimizeWebImageForAnalysis(image)))
-);
+const prepareImagesForAnalysis = async (images = []) => images || [];
 
 const estimateImagePayloadBytes = (images = []) => (
   (images || []).reduce((total, image) => total + (image?.base64 ? image.base64.length : 0), 0)

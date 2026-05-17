@@ -108,15 +108,37 @@ const matchesTopic = (text, topics) => {
   return topics.some((topic) => normalized.includes(topic));
 };
 
+const advertisedNamePatterns = [
+  /\bHuman Nature\b/gi,
+  /\bDove\b/gi,
+  /\bCream Silk\b/gi,
+  /\bVitress\b/gi,
+  /\bHead\s*&\s*Shoulders\b/gi,
+  /\bSelsun Blue\b/gi,
+  /\bPantene(?:\s+Pro-V)?\b/gi,
+  /\bWatsons\b/gi,
+  /\bSM\b/g,
+  /\bRobinsons\b/gi,
+  /\bLazada(?:\.ph)?\b/gi,
+  /\bShopee(?:\.ph)?\b/gi,
+];
+
+const removeAdvertisedNames = (value = '') => {
+  let cleaned = String(value || '').trim();
+  advertisedNamePatterns.forEach((pattern) => {
+    cleaned = cleaned.replace(pattern, 'generic');
+  });
+  return cleaned.replace(/\bgeneric\s+generic\b/gi, 'generic').replace(/\s{2,}/g, ' ').trim();
+};
+
 const normalizeAiReply = (data) => {
   const replyText = data?.reply?.text || data?.text || '';
-  const rawProducts = Array.isArray(data?.reply?.products) ? data.reply.products : [];
   const rawMapLinks = Array.isArray(data?.reply?.map_links) ? data.reply.map_links : [];
 
   return {
-    text: replyText.trim(),
+    text: removeAdvertisedNames(replyText),
     source: data?.reply?.source || data?.source || 'ai',
-    products: rawProducts.filter((p) => p?.name),
+    products: [],
     mapLinks: rawMapLinks.filter((l) => l?.url && l?.label),
     attachments: Array.isArray(data?.reply?.attachments) ? data.reply.attachments : [],
     actions: Array.isArray(data?.reply?.actions) ? data.reply.actions : [],
@@ -225,7 +247,7 @@ const buildSupportContextBundle = async ({ role, userId, text }) => {
         .catch(() => ({ data: [] }));
 
       supportContext.latestDonorRecommendations = (recommendations || [])
-        .map((item) => item?.recommendation_text)
+        .map((item) => removeAdvertisedNames(item?.recommendation_text))
         .filter(Boolean);
     }
 

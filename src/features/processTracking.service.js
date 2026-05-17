@@ -146,9 +146,10 @@ const buildDonorTracker = ({ submission, detail, logistics, qaAssessment, histor
             || 'Transport details were added for this donation.',
           timestamp: formatDateTime(
             logistics.received_at
-            || logistics.pickup_schedule_at
+            || logistics.pickup_approved_at
+            || logistics.pickup_scheduled_at
             || logistics.pickup_schedule_date
-            || logistics.updated_at
+            || logistics.created_at
           ),
           badge: normalizeStatusLabel(logistics.shipment_status || logistics.logistics_type, 'In transit'),
         }
@@ -185,7 +186,10 @@ const buildDonorTracker = ({ submission, detail, logistics, qaAssessment, histor
         helperText: `Last updated ${formatDateTime(
           latestHistory?.updated_at
           || qaAssessment?.assessed_at
-          || logistics?.updated_at
+          || logistics?.received_at
+          || logistics?.pickup_approved_at
+          || logistics?.pickup_scheduled_at
+          || logistics?.created_at
           || submission.updated_at
           || submission.created_at
         )}`,

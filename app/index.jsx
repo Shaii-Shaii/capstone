@@ -207,7 +207,7 @@ function PublicLanding() {
       <View style={[styles.landingPage, { backgroundColor: roles.pageBackground }]}>
         <View style={[styles.landingTopBar, { backgroundColor: roles.defaultCardBackground }]}>
           <View style={styles.landingBrandBar}>
-            <MaterialCommunityIcons name="content-cut" size={26} color={roles.primaryActionBackground} />
+            <BrandLogo resolvedTheme={resolvedTheme} plain />
             <Text
               style={[
                 styles.landingBrandText,
@@ -220,18 +220,36 @@ function PublicLanding() {
               {brandName}
             </Text>
           </View>
-          <AppButton
-            title="Sign Up"
-            size="sm"
-            fullWidth={false}
-            style={styles.landingNavButton}
-            textStyle={styles.landingNavButtonText}
-            disabled={isLoading}
-            onPress={() => {
-              clearGoogleError();
-              return navigateWithHaptic('/auth/signup');
-            }}
-          />
+          <View style={styles.landingNavActions}>
+            <AppButton
+              title="Log In"
+              variant="outline"
+              size="sm"
+              fullWidth={false}
+              style={styles.landingNavButton}
+              textStyle={styles.landingNavButtonText}
+              textColorOverride={roles.secondaryActionText}
+              backgroundColorOverride={roles.defaultCardBackground}
+              borderColorOverride={roles.defaultCardBorder}
+              disabled={isLoading}
+              onPress={() => {
+                clearGoogleError();
+                return navigateWithHaptic('/auth/access');
+              }}
+            />
+            <AppButton
+              title="Sign Up"
+              size="sm"
+              fullWidth={false}
+              style={styles.landingNavButton}
+              textStyle={styles.landingNavButtonText}
+              disabled={isLoading}
+              onPress={() => {
+                clearGoogleError();
+                return navigateWithHaptic('/auth/signup');
+              }}
+            />
+          </View>
         </View>
 
         <View style={styles.landingContent}>
@@ -592,7 +610,7 @@ function FirstTimeOnboarding() {
   const pickManualPatientAsset = async (fieldName, setUploading) => {
     try {
       setUploading(true);
-      if (Platform.OS !== 'web' && Platform.OS !== 'android') {
+      if (Platform.OS !== 'android') {
         const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
         if (!permission.granted) {
           setScreenError('Please allow photo library access to continue.');
@@ -635,15 +653,15 @@ function FirstTimeOnboarding() {
       return (
         <AppCard variant="elevated" radius="xl" padding="lg" style={styles.onboardingCard}>
           <View style={styles.onboardingSection}>
-            <Text style={styles.onboardingQuestion}>Assign User Role to Donor</Text>
+            <Text style={styles.onboardingQuestion}>Ready to donate hair?</Text>
             <Text style={styles.onboardingBody}>
-              This account will be routed to the Donor Dashboard after the donor role is assigned.
+              Continue to your donation dashboard to start tracking your hair donation journey.
             </Text>
           </View>
 
           <View style={styles.actionStack}>
             <AppButton
-              title="Open Donor Dashboard"
+              title="Continue"
               size="lg"
               loading={isSubmitting}
               disabled={isSubmitting}
@@ -666,9 +684,9 @@ function FirstTimeOnboarding() {
       return (
         <AppCard variant="elevated" radius="xl" padding="lg" style={styles.onboardingCard}>
           <View style={styles.onboardingSection}>
-            <Text style={styles.onboardingQuestion}>Input Patient Code</Text>
+            <Text style={styles.onboardingQuestion}>Have you received a patient code?</Text>
             <Text style={styles.onboardingBody}>
-              Enter the numeric part of the patient code provided with the temporary credentials.
+              Enter the code shared by your hospital or care team.
             </Text>
           </View>
 
@@ -694,7 +712,7 @@ function FirstTimeOnboarding() {
           <View style={styles.actionStack}>
             {patientPreview ? (
               <AppButton
-                title="Assign Patient Role"
+                title="Continue"
                 size="lg"
                 loading={isSubmitting}
                 disabled={isSubmitting}
@@ -702,7 +720,7 @@ function FirstTimeOnboarding() {
               />
             ) : (
               <AppButton
-                title="Validate Patient Code"
+                title="Check Code"
                 size="lg"
                 loading={isValidatingCode}
                 disabled={isValidatingCode || isSubmitting}
@@ -711,7 +729,7 @@ function FirstTimeOnboarding() {
             )}
 
             <AppTextLink
-              title="No patient code"
+              title="I do not have a code"
               variant="muted"
               disabled={isSubmitting || isValidatingCode}
               onPress={() => {
@@ -1110,7 +1128,7 @@ function FirstTimeOnboarding() {
               />
             ) : (
               <AppButton
-                title="Assign Patient Role"
+                title="Continue"
                 size="lg"
                 loading={isSubmitting}
                 disabled={isSubmitting || isUploadingPatientPicture || isUploadingMedicalDocument}
@@ -1144,15 +1162,15 @@ function FirstTimeOnboarding() {
     return (
       <AppCard variant="elevated" radius="xl" padding="lg" style={styles.onboardingCard}>
         <View style={styles.onboardingSection}>
-          <Text style={styles.onboardingQuestion}>Is the user a Patient?</Text>
+          <Text style={styles.onboardingQuestion}>How will you use Donivra?</Text>
           <Text style={styles.onboardingBody}>
-            Choose Patient only if this account should complete the patient startup flow.
+            Choose the option that best matches what you need today.
           </Text>
         </View>
 
         <View style={styles.choiceRow}>
           <AppButton
-            title="Yes"
+            title="I need a wig"
             size="lg"
             fullWidth={false}
             style={styles.choiceButton}
@@ -1164,7 +1182,7 @@ function FirstTimeOnboarding() {
             }}
           />
           <AppButton
-            title="No"
+            title="I want to donate"
             variant="secondary"
             size="lg"
             fullWidth={false}
@@ -1303,11 +1321,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.spacing.sm,
+    flexShrink: 1,
   },
   landingBrandText: {
     fontFamily: theme.typography.fontFamilyDisplay,
     fontSize: theme.typography.semantic.title,
     fontWeight: theme.typography.weights.bold,
+  },
+  landingNavActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
   },
   landingNavButton: {
     minHeight: 44,
@@ -1622,8 +1646,9 @@ const styles = StyleSheet.create({
     height: 68,
   },
   logoPlain: {
-    width: 42,
-    height: 42,
+    width: 34,
+    height: 34,
+    borderRadius: 8,
   },
   brandName: {
     fontFamily: theme.typography.fontFamilyDisplay,

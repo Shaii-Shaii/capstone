@@ -82,7 +82,7 @@ export const ScreenContainer = ({
   const keyboardWrapper = (
     <KeyboardAvoidingView
       style={styles.flex}
-      behavior={Platform.OS === 'ios' ? 'padding' : isAuth ? 'height' : undefined}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       keyboardVerticalOffset={Math.max(insets.top, isAuth ? theme.spacing.xl : theme.spacing.sm)}
     >
       {viewPort}

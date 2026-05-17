@@ -2,7 +2,6 @@ import React from 'react';
 import { Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import Animated, {
-  FadeInUp,
   interpolateColor,
   useAnimatedStyle,
   useSharedValue,
@@ -12,6 +11,7 @@ import Animated, {
 import { AppIcon } from './AppIcon';
 import { theme, resolveThemeRoles } from '../../design-system/theme';
 import { useAuth } from '../../providers/AuthProvider';
+import { donorDashboardNavItems } from '../../constants/dashboard';
 
 export const DASHBOARD_TAB_BAR_HEIGHT = 76;
 
@@ -42,6 +42,7 @@ function DashboardTabItem({ item, isActive, onPress }) {
   }));
 
   const handlePress = async () => {
+    if (isActive) return;
     await Haptics.selectionAsync();
     onPress?.(item);
   };
@@ -82,17 +83,26 @@ function DashboardTabItem({ item, isActive, onPress }) {
   );
 }
 
-export function DashboardTabBar({ items, activeKey, onPress, variant = 'donor' }) {
+function DashboardTabBarComponent({ items, activeKey, onPress, variant = 'donor' }) {
   const { resolvedTheme } = useAuth();
   const roles = resolveThemeRoles(resolvedTheme);
   const { width } = useWindowDimensions();
+  const displayItems = React.useMemo(() => {
+    if (variant !== 'donor') return items;
+    return donorDashboardNavItems.map((navItem) => ({
+      ...navItem,
+      badge: items.find((item) => item.key === navItem.key)?.badge,
+    }));
+  }, [items, variant]);
   const isCompact = width < 390;
   const horizontalInset = isCompact ? theme.spacing.md : theme.spacing.lg;
   const bottomOffset = Math.max(isCompact ? theme.spacing.sm : theme.spacing.md, 10);
-  const activeIndex = Math.max(items.findIndex((item) => item.key === activeKey), 0);
+  const activeIndex = displayItems.findIndex((item) => item.key === activeKey);
+  const hasActiveItem = activeIndex >= 0;
   const slotProgress = useSharedValue(activeIndex);
   const [surfaceWidth, setSurfaceWidth] = React.useState(0);
   const activePillColor = roles.navActiveBackground;
+  const pressLockRef = React.useRef(false);
 
   React.useEffect(() => {
     slotProgress.value = withSpring(activeIndex, {
@@ -103,12 +113,12 @@ export function DashboardTabBar({ items, activeKey, onPress, variant = 'donor' }
   }, [activeIndex, slotProgress]);
 
   const pillStyle = useAnimatedStyle(() => {
-    if (!surfaceWidth || !items.length) {
+    if (!surfaceWidth || !displayItems.length || !hasActiveItem) {
       return { opacity: 0 };
     }
 
     const innerWidth = surfaceWidth - theme.spacing.xs * 2;
-    const slotWidth = innerWidth / items.length;
+    const slotWidth = innerWidth / displayItems.length;
     const pillWidth = Math.max(48, slotWidth - theme.spacing.sm);
 
     return {
@@ -124,7 +134,6 @@ export function DashboardTabBar({ items, activeKey, onPress, variant = 'donor' }
 
   return (
     <Animated.View
-      entering={FadeInUp.duration(theme.motion.screenEnter)}
       style={[
         styles.container,
         {
@@ -153,18 +162,27 @@ export function DashboardTabBar({ items, activeKey, onPress, variant = 'donor' }
             pillStyle,
           ]}
         />
-        {items.map((item) => (
+        {displayItems.map((item) => (
           <DashboardTabItem
             key={item.key}
             item={item}
             isActive={item.key === activeKey}
-            onPress={onPress}
+            onPress={(pressedItem) => {
+              if (pressLockRef.current) return;
+              pressLockRef.current = true;
+              onPress?.(pressedItem);
+              setTimeout(() => {
+                pressLockRef.current = false;
+              }, 450);
+            }}
           />
         ))}
       </View>
     </Animated.View>
   );
 }
+
+export const DashboardTabBar = React.memo(DashboardTabBarComponent);
 
 const styles = StyleSheet.create({
   container: {

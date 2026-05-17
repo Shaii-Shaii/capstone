@@ -3,6 +3,8 @@ import { invokeEdgeFunction } from '../api/supabase/client';
 import * as NotificationAPI from './notification.api';
 import { notificationStoragePrefix, notificationTypes } from './notification.constants';
 import {
+  createDonationCertificate,
+  fetchDonationCertificateBySubmissionId,
   fetchHairBundleTrackingHistory,
   fetchLatestDonationCertificateByUserId,
   fetchDonorRecommendationsBySubmissionId,
@@ -19,7 +21,6 @@ import { writeAuditLog } from '../utils/appErrors';
 
 const buildStorageKey = ({ userId, role }) => `${notificationStoragePrefix}.${role}.${userId}`;
 const DONOR_REMINDER_EMAIL_FUNCTION = 'send-donor-hair-analysis-reminder';
-const DRIVE_NOTIFICATION_LOOKBACK_MS = 14 * 24 * 60 * 60 * 1000;
 const DRIVE_REMINDER_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
 const reminderEmailAttemptCache = new Map();
 
@@ -79,8 +80,9 @@ const getNotificationRouteFromType = (notification) => {
     case notificationTypes.recommendationAvailable:
     case notificationTypes.logisticsUpdated:
     case notificationTypes.donationTrackingUpdated:
-    case notificationTypes.certificateAvailable:
       return '/donor/status';
+    case notificationTypes.certificateAvailable:
+      return '/donor/achievements';
     default:
       return null;
   }
@@ -111,15 +113,14 @@ const formatDriveWindowLabel = (drive) => {
 
 const shouldIncludeDriveUpdate = (drive) => {
   const now = Date.now();
-  const updatedAt = drive?.updated_at ? new Date(drive.updated_at).getTime() : 0;
   const startsAt = drive?.start_date ? new Date(drive.start_date).getTime() : 0;
+  const isRegistered = Boolean(drive?.registration?.registration_id);
   const hasUpcomingReminderWindow = startsAt && startsAt >= now && startsAt - now <= DRIVE_REMINDER_WINDOW_MS;
 
-  return hasUpcomingReminderWindow || (updatedAt && now - updatedAt <= DRIVE_NOTIFICATION_LOOKBACK_MS);
+  return isRegistered && hasUpcomingReminderWindow;
 };
 
 const buildDriveNotification = (drive) => {
-  const organizationName = drive?.organization_name || 'your organization';
   const startsSoon = drive?.start_date
     ? (new Date(drive.start_date).getTime() - Date.now()) <= DRIVE_REMINDER_WINDOW_MS
     : false;
@@ -136,17 +137,7 @@ const buildDriveNotification = (drive) => {
     });
   }
 
-  return buildNotification({
-    dedupeKey: `${notificationTypes.driveUpdated}:${drive.donation_drive_id}`,
-    type: notificationTypes.driveUpdated,
-    title: drive?.registration?.registration_id ? 'Drive update' : 'New donation drive available',
-    message: drive?.registration?.registration_id
-      ? `${drive.event_title || 'Donation drive'} from ${organizationName} has a new schedule or status update.`
-      : `${organizationName} posted ${drive.event_title || 'a new donation drive'}.`,
-    createdAt: drive.updated_at || drive.start_date || new Date().toISOString(),
-    referenceType: 'donation_drive',
-    referenceId: drive.donation_drive_id,
-  });
+  return null;
 };
 
 const triggerHairAnalysisReminderEmail = async ({
@@ -207,19 +198,91 @@ const buildNotification = ({
   isRead,
 });
 
+const createDonationCertificateNumber = (submission = null) => {
+  const submissionPart = String(submission?.submission_code || submission?.submission_id || Date.now())
+    .replace(/[^a-z0-9]+/gi, '')
+    .slice(-10)
+    .toUpperCase();
+  const randomPart = Math.random().toString(36).slice(2, 6).toUpperCase();
+  return `DON-CERT-${submissionPart || Date.now().toString(36).toUpperCase()}-${randomPart}`;
+};
+
+const normalizeCertificateIssuerId = (value = null) => {
+  const issuerId = Number(value);
+  return Number.isFinite(issuerId) && issuerId > 0 ? issuerId : null;
+};
+
+const textIncludesAny = (source = '', tokens = []) => {
+  const normalized = String(source || '').toLowerCase();
+  return tokens.some((token) => normalized.includes(token));
+};
+
+const isReceivedByOrganizationSignal = (item = null) => (
+  textIncludesAny(item?.status, ['received_by_company', 'received by hair for hope', 'received by organization', 'received by the organization', 'organization received', 'received'])
+  || textIncludesAny(item?.title, ['received by hair for hope', 'received by organization', 'received by the organization', 'organization received'])
+  || textIncludesAny(item?.description, ['received by hair for hope', 'received by organization', 'received by the organization', 'organization received'])
+);
+
+const findDonationApprovalEvidence = ({ trackingEntries = [] } = {}) => {
+  const sortedEntries = (trackingEntries || [])
+    .slice()
+    .sort((left, right) => new Date(right?.updated_at || 0).getTime() - new Date(left?.updated_at || 0).getTime());
+  const receivedEntry = sortedEntries.find((entry) => isReceivedByOrganizationSignal(entry));
+
+  if (receivedEntry) {
+    return {
+      issuedBy: normalizeCertificateIssuerId(receivedEntry.changed_by),
+      issuedAt: receivedEntry.updated_at || null,
+    };
+  }
+
+  return null;
+};
+
+const ensureDonationCertificateForNotification = async ({
+  submission,
+  trackingEntries = [],
+}) => {
+  if (!submission?.submission_id || !submission?.user_id) return null;
+
+  const existingResult = await fetchDonationCertificateBySubmissionId(submission.submission_id);
+  if (existingResult.data?.certificate_id) {
+    return existingResult.data;
+  }
+
+  const approvalEvidence = findDonationApprovalEvidence({ trackingEntries });
+  if (!approvalEvidence) return null;
+
+  const certificateResult = await createDonationCertificate({
+    user_id: submission.user_id,
+    submission_id: submission.submission_id,
+    certificate_number: createDonationCertificateNumber(submission),
+    certificate_type: 'Certificate of Donation',
+    issued_by: approvalEvidence.issuedBy,
+    issued_at: approvalEvidence.issuedAt || new Date().toISOString(),
+    remarks: 'Issued after the hair donation was received.',
+  });
+
+  return certificateResult.data || null;
+};
+
 const normalizeTextToken = (value = '') => String(value || '')
   .replace(/\s+/g, ' ')
   .trim()
   .toLowerCase();
 
 const getNotificationIdentityKey = (notification = {}) => {
-  const backendId = notification.backendId || notification.notificationId || null;
-  if (backendId) {
-    return `backend:${backendId}`;
+  if (notification.stableKey) {
+    return `stable:${normalizeTextToken(notification.stableKey)}`;
   }
 
   if (notification.dedupeKey) {
     return `dedupe:${notification.dedupeKey}`;
+  }
+
+  const backendId = notification.backendId || notification.notificationId || null;
+  if (backendId) {
+    return `backend:${backendId}`;
   }
 
   const type = normalizeTextToken(notification.type || 'system_update');
@@ -430,7 +493,7 @@ const buildDonorDerivedNotifications = async ({
     const recommendationRows = submission?.donor_recommendations?.length
       ? submission.donor_recommendations
       : (await fetchDonorRecommendationsBySubmissionId(submissionId)).data || [];
-    if (recommendationRows.length) {
+    if (recommendationRows.length && !screeningId) {
       const topRecommendation = recommendationRows[0];
       notifications.push(buildNotification({
         dedupeKey: `${notificationTypes.recommendationAvailable}:${submissionId}`,
@@ -457,7 +520,7 @@ const buildDonorDerivedNotifications = async ({
         message: logistics.notes
           || [logistics.shipment_status, logistics.courier_name, logistics.tracking_number].filter(Boolean).join(' • ')
           || `Shipment status: ${logistics.shipment_status || logistics.logistics_type || 'updated'}.`,
-        createdAt: logistics.updated_at || logistics.created_at,
+        createdAt: logistics.received_at || logistics.pickup_approved_at || logistics.pickup_scheduled_at || logistics.created_at,
         referenceType: 'hair_submission',
         referenceId: submissionId,
       }));
@@ -475,17 +538,23 @@ const buildDonorDerivedNotifications = async ({
       }));
     });
 
-    if (String(screening?.decision || '').toLowerCase().includes('eligible')) {
+    const certificate = await ensureDonationCertificateForNotification({
+      submission,
+      trackingEntries: trackingResult.data || [],
+    });
+
+    if (certificate?.certificate_id) {
       notifications.push(buildNotification({
-        dedupeKey: `${notificationTypes.certificateAvailable}:${submissionId}:eligible`,
+        dedupeKey: `${notificationTypes.certificateAvailable}:${certificate.certificate_id}`,
         type: notificationTypes.certificateAvailable,
         title: 'Certificate available',
-        message: 'Your donation reached a qualified result and the donor certificate is now available.',
-        createdAt: screening.created_at || submission.updated_at || submission.created_at,
-        referenceType: 'hair_submission',
-        referenceId: submissionId,
+        message: 'Your donation was received. Your certificate is ready in Achievements.',
+        createdAt: certificate.issued_at || new Date().toISOString(),
+        referenceType: 'route',
+        referenceId: '/donor/achievements',
       }));
     }
+
   }));
 
   const latestCertificate = (await fetchLatestDonationCertificateByUserId(userId)).data;
@@ -494,10 +563,10 @@ const buildDonorDerivedNotifications = async ({
       dedupeKey: `${notificationTypes.certificateAvailable}:${latestCertificate.certificate_id}`,
       type: notificationTypes.certificateAvailable,
       title: 'Certificate available',
-      message: 'Your donor certificate is ready to view and share.',
+      message: 'Your donation was received. Your certificate is ready in Achievements.',
       createdAt: latestCertificate.issued_at || new Date().toISOString(),
-      referenceType: 'hair_submission',
-      referenceId: latestCertificate.submission_id,
+      referenceType: 'route',
+      referenceId: '/donor/achievements',
     }));
   }
 
@@ -506,7 +575,10 @@ const buildDonorDerivedNotifications = async ({
     (driveUpdatesResult.data || [])
       .filter(shouldIncludeDriveUpdate)
       .forEach((drive) => {
-        notifications.push(buildDriveNotification(drive));
+        const notification = buildDriveNotification(drive);
+        if (notification) {
+          notifications.push(notification);
+        }
       });
   }
 
@@ -784,7 +856,7 @@ export const buildImmediateNotificationEvents = ({ role, payload }) => {
   if (role === 'donor') {
     const notifications = [];
 
-    if (payload?.submission) {
+    if (payload?.submission && !payload?.screening) {
       notifications.push(buildNotification({
         dedupeKey: `${notificationTypes.submissionReceived}:${payload.submission.submission_id}`,
         type: notificationTypes.submissionReceived,
@@ -800,7 +872,7 @@ export const buildImmediateNotificationEvents = ({ role, payload }) => {
       notifications.push(buildNotification({
         dedupeKey: `${notificationTypes.screeningCompleted}:${payload.screening.ai_screening_id || payload.submission?.submission_id}`,
         type: notificationTypes.screeningCompleted,
-        title: 'AI screening completed',
+        title: 'Hair check completed',
         message: payload.screening.summary || `Your screening result is ${payload.screening.decision || 'ready for review'}.`,
         createdAt: payload.screening.created_at || new Date().toISOString(),
         referenceType: 'ai_screening',
@@ -808,25 +880,13 @@ export const buildImmediateNotificationEvents = ({ role, payload }) => {
       }));
     }
 
-    if (payload?.recommendations?.length) {
+    if (payload?.recommendations?.length && !payload?.screening) {
       notifications.push(buildNotification({
         dedupeKey: `${notificationTypes.recommendationAvailable}:${payload.submission?.submission_id}`,
         type: notificationTypes.recommendationAvailable,
         title: 'Recommendation available',
         message: payload.recommendations[0].recommendation_text || 'New donor guidance is now available.',
         createdAt: payload.recommendations[0].created_at || new Date().toISOString(),
-        referenceType: 'hair_submission',
-        referenceId: payload.submission?.submission_id,
-      }));
-    }
-
-    if (String(payload?.screening?.decision || '').toLowerCase().includes('eligible')) {
-      notifications.push(buildNotification({
-        dedupeKey: `${notificationTypes.certificateAvailable}:${payload.submission?.submission_id}`,
-        type: notificationTypes.certificateAvailable,
-        title: 'Certificate available',
-        message: 'Your donation reached a qualified result and the donor certificate is now available.',
-        createdAt: payload.screening?.created_at || new Date().toISOString(),
         referenceType: 'hair_submission',
         referenceId: payload.submission?.submission_id,
       }));

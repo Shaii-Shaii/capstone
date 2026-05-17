@@ -64,7 +64,7 @@ export function ChatMessageBubble({ message }) {
   const isUser = message.sender === 'user';
   const attachments = Array.isArray(message.attachments) ? message.attachments : [];
   const actions = Array.isArray(message.actions) ? message.actions : [];
-  const products = Array.isArray(message.products) ? message.products : [];
+  const products = [];
   const timestamp = formatTime(message.createdAt);
   const assistantLabel = resolvedTheme?.brandName ? `${resolvedTheme.brandName} AI` : 'AI Assistant';
 

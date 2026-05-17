@@ -3,14 +3,13 @@ import * as Sharing from 'expo-sharing';
 import { logAppError, logAppEvent } from '../utils/appErrors';
 import {
     buildDonationCertificatePayload,
-    buildDonationQrPayload,
     buildDonationSubmittedNotification,
     validateQrCodeScan,
 } from './donationLogisticsFlow.service';
 import {
     buildDonationNotification,
+    buildDonationTrackingQrPayload,
     buildQrImageUrl,
-    createDonationQrReference,
     recordNotifications
 } from './donorDonations.service';
 import {
@@ -19,12 +18,59 @@ import {
     createHairSubmissionDetail,
     createHairSubmissionImages,
     createHairSubmissionLogistics,
+    updateHairSubmissionById,
     uploadHairSubmissionImage,
 } from './hairSubmission.api';
 import { hairSubmissionStorageBucket } from './hairSubmission.constants';
 import { notificationTypes } from './notification.constants';
 
 const QR_IMAGE_SIZE = 512;
+const SCAN_STAGE_METADATA = {
+  event_rsvp: {
+    title: 'RSVP / Event check-in scanned',
+    description: 'Staff scanned the RSVP QR and confirmed donor participation.',
+  },
+  waybill_ready: {
+    title: 'Waybill issued',
+    description: 'Staff issued the waybill QR for bundle attachment.',
+  },
+  cut_and_shipped: {
+    title: 'Cut & shipped',
+    description: 'Staff scanned the waybill after cut and marked the parcel as shipped.',
+  },
+  sent_by_donor: {
+    title: 'Sent by donor',
+    description: 'Staff confirmed the donor parcel has been shipped with the waybill.',
+  },
+  received_by_company: {
+    title: 'Received by Hair for Hope',
+    description: 'Staff scanned the waybill upon receiving the parcel at destination.',
+  },
+  qa_assessment: {
+    title: 'QA Assessment',
+    description: 'QA Stylist scanned and recorded hair quality assessment result.',
+  },
+  bundling: {
+    title: 'For bundling',
+    description: 'Hair passed QA and is queued for bundling.',
+  },
+  wig_production: {
+    title: 'Wig production',
+    description: 'Bundled hair entered wig production workflow.',
+  },
+  wig_completed: {
+    title: 'Wig completed',
+    description: 'Wig production completed for this donation lineage.',
+  },
+  assigned_to_patient: {
+    title: 'Assigned to patient',
+    description: 'Completed wig was assigned to a patient.',
+  },
+  received_by_patient: {
+    title: 'Received by patient',
+    description: 'The patient has received the wig from this donation lineage.',
+  },
+};
 
 /**
  * Complete Donation Submission Process
@@ -54,25 +100,10 @@ export const submitDonation = async ({
       throw new Error('Missing required donation information');
     }
 
-    // Create submission code
-    const submissionCode = createDonationQrReference('DON');
-    const qrReference = createDonationQrReference('QR');
-
-    // Build QR payload
-    const qrPayload = buildDonationQrPayload({
-      submissionCode,
-      donorId: userId,
-      donationDetails,
-      timestamp: new Date().toISOString(),
-    });
-
-    // Generate QR code image URL
-    const qrCodeUrl = buildQrImageUrl(JSON.stringify(qrPayload), QR_IMAGE_SIZE);
-
     // Create hair submission record
     const submissionResult = await createHairSubmission({
       user_id: userId,
-      submission_code: submissionCode,
+      submission_code: null,
       donation_source: sourceType,
       donor_notes: `Donation from logistics flow - ${donationDetails.hairLengthValue}${donationDetails.hairLengthUnit}`,
       status: 'Pending',
@@ -83,6 +114,20 @@ export const submitDonation = async ({
     }
 
     const createdSubmission = submissionResult.data;
+    const submissionCode = createdSubmission.submission_code || `SUB-${createdSubmission.submission_id}`;
+    const syncedSubmissionResult = createdSubmission.submission_code
+      ? { data: createdSubmission, error: null }
+      : await updateHairSubmissionById(createdSubmission.submission_id, {
+          submission_code: submissionCode,
+          qr_status: 'Generated',
+          qr_generated_at: new Date().toISOString(),
+        });
+    const qrSubmission = syncedSubmissionResult.data || {
+      ...createdSubmission,
+      submission_code: submissionCode,
+      qr_status: 'Generated',
+    };
+
     logAppEvent('donation_logistics', 'Hair submission created', { submissionCode, submissionId: createdSubmission.submission_id });
 
     // Create submission detail
@@ -106,6 +151,11 @@ export const submitDonation = async ({
     }
 
     const createdDetail = detailResult.data;
+    const qrPayload = buildDonationTrackingQrPayload({
+      submission: qrSubmission,
+      detail: createdDetail,
+    });
+    const qrCodeUrl = buildQrImageUrl(qrPayload, QR_IMAGE_SIZE);
 
     // Upload hair photo if path provided
     if (hairPhotoPath) {
@@ -157,11 +207,10 @@ export const submitDonation = async ({
         user_id: userId,
         submission_id: createdSubmission.submission_id,
         submission_detail_id: createdDetail.submission_detail_id,
-        bundle_count: donationDetails.bundleQuantity,
-        hair_length: donationDetails.hairLengthValue,
-        hair_length_unit: donationDetails.hairLengthUnit,
-        status: 'submitted',
-        qr_code: submissionCode,
+        status: 'donation_submitted',
+        title: 'Donation submitted',
+        description: 'Donation submitted. QR generated from Hair_Submissions for staff scanning.',
+        changed_by: userId,
       });
 
       logAppEvent('donation_logistics', 'Bundle tracking entry created');
@@ -198,7 +247,6 @@ export const submitDonation = async ({
     return {
       success: true,
       submissionCode,
-      qrReference,
       qrCodeUrl,
       logisticsRecord,
       staffNotification,
@@ -308,6 +356,8 @@ export const processDonationQrScan = async ({
   qrData = '',
   staffId = '',
   scanTimestamp = null,
+  scanStage = '',
+  qaDecision = '',
 } = {}) => {
   try {
     logAppEvent('donation_logistics', 'Processing QR scan');
@@ -325,7 +375,12 @@ export const processDonationQrScan = async ({
     }
 
     // Validate QR code
-    const validation = validateQrCodeScan({ qrPayload });
+    const validation = validateQrCodeScan({
+      qrPayload: {
+        ...qrPayload,
+        submissionCode: qrPayload.submissionCode || qrPayload.submission_code,
+      },
+    });
     if (!validation.isValid) {
       return {
         success: false,
@@ -334,19 +389,28 @@ export const processDonationQrScan = async ({
       };
     }
 
-    // Update logistics status
-    const updateData = {
-      status: 'received_by_staff',
-      qr_scanned_at: scanTimestamp || new Date().toISOString(),
-      scanned_by_staff_id: staffId,
-    };
-
     try {
-      // This would need implementation in the API layer
-      // await updateHairSubmissionLogisticsById(
-      //   qrPayload.submissionCode,
-      //   updateData
-      // );
+      const normalizedStage = String(scanStage || '').trim().toLowerCase();
+      const stageMeta = SCAN_STAGE_METADATA[normalizedStage] || null;
+      const submissionId = Number(qrPayload?.submissionId || qrPayload?.submission_id || 0) || null;
+      const submissionDetailId = Number(qrPayload?.submissionDetailId || qrPayload?.submission_detail_id || 0) || null;
+
+      if (submissionId && stageMeta) {
+        const qaText = String(qaDecision || '').trim();
+        const description = normalizedStage === 'qa_assessment' && qaText
+          ? `${stageMeta.description} Decision: ${qaText}.`
+          : stageMeta.description;
+
+        await createHairBundleTrackingEntry({
+          submission_id: submissionId,
+          submission_detail_id: submissionDetailId,
+          status: normalizedStage,
+          title: stageMeta.title,
+          description,
+          changed_by: staffId || null,
+        });
+      }
+
       logAppEvent('donation_logistics', 'QR scan processed', { submissionCode: qrPayload.submissionCode });
     } catch (updateErr) {
       logAppError('donation_logistics', updateErr);

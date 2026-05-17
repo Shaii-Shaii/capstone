@@ -1,11 +1,13 @@
 import React from 'react';
-import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { DonorHairSubmissionScreen } from '../../src/components/layout/DonorHairSubmissionScreen';
 import { DashboardLayout } from '../../src/components/layout/DashboardLayout';
 import { HairLogDetailModal } from '../../src/components/hair/HairLogDetailModal';
+import { DonorTopBar } from '../../src/components/donor/DonorTopBar';
 import { AppButton } from '../../src/components/ui/AppButton';
 import { AppIcon } from '../../src/components/ui/AppIcon';
+import { StatusBanner } from '../../src/components/ui/StatusBanner';
 import { donorDashboardNavItems } from '../../src/constants/dashboard';
 import { fetchHairSubmissionsByUserId } from '../../src/features/hairSubmission.api';
 import { buildProfileCompletionMeta } from '../../src/features/profile/services/profile.service';
@@ -13,7 +15,19 @@ import { useNotifications } from '../../src/hooks/useNotifications';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { resolveThemeRoles, theme } from '../../src/design-system/theme';
 
-const WEEKDAY_LABELS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+let cachedHairAnalysisHomeData = null;
+let cachedHairAnalysisHomeUserId = '';
+const HAIR_CALENDAR_WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+const getInitials = (value = '') => (
+  String(value || '')
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase() || 'D'
+);
 
 const toLocalDateKey = (value) => {
   const date = value instanceof Date ? value : new Date(value);
@@ -23,10 +37,6 @@ const toLocalDateKey = (value) => {
   const d = String(date.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
 };
-
-const getMonthLabel = (date) => (
-  new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric' }).format(date)
-);
 
 const getWeekRangeLabel = (date) => {
   const current = new Date(date);
@@ -95,91 +105,88 @@ const getMoistureLabel = (screening = null) => {
   return 'Low';
 };
 
-const buildMonthCells = (cursorDate, highlightedDateKeys = new Set(), selectedDateKey = '') => {
-  const start = new Date(cursorDate.getFullYear(), cursorDate.getMonth(), 1);
-  const gridStart = new Date(start);
-  gridStart.setDate(start.getDate() - start.getDay());
-
-  const cells = [];
-  for (let index = 0; index < 42; index += 1) {
-    const current = new Date(gridStart);
-    current.setDate(gridStart.getDate() + index);
-    const key = toLocalDateKey(current);
-    cells.push({
-      key,
-      date: current,
-      day: current.getDate(),
-      isCurrentMonth: current.getMonth() === cursorDate.getMonth(),
-      isToday: key === toLocalDateKey(new Date()),
-      isSelected: key === selectedDateKey,
-      hasLog: highlightedDateKeys.has(key),
-    });
-  }
-
-  return cells;
+const formatRecentLogDate = (value) => {
+  if (!value) return 'No date';
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(new Date(value));
 };
 
-const buildTrendSeries = (screenings = [], range = 'month') => {
-  const now = new Date();
+const getScreeningRecommendations = (entry = null) => (
+  Array.isArray(entry?.submission?.donor_recommendations)
+    ? entry.submission.donor_recommendations
+    : Array.isArray(entry?.submission?.recommendations)
+      ? entry.submission.recommendations
+      : []
+).filter((recommendation) => String(recommendation?.recommendation_text || '').trim());
 
-  if (range === 'week') {
-    const days = [];
-    for (let offset = 6; offset >= 0; offset -= 1) {
-      const date = new Date(now);
-      date.setHours(0, 0, 0, 0);
-      date.setDate(now.getDate() - offset);
-      days.push(date);
-    }
+const cleanRecommendationText = (value = '') => (
+  String(value || '')
+    .replace(/\s+/g, ' ')
+    .replace(/Philippine product options? to consider:.*?(?:\.|$)/gi, '')
+    .replace(/\b(Dove|Cream Silk|Human Nature|Vitress|Pantene(?:\s+Pro-V)?|Watsons|Lazada(?:\.ph)?|Shopee(?:\.ph)?)\b/gi, 'a suitable product type')
+    .trim()
+);
 
-    return days.map((dayDate) => {
-      const dayStart = new Date(dayDate);
-      const dayEnd = new Date(dayDate);
-      dayEnd.setDate(dayDate.getDate() + 1);
+const hasNegatedCareConcern = (text = '') => (
+  /\b(no|not|without)\s+(?:visible\s+|significant\s+|major\s+)?(?:damage|dryness|frizz|breakage|split\s+ends?|issues?)\b/i.test(text)
+  || /\bno\s+significant\s+damage\s+or\s+issues\b/i.test(text)
+  || /\bsealed\s+ends?\b/i.test(text)
+);
 
-      const dailyScores = screenings
-        .filter((item) => {
-          const ts = new Date(item.created_at || 0).getTime();
-          return ts >= dayStart.getTime() && ts < dayEnd.getTime();
-        })
-        .map((item) => getScoreFromScreening(item));
-
-      const avg = dailyScores.length
-        ? Math.round(dailyScores.reduce((sum, value) => sum + value, 0) / dailyScores.length)
-        : 0;
-
-      return {
-        key: toLocalDateKey(dayDate),
-        label: new Intl.DateTimeFormat('en-US', { weekday: 'short' }).format(dayDate).slice(0, 1),
-        score: avg,
-        hasData: dailyScores.length > 0,
-      };
-    });
+const hasExplicitCareConcern = (text = '') => {
+  const normalized = String(text || '').toLowerCase();
+  const negated = hasNegatedCareConcern(normalized);
+  if (/(split\s+ends?|split\s+tips?|breakage|brittle|fray(?:ed|ing)|frizz|flyaways|oily|greasy|stressed\s+ends)/i.test(normalized)) {
+    return true;
   }
+  return /(dry|dull|damage|damaged|needs care|not eligible|improve)/i.test(normalized) && !negated;
+};
 
-  const months = [];
-  for (let offset = 5; offset >= 0; offset -= 1) {
-    months.push(new Date(now.getFullYear(), now.getMonth() - offset, 1));
-  }
+const screeningNeedsImprovement = (screening = null) => {
+  if (!screening) return false;
+  const combined = [
+    screening.decision,
+    screening.detected_condition,
+    screening.visible_damage_notes,
+    screening.summary,
+  ].filter(Boolean).join(' ');
+  return (
+    hasExplicitCareConcern(combined)
+    || getScoreFromScreening(screening) < 70
+  );
+};
 
-  return months.map((monthDate) => {
-    const monthStart = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1).getTime();
-    const monthEnd = new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 1).getTime();
-    const monthlyScores = screenings
-      .filter((item) => {
-        const ts = new Date(item.created_at || 0).getTime();
-        return ts >= monthStart && ts < monthEnd;
-      })
-      .map((item) => getScoreFromScreening(item));
+const compactText = (value = '', limit = 140) => {
+  const normalized = String(value || '').replace(/\s+/g, ' ').trim();
+  if (normalized.length <= limit) return normalized;
+  return `${normalized.slice(0, limit - 3).trimEnd()}...`;
+};
 
-    const avg = monthlyScores.length
-      ? Math.round(monthlyScores.reduce((sum, value) => sum + value, 0) / monthlyScores.length)
-      : 0;
+const getMonthLabel = (date) => (
+  new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric' }).format(date)
+);
 
+const buildHairCalendarCells = (cursorDate, markedDateKeys = new Set(), selectedDateKey = '') => {
+  const monthStart = new Date(cursorDate.getFullYear(), cursorDate.getMonth(), 1);
+  const gridStart = new Date(monthStart);
+  gridStart.setDate(monthStart.getDate() - monthStart.getDay());
+
+  return Array.from({ length: 42 }, (_, index) => {
+    const date = new Date(gridStart);
+    date.setDate(gridStart.getDate() + index);
+    const key = toLocalDateKey(date);
     return {
-      key: `${monthDate.getFullYear()}-${monthDate.getMonth()}`,
-      label: new Intl.DateTimeFormat('en-US', { month: 'short' }).format(monthDate),
-      score: avg,
-      hasData: monthlyScores.length > 0,
+      key,
+      date,
+      day: date.getDate(),
+      isCurrentMonth: date.getMonth() === cursorDate.getMonth(),
+      isToday: key === toLocalDateKey(new Date()),
+      isSelected: key === selectedDateKey,
+      hasLog: markedDateKeys.has(key),
     };
   });
 };
@@ -188,14 +195,19 @@ function HairAnalysisHomeModule() {
   const router = useRouter();
   const { user, profile, resolvedTheme } = useAuth();
   const roles = resolveThemeRoles(resolvedTheme);
-  const [isLoading, setIsLoading] = React.useState(true);
+  const cacheMatchesUser = Boolean(cachedHairAnalysisHomeData && cachedHairAnalysisHomeUserId === user?.id);
+  const cachedHome = cacheMatchesUser ? cachedHairAnalysisHomeData : null;
+  const submissionsRef = React.useRef(cachedHome?.submissions || []);
+  const [isLoading, setIsLoading] = React.useState(!cacheMatchesUser);
   const [error, setError] = React.useState('');
-  const [submissions, setSubmissions] = React.useState([]);
-  const [monthCursor, setMonthCursor] = React.useState(() => new Date());
-  const [selectedDateKey, setSelectedDateKey] = React.useState('');
-  const [trendRange, setTrendRange] = React.useState('month');
+  const [submissions, setSubmissions] = React.useState(cachedHome?.submissions || []);
   const [logDetailDateKey, setLogDetailDateKey] = React.useState('');
   const [logDetailEntries, setLogDetailEntries] = React.useState([]);
+  const [calendarMonth, setCalendarMonth] = React.useState(() => {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), 1);
+  });
+  const [selectedCalendarDateKey, setSelectedCalendarDateKey] = React.useState(() => toLocalDateKey(new Date()));
 
   const { unreadCount } = useNotifications({
     role: 'donor',
@@ -247,7 +259,9 @@ function HairAnalysisHomeModule() {
         return;
       }
 
-      setIsLoading(true);
+      if (!submissionsRef.current.length) {
+        setIsLoading(true);
+      }
       setError('');
       const result = await fetchHairSubmissionsByUserId(user.id, 120);
 
@@ -258,6 +272,9 @@ function HairAnalysisHomeModule() {
       }
 
       const normalized = Array.isArray(result.data) ? result.data : [];
+      cachedHairAnalysisHomeData = { submissions: normalized };
+      cachedHairAnalysisHomeUserId = user.id;
+      submissionsRef.current = normalized;
       setSubmissions(normalized);
       setIsLoading(false);
     };
@@ -278,68 +295,48 @@ function HairAnalysisHomeModule() {
       .sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime())
   ), [submissions]);
 
+  const latestScreening = screenings[0] || null;
+  const recentLogs = React.useMemo(() => screenings.slice(0, 5), [screenings]);
   const screeningsByDate = React.useMemo(() => {
     const grouped = new Map();
     screenings.forEach((entry) => {
       const key = toLocalDateKey(entry.created_at);
       if (!key) return;
-      const current = grouped.get(key) || [];
-      current.push(entry);
-      grouped.set(key, current);
+      const rows = grouped.get(key) || [];
+      rows.push(entry);
+      grouped.set(key, rows);
     });
     return grouped;
   }, [screenings]);
-
-  React.useEffect(() => {
-    if (selectedDateKey) return;
-
-    const todayKey = toLocalDateKey(new Date());
-    if (screeningsByDate.has(todayKey)) {
-      setSelectedDateKey(todayKey);
-      return;
+  const calendarDateKeys = React.useMemo(() => new Set(screeningsByDate.keys()), [screeningsByDate]);
+  const calendarCells = React.useMemo(
+    () => buildHairCalendarCells(calendarMonth, calendarDateKeys, selectedCalendarDateKey),
+    [calendarDateKeys, calendarMonth, selectedCalendarDateKey]
+  );
+  const calendarRows = React.useMemo(() => {
+    const rows = [];
+    for (let index = 0; index < calendarCells.length; index += 7) {
+      rows.push(calendarCells.slice(index, index + 7));
     }
-
-    const latest = screenings[0];
-    if (latest?.created_at) {
-      const latestKey = toLocalDateKey(latest.created_at);
-      setSelectedDateKey(latestKey);
-      setMonthCursor(new Date(latest.created_at));
-    }
-  }, [screenings, screeningsByDate, selectedDateKey]);
-
-  const latestScreening = screenings[0] || null;
-  const selectedDayScreening = (screeningsByDate.get(selectedDateKey) || [])[0] || latestScreening;
-  const trendSeries = React.useMemo(() => buildTrendSeries(screenings, trendRange), [screenings, trendRange]);
-  const trendAverage = React.useMemo(() => {
-    const scored = trendSeries.filter((item) => item.hasData);
-    if (!scored.length) return 0;
-    return Math.round(scored.reduce((sum, item) => sum + item.score, 0) / scored.length);
-  }, [trendSeries]);
-  const trendRangeLabel = trendRange === 'week' ? 'Last 7 Days' : 'Last 6 Months';
+    return rows;
+  }, [calendarCells]);
+  const selectedDateLogs = screeningsByDate.get(selectedCalendarDateKey) || [];
+  const selectedDateLatestLog = selectedDateLogs[0] || null;
+  const latestRecommendations = React.useMemo(
+    () => getScreeningRecommendations(latestScreening).slice(0, 3),
+    [latestScreening]
+  );
+  const latestNeedsImprovement = screeningNeedsImprovement(latestScreening);
   const brandName = resolvedTheme?.brandName || 'Donivra';
   const isProfileComplete = profileCompletionMeta.isComplete;
   const isFirstHairCheck = screenings.length === 0;
 
-  const highlightedDateKeys = React.useMemo(() => new Set(screenings.map((item) => toLocalDateKey(item.created_at))), [screenings]);
-  const monthCells = React.useMemo(
-    () => buildMonthCells(monthCursor, highlightedDateKeys, selectedDateKey),
-    [highlightedDateKeys, monthCursor, selectedDateKey]
-  );
-
-  const todayCondition = selectedDayScreening?.detected_condition || latestScreening?.detected_condition || 'No result yet';
-  const healthScore = getScoreFromScreening(selectedDayScreening || latestScreening);
-  const lengthLabel = getLengthLabel(selectedDayScreening || latestScreening);
-  const textureLabel = selectedDayScreening?.detected_texture || latestScreening?.detected_texture || 'N/A';
+  const todayCondition = latestScreening?.detected_condition || 'No result yet';
+  const healthScore = getScoreFromScreening(latestScreening);
+  const lengthLabel = getLengthLabel(latestScreening);
+  const textureLabel = latestScreening?.detected_texture || 'N/A';
   const scalpLabel = todayCondition || 'N/A';
-  const moistureLabel = getMoistureLabel(selectedDayScreening || latestScreening);
-
-  const handleBack = () => {
-    if (router.canGoBack?.()) {
-      router.back();
-      return;
-    }
-    router.replace('/donor/home');
-  };
+  const moistureLabel = getMoistureLabel(latestScreening);
 
   const handleStartAnalysis = () => {
     router.push('/donor/donations?mode=scan');
@@ -359,16 +356,15 @@ function HairAnalysisHomeModule() {
     router.replace(item.route);
   };
 
-  const openLogDetailsForDate = (dateKey) => {
-    const entries = screeningsByDate.get(dateKey) || [];
-    if (!entries.length) return;
-    setLogDetailDateKey(dateKey);
-    setLogDetailEntries(entries.map((entry) => ({
+  const openLogDetailsForEntry = (entry) => {
+    if (!entry?.created_at) return;
+    setLogDetailDateKey(toLocalDateKey(entry.created_at));
+    setLogDetailEntries([{
       screening: entry,
       submission: entry.submission,
-      recommendations: entry.submission?.recommendations || [],
+      recommendations: getScreeningRecommendations(entry),
       images: (entry.submission?.submission_details || []).flatMap((detail) => detail.images || []),
-    })));
+    }]);
   };
 
   const closeLogDetails = () => {
@@ -376,44 +372,7 @@ function HairAnalysisHomeModule() {
     setLogDetailEntries([]);
   };
 
-  const header = (
-    <View style={[styles.headerRow, { borderColor: roles.defaultCardBorder, backgroundColor: roles.defaultCardBackground }]}>
-      <Pressable onPress={handleBack} style={[styles.iconBtn, { borderColor: roles.defaultCardBorder, backgroundColor: roles.pageBackground }]}>
-        <AppIcon name="arrow-left" color={roles.headingText} />
-      </Pressable>
-      <Text style={[styles.headerTitle, { color: roles.headingText }]}>{brandName}</Text>
-      <Pressable
-        onPress={() => router.push('/donor/notifications')}
-        style={[styles.iconBtn, { borderColor: roles.defaultCardBorder, backgroundColor: roles.pageBackground }]}
-      >
-        <AppIcon name="notifications" color={roles.headingText} />
-        {unreadCount > 0 ? (
-          <View style={[styles.badge, { backgroundColor: roles.primaryActionBackground }]}>
-            <Text style={[styles.badgeText, { color: roles.primaryActionText }]}>{Math.min(unreadCount, 99)}</Text>
-          </View>
-        ) : null}
-      </Pressable>
-    </View>
-  );
-
-  if (isLoading) {
-    return (
-      <DashboardLayout
-        header={header}
-        navItems={donorDashboardNavItems}
-        activeNavKey="checkhair"
-        onNavPress={handleNavPress}
-        navVariant="donor"
-        screenVariant="default"
-        showSupportChat={false}
-      >
-        <View style={styles.centerState}>
-          <ActivityIndicator size="large" color={roles.primaryActionBackground} />
-          <Text style={[styles.centerStateText, { color: roles.bodyText }]}>Loading hair analysis...</Text>
-        </View>
-      </DashboardLayout>
-    );
-  }
+  const avatarInitials = getInitials(`${profile?.first_name || ''} ${profile?.last_name || ''}`);
 
   const primaryActionTitle = !isProfileComplete
     ? 'Complete Profile First'
@@ -431,7 +390,17 @@ function HairAnalysisHomeModule() {
 
   return (
     <DashboardLayout
-      header={header}
+      header={(
+        <DonorTopBar
+          title={brandName}
+          subtitle="Hair Analysis"
+          avatarInitials={avatarInitials}
+          avatarUri={profile?.avatar_url || profile?.photo_path || ''}
+          unreadCount={unreadCount}
+          onNotificationsPress={() => router.push('/donor/notifications')}
+          onProfilePress={() => router.navigate('/profile')}
+        />
+      )}
       navItems={donorDashboardNavItems}
       activeNavKey="checkhair"
       onNavPress={handleNavPress}
@@ -452,72 +421,224 @@ function HairAnalysisHomeModule() {
             <Text style={[styles.errorText, { color: roles.bodyText }]}>{error}</Text>
           </View>
         ) : null}
+        {isLoading ? (
+          <StatusBanner
+            variant="info"
+            message="Refreshing hair analysis in the background."
+            presentation="floating"
+            visible={isLoading}
+            autoDismissMs={3000}
+          />
+        ) : null}
+
+        <View style={[styles.card, styles.calendarCard, { borderColor: roles.defaultCardBorder, backgroundColor: roles.defaultCardBackground }]}>
+          <View style={styles.calendarHeader}>
+            <Pressable
+              onPress={() => setCalendarMonth((previous) => new Date(previous.getFullYear(), previous.getMonth() - 1, 1))}
+              style={[styles.calendarNavButton, { backgroundColor: roles.pageBackground }]}
+            >
+              <AppIcon name="chevron-left" color={roles.headingText} />
+            </Pressable>
+            <View style={styles.calendarHeaderCopy}>
+              <Text style={[styles.cardTitle, { color: roles.headingText }]}>{getMonthLabel(calendarMonth)}</Text>
+              <Text style={[styles.cardSubtitle, { color: roles.metaText }]}>
+                {selectedDateLogs.length
+                  ? `${selectedDateLogs.length} log${selectedDateLogs.length === 1 ? '' : 's'} selected`
+                  : `${calendarDateKeys.size} logged day${calendarDateKeys.size === 1 ? '' : 's'}`}
+              </Text>
+            </View>
+            <Pressable
+              onPress={() => setCalendarMonth((previous) => new Date(previous.getFullYear(), previous.getMonth() + 1, 1))}
+              style={[styles.calendarNavButton, { backgroundColor: roles.pageBackground }]}
+            >
+              <AppIcon name="chevron-right" color={roles.headingText} />
+            </Pressable>
+          </View>
+
+          <View style={styles.calendarWeekdayRow}>
+            {HAIR_CALENDAR_WEEKDAYS.map((label) => (
+              <Text key={`hair-calendar-weekday-${label}`} style={[styles.calendarWeekdayText, { color: roles.metaText }]}>
+                {label}
+              </Text>
+            ))}
+          </View>
+
+          <View style={styles.calendarGrid}>
+            {calendarRows.map((row, rowIndex) => (
+              <View key={`hair-calendar-row-${rowIndex}`} style={styles.calendarRow}>
+                {row.map((cell) => (
+                  <Pressable
+                    key={cell.key}
+                    onPress={() => {
+                      setSelectedCalendarDateKey(cell.key);
+                      if (!cell.isCurrentMonth) {
+                        setCalendarMonth(new Date(cell.date.getFullYear(), cell.date.getMonth(), 1));
+                      }
+                      const logs = screeningsByDate.get(cell.key) || [];
+                      if (logs[0]) {
+                        openLogDetailsForEntry(logs[0]);
+                      }
+                    }}
+                    style={[
+                      styles.calendarDay,
+                      { borderColor: cell.isSelected ? roles.primaryActionBackground : roles.defaultCardBorder },
+                      cell.isSelected ? { backgroundColor: roles.primaryActionBackground } : { backgroundColor: roles.pageBackground },
+                      !cell.isCurrentMonth ? styles.calendarDayMuted : null,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.calendarDayText,
+                        { color: cell.isSelected ? roles.primaryActionText : roles.headingText },
+                        !cell.isCurrentMonth && !cell.isSelected ? { color: roles.metaText } : null,
+                      ]}
+                    >
+                      {cell.day}
+                    </Text>
+                    {cell.hasLog ? (
+                      <View style={[styles.calendarDot, { backgroundColor: cell.isSelected ? roles.primaryActionText : roles.primaryActionBackground }]} />
+                    ) : cell.isToday ? (
+                      <View style={[styles.calendarTodayDot, { borderColor: roles.primaryActionBackground }]} />
+                    ) : null}
+                  </Pressable>
+                ))}
+              </View>
+            ))}
+          </View>
+
+          <View style={[styles.calendarSelectedPanel, { backgroundColor: roles.pageBackground, borderColor: roles.defaultCardBorder }]}>
+            <View style={styles.calendarSelectedCopy}>
+              <Text style={[styles.calendarSelectedTitle, { color: roles.headingText }]}>
+                {selectedDateLatestLog ? selectedDateLatestLog.detected_condition || 'Hair check' : 'No log selected'}
+              </Text>
+              <Text style={[styles.calendarSelectedText, { color: roles.bodyText }]}>
+                {selectedDateLatestLog
+                  ? compactText(selectedDateLatestLog.summary || selectedDateLatestLog.decision || 'Tap a marked date to view the saved AI scan.', 120)
+                  : 'Marked dates contain saved hair analysis logs.'}
+              </Text>
+            </View>
+            {selectedDateLatestLog ? (
+              <Pressable
+                onPress={() => openLogDetailsForEntry(selectedDateLatestLog)}
+                style={[styles.calendarViewButton, { backgroundColor: roles.iconPrimarySurface }]}
+              >
+                <Text style={[styles.calendarViewButtonText, { color: roles.iconPrimaryColor }]}>View</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        </View>
 
         <View style={styles.topGrid}>
-          <View style={[styles.card, styles.calendarCard, { borderColor: roles.defaultCardBorder, backgroundColor: roles.defaultCardBackground }]}>
+          <View style={[styles.card, styles.recentLogCard, { borderColor: roles.defaultCardBorder, backgroundColor: roles.defaultCardBackground }]}>
             <View style={styles.cardHeader}>
-              <Text style={[styles.cardTitle, { color: roles.headingText }]}>My Hair Log</Text>
-              <View style={styles.monthControl}>
-                <Pressable
-                  onPress={() => setMonthCursor((prev) => new Date(prev.getFullYear(), prev.getMonth() - 1, 1))}
-                  style={[styles.monthArrow, { backgroundColor: roles.pageBackground }]}
-                >
-                  <AppIcon name="chevron-left" color={roles.headingText} />
-                </Pressable>
-                <Text style={[styles.monthLabel, { color: roles.bodyText }]}>{getMonthLabel(monthCursor)}</Text>
-                <Pressable
-                  onPress={() => setMonthCursor((prev) => new Date(prev.getFullYear(), prev.getMonth() + 1, 1))}
-                  style={[styles.monthArrow, { backgroundColor: roles.pageBackground }]}
-                >
-                  <AppIcon name="chevron-right" color={roles.headingText} />
-                </Pressable>
+              <View>
+                <Text style={[styles.cardTitle, { color: roles.headingText }]}>Recent Hair Log</Text>
+                <Text style={[styles.cardSubtitle, { color: roles.metaText }]}>Latest AI scan results and next steps</Text>
+              </View>
+              <View style={[styles.logCountPill, { backgroundColor: roles.pageBackground }]}>
+                <Text style={[styles.logCountText, { color: roles.bodyText }]}>{screenings.length} logs</Text>
               </View>
             </View>
 
-            <View style={styles.weekHeaderRow}>
-              {WEEKDAY_LABELS.map((label, index) => (
-                <Text key={`weekday-${index}-${label}`} style={[styles.weekdayLabel, { color: roles.metaText }]}>{label}</Text>
-              ))}
-            </View>
+            {latestScreening && latestNeedsImprovement ? (
+              <View style={[styles.improvementPanel, { backgroundColor: roles.pageBackground, borderColor: roles.defaultCardBorder }]}>
+                <View style={styles.improvementHeader}>
+                  <View style={[styles.improvementIcon, { backgroundColor: roles.iconPrimarySurface }]}>
+                    <AppIcon name="sparkle" color={roles.iconPrimaryColor} />
+                  </View>
+                  <View style={styles.improvementCopy}>
+                    <Text style={[styles.improvementTitle, { color: roles.headingText }]}>Focus for improvement</Text>
+                    <Text style={[styles.improvementBody, { color: roles.bodyText }]}>
+                      Your latest result needs care. Follow the AI recommendation below before your next scan.
+                    </Text>
+                  </View>
+                </View>
+                {latestRecommendations.length ? (
+                  <View style={styles.recommendationPreviewList}>
+                    {latestRecommendations.slice(0, 2).map((recommendation, index) => (
+                      <View key={recommendation.recommendation_id || `${recommendation.title}-${index}`} style={styles.recommendationPreviewItem}>
+                        <Text style={[styles.recommendationPreviewTitle, { color: roles.headingText }]}>
+                          {recommendation.title || `Recommendation ${index + 1}`}
+                        </Text>
+                        <Text style={[styles.recommendationPreviewText, { color: roles.bodyText }]}>
+                          {compactText(cleanRecommendationText(recommendation.recommendation_text), 170)}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                ) : (
+                  <Text style={[styles.improvementBody, { color: roles.bodyText }]}>
+                    Keep your hair clean, loose, and protected from heat or harsh chemical processing, then scan again for a clearer comparison.
+                  </Text>
+                )}
+              </View>
+            ) : null}
 
-            <View style={styles.daysGrid}>
-              {monthCells.map((cell) => (
-                <Pressable
-                  key={cell.key}
-                  onPress={() => {
-                    setSelectedDateKey(cell.key);
-                    setMonthCursor(new Date(cell.date.getFullYear(), cell.date.getMonth(), 1));
-                    if (cell.hasLog) {
-                      openLogDetailsForDate(cell.key);
-                    }
-                  }}
-                  style={[
-                    styles.dayCell,
-                    cell.isSelected ? { backgroundColor: roles.primaryActionBackground } : null,
-                    !cell.isCurrentMonth ? styles.dayCellMuted : null,
-                  ]}
-                >
-                  <Text
+            <View style={styles.recentLogList}>
+              {recentLogs.length ? recentLogs.map((entry, index) => {
+                const score = getScoreFromScreening(entry);
+                const needsImprovement = screeningNeedsImprovement(entry);
+                const recommendations = getScreeningRecommendations(entry);
+                const primaryRecommendation = recommendations[0] || null;
+
+                return (
+                  <Pressable
+                    key={entry.ai_screening_id || entry.created_at || index}
+                    onPress={() => openLogDetailsForEntry(entry)}
                     style={[
-                      styles.dayText,
-                      { color: cell.isSelected ? roles.primaryActionText : roles.headingText },
-                      !cell.isCurrentMonth ? { color: roles.metaText } : null,
+                      styles.recentLogItem,
+                      { borderColor: roles.defaultCardBorder, backgroundColor: roles.pageBackground },
                     ]}
                   >
-                    {cell.day}
-                  </Text>
-                  {cell.hasLog ? (
-                    <View
-                      style={[
-                        styles.dayDot,
-                        {
-                          backgroundColor: cell.isSelected ? roles.primaryActionText : roles.primaryActionBackground,
-                        },
-                      ]}
-                    />
-                  ) : null}
+                    <View style={styles.recentLogMain}>
+                      <View style={styles.recentLogTopRow}>
+                        <Text style={[styles.recentLogDate, { color: roles.metaText }]}>
+                          {formatRecentLogDate(entry.created_at)}
+                        </Text>
+                        <View
+                          style={[
+                            styles.recentLogStatus,
+                            {
+                              backgroundColor: needsImprovement ? '#F8E4D2' : '#E3F3E5',
+                            },
+                          ]}
+                        >
+                          <Text style={[styles.recentLogStatusText, { color: needsImprovement ? '#9A5B21' : '#2D6F3E' }]}>
+                            {needsImprovement ? 'Needs care' : 'Good'}
+                          </Text>
+                        </View>
+                      </View>
+                      <Text style={[styles.recentLogCondition, { color: roles.headingText }]}>
+                        {entry.detected_condition || entry.decision || 'Hair check'}
+                      </Text>
+                      {needsImprovement && primaryRecommendation?.recommendation_text ? (
+                        <Text style={[styles.recentLogRecommendation, { color: roles.bodyText }]}>
+                          Do this: {compactText(cleanRecommendationText(primaryRecommendation.recommendation_text), 130)}
+                        </Text>
+                      ) : (
+                        <Text style={[styles.recentLogRecommendation, { color: roles.bodyText }]}>
+                          {entry.summary ? compactText(entry.summary, 130) : 'Tap to review this saved AI scan.'}
+                        </Text>
+                      )}
+                    </View>
+                    <View style={styles.recentLogScoreWrap}>
+                      <Text style={[styles.recentLogScore, { color: roles.primaryActionBackground }]}>{score || '--'}</Text>
+                      <Text style={[styles.recentLogScoreLabel, { color: roles.metaText }]}>score</Text>
+                    </View>
+                  </Pressable>
+                );
+              }) : (
+                <Pressable
+                  onPress={handlePrimaryAction}
+                  style={[styles.emptyLogState, { borderColor: roles.defaultCardBorder, backgroundColor: roles.pageBackground }]}
+                >
+                  <AppIcon name="camera" color={roles.primaryActionBackground} size="lg" />
+                  <View style={styles.emptyLogCopy}>
+                    <Text style={[styles.emptyLogTitle, { color: roles.headingText }]}>No recent logs yet</Text>
+                    <Text style={[styles.emptyLogBody, { color: roles.bodyText }]}>Start your first hair check to get AI recommendations.</Text>
+                  </View>
                 </Pressable>
-              ))}
+              )}
             </View>
           </View>
 
@@ -560,88 +681,6 @@ function HairAnalysisHomeModule() {
           </View>
         </View>
 
-        <View style={[styles.card, styles.trendCard, { borderColor: roles.defaultCardBorder, backgroundColor: roles.defaultCardBackground }]}>
-          <View style={styles.trendHeader}>
-            <View style={styles.trendTitleBlock}>
-              <Text style={[styles.cardTitle, { color: roles.headingText }]}>Health Trend</Text>
-              <Text style={[styles.trendSubtitle, { color: roles.metaText }]}>{trendRangeLabel}</Text>
-            </View>
-            <View style={[styles.trendFilter, { backgroundColor: roles.pageBackground }]}>
-              {['week', 'month'].map((range) => {
-                const isActive = trendRange === range;
-                return (
-                  <Pressable
-                    key={range}
-                    onPress={() => setTrendRange(range)}
-                    style={[
-                      styles.trendFilterOption,
-                      isActive ? { backgroundColor: roles.primaryActionBackground } : null,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.trendFilterText,
-                        { color: isActive ? roles.primaryActionText : roles.bodyText },
-                      ]}
-                    >
-                      {range === 'week' ? 'Week' : 'Month'}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-          </View>
-
-          <View style={[styles.trendSummaryRow, { borderColor: roles.defaultCardBorder }]}>
-            <Text style={[styles.trendSummaryLabel, { color: roles.metaText }]}>Average score</Text>
-            <Text style={[styles.trendSummaryValue, { color: roles.primaryActionBackground }]}>
-              {trendAverage || '--'}
-              <Text style={[styles.trendSummaryUnit, { color: roles.metaText }]}>/100</Text>
-            </Text>
-          </View>
-
-          <View style={styles.areaChartWrap}>
-            <View style={styles.areaYAxis}>
-              {[100, 50, 0].map((label) => (
-                <Text key={label} style={[styles.areaAxisLabel, { color: roles.metaText }]}>{label}</Text>
-              ))}
-            </View>
-            <View style={styles.areaChartBody}>
-              <View style={styles.areaGrid}>
-                {[0, 1, 2].map((line) => (
-                  <View key={line} style={[styles.areaGridLine, { backgroundColor: roles.defaultCardBorder }]} />
-                ))}
-              </View>
-              <View style={styles.areaColumns}>
-                {trendSeries.map((item) => {
-                  const heightPercent = Math.max(item.hasData ? item.score : 0, item.hasData ? 8 : 2);
-                  return (
-                    <View key={item.key} style={styles.areaColumn}>
-                      <View style={styles.areaColumnInner}>
-                        <View
-                          style={[
-                            styles.areaFill,
-                            {
-                              height: `${heightPercent}%`,
-                              backgroundColor: item.hasData ? `${roles.primaryActionBackground}28` : roles.pageBackground,
-                              borderTopColor: item.hasData ? roles.primaryActionBackground : roles.defaultCardBorder,
-                            },
-                          ]}
-                        >
-                          {item.hasData ? (
-                            <View style={[styles.areaPoint, { backgroundColor: roles.primaryActionBackground }]} />
-                          ) : null}
-                        </View>
-                      </View>
-                      <Text style={[styles.trendLabel, { color: roles.metaText }]}>{item.label}</Text>
-                    </View>
-                  );
-                })}
-              </View>
-            </View>
-          </View>
-        </View>
-
         <AppButton
           title={primaryActionTitle}
           onPress={handlePrimaryAction}
@@ -651,7 +690,7 @@ function HairAnalysisHomeModule() {
         />
       </View>
 
-      {isFirstHairCheck ? (
+      {isFirstHairCheck && !isLoading ? (
         <Modal transparent animationType="fade" visible>
           <View style={styles.firstTimeOverlay}>
             <View style={[styles.firstTimeCard, { backgroundColor: roles.defaultCardBackground }]}>
@@ -768,11 +807,108 @@ const styles = StyleSheet.create({
   calendarCard: {
     gap: theme.spacing.sm,
   },
-  conditionCard: {
+  calendarHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: theme.spacing.sm,
   },
-  trendCard: {
-    gap: theme.spacing.md,
+  calendarHeaderCopy: {
+    flex: 1,
+    alignItems: 'center',
+    minWidth: 0,
+  },
+  calendarNavButton: {
+    width: 40,
+    height: 40,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  calendarWeekdayRow: {
+    flexDirection: 'row',
+    gap: 5,
+  },
+  calendarWeekdayText: {
+    flex: 1,
+    textAlign: 'center',
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 10,
+    fontWeight: theme.typography.weights.bold,
+  },
+  calendarGrid: {
+    gap: 5,
+  },
+  calendarRow: {
+    flexDirection: 'row',
+    gap: 5,
+  },
+  calendarDay: {
+    flex: 1,
+    minHeight: 42,
+    borderWidth: 1,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 3,
+  },
+  calendarDayMuted: {
+    opacity: 0.46,
+  },
+  calendarDayText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 13,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  calendarDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  calendarTodayDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    borderWidth: 1,
+  },
+  calendarSelectedPanel: {
+    borderWidth: 1,
+    borderRadius: theme.radius.lg,
+    padding: theme.spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  calendarSelectedCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 3,
+  },
+  calendarSelectedTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.bold,
+    textTransform: 'capitalize',
+  },
+  calendarSelectedText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  calendarViewButton: {
+    borderRadius: theme.radius.full,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: 8,
+  },
+  calendarViewButtonText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 12,
+    fontWeight: theme.typography.weights.bold,
+  },
+  recentLogCard: {
+    gap: theme.spacing.sm,
+  },
+  conditionCard: {
+    gap: theme.spacing.sm,
   },
   cardHeader: {
     flexDirection: 'row',
@@ -785,64 +921,153 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.semantic.titleSm,
     fontWeight: theme.typography.weights.bold,
   },
-  monthControl: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  monthArrow: {
-    width: 26,
-    height: 26,
-    borderRadius: theme.radius.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  monthLabel: {
-    minWidth: 120,
-    textAlign: 'center',
+  cardSubtitle: {
+    marginTop: 2,
     fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    fontWeight: theme.typography.weights.semibold,
+    fontSize: 12,
   },
-  weekHeaderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: 4,
+  logCountPill: {
+    borderRadius: theme.radius.full,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: 6,
   },
-  weekdayLabel: {
-    flex: 1,
-    textAlign: 'center',
+  logCountText: {
     fontFamily: theme.typography.fontFamily,
     fontSize: 12,
     fontWeight: theme.typography.weights.semibold,
   },
-  daysGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 4,
-    justifyContent: 'space-between',
+  improvementPanel: {
+    borderWidth: 1,
+    borderRadius: theme.radius.lg,
+    padding: theme.spacing.sm,
+    gap: theme.spacing.sm,
   },
-  dayCell: {
-    width: '13.5%',
-    aspectRatio: 1,
+  improvementHeader: {
+    flexDirection: 'row',
+    gap: theme.spacing.sm,
+    alignItems: 'flex-start',
+  },
+  improvementIcon: {
+    width: 36,
+    height: 36,
     borderRadius: theme.radius.full,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  dayCellMuted: {
-    opacity: 0.5,
+  improvementCopy: {
+    flex: 1,
+    gap: 2,
   },
-  dayText: {
+  improvementTitle: {
     fontFamily: theme.typography.fontFamily,
-    fontSize: 13,
-    fontWeight: theme.typography.weights.medium,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.bold,
   },
-  dayDot: {
-    width: 5,
-    height: 5,
+  improvementBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  recommendationPreviewList: {
+    gap: theme.spacing.xs,
+  },
+  recommendationPreviewItem: {
+    gap: 2,
+  },
+  recommendationPreviewTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 12,
+    fontWeight: theme.typography.weights.bold,
+  },
+  recommendationPreviewText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  recentLogList: {
+    gap: theme.spacing.xs,
+  },
+  recentLogItem: {
+    borderWidth: 1,
+    borderRadius: theme.radius.lg,
+    padding: theme.spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  recentLogMain: {
+    flex: 1,
+    gap: 4,
+  },
+  recentLogTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.xs,
+  },
+  recentLogDate: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 11,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  recentLogStatus: {
     borderRadius: theme.radius.full,
-    position: 'absolute',
-    bottom: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  recentLogStatusText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 10,
+    fontWeight: theme.typography.weights.bold,
+  },
+  recentLogCondition: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 14,
+    fontWeight: theme.typography.weights.bold,
+    textTransform: 'capitalize',
+  },
+  recentLogRecommendation: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  recentLogScoreWrap: {
+    width: 54,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  recentLogScore: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: 20,
+    fontWeight: theme.typography.weights.bold,
+  },
+  recentLogScoreLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 10,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  emptyLogState: {
+    minHeight: 96,
+    borderWidth: 1,
+    borderRadius: theme.radius.lg,
+    padding: theme.spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  emptyLogCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  emptyLogTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.bold,
+  },
+  emptyLogBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 12,
+    lineHeight: 18,
   },
   healthRow: {
     flexDirection: 'row',
@@ -900,131 +1125,6 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamily,
     fontSize: 13,
     fontWeight: theme.typography.weights.semibold,
-  },
-  trendHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: theme.spacing.sm,
-  },
-  trendTitleBlock: {
-    flex: 1,
-    gap: 2,
-  },
-  trendSubtitle: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: 12,
-  },
-  trendFilter: {
-    flexDirection: 'row',
-    borderRadius: theme.radius.full,
-    padding: 4,
-    gap: 4,
-  },
-  trendFilterOption: {
-    minWidth: 64,
-    minHeight: 32,
-    borderRadius: theme.radius.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: theme.spacing.sm,
-  },
-  trendFilterText: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: 12,
-    fontWeight: theme.typography.weights.bold,
-  },
-  trendSummaryRow: {
-    borderWidth: 1,
-    borderRadius: theme.radius.lg,
-    paddingHorizontal: theme.spacing.sm,
-    paddingVertical: theme.spacing.xs,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  trendSummaryLabel: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: 12,
-    fontWeight: theme.typography.weights.medium,
-  },
-  trendSummaryValue: {
-    fontFamily: theme.typography.fontFamilyDisplay,
-    fontSize: 22,
-    fontWeight: theme.typography.weights.bold,
-  },
-  trendSummaryUnit: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: 12,
-    fontWeight: theme.typography.weights.medium,
-  },
-  areaChartWrap: {
-    flexDirection: 'row',
-    minHeight: 188,
-    gap: theme.spacing.xs,
-  },
-  areaYAxis: {
-    width: 28,
-    height: 150,
-    justifyContent: 'space-between',
-    alignItems: 'flex-end',
-    paddingRight: 4,
-  },
-  areaAxisLabel: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: 10,
-  },
-  areaChartBody: {
-    flex: 1,
-    height: 176,
-    position: 'relative',
-  },
-  areaGrid: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 150,
-    justifyContent: 'space-between',
-  },
-  areaGridLine: {
-    height: 1,
-    opacity: 0.7,
-  },
-  areaColumns: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    height: 176,
-  },
-  areaColumn: {
-    flex: 1,
-    height: 176,
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-  },
-  areaColumnInner: {
-    width: '100%',
-    height: 150,
-    justifyContent: 'flex-end',
-    alignItems: 'stretch',
-  },
-  areaFill: {
-    width: '100%',
-    minHeight: 4,
-    borderTopWidth: 3,
-    alignItems: 'center',
-    justifyContent: 'flex-start',
-  },
-  areaPoint: {
-    width: 8,
-    height: 8,
-    borderRadius: theme.radius.full,
-    marginTop: -6,
-  },
-  trendLabel: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: 11,
-    fontWeight: theme.typography.weights.medium,
   },
   ctaButton: {
     marginTop: theme.spacing.xs,

@@ -26,6 +26,66 @@ const CAPTURE_NOISE_PATTERNS = [
   'reupload', 'all views are', 'photo is clear', 'visible in the',
 ];
 
+const ADVERTISED_RECOMMENDATION_PATTERNS = [
+  /\bDove\b/gi,
+  /\bCream Silk\b/gi,
+  /\bHuman Nature\b/gi,
+  /\bVitress\b/gi,
+  /\bHead\s*&\s*Shoulders\b/gi,
+  /\bSelsun Blue\b/gi,
+  /\bPantene(?:\s+Pro-V)?\b/gi,
+  /\bWatsons\b/gi,
+  /\bLazada(?:\.ph)?\b/gi,
+  /\bShopee(?:\.ph)?\b/gi,
+];
+
+const cleanRecommendationText = (value = '') => {
+  let text = String(value || '').replace(/\s+/g, ' ').trim();
+  text = text.replace(/Philippine product options? to consider:.*?(?:\.|$)/gi, '');
+  ADVERTISED_RECOMMENDATION_PATTERNS.forEach((pattern) => {
+    text = text.replace(pattern, 'a suitable product type');
+  });
+  return text.replace(/\s+/g, ' ').trim();
+};
+
+const hasNegatedCareConcern = (text = '') => (
+  /\b(no|not|without)\s+(?:visible\s+|significant\s+|major\s+)?(?:damage|dryness|frizz|breakage|split\s+ends?|issues?)\b/i.test(text)
+  || /\bno\s+significant\s+damage\s+or\s+issues\b/i.test(text)
+  || /\bsealed\s+ends?\b/i.test(text)
+);
+
+const hasExplicitCareConcern = (text = '') => {
+  const normalized = String(text || '').toLowerCase();
+  const negated = hasNegatedCareConcern(normalized);
+  if (/(split\s+ends?|split\s+tips?|breakage|brittle|fray(?:ed|ing)|frizz|flyaways|oily|greasy|stressed\s+ends)/i.test(normalized)) {
+    return true;
+  }
+  if (/(dry|dull|damage|damaged|needs care|not eligible|improve)/i.test(normalized) && !negated) {
+    return true;
+  }
+  return false;
+};
+
+const getCanonicalHairAssessment = (screening = null) => {
+  if (!screening) return { label: 'No result', needsCare: false };
+  const combined = [
+    screening.detected_condition,
+    screening.visible_damage_notes,
+    screening.summary,
+    screening.decision,
+  ].filter(Boolean).join(' ');
+  const condition = String(screening.detected_condition || '').trim();
+  const needsCare = hasExplicitCareConcern(combined);
+  const label = needsCare && /healthy/i.test(condition)
+    ? 'Needs care'
+    : condition || (needsCare ? 'Needs care' : 'Healthy');
+
+  return {
+    label,
+    needsCare,
+  };
+};
+
 const normalizeConditionTone = (condition = '') => {
   const normalized = String(condition || '').trim().toLowerCase();
 
@@ -92,7 +152,22 @@ const toCompactSummary = (value = '') => {
 
 const isHairCareTip = (recommendation) => {
   const combined = `${recommendation?.title || ''} ${recommendation?.recommendation_text || ''}`.toLowerCase();
-  return !CAPTURE_NOISE_PATTERNS.some((pattern) => combined.includes(pattern));
+  return Boolean(cleanRecommendationText(recommendation?.recommendation_text || recommendation?.title || ''))
+    && !CAPTURE_NOISE_PATTERNS.some((pattern) => combined.includes(pattern));
+};
+
+const sanitizeRecommendation = (recommendation = {}) => ({
+  ...recommendation,
+  title: cleanRecommendationText(recommendation.title),
+  recommendation_text: cleanRecommendationText(recommendation.recommendation_text),
+});
+
+const filterDisplayRecommendations = (rows = [], screening = null) => {
+  if (!getCanonicalHairAssessment(screening).needsCare) return [];
+  return rows
+    .filter(isHairCareTip)
+    .map(sanitizeRecommendation)
+    .filter((item) => item.title || item.recommendation_text);
 };
 
 const buildEntryKey = (entry, index) => (
@@ -175,14 +250,17 @@ export function HairLogDetailModal({ visible, dateKey = '', entries = [], onClos
       });
     }
 
-    if (Array.isArray(activeEntry.recommendations) && activeEntry.recommendations.length) {
-      setRecommendations(activeEntry.recommendations.filter(isHairCareTip));
+    if (!getCanonicalHairAssessment(activeEntry.screening).needsCare) {
+      setRecommendations([]);
+      setIsLoadingRecommendations(false);
+    } else if (Array.isArray(activeEntry.recommendations) && activeEntry.recommendations.length) {
+      setRecommendations(filterDisplayRecommendations(activeEntry.recommendations, activeEntry.screening));
       setIsLoadingRecommendations(false);
     } else if (activeEntry.submission?.submission_id) {
       setIsLoadingRecommendations(true);
       fetchDonorRecommendationsBySubmissionId(activeEntry.submission.submission_id, 5).then((result) => {
         if (isCancelled) return;
-        setRecommendations((result.data || []).filter(isHairCareTip));
+        setRecommendations(filterDisplayRecommendations(result.data || [], activeEntry.screening));
         setIsLoadingRecommendations(false);
       });
     } else {
@@ -198,7 +276,10 @@ export function HairLogDetailModal({ visible, dateKey = '', entries = [], onClos
   if (!visible || !activeEntry?.screening) return null;
 
   const screening = activeEntry.screening;
-  const tone = normalizeConditionTone(screening.detected_condition);
+  const assessment = getCanonicalHairAssessment(screening);
+  const tone = assessment.needsCare
+    ? { dotColor: '#d89258', label: 'Needs care' }
+    : normalizeConditionTone(assessment.label);
   const hasAssessmentDetails = Boolean(
     screening?.estimated_length != null
     || screening?.detected_color
@@ -238,7 +319,7 @@ export function HairLogDetailModal({ visible, dateKey = '', entries = [], onClos
             <View style={[styles.statusCard, { backgroundColor: tone.dotColor + '14', borderColor: tone.dotColor + '44' }]}>
               <View style={styles.statusRow}>
                 <View style={[styles.statusDot, { backgroundColor: tone.dotColor }]} />
-                <Text style={[styles.statusLabel, { color: tone.dotColor }]}>{screening.decision || tone.label}</Text>
+                <Text style={[styles.statusLabel, { color: tone.dotColor }]}>{assessment.label}</Text>
               </View>
               <Text style={[styles.statusSubtext, { color: roles.bodyText }]}>
                 Saved {formatSavedDateTime(screening.created_at)}

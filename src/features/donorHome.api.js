@@ -2,21 +2,22 @@ import { supabase } from '../api/supabase/client';
 import { logAppError, logAppEvent } from '../utils/appErrors';
 import { canSubmitHairDonation, mapDonationPermissionError } from './donorCompliance.service';
 
-const donationDriveRequestsTable = 'Donation_Drive_Requests';
-const donationDriveRegistrationsTable = 'Donation_Drive_Registrations';
-const organizationsTable = 'Organizations';
-const organizationMembersTable = 'Organization_Members';
-const notificationTable = 'notification';
+const donationDriveRequestsTable = 'Event_Applications';
+const donationDriveRegistrationsTable = 'Event_Attendees';
 
 const donationDriveSelect = `
-  donation_drive_id:Donation_Drive_ID,
-  organization_id:Organization_ID,
-  event_title:Event_Title,
+  donation_drive_id:Event_Application_ID,
+  created_by_user_id:Created_By_User_ID,
+  applicant_first_name:Applicant_First_Name,
+  applicant_last_name:Applicant_Last_Name,
+  applicant_email:Applicant_Email,
+  applicant_contact_number:Applicant_Contact_Number,
+  event_title:Event_Name,
   event_overview:Event_Overview,
-  start_date:Start_Date,
-  end_date:End_Date,
-  proposal_attachment:Proposal_Attachment,
-  proposal_attachment_bucket:Proposal_Attachment_Bucket,
+  start_date:Proposed_Start_At,
+  end_date:Proposed_End_At,
+  event_image_url:Event_Place_Photo_URL,
+  event_image_path:Event_Place_Photo_Path,
   street:Street,
   region:Region,
   barangay:Barangay,
@@ -26,40 +27,23 @@ const donationDriveSelect = `
   latitude:Latitude,
   longitude:Longitude,
   status:Status,
-  is_open_for_all:Is_Open_For_All,
-  donation_setup_type:Donation_Setup_Type,
-  updated_at:Updated_At
-`;
-
-const organizationSelect = `
-  organization_id:Organization_ID,
-  organization_name:Organization_Name,
-  organization_type:Organization_Type,
-  organization_logo_url:Organization_Logo_URL,
-  street:Street,
-  region:Region,
-  barangay:Barangay,
-  city:City,
-  province:Province,
-  country:Country,
-  contact_number:Contact_Number,
-  status:Status,
-  is_approved:Is_Approved,
-  approval_status:Approval_Status,
-  review_notes:Review_Notes,
-  created_at:Created_At,
+  staff_contact_notes:Staff_Contact_Notes,
+  staff_review_notes:Staff_Review_Notes,
+  admin_decision_reason:Admin_Decision_Reason,
   updated_at:Updated_At
 `;
 
 const donationDriveRegistrationSelect = `
-  registration_id:Registration_ID,
-  donation_drive_id:Donation_Drive_ID,
+  registration_id:Event_Attendee_ID,
+  donation_drive_id:Event_Application_ID,
   user_id:User_ID,
+  full_name:Full_Name,
+  email:Email,
+  contact_number:Contact_Number,
   registration_status:Registration_Status,
   attendance_status:Attendance_Status,
-  registered_at:Registered_At,
-  updated_at:Updated_At,
-  attendance_marked_at:Attendance_Marked_At
+  registered_at:Created_At,
+  updated_at:Updated_At
 `;
 
 const normalizeRegistrationStatus = (value = '') => String(value || '').trim().toLowerCase();
@@ -71,7 +55,7 @@ const getStartOfTodayIso = () => {
 };
 
 const getDriveCompareDate = (drive) => drive?.end_date || drive?.start_date || null;
-const isDrivePublic = (drive = null) => Boolean(drive?.is_open_for_all);
+const isDrivePublic = (_drive = null) => true;
 const doesDriveRequireMembership = (drive = null) => (
   Boolean(drive?.organization_id) && !isDrivePublic(drive)
 );
@@ -117,18 +101,6 @@ const resolveDriveQrState = (row) => {
   };
 };
 
-const organizationMemberSelect = `
-  member_id:Member_ID,
-  organization_id:Organization_ID,
-  user_id:User_ID,
-  membership_role:Membership_Role,
-  is_primary:Is_Primary,
-  status:Status,
-  created_by:Created_By,
-  created_at:Created_At,
-  updated_at:Updated_At
-`;
-
 const buildLocationLabel = (row) => (
   [row?.city, row?.province, row?.country]
     .filter(Boolean)
@@ -143,9 +115,42 @@ const buildFullAddressLabel = (row) => (
     .trim()
 );
 
+const getEventHostKey = (row = {}) => (
+  row?.created_by_user_id
+    ? `user-${row.created_by_user_id}`
+    : `event-${row?.donation_drive_id || 'unknown'}`
+);
+
+const getEventHostName = (row = {}) => (
+  [row?.applicant_first_name, row?.applicant_last_name].filter(Boolean).join(' ').trim()
+  || row?.applicant_email
+  || 'Event host'
+);
+
+const normalizeEventHostOrganization = (row = {}, drives = []) => {
+  const organizationId = getEventHostKey(row);
+  const normalizedDrives = drives.length ? drives : [row];
+
+  return {
+    id: organizationId,
+    organization_id: organizationId,
+    organization_name: getEventHostName(row),
+    organization_type: 'Event host',
+    organization_logo_url: row?.event_image_url || '',
+    location_label: buildLocationLabel(row),
+    address_label: buildFullAddressLabel(row),
+    description: buildShortOverview(row?.event_overview || 'Approved donation event host.'),
+    membership: null,
+    is_active: true,
+    drives: normalizedDrives.map((drive) => normalizeDonationDrive(drive, null, null, null)),
+    updated_at: row?.updated_at || null,
+  };
+};
+
 const isRemoteUrl = (value = '') => /^https?:\/\//i.test(String(value || '').trim());
 
 const buildDonationDriveAttachmentUrl = (row = {}) => {
+  if (row?.event_image_url) return row.event_image_url;
   const attachment = String(row?.proposal_attachment || '').trim();
   if (!attachment) return '';
   if (isRemoteUrl(attachment)) return attachment;
@@ -165,29 +170,6 @@ const buildShortOverview = (value, maxLength = 140) => {
   return `${normalized.slice(0, maxLength - 1).trimEnd()}…`;
 };
 
-const normalizeOrganization = (row) => ({
-  id: row?.organization_id || null,
-  organization_id: row?.organization_id || null,
-  organization_name: row?.organization_name || '',
-  organization_type: row?.organization_type || '',
-  organization_logo_url: row?.organization_logo_url || '',
-  street: row?.street || '',
-  region: row?.region || '',
-  barangay: row?.barangay || '',
-  city: row?.city || '',
-  province: row?.province || '',
-  country: row?.country || '',
-  contact_number: row?.contact_number || '',
-  status: row?.status || '',
-  is_approved: row?.is_approved ?? false,
-  approval_status: row?.approval_status || '',
-  review_notes: row?.review_notes || '',
-  created_at: row?.created_at || null,
-  updated_at: row?.updated_at || null,
-  location_label: buildLocationLabel(row),
-  address_label: buildFullAddressLabel(row),
-});
-
 const normalizeDonationDriveRegistration = (row) => ({
   registration_id: row?.registration_id || null,
   donation_drive_id: row?.donation_drive_id || null,
@@ -200,66 +182,17 @@ const normalizeDonationDriveRegistration = (row) => ({
   qr: resolveDriveQrState(row),
 });
 
-const normalizeOrganizationMember = (row) => ({
-  membership_role: row?.membership_role || '',
-  membership_role_normalized: String(row?.membership_role || '').trim().toLowerCase(),
-  member_id: row?.member_id || null,
-  organization_id: row?.organization_id || null,
-  user_id: row?.user_id || null,
-  is_primary: Boolean(row?.is_primary),
-  status: row?.status || '',
-  created_by: row?.created_by || null,
-  created_at: row?.created_at || null,
-  updated_at: row?.updated_at || null,
-  is_active: String(row?.status || '').trim().toLowerCase() === 'active',
-  is_pending: (
-    String(row?.status || '').trim().toLowerCase() === 'inactive'
-    && String(row?.membership_role || '').trim().toLowerCase().startsWith('pending')
-  ),
-});
-
-const createOrganizationJoinPendingNotification = async ({
-  databaseUserId,
-  organizationName,
-}) => {
-  if (!databaseUserId || !organizationName) return;
-
-  const nowIso = new Date().toISOString();
-  const title = 'Organization join request submitted';
-  const message = `Your request to join ${organizationName} is pending approval.`;
-
-  const result = await supabase
-    .from(notificationTable)
-    .insert({
-      user_id: databaseUserId,
-      type: 'organization_membership_pending',
-      title,
-      message,
-      status: 'Unread',
-      updated_at: nowIso,
-    })
-    .select('notification_id')
-    .maybeSingle();
-
-  if (result.error) {
-    logAppError('donor_home.organization_membership.pending_notification', result.error, {
-      table: notificationTable,
-      databaseUserId,
-      organizationName,
-    });
-  }
-};
-
 const normalizeDonationDrive = (row, organization = null, registration = null, membership = null) => ({
   id: row?.donation_drive_id || null,
   donation_drive_id: row?.donation_drive_id || null,
   organization_id: row?.organization_id || null,
+  created_by_user_id: row?.created_by_user_id || null,
   event_title: row?.event_title || '',
   event_overview: row?.event_overview || '',
   short_overview: buildShortOverview(row?.event_overview),
   start_date: row?.start_date || null,
   end_date: row?.end_date || null,
-  proposal_attachment: row?.proposal_attachment || '',
+  proposal_attachment: row?.proposal_attachment || row?.event_image_path || '',
   proposal_attachment_bucket: row?.proposal_attachment_bucket || '',
   event_image_url: buildDonationDriveAttachmentUrl(row),
   street: row?.street || '',
@@ -271,12 +204,12 @@ const normalizeDonationDrive = (row, organization = null, registration = null, m
   latitude: row?.latitude ?? null,
   longitude: row?.longitude ?? null,
   status: row?.status || '',
-  is_open_for_all: row?.is_open_for_all ?? false,
-  donation_setup_type: row?.donation_setup_type || '',
+  is_open_for_all: true,
+  donation_setup_type: row?.donation_setup_type || 'Event',
   updated_at: row?.updated_at || null,
   location_label: buildLocationLabel(row),
   address_label: buildFullAddressLabel(row),
-  organization_name: organization?.organization_name || '',
+  organization_name: organization?.organization_name || [row?.applicant_first_name, row?.applicant_last_name].filter(Boolean).join(' ') || 'Event host',
   organization_logo_url: organization?.organization_logo_url || '',
   organization: organization || null,
   registration: registration || null,
@@ -314,7 +247,7 @@ const findExistingDriveRegistration = async (driveId, databaseUserId) => {
   const result = await supabase
     .from(donationDriveRegistrationsTable)
     .select(donationDriveRegistrationSelect)
-    .eq('Donation_Drive_ID', driveId)
+    .eq('Event_Application_ID', driveId)
     .eq('User_ID', databaseUserId)
     .order('Updated_At', { ascending: false });
 
@@ -359,7 +292,7 @@ const findDriveRegistrationsByUserIdAndDriveIds = async (driveIds = [], database
     .from(donationDriveRegistrationsTable)
     .select(donationDriveRegistrationSelect)
     .eq('User_ID', databaseUserId)
-    .in('Donation_Drive_ID', driveIds)
+    .in('Event_Application_ID', driveIds)
     .order('Updated_At', { ascending: false });
 
   if (result.error) {
@@ -393,68 +326,15 @@ const findDriveRegistrationsByUserIdAndDriveIds = async (driveIds = [], database
 };
 
 const fetchOrganizationsByIds = async (organizationIds = []) => {
-  if (!organizationIds.length) {
-    return {
-      data: new Map(),
-      error: null,
-    };
-  }
-
-  const result = await supabase
-    .from(organizationsTable)
-    .select(organizationSelect)
-    .in('Organization_ID', organizationIds);
-
-  if (result.error) {
-    logAppError('donor_home.organizations.by_ids', result.error, {
-      table: organizationsTable,
-      organizationIds,
-    });
-
-    return {
-      data: new Map(),
-      error: result.error,
-    };
-  }
-
   return {
-    data: new Map(
-      (result.data || [])
-        .map(normalizeOrganization)
-        .map((item) => [item.organization_id, item])
-    ),
+    data: new Map(),
     error: null,
   };
 };
 
 export const fetchOrganizationMembershipsByUserId = async (databaseUserId) => {
-  if (!databaseUserId) {
-    return {
-      data: [],
-      error: null,
-    };
-  }
-
-  const result = await supabase
-    .from(organizationMembersTable)
-    .select(organizationMemberSelect)
-    .eq('User_ID', databaseUserId)
-    .order('Updated_At', { ascending: false });
-
-  if (result.error) {
-    logAppError('donor_home.organization_memberships', result.error, {
-      table: organizationMembersTable,
-      databaseUserId,
-    });
-
-    return {
-      data: [],
-      error: result.error,
-    };
-  }
-
   return {
-    data: (result.data || []).map(normalizeOrganizationMember),
+    data: [],
     error: null,
   };
 };
@@ -494,11 +374,22 @@ export const fetchDonationDriveRegistrationsByUserId = async (databaseUserId) =>
 export const createDonationDriveRegistration = async ({
   driveId,
   databaseUserId,
+  hasEligibleHairScan = null,
 }) => {
   if (!driveId || !databaseUserId) {
     return {
       data: null,
       error: new Error('Donation drive and donor account are required before joining a drive.'),
+      alreadyRegistered: false,
+    };
+  }
+
+  if (hasEligibleHairScan === false) {
+    const eligibilityError = new Error('Scan your hair first so the system can confirm if you are eligible to join this donation event.');
+    eligibilityError.code = 'HAIR_ELIGIBILITY_REQUIRED';
+    return {
+      data: null,
+      error: eligibilityError,
       alreadyRegistered: false,
     };
   }
@@ -517,7 +408,7 @@ export const createDonationDriveRegistration = async ({
   const driveResult = await supabase
     .from(donationDriveRequestsTable)
     .select(donationDriveSelect)
-    .eq('Donation_Drive_ID', driveId)
+    .eq('Event_Application_ID', driveId)
     .maybeSingle();
 
   if (driveResult.error) {
@@ -553,29 +444,6 @@ export const createDonationDriveRegistration = async ({
     };
   }
 
-  if (doesDriveRequireMembership(driveResult.data)) {
-    const membershipResult = await fetchOrganizationMembership({
-      organizationId: driveResult.data.organization_id || null,
-      databaseUserId,
-    });
-
-    if (membershipResult.error) {
-      return {
-        data: null,
-        error: membershipResult.error,
-        alreadyRegistered: false,
-      };
-    }
-
-    if (!membershipResult.data?.is_active) {
-      return {
-        data: null,
-        error: new Error('This is a private donation drive. Join the partner organization first.'),
-        alreadyRegistered: false,
-      };
-    }
-  }
-
   const existingResult = await findExistingDriveRegistration(driveId, databaseUserId);
   if (existingResult.error) {
     return {
@@ -596,9 +464,10 @@ export const createDonationDriveRegistration = async ({
   const insertResult = await supabase
     .from(donationDriveRegistrationsTable)
     .insert({
-      Donation_Drive_ID: driveId,
+      Event_Application_ID: driveId,
       User_ID: databaseUserId,
-      Registration_Status: 'Approved',
+      Full_Name: 'Donor',
+      Registration_Status: 'Registered',
       Attendance_Status: 'Not Marked',
     })
     .select(donationDriveRegistrationSelect)
@@ -629,38 +498,8 @@ export const fetchOrganizationMembership = async ({
   organizationId,
   databaseUserId,
 }) => {
-  if (!organizationId || !databaseUserId) {
-    return {
-      data: null,
-      error: null,
-    };
-  }
-
-  const result = await supabase
-    .from(organizationMembersTable)
-    .select(organizationMemberSelect)
-    .eq('Organization_ID', organizationId)
-    .eq('User_ID', databaseUserId)
-    .order('Updated_At', { ascending: false });
-
-  if (result.error) {
-    logAppError('donor_home.organization_membership.lookup', result.error, {
-      table: organizationMembersTable,
-      organizationId,
-      databaseUserId,
-    });
-
-    return {
-      data: null,
-      error: result.error,
-    };
-  }
-
-  const normalizedRows = (result.data || []).map(normalizeOrganizationMember);
-  const activeMembership = normalizedRows.find((item) => item.is_active) || normalizedRows[0] || null;
-
   return {
-    data: activeMembership,
+    data: null,
     error: null,
   };
 };
@@ -669,176 +508,12 @@ export const joinOrganizationMembership = async ({
   organizationId,
   databaseUserId,
 }) => {
-  if (!organizationId || !databaseUserId) {
-    return {
-      data: null,
-      error: new Error('Joining an organization requires the organization and donor account.'),
-      alreadyMember: false,
-    };
-  }
-
-  const organizationResult = await supabase
-    .from(organizationsTable)
-    .select(organizationSelect)
-    .eq('Organization_ID', organizationId)
-    .maybeSingle();
-
-  if (organizationResult.error) {
-    logAppError('donor_home.organization_membership.organization_lookup', organizationResult.error, {
-      table: organizationsTable,
-      organizationId,
-      databaseUserId,
-    });
-
-    return {
-      data: null,
-      error: organizationResult.error,
-      alreadyMember: false,
-    };
-  }
-
-  if (!organizationResult.data) {
-    return {
-      data: null,
-      error: new Error('The selected organization could not be found.'),
-      alreadyMember: false,
-    };
-  }
-
-  const organization = normalizeOrganization(organizationResult.data);
-  const isJoinable = (
-    String(organization.status || '').trim().toLowerCase() === 'active'
-    && Boolean(organization.is_approved)
-    && String(organization.approval_status || '').trim().toLowerCase() === 'approved'
-  );
-
-  if (!isJoinable) {
-    return {
-      data: null,
-      error: new Error('This organization is not available to join right now.'),
-      alreadyMember: false,
-    };
-  }
-
-  const existingResult = await fetchOrganizationMembership({
-    organizationId,
-    databaseUserId,
-  });
-
-  if (existingResult.error) {
-    return {
-      data: null,
-      error: existingResult.error,
-      alreadyMember: false,
-    };
-  }
-
-  if (existingResult.data?.is_active) {
-    return {
-      data: existingResult.data,
-      error: null,
-      alreadyMember: true,
-      alreadyPending: false,
-      requestSubmitted: false,
-    };
-  }
-
-  if (existingResult.data?.is_pending) {
-    return {
-      data: existingResult.data,
-      error: null,
-      alreadyMember: false,
-      alreadyPending: true,
-      requestSubmitted: false,
-    };
-  }
-
-  if (existingResult.data?.member_id) {
-    const updateResult = await supabase
-      .from(organizationMembersTable)
-      .update({
-        Membership_Role: 'Pending Approval',
-        Is_Primary: false,
-        Status: 'Inactive',
-        Updated_At: new Date().toISOString(),
-      })
-      .eq('Member_ID', existingResult.data.member_id)
-      .select(organizationMemberSelect)
-      .maybeSingle();
-
-    if (updateResult.error) {
-      logAppError('donor_home.organization_membership.reactivate', updateResult.error, {
-        table: organizationMembersTable,
-        organizationId,
-        databaseUserId,
-        memberId: existingResult.data.member_id,
-      });
-
-      return {
-        data: null,
-        error: updateResult.error,
-        alreadyMember: false,
-        alreadyPending: false,
-        requestSubmitted: false,
-      };
-    }
-
-    const normalizedUpdatedMembership = normalizeOrganizationMember(updateResult.data);
-    await createOrganizationJoinPendingNotification({
-      databaseUserId,
-      organizationName: organization.organization_name,
-    });
-
-    return {
-      data: normalizedUpdatedMembership,
-      error: null,
-      alreadyMember: false,
-      alreadyPending: false,
-      requestSubmitted: true,
-    };
-  }
-
-  const insertResult = await supabase
-    .from(organizationMembersTable)
-    .insert({
-      Organization_ID: organizationId,
-      User_ID: databaseUserId,
-      Membership_Role: 'Pending Approval',
-      Is_Primary: false,
-      Status: 'Inactive',
-      Created_By: databaseUserId,
-    })
-    .select(organizationMemberSelect)
-    .maybeSingle();
-
-  if (insertResult.error) {
-    logAppError('donor_home.organization_membership.join', insertResult.error, {
-      table: organizationMembersTable,
-      organizationId,
-      databaseUserId,
-    });
-
-    return {
-      data: null,
-      error: insertResult.error,
-      alreadyMember: false,
-      alreadyPending: false,
-      requestSubmitted: false,
-    };
-  }
-
-  const normalizedInsertedMembership = normalizeOrganizationMember(insertResult.data);
-  await createOrganizationJoinPendingNotification({
-    databaseUserId,
-    organizationName: organization.organization_name,
-  });
-
   return {
-    data: normalizedInsertedMembership,
-    error: null,
+    data: null,
+    error: new Error('Organization membership is not available in the current database schema.'),
     alreadyMember: false,
     alreadyPending: false,
-    requestSubmitted: true,
+    requestSubmitted: false,
   };
 };
 
@@ -854,94 +529,55 @@ export const leaveOrganizationMembership = async ({
     };
   }
 
-  const existingResult = await fetchOrganizationMembership({
-    organizationId,
-    databaseUserId,
-  });
-
-  if (existingResult.error) {
-    return {
-      data: null,
-      error: existingResult.error,
-      alreadyLeft: false,
-    };
-  }
-
-  if (!existingResult.data?.member_id) {
-    return {
-      data: null,
-      error: null,
-      alreadyLeft: true,
-    };
-  }
-
-  if (!existingResult.data?.is_active) {
-    return {
-      data: existingResult.data,
-      error: null,
-      alreadyLeft: true,
-    };
-  }
-
-  const updateResult = await supabase
-    .from(organizationMembersTable)
-    .update({
-      Membership_Role: 'Former Member',
-      Is_Primary: false,
-      Status: 'Inactive',
-      Updated_At: new Date().toISOString(),
-    })
-    .eq('Member_ID', existingResult.data.member_id)
-    .select(organizationMemberSelect)
-    .maybeSingle();
-
-  if (updateResult.error) {
-    logAppError('donor_home.organization_membership.leave', updateResult.error, {
-      table: organizationMembersTable,
-      organizationId,
-      databaseUserId,
-      memberId: existingResult.data.member_id,
-    });
-
-    return {
-      data: null,
-      error: updateResult.error,
-      alreadyLeft: false,
-    };
-  }
-
   return {
-    data: normalizeOrganizationMember(updateResult.data),
+    data: null,
     error: null,
-    alreadyLeft: false,
+    alreadyLeft: true,
   };
 };
 
 export const fetchFeaturedOrganizations = async (limit = 8) => {
   logAppEvent('donor_home.organizations', 'Loading featured organizations.', {
-    table: organizationsTable,
+    table: donationDriveRequestsTable,
     limit,
+    source: 'approved_event_hosts',
   });
 
   const result = await supabase
-    .from(organizationsTable)
-    .select(organizationSelect)
-    .eq('Status', 'Active')
-    .eq('Is_Approved', true)
-    .eq('Approval_Status', 'Approved')
+    .from(donationDriveRequestsTable)
+    .select(donationDriveSelect)
+    .ilike('Status', 'approved')
     .order('Updated_At', { ascending: false })
-    .limit(limit);
+    .limit(Math.max(Number(limit) || 8, 8) * 3);
 
   if (result.error) {
     logAppError('donor_home.organizations', result.error, {
-      table: organizationsTable,
+      table: donationDriveRequestsTable,
       limit,
     });
+
+    return {
+      data: [],
+      error: result.error,
+    };
   }
 
+  const byHost = new Map();
+  (result.data || []).forEach((row) => {
+    const key = getEventHostKey(row);
+    const current = byHost.get(key);
+    if (!current) {
+      byHost.set(key, { row, drives: [row] });
+      return;
+    }
+    current.drives.push(row);
+  });
+
   return {
-    data: (result.data || []).map(normalizeOrganization),
-    error: result.error,
+    data: Array.from(byHost.values())
+      .map(({ row, drives }) => normalizeEventHostOrganization(row, drives))
+      .slice(0, Math.max(Number(limit) || 8, 1)),
+    error: null,
   };
 };
 
@@ -961,7 +597,7 @@ export const fetchUpcomingDonationDrives = async (limit = 6, databaseUserId = nu
     .from(donationDriveRequestsTable)
     .select(donationDriveSelect)
     .ilike('Status', 'approved')
-    .order('Start_Date', { ascending: true })
+    .order('Proposed_Start_At', { ascending: true })
     .limit(queryLimit);
 
   if (result.error) {
@@ -1035,7 +671,7 @@ export const fetchDonationDrivePreview = async (driveId, databaseUserId = null) 
   const driveResult = await supabase
     .from(donationDriveRequestsTable)
     .select(donationDriveSelect)
-    .eq('Donation_Drive_ID', driveId)
+    .eq('Event_Application_ID', driveId)
     .maybeSingle();
 
   if (driveResult.error) {
@@ -1086,148 +722,67 @@ export const fetchOrganizationPreview = async (organizationId, databaseUserId = 
     };
   }
 
-  logAppEvent('donor_home.organization_preview', 'Loading organization preview.', {
-    table: organizationsTable,
-    organizationId,
-    driveLimit,
-  });
+  const idText = String(organizationId);
+  const numericId = Number(idText.replace(/^user-|^event-/, ''));
+  const isUserHost = idText.startsWith('user-') && Number.isFinite(numericId);
+  const isEventHost = idText.startsWith('event-') && Number.isFinite(numericId);
 
-  const [organizationResult, drivesResult] = await Promise.all([
-    supabase
-      .from(organizationsTable)
-      .select(organizationSelect)
-      .eq('Organization_ID', organizationId)
-      .maybeSingle(),
-    supabase
-      .from(donationDriveRequestsTable)
-      .select(donationDriveSelect)
-      .eq('Organization_ID', organizationId)
-      .ilike('Status', 'approved')
-      .not('Start_Date', 'is', null)
-      .order('Start_Date', { ascending: true })
-      .limit(Math.max(driveLimit, 24)),
-  ]);
+  let query = supabase
+    .from(donationDriveRequestsTable)
+    .select(donationDriveSelect)
+    .ilike('Status', 'approved')
+    .order('Proposed_Start_At', { ascending: true })
+    .limit(Math.max(Number(driveLimit) || 3, 1));
 
-  if (organizationResult.error) {
-    logAppError('donor_home.organization_preview.organization', organizationResult.error, {
-      table: organizationsTable,
-      organizationId,
-    });
-  }
-
-  if (drivesResult.error) {
-    logAppError('donor_home.organization_preview.drives', drivesResult.error, {
-      table: donationDriveRequestsTable,
-      organizationId,
-      driveLimit,
-    });
-  }
-
-  if (!organizationResult.data) {
+  if (isUserHost) {
+    query = query.eq('Created_By_User_ID', numericId);
+  } else if (isEventHost) {
+    query = query.eq('Event_Application_ID', numericId);
+  } else {
     return {
       data: null,
-      error: organizationResult.error || drivesResult.error,
+      error: null,
     };
   }
 
-  const organization = normalizeOrganization(organizationResult.data);
-  const driveRows = drivesResult.data || [];
-  const driveIds = driveRows.map((row) => row?.donation_drive_id).filter(Boolean);
-  const [membershipResult, registrationsResult] = await Promise.all([
-    fetchOrganizationMembership({
+  const result = await query;
+
+  if (result.error) {
+    logAppError('donor_home.organization_preview', result.error, {
+      table: donationDriveRequestsTable,
       organizationId,
       databaseUserId,
-    }),
-    findDriveRegistrationsByUserIdAndDriveIds(driveIds, databaseUserId),
-  ]);
+    });
 
-  const membership = membershipResult.data || null;
-  const drives = driveRows
-    .map((row) => normalizeDonationDrive(
-      row,
-      organization,
-      registrationsResult.data.get(row?.donation_drive_id) || null,
-      membership
-    ))
-    .filter((drive) => drive.can_view);
-  const upcomingDrives = drives.filter(isUpcomingDrive);
-  const pastDrives = drives.filter((drive) => !isUpcomingDrive(drive));
+    return {
+      data: null,
+      error: result.error,
+    };
+  }
+
+  const rows = result.data || [];
+  if (!rows.length) {
+    return {
+      data: null,
+      error: null,
+    };
+  }
 
   return {
-    data: {
-      ...organization,
-      membership,
-      drives,
-      upcoming_drives: upcomingDrives,
-      past_drives: pastDrives,
-      short_overview: buildShortOverview(`${organization.organization_type || ''} ${organization.location_label || ''}`.trim(), 100),
-    },
-    error: organizationResult.error || drivesResult.error || membershipResult.error || registrationsResult.error,
+    data: normalizeEventHostOrganization(rows[0], rows),
+    error: null,
   };
 };
 
 export const fetchOrganizationsWithDrives = async (limit = 24, driveLimitPerOrganization = 3, databaseUserId = null) => {
   const organizationsResult = await fetchFeaturedOrganizations(limit);
-  const organizations = organizationsResult.data || [];
-  const organizationIds = organizations.map((item) => item.organization_id).filter(Boolean);
-
-  if (!organizationIds.length) {
-    return {
-      data: [],
-      error: organizationsResult.error,
-    };
-  }
-
-  const drivesResult = await supabase
-    .from(donationDriveRequestsTable)
-    .select(donationDriveSelect)
-    .in('Organization_ID', organizationIds)
-    .ilike('Status', 'approved')
-    .not('Start_Date', 'is', null)
-    .order('Start_Date', { ascending: true });
-
-  if (drivesResult.error) {
-    logAppError('donor_home.organizations_with_drives', drivesResult.error, {
-      table: donationDriveRequestsTable,
-      organizationIds,
-      driveLimitPerOrganization,
-    });
-
-    return {
-      data: organizations.map((organization) => ({
-        ...organization,
-        drives: [],
-      })),
-      error: drivesResult.error,
-    };
-  }
-
-  const drivesByOrganizationId = new Map();
-  (drivesResult.data || []).forEach((row) => {
-    const currentRows = drivesByOrganizationId.get(row?.organization_id) || [];
-    currentRows.push(row);
-    drivesByOrganizationId.set(row?.organization_id, currentRows);
-  });
-
-  const membershipsResult = await fetchOrganizationMembershipsByUserId(databaseUserId);
-  const membershipByOrganizationId = new Map(
-    (membershipsResult.data || []).map((membership) => [membership.organization_id, membership])
-  );
 
   return {
-    data: organizations.map((organization) => {
-      const membership = membershipByOrganizationId.get(organization.organization_id) || null;
-
-      return {
-        ...organization,
-        membership,
-        drives: (drivesByOrganizationId.get(organization.organization_id) || [])
-          .map((row) => normalizeDonationDrive(row, organization, null, membership))
-          .filter((drive) => drive.can_view && isUpcomingDrive(drive))
-          .slice(0, driveLimitPerOrganization),
-      };
-    }),
-    error: organizationsResult.error || drivesResult.error || membershipsResult.error,
+    data: (organizationsResult.data || []).map((organization) => ({
+      ...organization,
+      drives: (organization.drives || []).slice(0, Math.max(Number(driveLimitPerOrganization) || 3, 1)),
+    })),
+    error: organizationsResult.error || null,
   };
 };
 
@@ -1242,55 +797,24 @@ export const fetchRelevantDonationDriveUpdates = async ({
     };
   }
 
-  const [membershipsResult, registrationsResult] = await Promise.all([
-    fetchOrganizationMembershipsByUserId(databaseUserId),
-    fetchDonationDriveRegistrationsByUserId(databaseUserId),
-  ]);
-
-  const memberships = membershipsResult.data || [];
+  const registrationsResult = await fetchDonationDriveRegistrationsByUserId(databaseUserId);
   const registrations = registrationsResult.data || [];
-  const activeMemberships = memberships.filter((item) => item.is_active);
-  const organizationIds = [...new Set(activeMemberships.map((item) => item.organization_id).filter(Boolean))];
   const driveIds = [...new Set(registrations.map((item) => item.donation_drive_id).filter(Boolean))];
 
-  if (!organizationIds.length && !driveIds.length) {
+  if (!driveIds.length) {
     return {
       data: [],
-      error: membershipsResult.error || registrationsResult.error || null,
+      error: registrationsResult.error || null,
     };
   }
 
-  const today = getStartOfTodayIso();
-  const [organizationDrivesResult, registeredDrivesResult] = await Promise.all([
-    organizationIds.length
-      ? supabase
-          .from(donationDriveRequestsTable)
-          .select(donationDriveSelect)
-          .in('Organization_ID', organizationIds)
-          .ilike('Status', 'approved')
-          .not('Start_Date', 'is', null)
-          .order('Start_Date', { ascending: true })
-          .limit(limit)
-      : Promise.resolve({ data: [], error: null }),
-    driveIds.length
-      ? supabase
-          .from(donationDriveRequestsTable)
-          .select(donationDriveSelect)
-          .in('Donation_Drive_ID', driveIds)
-          .ilike('Status', 'approved')
-          .order('Updated_At', { ascending: false })
-          .limit(limit)
-      : Promise.resolve({ data: [], error: null }),
-  ]);
-
-  if (organizationDrivesResult.error) {
-    logAppError('donor_home.relevant_drive_updates.organizations', organizationDrivesResult.error, {
-      table: donationDriveRequestsTable,
-      organizationIds,
-      databaseUserId,
-      startDateFrom: today,
-    });
-  }
+  const registeredDrivesResult = await supabase
+    .from(donationDriveRequestsTable)
+    .select(donationDriveSelect)
+    .in('Event_Application_ID', driveIds)
+    .ilike('Status', 'approved')
+    .order('Updated_At', { ascending: false })
+    .limit(limit);
 
   if (registeredDrivesResult.error) {
     logAppError('donor_home.relevant_drive_updates.registrations', registeredDrivesResult.error, {
@@ -1300,7 +824,7 @@ export const fetchRelevantDonationDriveUpdates = async ({
     });
   }
 
-  const rawDrives = [...(organizationDrivesResult.data || []), ...(registeredDrivesResult.data || [])];
+  const rawDrives = registeredDrivesResult.data || [];
   const uniqueDrives = new Map();
   rawDrives.filter(isUpcomingDrive).forEach((row) => {
     const driveId = row?.donation_drive_id;
@@ -1311,28 +835,21 @@ export const fetchRelevantDonationDriveUpdates = async ({
     }
   });
 
-  const organizationLookup = await fetchOrganizationsByIds(
-    [...new Set(Array.from(uniqueDrives.values()).map((row) => row?.organization_id).filter(Boolean))]
-  );
   const registrationByDriveId = new Map(registrations.map((item) => [item.donation_drive_id, item]));
-  const membershipByOrganizationId = new Map(activeMemberships.map((item) => [item.organization_id, item]));
 
   return {
     data: sortByNewestTimestamp(
       Array.from(uniqueDrives.values()).map((row) => normalizeDonationDrive(
         row,
-        organizationLookup.data.get(row?.organization_id) || null,
+        null,
         registrationByDriveId.get(row?.donation_drive_id) || null,
-        membershipByOrganizationId.get(row?.organization_id) || null
+        null
       )),
       ['updated_at', 'start_date']
     ).slice(0, limit),
     error:
-      membershipsResult.error
-      || registrationsResult.error
-      || organizationDrivesResult.error
+      registrationsResult.error
       || registeredDrivesResult.error
-      || organizationLookup.error
       || null,
   };
 };

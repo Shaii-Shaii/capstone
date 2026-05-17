@@ -1,12 +1,29 @@
 import React from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { ScreenContainer } from '../../src/components/ui/ScreenContainer';
 import { SignupForm } from '../../src/components/auth/SignupForm';
 import { unifiedSignupSchema } from '../../src/features/auth/validators/auth.schema';
 import { useRoleAuthFlow } from '../../src/hooks/useRoleAuthFlow';
-import { resolveThemeRoles, theme } from '../../src/design-system/theme';
+import { resolveBrandLogoSource, resolveThemeRoles, theme } from '../../src/design-system/theme';
+
+function SignupBrandLogo({ resolvedTheme, size = 'sm' }) {
+  const [imageFailed, setImageFailed] = React.useState(false);
+  const logoSource = resolveBrandLogoSource(resolvedTheme, imageFailed);
+
+  React.useEffect(() => {
+    setImageFailed(false);
+  }, [resolvedTheme?.logoIcon]);
+
+  return (
+    <Image
+      source={logoSource}
+      style={size === 'lg' ? styles.logoLarge : styles.logoSmall}
+      resizeMode="contain"
+      onError={() => setImageFailed(true)}
+    />
+  );
+}
 
 export default function SignupScreen() {
   const router = useRouter();
@@ -32,7 +49,7 @@ export default function SignupScreen() {
     >
       <View style={[styles.topBar, { backgroundColor: roles.defaultCardBackground }]}>
         <View style={styles.topBrand}>
-          <MaterialCommunityIcons name="content-cut" size={26} color={roles.primaryActionBackground} />
+          <SignupBrandLogo resolvedTheme={resolvedTheme} />
           <Text style={[styles.topBrandText, { color: roles.primaryActionBackground }]}>{brandName}</Text>
         </View>
       </View>
@@ -42,8 +59,8 @@ export default function SignupScreen() {
           <View style={[styles.cardAccent, { backgroundColor: roles.primaryActionBackground }]} />
 
           <View style={styles.brandSection}>
-            <View style={[styles.logoContainer, { backgroundColor: roles.iconPrimarySurface }]}>
-              <MaterialCommunityIcons name="heart-outline" size={34} color={roles.primaryActionBackground} />
+            <View style={[styles.logoContainer, { backgroundColor: roles.iconPrimarySurface, borderColor: roles.defaultCardBorder }]}>
+              <SignupBrandLogo resolvedTheme={resolvedTheme} size="lg" />
             </View>
 
             <Text
@@ -122,6 +139,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.spacing.sm,
+    flexShrink: 1,
   },
   topBrandText: {
     fontFamily: theme.typography.fontFamilyDisplay,
@@ -170,6 +188,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: theme.spacing.md,
+    borderWidth: 1,
+    overflow: 'hidden',
+  },
+  logoSmall: {
+    width: 34,
+    height: 34,
+    borderRadius: 8,
+  },
+  logoLarge: {
+    width: 56,
+    height: 56,
   },
   brandName: {
     fontSize: 32,

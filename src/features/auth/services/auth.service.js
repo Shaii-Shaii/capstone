@@ -170,6 +170,15 @@ const getFriendlyOtpError = (error) => {
   return new Error(msg || 'Invalid OTP');
 };
 
+const isInvalidRefreshTokenMessage = (message = '') => {
+  const normalized = String(message || '').trim().toLowerCase();
+  return (
+    normalized.includes('invalid refresh token')
+    || normalized.includes('refresh token not found')
+    || normalized.includes('invalid grant')
+  );
+};
+
 const validateSystemUserAccount = (systemUser) => {
   if (!systemUser?.user_id) {
     return buildUserFacingLoginError('We could not find your account details.', loginErrorCodes.accountDetailsMissing);
@@ -774,19 +783,27 @@ export const resendVerifyEmail = async (email) => {
 
 
 export const logout = async () => {
+  let currentUser = null;
+
   try {
     const sessionResult = await AuthAPI.getCurrentSession();
-    const currentUser = sessionResult.data?.session?.user || null;
-    const auditPayload = {
+    currentUser = sessionResult?.data?.session?.user || null;
+  } catch (sessionError) {
+    logAppEvent('auth.logout.session_lookup_skipped', 'Current session lookup failed before logout. Continuing sign-out.', {
+      error: sessionError?.message || null,
+    }, 'warn');
+  }
+
+  try {
+    const auditResult = await writeAuditLog({
       authUserId: currentUser?.id,
       userEmail: currentUser?.email || '',
       action: 'auth.logout',
       description: 'User logged out.',
       resource: 'auth',
       status: 'success',
-    };
+    });
 
-    const auditResult = await writeAuditLog(auditPayload);
     if (!auditResult.success) {
       logAppEvent('auth.logout.audit_skipped', 'Logout audit log could not be written before session teardown. Continuing logout.', {
         authUserId: currentUser?.id || null,
@@ -794,9 +811,23 @@ export const logout = async () => {
         auditError: auditResult.error || null,
       }, 'warn');
     }
+  } catch (auditError) {
+    logAppEvent('auth.logout.audit_exception', 'Logout audit threw unexpectedly. Continuing logout.', {
+      authUserId: currentUser?.id || null,
+      userEmail: currentUser?.email || '',
+      auditError: auditError?.message || null,
+    }, 'warn');
+  }
 
+  try {
     const { error } = await AuthAPI.logoutUser();
-    if (error) throw new Error(error.message);
+    if (error) {
+      const message = String(error?.message || '');
+      if (isInvalidRefreshTokenMessage(message)) {
+        return { success: true, error: null };
+      }
+      throw new Error(message || 'Logout failed.');
+    }
 
     return { success: true, error: null };
   } catch (error) {

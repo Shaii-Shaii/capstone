@@ -4,6 +4,7 @@ import {
   StyleSheet,
   useWindowDimensions,
   ScrollView,
+  RefreshControl,
   Modal,
   Pressable,
   Text,
@@ -16,6 +17,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from 'expo-speech-recognition';
+import { usePathname } from 'expo-router';
 import { ScreenContainer } from '../ui/ScreenContainer';
 import { DASHBOARD_TAB_BAR_HEIGHT, DashboardTabBar } from '../ui/DashboardTabBar';
 import { AppCard } from '../ui/AppCard';
@@ -39,8 +41,11 @@ export const DashboardLayout = ({
   screenVariant = 'dashboard',
   chatModalPresentation = 'sheet',
   draggableChat = false,
+  refreshing = false,
+  onRefresh,
 }) => {
   const insets = useSafeAreaInsets();
+  const pathname = usePathname();
   const { height, width } = useWindowDimensions();
   const { user, resolvedTheme } = useAuth();
   const [isChatOpen, setIsChatOpen] = useState(false);
@@ -48,6 +53,8 @@ export const DashboardLayout = ({
   const [voiceHint, setVoiceHint] = useState('');
   const [queuedVoiceMessage, setQueuedVoiceMessage] = useState(null);
   const hasNav = navItems.length > 0;
+  const shouldRenderOwnNav = hasNav && !(navVariant === 'donor' && pathname.startsWith('/donor'));
+  const usesPersistentDonorNav = hasNav && navVariant === 'donor' && pathname.startsWith('/donor');
   const isShortScreen = height < theme.layout.shortScreenHeight;
   const isCompactScreen = height < theme.layout.compactScreenHeight;
   const chatRole = navVariant === 'donor' || navVariant === 'patient' ? navVariant : null;
@@ -65,10 +72,11 @@ export const DashboardLayout = ({
       : theme.layout.dashboardFloatingNavOffset
   ) + theme.layout.dashboardFloatingNavLift;
   const navReservedHeight = DASHBOARD_TAB_BAR_HEIGHT + navVisualOffset + (isCompactScreen ? 22 : 26);
+  const persistentDonorNavReservedHeight = DASHBOARD_TAB_BAR_HEIGHT + Math.max(isCompactScreen ? theme.spacing.sm : theme.spacing.md, 10) + theme.spacing.sm;
   const navBottomPadding = hasNav
     ? Math.max(
-      insets.bottom + navReservedHeight,
-      isShortScreen ? 116 : 130
+      insets.bottom + (usesPersistentDonorNav ? persistentDonorNavReservedHeight : navReservedHeight),
+      usesPersistentDonorNav ? (isShortScreen ? 92 : 100) : (isShortScreen ? 116 : 130)
     )
     : (isShortScreen ? theme.spacing.sectionCompact : theme.spacing.sectionLg);
   const chatLauncherBottom = hasNav
@@ -81,6 +89,7 @@ export const DashboardLayout = ({
   const chatPulse = React.useRef(new RNAnimated.Value(1)).current;
   const voiceHintTimerRef = React.useRef(null);
   const intentionalVoiceStopRef = React.useRef(false);
+  const navPressLockRef = React.useRef(false);
   const chatBubbleResponder = React.useRef(
     PanResponder.create({
       onMoveShouldSetPanResponder: (_event, gestureState) => (
@@ -197,6 +206,21 @@ export const DashboardLayout = ({
     } catch {}
   }, []);
 
+  const handleStableNavPress = React.useCallback((item) => {
+    if (!item?.route || !onNavPress) return;
+    if (item.key === activeNavKey) return;
+
+    const targetPath = String(item.route).split('?')[0];
+    if (targetPath && pathname === targetPath) return;
+    if (navPressLockRef.current) return;
+
+    navPressLockRef.current = true;
+    onNavPress(item);
+    setTimeout(() => {
+      navPressLockRef.current = false;
+    }, 450);
+  }, [activeNavKey, onNavPress, pathname]);
+
   return (
     <ScreenContainer
       variant={resolvedScreenVariant}
@@ -215,9 +239,19 @@ export const DashboardLayout = ({
         <ScrollView
           style={styles.scrollView}
           contentContainerStyle={[styles.scrollContent, { paddingBottom: navBottomPadding }]}
-          bounces={false}
+          bounces={Boolean(onRefresh)}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
+          keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+          automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
+          refreshControl={onRefresh ? (
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={resolvedTheme?.primaryColor || theme.colors.brandPrimary}
+              colors={[resolvedTheme?.primaryColor || theme.colors.brandPrimary]}
+            />
+          ) : undefined}
         >
             <View
               style={[
@@ -237,11 +271,11 @@ export const DashboardLayout = ({
         </ScrollView>
       </View>
 
-      {hasNav ? (
+      {shouldRenderOwnNav ? (
         <DashboardTabBar
           items={navItems}
           activeKey={activeNavKey}
-          onPress={onNavPress}
+          onPress={handleStableNavPress}
           variant={navVariant}
         />
       ) : null}

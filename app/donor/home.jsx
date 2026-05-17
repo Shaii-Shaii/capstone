@@ -38,7 +38,7 @@ import { getDonorDonationsModuleData } from '../../src/features/donorDonations.s
 import { useAuthActions } from '../../src/features/auth/hooks/useAuthActions';
 import { useNotifications } from '../../src/hooks/useNotifications';
 import { useAuth } from '../../src/providers/AuthProvider';
-import { resolveBrandLogoSource, resolveThemeRoles, theme } from '../../src/design-system/theme';
+import { resolveThemeRoles, theme } from '../../src/design-system/theme';
 import { invokeEdgeFunction, supabase } from '../../src/api/supabase/client';
 import { loadChatbotBootstrap, resolveChatbotReply } from '../../src/features/chatbot.service';
 import { buildProfileCompletionMeta } from '../../src/features/profile/services/profile.service';
@@ -59,6 +59,17 @@ const formatDriveDate = (startDate, endDate) => {
   }
 
   return `${shortFormatter.format(start)} - ${shortFormatter.format(end)}`;
+};
+
+const normalizeRsvpStatus = (value = '') => (
+  String(value || '').trim().toLowerCase().replace(/[_-]+/g, ' ')
+);
+
+const isRsvpCheckedIn = (registration = null) => {
+  if (!registration) return false;
+  if (registration?.attendance_marked_at) return true;
+  const attendanceStatus = normalizeRsvpStatus(registration?.attendance_status);
+  return ['attended', 'present', 'checked in', 'checked-in', 'marked'].includes(attendanceStatus);
 };
 
 const getInitials = (value = '') => (
@@ -163,6 +174,86 @@ const normalizeConditionTone = (condition = '') => {
   };
 };
 
+const advertisedRecommendationPatterns = [
+  /\bDove\b/gi,
+  /\bCream Silk\b/gi,
+  /\bHuman Nature\b/gi,
+  /\bVitress\b/gi,
+  /\bHead\s*&\s*Shoulders\b/gi,
+  /\bSelsun Blue\b/gi,
+  /\bPantene(?:\s+Pro-V)?\b/gi,
+  /\bWatsons\b/gi,
+  /\bLazada(?:\.ph)?\b/gi,
+  /\bShopee(?:\.ph)?\b/gi,
+];
+
+const cleanRecommendationText = (value = '') => {
+  let text = String(value || '').replace(/\s+/g, ' ').trim();
+  text = text.replace(/Philippine product options? to consider:.*?(?:\.|$)/gi, '');
+  advertisedRecommendationPatterns.forEach((pattern) => {
+    text = text.replace(pattern, 'a suitable product type');
+  });
+  return text.replace(/\s+/g, ' ').trim();
+};
+
+const hasNegatedCareConcern = (text = '') => (
+  /\b(no|not|without)\s+(?:visible\s+|significant\s+|major\s+)?(?:damage|dryness|frizz|breakage|split\s+ends?|issues?)\b/i.test(text)
+  || /\bno\s+significant\s+damage\s+or\s+issues\b/i.test(text)
+  || /\bsealed\s+ends?\b/i.test(text)
+);
+
+const hasExplicitCareConcern = (text = '') => {
+  const normalized = String(text || '').toLowerCase();
+  const negated = hasNegatedCareConcern(normalized);
+  if (/(split\s+ends?|split\s+tips?|breakage|brittle|fray(?:ed|ing)|frizz|flyaways|oily|greasy|stressed\s+ends)/i.test(normalized)) {
+    return true;
+  }
+  if (/(dry|dull|damage|damaged|needs care|not eligible|improve)/i.test(normalized) && !negated) {
+    return true;
+  }
+  return false;
+};
+
+const getCanonicalHairAssessment = (screening = null) => {
+  if (!screening) {
+    return { label: 'No result', needsCare: false, issueLabel: 'No result' };
+  }
+
+  const combined = [
+    screening.detected_condition,
+    screening.visible_damage_notes,
+    screening.summary,
+    screening.decision,
+  ].filter(Boolean).join(' ');
+  const condition = String(screening.detected_condition || '').trim();
+  const metrics = deriveHairMetrics(screening);
+  const metricConcern = (
+    Number(metrics.dryness) >= 6
+    || Number(metrics.damage) >= 6
+    || Number(metrics.frizz) >= 6
+    || Number(metrics.oiliness) >= 7
+  );
+  const explicitConcern = hasExplicitCareConcern(combined);
+  const needsCare = explicitConcern || metricConcern;
+
+  if (!needsCare && (/healthy|good|eligible/i.test(combined) || condition)) {
+    return { label: condition || 'Healthy', needsCare: false, issueLabel: 'Good result' };
+  }
+
+  const issueLabel = [
+    Number(metrics.damage) >= 6 || /split|breakage|damage|fray|stressed/i.test(combined) ? 'Damage' : '',
+    Number(metrics.dryness) >= 6 || /dry|dull/i.test(combined) ? 'Dryness' : '',
+    Number(metrics.frizz) >= 6 || /frizz|flyaway/i.test(combined) ? 'Frizz' : '',
+    Number(metrics.oiliness) >= 7 || /oily|greasy/i.test(combined) ? 'Oiliness' : '',
+  ].filter(Boolean)[0] || 'Needs care';
+
+  return {
+    label: condition && !/healthy/i.test(condition) ? condition : issueLabel,
+    needsCare: true,
+    issueLabel,
+  };
+};
+
 const getScreeningEntries = (submissions = []) => (
   submissions
     .flatMap((submission) => (submission?.ai_screenings || []).map((screening) => ({ submission, screening })))
@@ -172,12 +263,20 @@ const getScreeningEntries = (submissions = []) => (
 
 const WEEK_DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const HOME_REALTIME_DEBOUNCE_MS = 420;
+const HOME_CACHE_FRESH_MS = 60000;
+let cachedDonorHomeData = null;
+let cachedDonorHomeUserId = '';
 
-function AnimatedHomeSection({ children, delay = 0, style }) {
-  const opacity = React.useRef(new Animated.Value(0)).current;
-  const translateY = React.useRef(new Animated.Value(14)).current;
+function AnimatedHomeSection({ children, delay = 0, style, animate = true }) {
+  const opacity = React.useRef(new Animated.Value(animate ? 0 : 1)).current;
+  const translateY = React.useRef(new Animated.Value(animate ? 14 : 0)).current;
 
   React.useEffect(() => {
+    if (!animate) {
+      opacity.setValue(1);
+      translateY.setValue(0);
+      return undefined;
+    }
     Animated.parallel([
       Animated.timing(opacity, {
         toValue: 1,
@@ -196,7 +295,8 @@ function AnimatedHomeSection({ children, delay = 0, style }) {
         }),
       ]),
     ]).start();
-  }, [delay, opacity, translateY]);
+    return undefined;
+  }, [animate, delay, opacity, translateY]);
 
   return (
     <Animated.View style={[style, { opacity, transform: [{ translateY }] }]}>
@@ -339,7 +439,6 @@ function HairConditionWidget({ screening, onViewDetail }) {
           </Pressable>
         ) : null}
       </View>
-
       <View style={styles.hairMetricList}>
         {HAIR_METRIC_DEFS.map((def) => {
           const rawValue = metrics[def.key] ?? 5;
@@ -381,6 +480,142 @@ function HairConditionWidget({ screening, onViewDetail }) {
   );
 }
 
+const compactHomeText = (value = '', limit = 150) => {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (text.length <= limit) return text;
+  return `${text.slice(0, limit - 3).trimEnd()}...`;
+};
+
+const getEntryRecommendation = (entry = null, fallbackRecommendation = null) => {
+  const recommendations = entry?.submission?.donor_recommendations || [];
+  const savedText = recommendations
+    .map((item) => item?.recommendation_text || item?.title || '')
+    .find((value) => String(value || '').trim());
+
+  return compactHomeText(cleanRecommendationText(
+    savedText
+    || fallbackRecommendation?.recommendation_text
+    || entry?.screening?.summary
+    || entry?.screening?.visible_damage_notes
+    || ''
+  ));
+};
+
+const isWeakHairResult = (screening = null) => {
+  return getCanonicalHairAssessment(screening).needsCare;
+};
+
+function RecentHairLogWidget({ hairSubmissions, latestRecommendation, onOpenLog }) {
+  const { resolvedTheme } = useAuth();
+  const roles = resolveThemeRoles(resolvedTheme);
+  const headingFont = resolvedTheme?.secondaryFontFamily || theme.typography.fontFamilyDisplay;
+  const bodyFont = resolvedTheme?.fontFamily || theme.typography.fontFamily;
+  const entries = React.useMemo(() => getScreeningEntries(hairSubmissions).slice(0, 5), [hairSubmissions]);
+  const latestWeakEntry = entries.find((entry) => isWeakHairResult(entry.screening)) || null;
+  const latestRecommendationText = latestWeakEntry
+    ? getEntryRecommendation(latestWeakEntry, latestRecommendation)
+    : '';
+
+  return (
+    <AppCard variant="default" radius="xl" padding="md" contentStyle={styles.recentLogCard}>
+      <View style={styles.recentLogHeader}>
+        <View style={styles.recentLogHeaderCopy}>
+          <Text style={[styles.recentLogSubtitle, { color: roles.metaText, fontFamily: bodyFont }]}>
+            Latest AI results
+          </Text>
+        </View>
+        <View style={[styles.recentLogCountPill, { backgroundColor: roles.iconPrimarySurface }]}>
+          <Text style={[styles.recentLogCountText, { color: roles.iconPrimaryColor, fontFamily: bodyFont }]}>
+            {entries.length} logs
+          </Text>
+        </View>
+      </View>
+
+      {latestWeakEntry ? (
+        <View style={[styles.homeRecommendationPanel, { backgroundColor: roles.supportCardBackground, borderColor: roles.defaultCardBorder }]}>
+          <View style={[styles.homeRecommendationIcon, { backgroundColor: roles.iconPrimarySurface }]}>
+            <MaterialCommunityIcons name="lightbulb-on-outline" size={18} color={roles.iconPrimaryColor} />
+          </View>
+          <View style={styles.homeRecommendationCopy}>
+            <Text style={[styles.homeRecommendationTitle, { color: roles.headingText, fontFamily: headingFont }]}>
+              Do this to improve
+            </Text>
+            <Text style={[styles.homeRecommendationText, { color: roles.bodyText, fontFamily: bodyFont }]}>
+              {latestRecommendationText || 'Avoid heat and chemical processing, keep the hair clean, and repeat the scan after care.'}
+            </Text>
+          </View>
+        </View>
+      ) : null}
+
+      {entries.length ? (
+        <View style={styles.recentLogList}>
+          {entries.map((entry, index) => {
+            const assessment = getCanonicalHairAssessment(entry.screening);
+            const condition = assessment.label || 'Checked';
+            const needsCare = assessment.needsCare;
+            const recommendation = needsCare ? getEntryRecommendation(entry, latestRecommendation) : '';
+
+            return (
+              <Pressable
+                key={`recent-hair-log-${entry.screening?.ai_screening_id || entry.screening?.created_at || index}`}
+                onPress={() => onOpenLog?.(entry)}
+                style={({ pressed }) => [
+                  styles.recentLogItem,
+                  { backgroundColor: roles.supportCardBackground, borderColor: roles.defaultCardBorder },
+                  pressed ? styles.cardPressed : null,
+                ]}
+              >
+                <View style={[styles.recentLogIcon, { backgroundColor: needsCare ? '#fff4e6' : roles.iconPrimarySurface }]}>
+                  <MaterialCommunityIcons
+                    name={needsCare ? 'alert-circle-outline' : 'check-circle-outline'}
+                    size={18}
+                    color={needsCare ? '#c46a18' : roles.iconPrimaryColor}
+                  />
+                </View>
+                <View style={styles.recentLogCopy}>
+                  <View style={styles.recentLogTopRow}>
+                    <Text style={[styles.recentLogCondition, { color: roles.headingText, fontFamily: headingFont }]} numberOfLines={1}>
+                      {condition}
+                    </Text>
+                    <Text style={[styles.recentLogDate, { color: roles.metaText, fontFamily: bodyFont }]}>
+                      {formatDayLabel(entry.screening.created_at)}
+                    </Text>
+                  </View>
+                  <Text style={[styles.recentLogMeta, { color: roles.bodyText, fontFamily: bodyFont }]} numberOfLines={1}>
+                    {needsCare ? assessment.issueLabel : 'Healthy result'}
+                  </Text>
+                  {needsCare ? (
+                    <Text style={[styles.recentLogRecommendation, { color: roles.bodyText, fontFamily: bodyFont }]} numberOfLines={2}>
+                      Do this: {recommendation || 'Follow the care recommendation before your next scan.'}
+                    </Text>
+                  ) : null}
+                </View>
+                <MaterialCommunityIcons name="chevron-right" size={18} color={roles.metaText} />
+              </Pressable>
+            );
+          })}
+        </View>
+      ) : (
+        <View style={styles.emptyCalendarState}>
+          <View style={[styles.emptyCalendarIcon, { backgroundColor: roles.iconPrimarySurface }]}>
+            <MaterialCommunityIcons name="hair-dryer-outline" size={20} color={roles.iconPrimaryColor} />
+          </View>
+          <View style={styles.emptyCalendarCopy}>
+            <Text style={[styles.emptyCalendarTitle, { color: roles.headingText, fontFamily: headingFont }]}>
+              No hair logs yet
+            </Text>
+            <Text style={[styles.emptyCalendarBody, { color: roles.bodyText, fontFamily: bodyFont }]}>
+              Start CheckHair to see recent results and care recommendations here.
+            </Text>
+          </View>
+        </View>
+      )}
+    </AppCard>
+  );
+}
+
+// Kept for reference while the home page uses the recent-log layout.
+// eslint-disable-next-line no-unused-vars
 function HairCalendarWidget({ hairSubmissions, onOpenDate }) {
   const { resolvedTheme } = useAuth();
   const roles = resolveThemeRoles(resolvedTheme);
@@ -771,7 +1006,7 @@ function HomeModeTabs({ activeTab, onChange }) {
   );
 }
 
-function ActiveDonationDriveCard({ drive, onPress, style }) {
+function ActiveDonationDriveCard({ drive, onOpenFlow, style }) {
   const { resolvedTheme } = useAuth();
   const roles = resolveThemeRoles(resolvedTheme);
   const [imageFailed, setImageFailed] = React.useState(false);
@@ -781,6 +1016,11 @@ function ActiveDonationDriveCard({ drive, onPress, style }) {
   React.useEffect(() => {
     setImageFailed(false);
   }, [imageUrl]);
+
+  const checkedIn = isRsvpCheckedIn(drive?.registration || null);
+  const primaryLabel = drive?.registration
+    ? (checkedIn ? 'Open Donation Module' : 'Show RSVP QR')
+    : 'RSVP Now';
 
   return (
     <View style={[styles.activeDriveCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }, style]}>
@@ -825,7 +1065,7 @@ function ActiveDonationDriveCard({ drive, onPress, style }) {
           </View>
         </View>
         <Pressable
-          onPress={onPress}
+          onPress={onOpenFlow}
           style={({ pressed }) => [
             styles.activeDriveButton,
             { backgroundColor: roles.primaryActionBackground },
@@ -833,7 +1073,7 @@ function ActiveDonationDriveCard({ drive, onPress, style }) {
           ]}
         >
           <Text style={[styles.activeDriveButtonText, { color: roles.primaryActionText }]}>
-            {drive?.registration ? 'View Drive' : 'Donate'}
+            {primaryLabel}
           </Text>
         </Pressable>
       </View>
@@ -1025,56 +1265,23 @@ function AiInsightCard({ message, name }) {
   const bodyFont = resolvedTheme?.fontFamily || theme.typography.fontFamily;
 
   return (
-    <View style={[
-      styles.aiInsightCard,
-      {
-        backgroundColor: roles.defaultCardBackground,
-        borderColor: roles.defaultCardBorder,
-        borderLeftColor: roles.primaryActionBackground,
-      },
-    ]}>
+    <View style={styles.aiInsightCard}>
       <View style={styles.aiInsightHeader}>
         <View style={[styles.aiInsightIconWrap, { backgroundColor: roles.iconPrimarySurface }]}>
           <MaterialCommunityIcons name="star-four-points-outline" size={18} color={roles.primaryActionBackground} />
         </View>
-        <Text numberOfLines={1} style={[styles.homeGreetingTitle, { color: roles.headingText, fontFamily: headingFont }]}>
-          Hello, {name}!
-        </Text>
+        <View style={styles.aiInsightCopy}>
+          <Text numberOfLines={1} style={[styles.homeGreetingTitle, { color: roles.headingText, fontFamily: headingFont }]}>
+            Hello, {name}!
+          </Text>
+          <Text style={[styles.aiInsightText, { color: roles.bodyText, fontFamily: bodyFont }]}>
+            {message || 'Start your first hair check when you are ready.'}
+          </Text>
+        </View>
       </View>
-      <Text style={[styles.aiInsightText, { color: roles.bodyText, fontFamily: bodyFont }]}>
-        {message || 'Loading your personalized insight…'}
-      </Text>
     </View>
   );
 }
-
-function HomeSplashLoading() {
-  const { resolvedTheme } = useAuth();
-  const roles = resolveThemeRoles(resolvedTheme);
-  const [imageFailed, setImageFailed] = React.useState(false);
-  const logoSource = resolveBrandLogoSource(resolvedTheme, imageFailed);
-  const headingFont = resolvedTheme?.secondaryFontFamily || resolvedTheme?.fontFamily || theme.typography.fontFamilyDisplay;
-
-  React.useEffect(() => {
-    setImageFailed(false);
-  }, [resolvedTheme?.logoIcon]);
-
-  return (
-    <View style={styles.homeSplashLoading}>
-      <Image
-        source={logoSource}
-        style={styles.homeSplashLogo}
-        resizeMode="contain"
-        onError={() => setImageFailed(true)}
-      />
-      <Text style={[styles.homeSplashBrand, { color: roles.headingText, fontFamily: headingFont }]}>
-        {resolvedTheme?.brandName || 'Donivra'}
-      </Text>
-      <ActivityIndicator color={roles.primaryActionBackground} size="small" />
-    </View>
-  );
-}
-
 function OrganizationPreviewModal({
   visible,
   organization,
@@ -1359,27 +1566,25 @@ const buildDailyReminder = (submissions = []) => {
   };
 };
 
-const buildContextualGreeting = ({ donorName, hasHistory, latestCondition, checkedToday, daysSinceLastLog, latestRecommendation }) => {
-  const name = donorName || 'there';
-  if (!hasHistory) return `Hey ${name}! Start your first hair check to get personalized insights.`;
+const buildContextualGreeting = ({ hasHistory, latestCondition, checkedToday, daysSinceLastLog, latestRecommendation }) => {
+  if (!hasHistory) return 'Start your first hair check to get personalized insights.';
   const tone = normalizeConditionTone(latestCondition || '');
   if (checkedToday) {
     return tone.label === 'Healthy'
-      ? `Looking great, ${name}! Your hair is healthy today. Keep it up!`
-      : `Hey ${name}! Today's check shows ${tone.label.toLowerCase()}. See your care tips below.`;
+      ? 'Your hair is healthy today. Keep it up!'
+      : `Today's check shows ${tone.label.toLowerCase()}. See your care tips below.`;
   }
   const days = Number(daysSinceLastLog) || 0;
   const daysText = days === 1 ? '1 day' : `${days} days`;
   if (days > 1) {
     return tone.label !== 'Healthy'
-      ? `Hey ${name}, you haven't logged for ${daysText}. Based on your previous log, you had ${tone.label.toLowerCase()} hair. Have you tried the recommendations?`
-      : `Hey ${name}! It's been ${daysText} since your last check. Your hair was healthy last time — check in again!`;
+      ? `You haven't logged for ${daysText}. Based on your previous log, you had ${tone.label.toLowerCase()} hair. Have you tried the recommendations?`
+      : `It's been ${daysText} since your last check. Your hair was healthy last time, so check in again.`;
   }
   return tone.label !== 'Healthy'
-    ? `Hey ${name}, your last check showed ${tone.label.toLowerCase()} hair. Have you tried the care tips we shared?`
-    : `Welcome back, ${name}! Last check: ${tone.label.toLowerCase()}. Ready for today's check?`;
+    ? `Your last check showed ${tone.label.toLowerCase()} hair. Have you tried the care tips we shared?`
+    : `Last check: ${tone.label.toLowerCase()}. Ready for today's check?`;
 };
-
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function DonorHomeScreen() {
@@ -1399,13 +1604,17 @@ export default function DonorHomeScreen() {
     mode: 'badge',
     liveUpdates: true,
   });
-  const [isLoadingHome, setIsLoadingHome] = React.useState(true);
+  const homeCacheMatchesUser = Boolean(cachedDonorHomeData && cachedDonorHomeUserId === user?.id);
+  const cachedHome = homeCacheMatchesUser ? cachedDonorHomeData : null;
+  const homeCacheRef = React.useRef(cachedHome);
+  const shouldAnimateHomeSections = !homeCacheMatchesUser;
+  const [isLoadingHome, setIsLoadingHome] = React.useState(!homeCacheMatchesUser);
   const [homeError, setHomeError] = React.useState('');
   const [homeTab, setHomeTab] = React.useState(tabParam === 'organizations' ? 'organizations' : 'drives');
   const [organizationSearchQuery, setOrganizationSearchQuery] = React.useState('');
-  const [donationDrives, setDonationDrives] = React.useState([]);
-  const [organizations, setOrganizations] = React.useState([]);
-  const [hairSubmissions, setHairSubmissions] = React.useState([]);
+  const [donationDrives, setDonationDrives] = React.useState(cachedHome?.donationDrives || []);
+  const [organizations, setOrganizations] = React.useState(cachedHome?.organizations || []);
+  const [hairSubmissions, setHairSubmissions] = React.useState(cachedHome?.hairSubmissions || []);
   const [isOrganizationPreviewOpen, setIsOrganizationPreviewOpen] = React.useState(false);
   const [isLoadingOrganizationPreview] = React.useState(false);
   const [selectedOrganizationPreview, setSelectedOrganizationPreview] = React.useState(null);
@@ -1415,8 +1624,8 @@ export default function DonorHomeScreen() {
   // Hair log detail modal
   const [isHairLogModalOpen, setIsHairLogModalOpen] = React.useState(false);
   const [selectedHairLogEntries, setSelectedHairLogEntries] = React.useState([]);
-  const [latestRecommendation, setLatestRecommendation] = React.useState(null);
-  const [aiGreeting, setAiGreeting] = React.useState('');
+  const [latestRecommendation, setLatestRecommendation] = React.useState(cachedHome?.latestRecommendation || null);
+  const [aiGreeting, setAiGreeting] = React.useState(cachedHome?.aiGreeting || '');
 
   const firstName = String(profile?.first_name || '').trim();
   const lastName = String(profile?.last_name || '').trim();
@@ -1470,8 +1679,11 @@ export default function DonorHomeScreen() {
 
   const loadHome = React.useCallback(async ({ silent = false } = {}) => {
     if (!user?.id) return;
+    const cachedAt = Number(homeCacheRef.current?.cachedAt || 0);
+    const cacheIsFresh = cachedAt && (Date.now() - cachedAt) < HOME_CACHE_FRESH_MS;
+    if (silent && cacheIsFresh) return;
 
-    if (!silent) {
+    if (!silent && !homeCacheRef.current) {
       setIsLoadingHome(true);
     }
     setHomeError('');
@@ -1499,13 +1711,28 @@ export default function DonorHomeScreen() {
     const visibleDriveRows = upcomingDrivesResult.data?.length
       ? upcomingDrivesResult.data
       : (donationModuleResult.drives || []);
-    setDonationDrives(visibleDriveRows.filter(isDriveActiveForHome));
-    setOrganizations(attachMembershipsToOrganizations(
+    const nextDonationDrives = visibleDriveRows.filter(isDriveActiveForHome);
+    const nextOrganizations = attachMembershipsToOrganizations(
       organizationsResult.data || [],
       organizationMembershipsResult.data || []
-    ));
-    setHairSubmissions(submissionsResult.data || []);
-    setLatestRecommendation(recommendationResult?.data || null);
+    );
+    const nextHairSubmissions = submissionsResult.data || [];
+    const nextLatestRecommendation = recommendationResult?.data || null;
+    const nextHomeData = {
+      donationDrives: nextDonationDrives,
+      organizations: nextOrganizations,
+      hairSubmissions: nextHairSubmissions,
+      latestRecommendation: nextLatestRecommendation,
+      aiGreeting: homeCacheRef.current?.aiGreeting || '',
+      cachedAt: Date.now(),
+    };
+    cachedDonorHomeData = nextHomeData;
+    cachedDonorHomeUserId = user.id;
+    homeCacheRef.current = nextHomeData;
+    setDonationDrives(nextDonationDrives);
+    setOrganizations(nextOrganizations);
+    setHairSubmissions(nextHairSubmissions);
+    setLatestRecommendation(nextLatestRecommendation);
     const loadFailed = Boolean(
       donationModuleResult.error
       || organizationsResult.error
@@ -1517,9 +1744,9 @@ export default function DonorHomeScreen() {
     setIsLoadingHome(false);
 
     // Build contextual AI greeting from loaded data
-    const analytics = buildAnalyticsData(submissionsResult.data || []);
+    const analytics = buildAnalyticsData(nextHairSubmissions);
     const todayStr = toLocalDateKey(new Date());
-    const checkedToday = (submissionsResult.data || []).some((s) =>
+    const checkedToday = nextHairSubmissions.some((s) =>
       (s?.ai_screenings || []).some(
         (sc) => sc?.created_at && toLocalDateKey(sc.created_at) === todayStr
       )
@@ -1529,7 +1756,7 @@ export default function DonorHomeScreen() {
       || 'Donor';
 
     // Compute days since last log
-    const allEntries = getScreeningEntries(submissionsResult.data || []);
+    const allEntries = getScreeningEntries(nextHairSubmissions);
     const latestEntry = allEntries[0] || null;
     let daysSinceLastLog = 0;
     if (latestEntry?.screening?.created_at) {
@@ -1547,25 +1774,35 @@ export default function DonorHomeScreen() {
     };
 
     // Set immediate fallback, then try AI enhancement
-    setAiGreeting(buildContextualGreeting(greetingContext));
+    const fallbackGreeting = buildContextualGreeting(greetingContext);
+    cachedDonorHomeData = { ...(homeCacheRef.current || {}), aiGreeting: fallbackGreeting };
+    homeCacheRef.current = cachedDonorHomeData;
+    setAiGreeting(fallbackGreeting);
+    if (!analytics.hasHistory) return;
 
     // Try OpenAI edge function, then chatbot fallback
     const latestConditionText = analytics.latestAnalysis?.detected_condition || 'no result yet';
     const aiPrompt = [
-      `Write one warm, personal home greeting for hair donor named ${greetName}.`,
+      'Write one warm, personal home greeting for a hair donor.',
       analytics.hasHistory
         ? `Their last hair check: ${latestConditionText}. Days since last log: ${daysSinceLastLog}.`
         : 'They have not done a hair check yet.',
       checkedToday ? 'They already checked today.' : '',
       recommendationResult?.data?.recommendation_text
         ? `Previous tip given: ${recommendationResult.data.recommendation_text.slice(0, 80)}` : '',
-      'Return one short sentence under 20 words. Mention condition or days since last log. No markdown.',
+      'Return one short sentence under 20 words. Mention condition or days since last log. Do not include the donor name. No markdown.',
     ].filter(Boolean).join(' ');
 
     invokeEdgeFunction('home-greeting', { body: { prompt: aiPrompt, donorName: greetName, condition: latestConditionText, daysSinceLastLog } })
       .then(({ data, error }) => {
         const text = String(data?.greeting || data?.message || '').replace(/\s+/g, ' ').trim();
-        if (!error && text) { setAiGreeting(text.slice(0, 200)); return; }
+        if (!error && text) {
+          const nextGreeting = text.slice(0, 200);
+          cachedDonorHomeData = { ...(homeCacheRef.current || {}), aiGreeting: nextGreeting };
+          homeCacheRef.current = cachedDonorHomeData;
+          setAiGreeting(nextGreeting);
+          return;
+        }
         return loadChatbotBootstrap({ role: 'donor', userId: user.id });
       })
       .then((bootstrap) => {
@@ -1581,10 +1818,15 @@ export default function DonorHomeScreen() {
       })
       .then((reply) => {
         const text = String(reply?.text || '').replace(/\s+/g, ' ').trim();
-        if (text) setAiGreeting(text.slice(0, 200));
+        if (text) {
+          const nextGreeting = text.slice(0, 200);
+          cachedDonorHomeData = { ...(homeCacheRef.current || {}), aiGreeting: nextGreeting };
+          homeCacheRef.current = cachedDonorHomeData;
+          setAiGreeting(nextGreeting);
+        }
       })
       .catch(() => {});
-  }, [profile?.first_name, profile?.user_id, user?.email, user?.id]);
+  }, [homeCacheRef, profile?.first_name, profile?.user_id, user?.email, user?.id]);
 
   const homeRealtimeRefreshRef = React.useRef(null);
   const scheduleHomeRealtimeRefresh = React.useCallback(() => {
@@ -1598,6 +1840,7 @@ export default function DonorHomeScreen() {
   }, [loadHome]);
 
   React.useEffect(() => {
+    if (homeCacheRef.current) return;
     loadHome();
   }, [loadHome]);
 
@@ -1628,24 +1871,13 @@ export default function DonorHomeScreen() {
       .on('postgres_changes', {
         event: '*',
         schema: 'public',
-        table: 'Donation_Drive_Requests',
+        table: 'Event_Applications',
       }, onRealtimeEvent)
       .on('postgres_changes', {
         event: '*',
         schema: 'public',
-        table: 'Donation_Drive_Registrations',
+        table: 'Event_Attendees',
         filter: `User_ID=eq.${profile.user_id}`,
-      }, onRealtimeEvent)
-      .on('postgres_changes', {
-        event: '*',
-        schema: 'public',
-        table: 'Organization_Members',
-        filter: `User_ID=eq.${profile.user_id}`,
-      }, onRealtimeEvent)
-      .on('postgres_changes', {
-        event: '*',
-        schema: 'public',
-        table: 'Organizations',
       }, onRealtimeEvent)
       .on('postgres_changes', {
         event: '*',
@@ -1812,92 +2044,107 @@ export default function DonorHomeScreen() {
         <StatusBanner
           variant="info"
           message={homeError}
-          style={styles.statusBanner}
+          presentation="floating"
+          visible={Boolean(homeError)}
+          autoDismissMs={3000}
+          onDismiss={() => setHomeError('')}
         />
       ) : null}
 
       {isLoadingHome ? (
-        <HomeSplashLoading />
-      ) : (
-        <View style={styles.homeFeed}>
-          <AnimatedHomeSection delay={10}>
-            <HomeModeTabs activeTab={homeTab} onChange={setHomeTab} />
+        <StatusBanner
+          variant="info"
+          message="Refreshing dashboard in the background."
+          presentation="floating"
+          visible={isLoadingHome}
+          autoDismissMs={3000}
+        />
+      ) : null}
+
+      <View style={styles.homeFeed}>
+        <AnimatedHomeSection delay={10} animate={shouldAnimateHomeSections}>
+          <HomeModeTabs activeTab={homeTab} onChange={setHomeTab} />
+        </AnimatedHomeSection>
+
+        {homeTab === 'drives' ? (
+          <AnimatedHomeSection delay={20} animate={shouldAnimateHomeSections}>
+            <AiInsightCard
+              name={greetingName}
+              message={aiGreeting || buildContextualGreeting({
+                donorName: greetingName,
+                hasHistory: analyticsData.hasHistory,
+                latestCondition: analyticsData.latestAnalysis?.detected_condition || null,
+                checkedToday: dailyReminder.type === 'analyzed-today',
+                latestRecommendation: latestRecommendation?.recommendation_text || null,
+              })}
+            />
           </AnimatedHomeSection>
+        ) : null}
 
-          {homeTab === 'drives' ? (
-            <AnimatedHomeSection delay={20}>
-              <AiInsightCard
-                name={greetingName}
-                message={aiGreeting || buildContextualGreeting({
-                  donorName: greetingName,
-                  hasHistory: analyticsData.hasHistory,
-                  latestCondition: analyticsData.latestAnalysis?.detected_condition || null,
-                  checkedToday: dailyReminder.type === 'analyzed-today',
-                  latestRecommendation: latestRecommendation?.recommendation_text || null,
-                })}
+        {!areCredentialsCompleted ? (
+          <AnimatedHomeSection delay={60} animate={shouldAnimateHomeSections}>
+            <FinishSetupCard
+              completionMeta={profileCompletionMeta}
+              onManageProfile={() => router.navigate('/profile')}
+            />
+          </AnimatedHomeSection>
+        ) : null}
+
+        {homeTab === 'drives' ? (
+          <>
+            <AnimatedHomeSection delay={90} style={styles.section} animate={shouldAnimateHomeSections}>
+              <HomeSectionHeader title="Recent Hair Log" />
+              <RecentHairLogWidget
+                hairSubmissions={hairSubmissions}
+                latestRecommendation={latestRecommendation}
+                onOpenLog={handleOpenHairLogEntry}
               />
             </AnimatedHomeSection>
-          ) : null}
 
-          {!areCredentialsCompleted ? (
-            <AnimatedHomeSection delay={60}>
-              <FinishSetupCard
-                completionMeta={profileCompletionMeta}
-                onManageProfile={() => router.navigate('/profile')}
-              />
+            <AnimatedHomeSection delay={140} style={styles.section} animate={shouldAnimateHomeSections}>
+              <HomeSectionHeader title="Active Donation Drives" />
+              {donationDrives.length ? (
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  decelerationRate="fast"
+                  snapToInterval={activeDriveSnapInterval}
+                  snapToAlignment="start"
+                  contentContainerStyle={styles.activeDriveCarouselContent}
+                  style={styles.activeDriveCarousel}
+                >
+                  {donationDrives.slice(0, 8).map((drive) => (
+                      <ActiveDonationDriveCard
+                        key={`active-drive-${drive.donation_drive_id}`}
+                        drive={drive}
+                        onOpenFlow={() => {
+                          const checkedIn = isRsvpCheckedIn(drive?.registration || null);
+                          router.navigate(checkedIn
+                            ? `/donor/status?driveId=${drive.donation_drive_id}`
+                            : `/donor/drives/${drive.donation_drive_id}`);
+                        }}
+                        style={{ width: activeDriveCardWidth }}
+                      />
+                    ))}
+                </ScrollView>
+              ) : (
+                <View style={styles.activeDriveList}>
+                  <EmptyDonationDriveCard />
+                </View>
+              )}
             </AnimatedHomeSection>
-          ) : null}
-
-          {homeTab === 'drives' ? (
-            <>
-              <AnimatedHomeSection delay={90} style={styles.section}>
-                <HomeSectionHeader title="Analysis History" />
-                <HairCalendarWidget
-                  hairSubmissions={hairSubmissions}
-                  onOpenDate={handleOpenHairLogEntry}
-                />
-              </AnimatedHomeSection>
-
-              <AnimatedHomeSection delay={140} style={styles.section}>
-                <HomeSectionHeader title="Active Donation Drives" />
-                {donationDrives.length ? (
-                  <ScrollView
-                    horizontal
-                    showsHorizontalScrollIndicator={false}
-                    decelerationRate="fast"
-                    snapToInterval={activeDriveSnapInterval}
-                    snapToAlignment="start"
-                    contentContainerStyle={styles.activeDriveCarouselContent}
-                    style={styles.activeDriveCarousel}
-                  >
-                    {donationDrives.slice(0, 8).map((drive) => (
-                        <ActiveDonationDriveCard
-                          key={`active-drive-${drive.donation_drive_id}`}
-                          drive={drive}
-                          onPress={() => router.navigate(`/donor/drives/${drive.donation_drive_id}`)}
-                          style={{ width: activeDriveCardWidth }}
-                        />
-                      ))}
-                  </ScrollView>
-                ) : (
-                  <View style={styles.activeDriveList}>
-                    <EmptyDonationDriveCard />
-                  </View>
-                )}
-              </AnimatedHomeSection>
-            </>
-          ) : (
-            <AnimatedHomeSection delay={90}>
-              <OrganizationHomeSection
-                organizations={organizations}
-                searchQuery={organizationSearchQuery}
-                onSearchChange={setOrganizationSearchQuery}
-                onOpenOrganization={handleOpenOrganizationPreview}
-              />
-            </AnimatedHomeSection>
-          )}
-        </View>
-      )}
+          </>
+        ) : (
+          <AnimatedHomeSection delay={90} animate={shouldAnimateHomeSections}>
+            <OrganizationHomeSection
+              organizations={organizations}
+              searchQuery={organizationSearchQuery}
+              onSearchChange={setOrganizationSearchQuery}
+              onOpenOrganization={handleOpenOrganizationPreview}
+            />
+          </AnimatedHomeSection>
+        )}
+      </View>
 
       <OrganizationPreviewModal
         visible={isOrganizationPreviewOpen}
@@ -1969,7 +2216,7 @@ const styles = StyleSheet.create({
   activeDriveCarouselContent: {
     gap: theme.spacing.md,
     paddingHorizontal: theme.spacing.md,
-    paddingBottom: theme.spacing.lg,
+    paddingBottom: theme.spacing.xs,
   },
   activeDriveCard: {
     borderRadius: 18,
@@ -2056,6 +2303,15 @@ const styles = StyleSheet.create({
   activeDriveButtonText: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.body,
+    fontWeight: theme.typography.weights.bold,
+  },
+  activeDriveLink: {
+    marginTop: theme.spacing.sm,
+    alignSelf: 'flex-start',
+  },
+  activeDriveLinkText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
     fontWeight: theme.typography.weights.bold,
   },
   emptyDriveCard: {
@@ -2517,6 +2773,119 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.compact.caption,
     marginTop: theme.spacing.xs,
     lineHeight: theme.typography.compact.caption * 1.4,
+  },
+  recentLogCard: {
+    gap: theme.spacing.md,
+  },
+  recentLogHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: theme.spacing.md,
+  },
+  recentLogHeaderCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 3,
+  },
+  recentLogTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  recentLogSubtitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+  },
+  recentLogCountPill: {
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: 5,
+  },
+  recentLogCountText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    fontWeight: theme.typography.weights.bold,
+  },
+  homeRecommendationPanel: {
+    borderWidth: 1,
+    borderRadius: 18,
+    padding: theme.spacing.md,
+    flexDirection: 'row',
+    gap: theme.spacing.sm,
+  },
+  homeRecommendationIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  homeRecommendationCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 3,
+  },
+  homeRecommendationTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.compact.bodyMd,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  homeRecommendationText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+  },
+  recentLogList: {
+    gap: theme.spacing.sm,
+  },
+  recentLogItem: {
+    borderWidth: 1,
+    borderRadius: 18,
+    padding: theme.spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  recentLogIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  recentLogCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 3,
+  },
+  recentLogTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  recentLogCondition: {
+    flex: 1,
+    minWidth: 0,
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.compact.bodyMd,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  recentLogDate: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    flexShrink: 0,
+  },
+  recentLogMeta: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+  },
+  recentLogRecommendation: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
   },
   // Week strip calendar
   calWeekStrip: {
@@ -3055,28 +3424,28 @@ const styles = StyleSheet.create({
   },
   // ─── AI Insight Card ───────────────────────────────────────────────────────
   aiInsightCard: {
-    borderRadius: theme.radius.xl,
-    borderWidth: 1,
-    borderLeftWidth: 4,
-    padding: theme.spacing.md,
-    gap: theme.spacing.sm,
-    ...theme.shadows.soft,
+    paddingHorizontal: theme.spacing.xs,
+    paddingVertical: theme.spacing.xs,
   },
   aiInsightHeader: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: theme.spacing.sm,
   },
   aiInsightIconWrap: {
-    width: 34,
-    height: 34,
+    width: 32,
+    height: 32,
     borderRadius: theme.radius.full,
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
   },
-  homeGreetingTitle: {
+  aiInsightCopy: {
     flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  homeGreetingTitle: {
     fontFamily: theme.typography.fontFamilyDisplay,
     fontSize: theme.typography.compact.bodyMd,
   },

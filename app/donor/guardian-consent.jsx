@@ -111,9 +111,13 @@ export default function GuardianConsentScreen() {
     <SafeAreaView style={[styles.safeArea, { backgroundColor: roles.screenBackground }]}>
       <KeyboardAvoidingView
         style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
-        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+        <ScrollView
+          contentContainerStyle={styles.content}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+        >
           <View style={styles.header}>
             <Pressable
               onPress={() => router.back()}
@@ -202,7 +206,7 @@ const styles = StyleSheet.create({
   },
   content: {
     padding: theme.spacing.lg,
-    paddingBottom: theme.spacing.xxl,
+    paddingBottom: theme.spacing.giant,
     gap: theme.spacing.md,
   },
   header: {
