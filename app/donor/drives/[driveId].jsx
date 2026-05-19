@@ -74,14 +74,16 @@ const isDriveEnded = (drive = null) => {
 };
 
 const normalizeRealtimeDriveRegistration = (row = {}) => ({
-  registration_id: row?.Registration_ID || row?.registration_id || null,
-  donation_drive_id: row?.Donation_Drive_ID || row?.donation_drive_id || null,
+  registration_id: row?.Event_Attendee_ID || row?.registration_id || null,
+  donation_drive_id: row?.Event_Application_ID || row?.donation_drive_id || null,
   user_id: row?.User_ID || row?.user_id || null,
   registration_status: row?.Registration_Status || row?.registration_status || '',
   attendance_status: row?.Attendance_Status || row?.attendance_status || '',
-  registered_at: row?.Registered_At || row?.registered_at || null,
+  registered_at: row?.Created_At || row?.registered_at || null,
   updated_at: row?.Updated_At || row?.updated_at || null,
-  attendance_marked_at: row?.Attendance_Marked_At || row?.attendance_marked_at || null,
+  attendance_marked_at: normalizeRsvpStatus(row?.Attendance_Status || row?.attendance_status) === 'present'
+    ? (row?.Updated_At || row?.updated_at || null)
+    : null,
 });
 
 const isApprovedRegistration = (registration = null) => (

@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Animated, Image, Platform, StyleSheet, Text, View } from 'react-native';
+import { Animated, Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import * as DocumentPicker from 'expo-document-picker';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import { Controller, useForm } from 'react-hook-form';
@@ -20,6 +21,7 @@ import {
   completePostLoginOnboarding,
   getPatientLinkPreview,
 } from '../src/features/profile/services/profile.service';
+import { calculateAgeFromBirthdate } from '../src/features/auth/validators/auth.schema';
 import { patientOnboardingSchema } from '../src/features/profile/profile.schema';
 import { guardianRelationshipOptions, profileGenderOptions } from '../src/constants/profile';
 import { resolveBrandLogoSource, resolveThemeRoles, theme } from '../src/design-system/theme';
@@ -33,13 +35,13 @@ const normalizePatientCode = (value) => {
   return normalized.slice(0, 6);
 };
 const IMAGE_MEDIA_TYPES = ['images'];
-const PROFILE_MINIMUM_AGE = 18;
 const MINIMUM_BIRTHDATE = new Date(1900, 0, 1);
 const MINIMUM_DIAGNOSIS_DATE = new Date(1900, 0, 1);
+const formatPhilippineMobileInput = (value) => String(value || '').replace(/\D/g, '').slice(0, 11);
 
 const getMaximumBirthdate = () => {
   const maxDate = new Date();
-  maxDate.setFullYear(maxDate.getFullYear() - PROFILE_MINIMUM_AGE);
+  maxDate.setHours(0, 0, 0, 0);
   return maxDate;
 };
 
@@ -56,6 +58,7 @@ const manualPatientStepFieldGroups = [
     'last_name',
     'suffix',
     'birthdate',
+    'parental_consent',
     'gender',
     'contact_number',
     'street',
@@ -84,10 +87,36 @@ const getFileExtension = (mimeType = '', fileName = '') => {
   const normalizedMimeType = String(mimeType || '').toLowerCase();
   const normalizedFileName = String(fileName || '').toLowerCase();
 
+  if (normalizedMimeType.includes('pdf') || normalizedFileName.endsWith('.pdf')) return 'pdf';
   if (normalizedMimeType.includes('png') || normalizedFileName.endsWith('.png')) return 'png';
   if (normalizedMimeType.includes('webp') || normalizedFileName.endsWith('.webp')) return 'webp';
   if (normalizedMimeType.includes('gif') || normalizedFileName.endsWith('.gif')) return 'gif';
   return 'jpg';
+};
+
+const base64ToArrayBuffer = (base64Value = '') => {
+  const base64 = String(base64Value || '').replace(/\s/g, '');
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  const bytes = [];
+
+  let buffer = 0;
+  let bits = 0;
+
+  for (const character of base64) {
+    if (character === '=') break;
+    const value = alphabet.indexOf(character);
+    if (value < 0) continue;
+
+    buffer = (buffer << 6) | value;
+    bits += 6;
+
+    if (bits >= 8) {
+      bits -= 8;
+      bytes.push((buffer >> bits) & 0xff);
+    }
+  }
+
+  return new Uint8Array(bytes).buffer;
 };
 
 const getPickedMediaPayload = async (asset, fallbackPrefix) => {
@@ -100,13 +129,8 @@ const getPickedMediaPayload = async (asset, fallbackPrefix) => {
   const previewUri = asset.uri || '';
 
   if (asset.base64) {
-    const fileResponse = await fetch(`data:${contentType};base64,${asset.base64}`);
-    if (!fileResponse.ok) {
-      throw new Error('Unable to read the selected image.');
-    }
-
     return {
-      fileBody: await fileResponse.arrayBuffer(),
+      fileBody: base64ToArrayBuffer(asset.base64),
       contentType,
       fileName,
       previewUri: previewUri || `data:${contentType};base64,${asset.base64}`,
@@ -137,6 +161,40 @@ const getPickedMediaPayload = async (asset, fallbackPrefix) => {
   }
 
   throw new Error('Unable to read the selected image.');
+};
+
+const getPickedDocumentPayload = async (asset, fallbackPrefix) => {
+  if (!asset) {
+    throw new Error('Unable to read the selected file.');
+  }
+
+  const contentType = asset.mimeType || 'application/octet-stream';
+  const fileName = asset.name || `${fallbackPrefix}.${getFileExtension(contentType)}`;
+
+  if (asset.file && typeof asset.file.arrayBuffer === 'function') {
+    return {
+      fileBody: await asset.file.arrayBuffer(),
+      contentType,
+      fileName,
+      previewUri: asset.uri || '',
+    };
+  }
+
+  if (asset.uri) {
+    const fileResponse = await fetch(asset.uri);
+    if (!fileResponse.ok) {
+      throw new Error('Unable to read the selected file.');
+    }
+
+    return {
+      fileBody: await fileResponse.arrayBuffer(),
+      contentType,
+      fileName,
+      previewUri: asset.uri,
+    };
+  }
+
+  throw new Error('Unable to read the selected file.');
 };
 
 function BrandLogo({ resolvedTheme, plain = false }) {
@@ -220,40 +278,18 @@ function PublicLanding() {
               {brandName}
             </Text>
           </View>
-          <View style={styles.landingNavActions}>
-            <AppButton
-              title="Log In"
-              variant="outline"
-              size="sm"
-              fullWidth={false}
-              style={styles.landingNavButton}
-              textStyle={styles.landingNavButtonText}
-              textColorOverride={roles.secondaryActionText}
-              backgroundColorOverride={roles.defaultCardBackground}
-              borderColorOverride={roles.defaultCardBorder}
-              disabled={isLoading}
-              onPress={() => {
-                clearGoogleError();
-                return navigateWithHaptic('/auth/access');
-              }}
-            />
-            <AppButton
-              title="Sign Up"
-              size="sm"
-              fullWidth={false}
-              style={styles.landingNavButton}
-              textStyle={styles.landingNavButtonText}
-              disabled={isLoading}
-              onPress={() => {
-                clearGoogleError();
-                return navigateWithHaptic('/auth/signup');
-              }}
-            />
-          </View>
         </View>
 
         <View style={styles.landingContent}>
           <View style={styles.landingHeroSection}>
+            <View style={styles.landingArtWrap}>
+              <Image
+                source={landingHeroImage}
+                style={styles.landingHeroImage}
+                resizeMode="cover"
+              />
+            </View>
+
             <View style={styles.landingCopyBlock}>
               <Text
                 style={[
@@ -264,14 +300,14 @@ function PublicLanding() {
                   },
                 ]}
               >
-                Give Your Hair a New Purpose
+                Donate hair. Track every step.
               </Text>
               <Text style={[styles.landingSubtitle, { color: roles.bodyText }]}>
-                Join donors making a difference in the lives of people experiencing medical hair loss. Professional, secure, and deeply impactful.
+                Start a hair donation, check your eligibility, and follow your impact in one app.
               </Text>
               <View style={styles.landingActionStack}>
                 <AppButton
-                  title="Start Your Journey"
+                  title="Create Account"
                   size="lg"
                   style={styles.landingButtonPrimary}
                   textStyle={styles.landingButtonText}
@@ -286,7 +322,7 @@ function PublicLanding() {
                   enableHaptics={true}
                 />
                 <AppButton
-                  title="Learn How It Works"
+                  title="I Already Have an Account"
                   variant="outline"
                   size="lg"
                   style={styles.landingButtonSecondary}
@@ -295,91 +331,19 @@ function PublicLanding() {
                   backgroundColorOverride={roles.defaultCardBackground}
                   borderColorOverride={roles.defaultCardBorder}
                   disabled={isLoading}
-                  onPress={() => Haptics.selectionAsync()}
+                  onPress={() => {
+                    clearGoogleError();
+                    return navigateWithHaptic('/auth/access');
+                  }}
                   enableHaptics={true}
                 />
               </View>
             </View>
 
-            <View style={styles.landingArtWrap}>
-              <Image
-                source={landingHeroImage}
-                style={styles.landingHeroImage}
-                resizeMode="cover"
-              />
-            </View>
-          </View>
-
-          <View style={styles.landingSection}>
-            <Text style={[styles.landingSectionTitle, { color: roles.headingText }]}>Why Donate?</Text>
-            <View style={styles.landingCardGrid}>
-              {[
-                {
-                  icon: 'heart-outline',
-                  title: 'Emotional Impact',
-                  body: 'Provide confidence and emotional support to individuals facing severe medical treatments.',
-                },
-                {
-                  icon: 'check-decagram-outline',
-                  title: 'Trusted Process',
-                  body: 'Certified partners help ensure every strand is handled with professional care.',
-                },
-                {
-                  icon: 'leaf',
-                  title: 'Sustainable',
-                  body: 'Donated hair is used with careful, low-waste practices that respect every contribution.',
-                },
-              ].map((item) => (
-                <View key={item.title} style={[styles.landingInfoCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
-                  <View style={[styles.landingInfoIcon, { backgroundColor: roles.iconPrimarySurface }]}>
-                    <MaterialCommunityIcons name={item.icon} size={30} color={roles.primaryActionBackground} />
-                  </View>
-                  <Text style={[styles.landingInfoTitle, { color: roles.headingText }]}>{item.title}</Text>
-                  <Text style={[styles.landingInfoBody, { color: roles.bodyText }]}>{item.body}</Text>
-                </View>
-              ))}
-            </View>
-          </View>
-
-          <View style={[styles.landingProcessSection, { backgroundColor: roles.supportCardBackground }]}>
-            <Text style={[styles.landingSectionTitle, { color: roles.headingText }]}>Simple 3-Step Process</Text>
-            <Text style={[styles.landingProcessBody, { color: roles.bodyText }]}>
-              Donating is easier than you think. We guide you through every step to keep the experience clear and secure.
-            </Text>
-            <View style={styles.landingProcessGrid}>
-              {[
-                {
-                  step: '1',
-                  icon: 'ruler',
-                  title: 'Assess',
-                  body: 'Measure your hair and review basic donation requirements before starting.',
-                },
-                {
-                  step: '2',
-                  icon: 'map-marker-outline',
-                  title: 'Find',
-                  body: 'Locate a partner drive or prepare an independent hair donation through the platform.',
-                },
-                {
-                  step: '3',
-                  icon: 'truck-outline',
-                  title: 'Donate',
-                  body: 'Securely package your hair, attach the generated QR, and track the donation journey.',
-                },
-              ].map((item) => (
-                <View key={item.step} style={[styles.landingStepCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
-                  <Text style={[styles.landingStepNumber, { color: roles.defaultCardBorder }]}>{item.step}</Text>
-                  <MaterialCommunityIcons name={item.icon} size={28} color={roles.primaryActionBackground} />
-                  <Text style={[styles.landingStepTitle, { color: roles.headingText }]}>{item.title}</Text>
-                  <Text style={[styles.landingStepBody, { color: roles.bodyText }]}>{item.body}</Text>
-                </View>
-              ))}
-            </View>
           </View>
         </View>
 
         <View style={[styles.landingFooter, { backgroundColor: roles.supportCardBackground }]}>
-          <Text style={[styles.landingFooterBrand, { color: roles.primaryActionBackground }]}>{brandName}</Text>
           <Text style={[styles.landingFooterText, { color: roles.bodyText }]}>Every strand counts.</Text>
         </View>
       </View>
@@ -415,6 +379,7 @@ function PatientPreviewCard({ patient }) {
 function FirstTimeOnboarding() {
   const router = useRouter();
   const { user, profile, refreshProfile, resolvedTheme } = useAuth();
+  const roles = resolveThemeRoles(resolvedTheme);
   const [branchMode, setBranchMode] = useState('question');
   const [isIntroReady, setIsIntroReady] = useState(false);
   const [patientCode, setPatientCode] = useState('');
@@ -456,6 +421,7 @@ function FirstTimeOnboarding() {
       guardian: '',
       guardian_relationship: '',
       guardian_contact_number: '',
+      parental_consent: false,
       patient_picture: '',
       medical_document: '',
     },
@@ -610,6 +576,26 @@ function FirstTimeOnboarding() {
   const pickManualPatientAsset = async (fieldName, setUploading) => {
     try {
       setUploading(true);
+      if (fieldName === 'medical_document') {
+        const result = await DocumentPicker.getDocumentAsync({
+          type: ['application/pdf', 'image/*'],
+          copyToCacheDirectory: true,
+          multiple: false,
+        });
+
+        if (result.canceled) {
+          return;
+        }
+
+        const mediaPayload = await getPickedDocumentPayload(result.assets?.[0], 'patient-document');
+        manualPatientForm.setValue(fieldName, mediaPayload, {
+          shouldDirty: true,
+          shouldValidate: true,
+        });
+        setScreenError('');
+        return;
+      }
+
       if (Platform.OS !== 'android') {
         const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
         if (!permission.granted) {
@@ -758,19 +744,24 @@ function FirstTimeOnboarding() {
     if (branchMode === 'patient-manual') {
       const patientPictureValue = manualPatientForm.watch('patient_picture');
       const medicalDocumentValue = manualPatientForm.watch('medical_document');
+      const manualBirthdateValue = manualPatientForm.watch('birthdate');
+      const parentalConsentValue = manualPatientForm.watch('parental_consent');
       const manualGenderValue = manualPatientForm.watch('gender');
       const manualGuardianRelationshipValue = manualPatientForm.watch('guardian_relationship');
       const isManualGuardianRelationshipOther = manualGuardianRelationshipOption === 'Other';
+      const manualPatientAge = calculateAgeFromBirthdate(manualBirthdateValue);
+      const requiresParentalConsent = manualPatientAge !== null && manualPatientAge < 18;
       const patientPicturePreview = typeof patientPictureValue === 'string' ? patientPictureValue : patientPictureValue?.previewUri || '';
       const medicalDocumentPreview = typeof medicalDocumentValue === 'string' ? medicalDocumentValue : medicalDocumentValue?.previewUri || '';
+      const medicalDocumentName = typeof medicalDocumentValue === 'object' ? medicalDocumentValue?.fileName || '' : '';
+      const hasMedicalDocumentImagePreview = typeof medicalDocumentValue === 'string'
+        ? /\.(png|jpe?g|webp|gif)$/i.test(medicalDocumentValue)
+        : String(medicalDocumentValue?.contentType || '').startsWith('image/');
 
       return (
         <AppCard variant="elevated" radius="xl" padding="lg" style={styles.onboardingCard}>
           <View style={styles.onboardingSection}>
-            <Text style={styles.onboardingQuestion}>Enter Patient Information</Text>
-            <Text style={styles.onboardingBody}>
-              The Patient Dashboard opens only after the patient role is assigned.
-            </Text>
+            <Text style={styles.onboardingQuestion}>Patient information</Text>
           </View>
 
           <View style={styles.stepIndicatorRow}>
@@ -871,6 +862,41 @@ function FirstTimeOnboarding() {
                 )}
               />
 
+              {requiresParentalConsent ? (
+                <Controller
+                  control={manualPatientForm.control}
+                  name="parental_consent"
+                  defaultValue={Boolean(getManualPatientFieldValue('parental_consent'))}
+                  render={({ field: { onChange }, fieldState }) => (
+                    <View style={styles.parentalConsentBlock}>
+                      <Pressable
+                        accessibilityRole="checkbox"
+                        accessibilityState={{ checked: Boolean(parentalConsentValue), disabled: isSubmitting }}
+                        disabled={isSubmitting}
+                        onPress={() => onChange(!parentalConsentValue)}
+                        style={({ pressed }) => [
+                          styles.parentalConsentRow,
+                          fieldState.error ? styles.parentalConsentRowError : null,
+                          pressed ? styles.pressed : null,
+                        ]}
+                      >
+                        <MaterialCommunityIcons
+                          name={parentalConsentValue ? 'checkbox-marked' : 'checkbox-blank-outline'}
+                          size={24}
+                          color={parentalConsentValue ? roles.primaryActionBackground : roles.metaText}
+                        />
+                        <Text style={styles.parentalConsentText}>
+                          I confirm parent or guardian consent for this patient.
+                        </Text>
+                      </Pressable>
+                      {fieldState.error?.message ? (
+                        <Text style={styles.parentalConsentError}>{fieldState.error.message}</Text>
+                      ) : null}
+                    </View>
+                  )}
+                />
+              ) : null}
+
               <Controller
                 control={manualPatientForm.control}
                 name="gender"
@@ -918,11 +944,12 @@ function FirstTimeOnboarding() {
                     label="Contact Number"
                     required={true}
                     value={value ?? ''}
-                    onChangeText={onChange}
+                    onChangeText={(nextValue) => onChange(formatPhilippineMobileInput(nextValue))}
                     onBlur={onBlur}
                     error={fieldState.error?.message}
                     placeholder="09123456789"
                     keyboardType="phone-pad"
+                    maxLength={11}
                     variant="filled"
                   />
                 )}
@@ -1005,11 +1032,12 @@ function FirstTimeOnboarding() {
                     label="Guardian Contact Number"
                     required={true}
                     value={value ?? ''}
-                    onChangeText={onChange}
+                    onChangeText={(nextValue) => onChange(formatPhilippineMobileInput(nextValue))}
                     onBlur={onBlur}
                     error={fieldState.error?.message}
                     placeholder="09123456789"
                     keyboardType="phone-pad"
+                    maxLength={11}
                     variant="filled"
                   />
                 )}
@@ -1078,17 +1106,21 @@ function FirstTimeOnboarding() {
                   )}
                 />
               ) : null}
+
           </View>
 
           <View style={manualPatientStep === 2 ? styles.manualStepPanel : styles.manualStepPanelHidden}>
             <View style={styles.uploadSection}>
               <AppCard variant="soft" radius="xl" padding="md" style={styles.uploadCard}>
                 <View style={styles.uploadCardCopy}>
-                  <Text style={styles.uploadCardTitle}>Patient Picture</Text>
+                  <MaterialCommunityIcons name="account-box-outline" size={24} color={roles.primaryActionBackground} />
+                  <Text style={styles.uploadCardTitle}>Photo</Text>
                 </View>
                 <AppButton
-                  title={patientPictureValue ? 'Change Picture' : 'Add Picture'}
+                  title={patientPictureValue ? 'Change' : 'Add photo'}
                   variant="secondary"
+                  fullWidth={false}
+                  style={styles.uploadActionButton}
                   loading={isUploadingPatientPicture}
                   disabled={isUploadingPatientPicture || isSubmitting}
                   onPress={() => pickManualPatientAsset('patient_picture', setIsUploadingPatientPicture)}
@@ -1101,19 +1133,29 @@ function FirstTimeOnboarding() {
 
               <AppCard variant="soft" radius="xl" padding="md" style={styles.uploadCard}>
                 <View style={styles.uploadCardCopy}>
-                  <Text style={styles.uploadCardTitle}>Medical Document</Text>
+                  <MaterialCommunityIcons name="file-document-outline" size={24} color={roles.primaryActionBackground} />
+                  <Text style={styles.uploadCardTitle}>Medical document</Text>
                 </View>
                 <AppButton
-                  title={medicalDocumentValue ? 'Change Document' : 'Add Document'}
+                  title={medicalDocumentValue ? 'Change' : 'Add file'}
                   variant="secondary"
+                  fullWidth={false}
+                  style={styles.uploadActionButton}
                   loading={isUploadingMedicalDocument}
                   disabled={isUploadingMedicalDocument || isSubmitting}
                   onPress={() => pickManualPatientAsset('medical_document', setIsUploadingMedicalDocument)}
                 />
               </AppCard>
 
-              {medicalDocumentValue ? (
+              {medicalDocumentValue && hasMedicalDocumentImagePreview ? (
                 <Image source={{ uri: medicalDocumentPreview }} style={styles.uploadPreviewImage} />
+              ) : medicalDocumentValue ? (
+                <View style={styles.filePreviewRow}>
+                  <MaterialCommunityIcons name="file-check-outline" size={20} color={roles.primaryActionBackground} />
+                  <Text style={styles.filePreviewText} numberOfLines={1}>
+                    {medicalDocumentName || 'File selected'}
+                  </Text>
+                </View>
               ) : null}
             </View>
           </View>
@@ -1159,41 +1201,68 @@ function FirstTimeOnboarding() {
       );
     }
 
+    const roleOptions = [
+      {
+        key: 'patient',
+        label: 'Need a wig',
+        icon: 'account-heart-outline',
+        isPrimary: true,
+        onPress: async () => {
+          await Haptics.selectionAsync();
+          setBranchMode('patient-code');
+          setScreenError('');
+        },
+      },
+      {
+        key: 'donor',
+        label: 'Donate hair',
+        icon: 'content-cut',
+        isPrimary: false,
+        onPress: async () => {
+          await Haptics.selectionAsync();
+          setBranchMode('donor-info');
+          setScreenError('');
+        },
+      },
+    ];
+
     return (
-      <AppCard variant="elevated" radius="xl" padding="lg" style={styles.onboardingCard}>
-        <View style={styles.onboardingSection}>
-          <Text style={styles.onboardingQuestion}>How will you use Donivra?</Text>
-          <Text style={styles.onboardingBody}>
-            Choose the option that best matches what you need today.
-          </Text>
+      <AppCard variant="elevated" radius="xl" padding="lg" style={[styles.onboardingCard, styles.startupCard]}>
+        <View style={styles.startupHeader}>
+          <Text style={styles.startupQuestion}>Choose your path</Text>
         </View>
 
         <View style={styles.choiceRow}>
-          <AppButton
-            title="I need a wig"
-            size="lg"
-            fullWidth={false}
-            style={styles.choiceButton}
-            disabled={!isIntroReady || isSubmitting}
-            onPress={async () => {
-              await Haptics.selectionAsync();
-              setBranchMode('patient-code');
-              setScreenError('');
-            }}
-          />
-          <AppButton
-            title="I want to donate"
-            variant="secondary"
-            size="lg"
-            fullWidth={false}
-            style={styles.choiceButton}
-            disabled={!isIntroReady || isSubmitting}
-            onPress={async () => {
-              await Haptics.selectionAsync();
-              setBranchMode('donor-info');
-              setScreenError('');
-            }}
-          />
+          {roleOptions.map((option) => {
+            const isDisabled = !isIntroReady || isSubmitting;
+            const tileBackground = option.isPrimary ? roles.primaryActionBackground : roles.secondaryActionBackground;
+            const tileTextColor = option.isPrimary ? roles.primaryActionText : roles.secondaryActionText;
+            const tileBorderColor = option.isPrimary ? roles.primaryActionBackground : roles.secondaryActionBorder;
+
+            return (
+              <Pressable
+                key={option.key}
+                accessibilityRole="button"
+                accessibilityLabel={option.label}
+                disabled={isDisabled}
+                onPress={option.onPress}
+                style={({ pressed }) => [
+                  styles.choiceTile,
+                  {
+                    backgroundColor: tileBackground,
+                    borderColor: tileBorderColor,
+                    opacity: isDisabled ? 0.68 : pressed ? 0.86 : 1,
+                    transform: [{ scale: pressed && !isDisabled ? 0.98 : 1 }],
+                  },
+                ]}
+              >
+                <View style={[styles.choiceIconWrap, { backgroundColor: option.isPrimary ? 'rgba(255,255,255,0.16)' : theme.colors.surfaceCard }]}>
+                  <MaterialCommunityIcons name={option.icon} size={28} color={tileTextColor} />
+                </View>
+                <Text style={[styles.choiceLabel, { color: tileTextColor }]}>{option.label}</Text>
+              </Pressable>
+            );
+          })}
         </View>
       </AppCard>
     );
@@ -1215,7 +1284,7 @@ function FirstTimeOnboarding() {
           </Animated.Text>
 
           <Animated.Text style={[styles.heroTitle, { opacity: startOpacity }]}>
-            Let&apos;s get you started
+            Get started
           </Animated.Text>
 
           {isIntroReady ? renderOnboardingCard() : <View style={styles.introSpacer} />}
@@ -1257,8 +1326,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: theme.spacing.xxl,
-    paddingTop: theme.spacing.xxxxl,
-    paddingBottom: theme.spacing.giant,
+    paddingVertical: theme.spacing.xxl,
   },
   landingCard: {
     width: '100%',
@@ -1285,9 +1353,9 @@ const styles = StyleSheet.create({
   },
   landingTopBar: {
     width: '100%',
-    minHeight: 64,
-    paddingHorizontal: theme.spacing.lg,
-    paddingVertical: theme.spacing.sm,
+    minHeight: 58,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.xs,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -1296,16 +1364,16 @@ const styles = StyleSheet.create({
   },
   landingContent: {
     width: '100%',
-    maxWidth: 1200,
+    maxWidth: 430,
     alignSelf: 'center',
-    paddingHorizontal: theme.spacing.lg,
-    paddingTop: theme.spacing.xl,
-    paddingBottom: theme.spacing.xxxl,
-    gap: theme.spacing.xxxl,
+    paddingHorizontal: theme.spacing.md,
+    paddingTop: theme.spacing.lg,
+    paddingBottom: theme.spacing.xl,
+    gap: theme.spacing.lg,
   },
   landingHeroSection: {
     width: '100%',
-    gap: theme.spacing.xl,
+    gap: theme.spacing.lg,
   },
   landingDecorRow: {
     flexDirection: 'row',
@@ -1325,27 +1393,13 @@ const styles = StyleSheet.create({
   },
   landingBrandText: {
     fontFamily: theme.typography.fontFamilyDisplay,
-    fontSize: theme.typography.semantic.title,
-    fontWeight: theme.typography.weights.bold,
-  },
-  landingNavActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.spacing.sm,
-  },
-  landingNavButton: {
-    minHeight: 44,
-    borderRadius: theme.radius.lg,
-    paddingHorizontal: theme.spacing.md,
-  },
-  landingNavButtonText: {
-    fontSize: theme.typography.semantic.caption,
+    fontSize: theme.typography.semantic.body,
     fontWeight: theme.typography.weights.bold,
   },
   landingArtWrap: {
     width: '100%',
-    height: 270,
-    borderRadius: theme.radius.xxl,
+    height: 238,
+    borderRadius: 28,
     overflow: 'hidden',
     borderWidth: 1,
     borderColor: theme.colors.borderSubtle,
@@ -1480,24 +1534,24 @@ const styles = StyleSheet.create({
   },
   landingCopyBlock: {
     width: '100%',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     gap: theme.spacing.md,
   },
   landingTitle: {
-    textAlign: 'left',
+    textAlign: 'center',
     fontFamily: theme.typography.fontFamilyDisplay,
-    fontSize: 32,
-    lineHeight: 40,
+    fontSize: 30,
+    lineHeight: 36,
     fontWeight: theme.typography.weights.bold,
     color: theme.colors.textPrimary,
   },
   landingSubtitle: {
-    textAlign: 'left',
+    textAlign: 'center',
     fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.body,
-    lineHeight: theme.typography.semantic.body * theme.typography.lineHeights.relaxed,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
     color: theme.colors.textSecondary,
-    maxWidth: 560,
+    maxWidth: 330,
   },
   landingAssistant: {
     marginBottom: theme.spacing.md,
@@ -1612,7 +1666,7 @@ const styles = StyleSheet.create({
   landingFooter: {
     width: '100%',
     paddingHorizontal: theme.spacing.lg,
-    paddingVertical: theme.spacing.lg,
+    paddingVertical: theme.spacing.md,
     alignItems: 'center',
     gap: theme.spacing.xs,
   },
@@ -1629,12 +1683,12 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 380,
     alignItems: 'center',
-    gap: theme.spacing.lg,
+    gap: theme.spacing.md,
   },
   logoWrap: {
-    width: 112,
-    height: 112,
-    borderRadius: 32,
+    width: 104,
+    height: 104,
+    borderRadius: 30,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: theme.colors.surfaceCard,
@@ -1642,8 +1696,8 @@ const styles = StyleSheet.create({
     borderColor: theme.colors.borderSubtle,
   },
   logo: {
-    width: 68,
-    height: 68,
+    width: 64,
+    height: 64,
   },
   logoPlain: {
     width: 34,
@@ -1682,6 +1736,21 @@ const styles = StyleSheet.create({
   onboardingCard: {
     width: '100%',
     overflow: 'visible',
+  },
+  startupCard: {
+    maxWidth: 328,
+    alignSelf: 'center',
+  },
+  startupHeader: {
+    alignItems: 'center',
+    marginBottom: theme.spacing.lg,
+  },
+  startupQuestion: {
+    textAlign: 'center',
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    lineHeight: theme.typography.semantic.bodyLg * theme.typography.lineHeights.tight,
+    color: theme.colors.textPrimary,
   },
   onboardingSection: {
     alignItems: 'center',
@@ -1734,14 +1803,66 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
-    gap: theme.spacing.md,
-    marginTop: theme.spacing.lg,
+    gap: theme.spacing.sm,
   },
-  choiceButton: {
-    flex: 0,
-    minWidth: 132,
-    maxWidth: 150,
-    alignSelf: 'center',
+  choiceTile: {
+    flex: 1,
+    minHeight: 116,
+    maxWidth: 140,
+    borderRadius: theme.radius.xl,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: theme.spacing.md,
+    gap: theme.spacing.sm,
+    ...theme.shadows.soft,
+  },
+  choiceIconWrap: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  choiceLabel: {
+    textAlign: 'center',
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.tight,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  parentalConsentBlock: {
+    gap: theme.spacing.xs,
+  },
+  parentalConsentRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.spacing.sm,
+    padding: theme.spacing.md,
+    borderWidth: 1,
+    borderRadius: theme.radius.lg,
+    borderColor: theme.colors.borderMuted,
+    backgroundColor: theme.colors.surfaceSoft,
+  },
+  parentalConsentRowError: {
+    borderColor: theme.colors.textError,
+  },
+  parentalConsentText: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.normal,
+    color: theme.colors.textPrimary,
+  },
+  parentalConsentError: {
+    marginLeft: 34,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    color: theme.colors.textError,
+  },
+  pressed: {
+    opacity: 0.75,
   },
   codeInput: {
     marginTop: 0,
@@ -1796,10 +1917,17 @@ const styles = StyleSheet.create({
   },
   uploadCard: {
     width: '100%',
-    gap: theme.spacing.sm,
+    minHeight: 76,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.md,
   },
   uploadCardCopy: {
-    gap: 2,
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
   },
   uploadCardTitle: {
     fontFamily: theme.typography.fontFamily,
@@ -1807,12 +1935,34 @@ const styles = StyleSheet.create({
     fontWeight: theme.typography.weights.semibold,
     color: theme.colors.textPrimary,
   },
+  uploadActionButton: {
+    minWidth: 112,
+    paddingHorizontal: theme.spacing.lg,
+  },
   uploadPreviewImage: {
     width: '100%',
-    height: 180,
+    height: 140,
     borderRadius: theme.radius.xl,
     borderWidth: 1,
     borderColor: theme.colors.borderSubtle,
+  },
+  filePreviewRow: {
+    width: '100%',
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.md,
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.surfaceSoft,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+  },
+  filePreviewText: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    color: theme.colors.textPrimary,
   },
   errorText: {
     textAlign: 'center',

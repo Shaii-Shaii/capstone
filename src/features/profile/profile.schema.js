@@ -1,5 +1,12 @@
 import { z } from 'zod';
-import { birthdateField, coordinateField, nameField, passwordField, phoneField } from '../auth/validators/auth.schema';
+import {
+  birthdateField,
+  calculateAgeFromBirthdate,
+  coordinateField,
+  nameField,
+  passwordField,
+  phoneField,
+} from '../auth/validators/auth.schema';
 import { isPasswordReuse, reusedPasswordMessage } from '../../utils/passwordRules';
 import { profileGenderOptions } from '../../constants/profile';
 
@@ -84,6 +91,7 @@ export const patientOnboardingSchema = z.object({
     z.string().trim().min(1, 'Guardian relationship is required').max(80, 'Too long')
   ),
   guardian_contact_number: requiredStringField(phoneField),
+  parental_consent: z.boolean().optional().default(false),
   patient_picture: z.union([z.string(), z.object({
     fileBody: z.any().optional(),
     contentType: z.string().optional(),
@@ -99,12 +107,21 @@ export const patientOnboardingSchema = z.object({
 }).superRefine((data, ctx) => {
   const contactNumber = normalizePhoneComparable(data.contact_number);
   const guardianContactNumber = normalizePhoneComparable(data.guardian_contact_number);
+  const patientAge = calculateAgeFromBirthdate(data.birthdate);
 
   if (contactNumber && guardianContactNumber && contactNumber === guardianContactNumber) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: 'Guardian contact number must be different from your contact number',
       path: ['guardian_contact_number'],
+    });
+  }
+
+  if (patientAge !== null && patientAge < 18 && !data.parental_consent) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Parent or guardian consent is required for patients below 18.',
+      path: ['parental_consent'],
     });
   }
 });

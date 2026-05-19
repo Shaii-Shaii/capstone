@@ -21,6 +21,7 @@ const initialForm = {
 };
 
 const requiredMessage = 'This field is required.';
+const formatPhilippineMobileInput = (value) => String(value || '').replace(/\D/g, '').slice(0, 11);
 
 const CheckboxRow = ({ label, value, onPress, optional = false }) => (
   <Pressable
@@ -56,6 +57,9 @@ export default function GuardianConsentScreen() {
     if (!form.guardianFullName.trim()) nextErrors.guardianFullName = requiredMessage;
     if (!form.guardianRelationship.trim()) nextErrors.guardianRelationship = requiredMessage;
     if (!form.guardianContactNumber.trim()) nextErrors.guardianContactNumber = requiredMessage;
+    if (form.guardianContactNumber.trim() && !/^09\d{9}$/.test(form.guardianContactNumber.trim())) {
+      nextErrors.guardianContactNumber = 'Enter a valid PH mobile number';
+    }
     if (!form.minorDonationConsent) nextErrors.minorDonationConsent = 'Guardian donation consent is required.';
     if (!form.aiImageProcessingConsent) nextErrors.aiImageProcessingConsent = 'AI image processing consent is required.';
     if (!form.signature.trim()) nextErrors.signature = 'Typed guardian name is required.';
@@ -96,8 +100,12 @@ export default function GuardianConsentScreen() {
       <Text style={styles.label}>{label}{optional ? ' (optional)' : ''}</Text>
       <TextInput
         value={form[field]}
-        onChangeText={(value) => updateField(field, value)}
+        onChangeText={(value) => updateField(
+          field,
+          field === 'guardianContactNumber' ? formatPhilippineMobileInput(value) : value
+        )}
         keyboardType={keyboardType}
+        maxLength={field === 'guardianContactNumber' ? 11 : undefined}
         autoCapitalize={field === 'guardianEmail' ? 'none' : 'words'}
         autoCorrect={field !== 'guardianEmail'}
         style={[styles.input, errors[field] ? styles.inputError : null]}

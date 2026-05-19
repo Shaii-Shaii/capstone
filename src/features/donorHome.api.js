@@ -7,7 +7,6 @@ const donationDriveRegistrationsTable = 'Event_Attendees';
 
 const donationDriveSelect = `
   donation_drive_id:Event_Application_ID,
-  created_by_user_id:Created_By_User_ID,
   applicant_first_name:Applicant_First_Name,
   applicant_last_name:Applicant_Last_Name,
   applicant_email:Applicant_Email,
@@ -29,7 +28,6 @@ const donationDriveSelect = `
   status:Status,
   staff_contact_notes:Staff_Contact_Notes,
   staff_review_notes:Staff_Review_Notes,
-  admin_decision_reason:Admin_Decision_Reason,
   updated_at:Updated_At
 `;
 
@@ -37,9 +35,7 @@ const donationDriveRegistrationSelect = `
   registration_id:Event_Attendee_ID,
   donation_drive_id:Event_Application_ID,
   user_id:User_ID,
-  full_name:Full_Name,
-  email:Email,
-  contact_number:Contact_Number,
+  created_by_user_id:Created_By_User_ID,
   registration_status:Registration_Status,
   attendance_status:Attendance_Status,
   registered_at:Created_At,
@@ -116,9 +112,7 @@ const buildFullAddressLabel = (row) => (
 );
 
 const getEventHostKey = (row = {}) => (
-  row?.created_by_user_id
-    ? `user-${row.created_by_user_id}`
-    : `event-${row?.donation_drive_id || 'unknown'}`
+  `event-${row?.donation_drive_id || 'unknown'}`
 );
 
 const getEventHostName = (row = {}) => (
@@ -466,7 +460,7 @@ export const createDonationDriveRegistration = async ({
     .insert({
       Event_Application_ID: driveId,
       User_ID: databaseUserId,
-      Full_Name: 'Donor',
+      Created_By_User_ID: databaseUserId,
       Registration_Status: 'Registered',
       Attendance_Status: 'Not Marked',
     })
@@ -724,7 +718,6 @@ export const fetchOrganizationPreview = async (organizationId, databaseUserId = 
 
   const idText = String(organizationId);
   const numericId = Number(idText.replace(/^user-|^event-/, ''));
-  const isUserHost = idText.startsWith('user-') && Number.isFinite(numericId);
   const isEventHost = idText.startsWith('event-') && Number.isFinite(numericId);
 
   let query = supabase
@@ -734,9 +727,7 @@ export const fetchOrganizationPreview = async (organizationId, databaseUserId = 
     .order('Proposed_Start_At', { ascending: true })
     .limit(Math.max(Number(driveLimit) || 3, 1));
 
-  if (isUserHost) {
-    query = query.eq('Created_By_User_ID', numericId);
-  } else if (isEventHost) {
+  if (isEventHost) {
     query = query.eq('Event_Application_ID', numericId);
   } else {
     return {

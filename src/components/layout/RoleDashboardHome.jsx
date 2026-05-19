@@ -280,6 +280,7 @@ export function RoleDashboardHome({ role, profile, navItems, content }) {
             quickTools={role === 'patient' ? [] : quickTools}
             minimal={role === 'patient'}
             showAvatar={role === 'patient' ? true : undefined}
+            onProfilePress={role === 'patient' ? () => handleActionRoute('/profile') : undefined}
             utilityActions={content.header.utilityActions?.map((item) => ({
               ...item,
               badge: item.key === 'notifications' ? (unreadCount ? String(Math.min(unreadCount, 99)) : undefined) : item.badge,

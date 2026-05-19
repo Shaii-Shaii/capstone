@@ -42,7 +42,9 @@ export function NotificationListItem({ notification, onPress, compact = false })
           <Text style={styles.timestamp}>{getNotificationTimestampLabel(notification.createdAt)}</Text>
         </View>
         <View style={styles.messageRow}>
-          <Text numberOfLines={2} style={styles.message}>{notification.message}</Text>
+          <Text numberOfLines={compact ? 1 : 2} style={[styles.message, compact ? styles.messageCompact : null]}>
+            {notification.message}
+          </Text>
           {!notification.isRead ? <View style={styles.unreadDot} /> : null}
         </View>
       </View>
@@ -60,6 +62,7 @@ const styles = StyleSheet.create({
   },
   rowCompact: {
     paddingVertical: theme.spacing.sm,
+    minHeight: 58,
   },
   rowUnread: {
     backgroundColor: theme.colors.surfaceSoft,
@@ -120,6 +123,10 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.semantic.bodySm,
     lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
     color: theme.colors.textSecondary,
+  },
+  messageCompact: {
+    fontSize: theme.typography.compact.caption,
+    lineHeight: theme.typography.compact.caption * theme.typography.lineHeights.snug,
   },
   timestamp: {
     fontFamily: theme.typography.fontFamily,

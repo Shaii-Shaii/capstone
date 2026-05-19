@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Image, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Image, Platform, StyleSheet, Text, View } from 'react-native';
 import { Slot } from 'expo-router';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { StatusBar } from 'expo-status-bar';
@@ -71,8 +71,11 @@ function RootLayoutNav() {
 
   useEffect(() => {
     const hideSystemNavigation = async () => {
+      if (Platform.OS !== 'android') {
+        return;
+      }
+
       try {
-        await NavigationBar.setBehaviorAsync('overlay-swipe');
         await NavigationBar.setVisibilityAsync('hidden');
       } catch (_error) {
         // Navigation bar control is Android-only and may be unavailable in some runtimes.

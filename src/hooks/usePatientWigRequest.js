@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Platform } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { generatePatientWigPreview } from '../features/wigGeneration.service';
 import {
   getPatientWigRequestContext,
@@ -9,6 +10,8 @@ import {
 import { createAppError, getErrorMessage, logAppError, logAppEvent } from '../utils/appErrors';
 
 const IMAGE_MEDIA_TYPES = ['images'];
+const PREVIEW_IMAGE_MAX_SIZE = 1024;
+const PREVIEW_IMAGE_QUALITY = 0.62;
 
 const FRONT_PHOTO_REQUIRED_ERROR = createAppError(
   'Front Photo Required',
@@ -101,6 +104,53 @@ const mapPatientWigRequestError = (type, error) => {
     'Something Went Wrong',
     'Please try again.'
   );
+};
+
+const buildResizeAction = ({ width, height, maxSize }) => {
+  const resolvedWidth = Number(width || 0);
+  const resolvedHeight = Number(height || 0);
+
+  if (!resolvedWidth || !resolvedHeight) return [];
+
+  const scale = Math.min(1, maxSize / Math.max(resolvedWidth, resolvedHeight));
+  if (scale >= 1) return [];
+
+  return [{
+    resize: {
+      width: Math.max(1, Math.round(resolvedWidth * scale)),
+      height: Math.max(1, Math.round(resolvedHeight * scale)),
+    },
+  }];
+};
+
+const prepareFrontPhotoAsset = async (asset) => {
+  if (!asset?.uri) return null;
+
+  const normalizedAsset = await manipulateAsync(
+    asset.uri,
+    buildResizeAction({
+      width: asset.width,
+      height: asset.height,
+      maxSize: PREVIEW_IMAGE_MAX_SIZE,
+    }),
+    {
+      compress: PREVIEW_IMAGE_QUALITY,
+      format: SaveFormat.JPEG,
+      base64: true,
+    }
+  );
+
+  if (!normalizedAsset?.uri || !normalizedAsset?.base64) return null;
+
+  return {
+    ...asset,
+    uri: normalizedAsset.uri,
+    base64: normalizedAsset.base64,
+    dataUrl: `data:image/jpeg;base64,${normalizedAsset.base64}`,
+    mimeType: 'image/jpeg',
+    width: normalizedAsset.width || asset.width,
+    height: normalizedAsset.height || asset.height,
+  };
 };
 
 const normalizeFrontPhotoAsset = (asset) => {
@@ -377,7 +427,7 @@ export const usePatientWigRequest = ({ userId }) => {
       setIsPickingReference(false);
       if (result.canceled) return { success: false, canceled: true };
 
-      const selectedImage = normalizeFrontPhotoAsset(result.assets?.[0]);
+      const selectedImage = normalizeFrontPhotoAsset(await prepareFrontPhotoAsset(result.assets?.[0]));
       if (!selectedImage) {
         throw new Error('Unable to read the selected front photo.');
       }
@@ -394,8 +444,8 @@ export const usePatientWigRequest = ({ userId }) => {
     }
   };
 
-  const saveCapturedReferenceImage = (asset) => {
-    const capturedImage = normalizeFrontPhotoAsset(asset);
+  const saveCapturedReferenceImage = async (asset) => {
+    const capturedImage = normalizeFrontPhotoAsset(await prepareFrontPhotoAsset(asset));
 
     if (!capturedImage) {
       const mappedError = mapPatientWigRequestError('capture', new Error('Front photo could not be processed.'));

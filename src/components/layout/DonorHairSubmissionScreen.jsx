@@ -34,6 +34,7 @@ import {
 } from '../../features/hairSubmission.schema';
 import { hairAnalyzerQuestionChoices } from '../../features/hairSubmission.constants';
 import { buildProfileCompletionMeta } from '../../features/profile/services/profile.service';
+import { validateHairPhotosBeforeAnalysis } from '../../features/photoPreflight.service';
 import { logAppEvent } from '../../utils/appErrors';
 
 let NativeVisionCamera = null;
@@ -99,6 +100,10 @@ const PHOTO_GUIDELINE_ITEMS = [
   'Capture the required front view, one side profile, and a close-up of the hair ends.',
   'Keep hair loose, centered, and visible from root or hairline to the lowest visible ends.',
 ];
+
+const QUESTION_INFO_FADE_MS = 260;
+const QUESTION_INFO_READ_DELAY_MS = 1900;
+const QUESTION_TRANSITION_FADE_MS = 180;
 
 const isAnswered = (question, answers = {}) => {
   const value = answers?.[question?.key];
@@ -347,107 +352,29 @@ const buildLiveScanStatus = ({
   };
 };
 
-const getAnalysisHealthScore = (analysis = {}) => {
-  const confidence = Number(analysis?.confidence_score);
-  if (Number.isFinite(confidence) && confidence > 0) {
-    return Math.max(0, Math.min(100, Math.round(confidence <= 1 ? confidence * 100 : confidence)));
-  }
+const hasHardDonationBlocker = (analysis = {}) => {
+  const condition = String(analysis?.detected_condition || '').toLowerCase();
+  const notes = String(analysis?.visible_damage_notes || '').toLowerCase();
+  const summary = String(analysis?.summary || '').toLowerCase();
+  const combined = `${condition} ${notes} ${summary}`;
+  const confidenceScore = Number(analysis?.confidence_score);
 
-  const shine = Math.max(0, Math.min(10, Number(analysis?.shine_level) || 6));
-  const frizz = Math.max(0, Math.min(10, Number(analysis?.frizz_level) || 4));
-  const dryness = Math.max(0, Math.min(10, Number(analysis?.dryness_level) || 4));
-  const oiliness = Math.max(0, Math.min(10, Number(analysis?.oiliness_level) || 3));
-  const damage = Math.max(0, Math.min(10, Number(analysis?.damage_level) || 4));
-  return Math.max(0, Math.min(100, Math.round(((shine + (10 - frizz) + (10 - dryness) + (10 - oiliness) + (10 - damage)) / 50) * 100)));
-};
-
-const getScoreLabel = (score) => {
-  if (score >= 80) return 'GOOD';
-  if (score >= 60) return 'FAIR';
-  return 'NEEDS CARE';
-};
-
-const buildConditionInsights = (analysis = {}) => {
-  const dryness = Number(analysis?.dryness_level);
-  const damage = Number(analysis?.damage_level);
-  const frizz = Number(analysis?.frizz_level);
-  const density = String(analysis?.detected_density || '').trim();
+  if (analysis?.is_hair_detected === false) return true;
+  if (Array.isArray(analysis?.missing_views) && analysis.missing_views.length) return true;
+  if (Number.isFinite(confidenceScore) && confidenceScore < 0.55) return true;
 
   return [
-    {
-      key: 'scalp',
-      icon: 'check-circle-outline',
-      state: 'active',
-      tone: 'primary',
-      text: Number.isFinite(dryness) && dryness > 6 ? 'Scalp and ends need more moisture' : 'Healthy scalp',
-    },
-    {
-      key: 'dryness',
-      icon: Number.isFinite(dryness) && dryness > 5 ? 'information-outline' : 'check-circle-outline',
-      state: Number.isFinite(dryness) && dryness > 5 ? 'muted' : 'active',
-      tone: Number.isFinite(dryness) && dryness > 5 ? 'muted' : 'primary',
-      text: Number.isFinite(dryness) && dryness > 5 ? 'Slight dryness at ends' : 'Moisture level looks balanced',
-    },
-    {
-      key: 'damage',
-      icon: Number.isFinite(damage) && damage > 5 ? 'information-outline' : 'check-circle-outline',
-      state: Number.isFinite(damage) && damage > 5 ? 'muted' : 'active',
-      tone: Number.isFinite(damage) && damage > 5 ? 'muted' : 'primary',
-      text: Number.isFinite(damage) && damage > 5 ? 'Visible damage needs attention' : 'No structural damage',
-    },
-    {
-      key: 'density',
-      icon: 'check-circle-outline',
-      state: 'active',
-      tone: 'primary',
-      text: density ? `${density} thickness` : (Number.isFinite(frizz) && frizz > 6 ? 'Frizz needs smoothing' : 'Good thickness'),
-    },
-  ];
-};
-
-const getRecommendationIconName = (recommendation = {}) => {
-  const source = `${recommendation?.title || ''} ${recommendation?.recommendation_text || ''}`.toLowerCase();
-  if (source.includes('protein') || source.includes('biotin') || source.includes('keratin')) return 'test-tube';
-  if (source.includes('trim') || source.includes('cut')) return 'content-cut';
-  if (source.includes('heat') || source.includes('dry')) return 'thermometer';
-  return 'water-outline';
-};
-
-const buildDefaultRecommendations = (analysis = {}) => {
-  const dryness = Number(analysis?.dryness_level);
-  const damage = Number(analysis?.damage_level);
-  const frizz = Number(analysis?.frizz_level);
-
-  return [
-    {
-      title: 'Conditioning',
-      recommendation_text: Number.isFinite(dryness) && dryness > 5
-        ? 'Increase deep conditioning to 2x/week.'
-        : 'Maintain weekly deep conditioning.',
-      priority_order: 1,
-    },
-    {
-      title: 'Protein/Biotin',
-      recommendation_text: Number.isFinite(damage) && damage > 5
-        ? 'Add a keratin-based serum to the ends.'
-        : 'Use a light strengthening serum on wash days.',
-      priority_order: 2,
-    },
-    {
-      title: 'Trim',
-      recommendation_text: Number.isFinite(damage) && damage > 4
-        ? 'A 1-inch trim is recommended soon.'
-        : 'No urgent trim needed before donation.',
-      priority_order: 3,
-    },
-    {
-      title: 'Reduce Heat',
-      recommendation_text: Number.isFinite(frizz) && frizz > 5
-        ? 'Minimize blow-drying to preserve natural oils.'
-        : 'Keep heat styling low to preserve shine.',
-      priority_order: 4,
-    },
-  ];
+    'severe damage',
+    'major damage',
+    'extensive damage',
+    'heavy breakage',
+    'significant breakage',
+    'chemical damage',
+    'bleached',
+    'rebonded',
+    'split ends throughout',
+    'not suitable',
+  ].some((keyword) => combined.includes(keyword));
 };
 
 const buildDonationAssessment = ({ analysis = {}, donationRequirement = null }) => {
@@ -461,7 +388,8 @@ const buildDonationAssessment = ({ analysis = {}, donationRequirement = null }) 
   const minimumInches = cmToInches(minimumLengthCm);
   const isLengthDetected = Number.isFinite(totalLengthCm) && totalLengthCm > 0;
   const meetsLengthRequirement = isLengthDetected && totalLengthCm >= minimumLengthCm;
-  const isDonationReady = meetsLengthRequirement && analysis?.decision !== 'Improve hair condition';
+  const hasHardBlocker = hasHardDonationBlocker(analysis);
+  const isDonationReady = meetsLengthRequirement && !hasHardBlocker;
   const donatableLengthCm = meetsLengthRequirement ? minimumLengthCm : 0;
   const neededLengthCm = isLengthDetected ? Math.max(0, minimumLengthCm - totalLengthCm) : null;
   const cutLineBottomPercent = meetsLengthRequirement && totalLengthCm > 0
@@ -484,11 +412,150 @@ const buildDonationAssessment = ({ analysis = {}, donationRequirement = null }) 
     meetsLengthRequirement,
     minimumLengthLabel: `${minimumInches.toFixed(1)} inches`,
     summary: isDonationReady
-      ? (analysis?.donation_readiness_note || 'Your hair condition and visible length are suited for donation based on this scan.')
+      ? (analysis?.donation_readiness_note || 'Your hair appears long enough for donation. You can prepare for a haircut assessment and final partner review.')
       : meetsLengthRequirement
-        ? 'Your scanned hair length appears long enough for donation, but the condition still needs review or improvement before proceeding.'
-        : (analysis?.donation_readiness_note || 'Your hair is not ready for donation yet. Follow the recommendations and scan again.'),
+        ? 'Your hair length is enough, but the scan found a concern that needs review before donation.'
+        : (analysis?.donation_readiness_note || 'Your hair is not ready for donation yet. Continue hair care and check again after more growth.'),
   };
+};
+
+const buildDonationReadyAnalysis = (analysis = {}, donationAssessment = {}) => {
+  if (!donationAssessment.isDonationReady) return analysis;
+
+  return {
+    ...analysis,
+    decision: 'Eligible for hair donation',
+    donation_readiness_note: donationAssessment.summary,
+    summary: analysis?.summary || donationAssessment.summary,
+  };
+};
+
+const HAIR_RECOMMENDATION_KEYWORDS = [
+  'hair',
+  'scalp',
+  'root',
+  'roots',
+  'shaft',
+  'strands',
+  'ends',
+  'length',
+  'breakage',
+  'split',
+  'dry',
+  'dryness',
+  'frizz',
+  'shine',
+  'oil',
+  'conditioner',
+  'conditioning',
+  'shampoo',
+  'moisture',
+  'heat',
+  'trim',
+  'donation',
+];
+
+const cleanHairRecommendationText = (value = '') => (
+  String(value || '')
+    .replace(/\s+/g, ' ')
+    .replace(/ingredient or product-type options to consider:.*?(?:\.|$)/gi, '')
+    .replace(/(?:neutral care|generic|local|country)?\s*product options? to consider:.*?(?:\.|$)/gi, '')
+    .replace(/Ingredients that may help:.*?(?:\.|$)/gi, '')
+    .trim()
+);
+
+const isPhotoCaptureRecommendation = (recommendation = {}) => {
+  const combined = `${recommendation?.title || ''} ${recommendation?.recommendation_text || ''}`.toLowerCase();
+  const photoTerms = [
+    'photo',
+    'image',
+    'camera',
+    'capture',
+    'retake',
+    'rescan',
+    'scan again',
+    'next checkhair scan',
+    'next scan',
+    'recheck',
+    'lighting',
+    'background',
+    'centered',
+    'fully visible',
+    'upload',
+    'frame',
+  ];
+  return photoTerms.some((term) => combined.includes(term));
+};
+
+const isHairRecommendation = (recommendation = {}) => {
+  const combined = `${recommendation?.title || ''} ${recommendation?.recommendation_text || ''}`.toLowerCase();
+  return !isPhotoCaptureRecommendation(recommendation)
+    && HAIR_RECOMMENDATION_KEYWORDS.some((keyword) => combined.includes(keyword));
+};
+
+const buildHairRecommendationFallbacks = ({ analysis = {}, donationAssessment = {} }) => {
+  const rows = [];
+  const dryness = Number(analysis?.dryness_level);
+  const damage = Number(analysis?.damage_level);
+  const frizz = Number(analysis?.frizz_level);
+
+  if (!donationAssessment.meetsLengthRequirement) {
+    rows.push({
+      title: 'Grow and retain length',
+      recommendation_text: 'Your scanned hair is still below the donation length. Reduce heat styling, avoid tight pulling styles, and trim only visibly damaged ends so the hair can keep growing with less breakage.',
+      priority_order: 1,
+    });
+  }
+
+  if (Number.isFinite(damage) && damage >= 5) {
+    rows.push({
+      title: 'Protect damaged ends',
+      recommendation_text: 'The scan suggests stressed or uneven ends. Use gentle detangling, avoid harsh brushing when wet, and consider a small trim if split ends are visible before your next scan.',
+      priority_order: rows.length + 1,
+    });
+  }
+
+  if (Number.isFinite(dryness) && dryness >= 5) {
+    rows.push({
+      title: 'Improve moisture',
+      recommendation_text: 'Your hair appears dry or dull in the scan. Focus conditioner on the mid-lengths and ends, then use a weekly moisturizing treatment to improve softness and shine.',
+      priority_order: rows.length + 1,
+    });
+  }
+
+  if (Number.isFinite(frizz) && frizz >= 5) {
+    rows.push({
+      title: 'Reduce frizz',
+      recommendation_text: 'Visible frizz can make the hair shaft look rough during analysis. Dry with a soft towel, avoid high heat, and keep the ends smoothed before rescanning.',
+      priority_order: rows.length + 1,
+    });
+  }
+
+  rows.push({
+    title: 'Maintain hair between checks',
+    recommendation_text: 'Keep a gentle routine while the hair grows. Avoid tight pulling styles, reduce high heat, detangle carefully, and protect the ends from breakage.',
+    priority_order: rows.length + 1,
+  });
+
+  return rows.slice(0, 3);
+};
+
+const buildVisibleHairRecommendations = ({ analysis = {}, donationAssessment = {} }) => {
+  const aiRecommendations = Array.isArray(analysis?.recommendations)
+    ? analysis.recommendations
+    : [];
+  const cleanedRecommendations = aiRecommendations
+    .map((recommendation, index) => ({
+      title: cleanHairRecommendationText(recommendation?.title) || `Hair care step ${index + 1}`,
+      recommendation_text: cleanHairRecommendationText(recommendation?.recommendation_text),
+      priority_order: Number(recommendation?.priority_order) || index + 1,
+    }))
+    .filter((recommendation) => recommendation.recommendation_text && isHairRecommendation(recommendation));
+
+  return (cleanedRecommendations.length
+    ? cleanedRecommendations
+    : buildHairRecommendationFallbacks({ analysis, donationAssessment }))
+    .slice(0, 3);
 };
 
 function ChoiceList({ value, options, onChange, multi = false }) {
@@ -537,6 +604,7 @@ function ChoiceList({ value, options, onChange, multi = false }) {
 
 function LiveHairCameraPanel({
   autoCaptureEnabled,
+  autoCaptureCountdown,
   cameraFacing,
   currentView,
   currentPhoto,
@@ -556,9 +624,11 @@ function LiveHairCameraPanel({
   onToggleFlash,
   onUpload,
   onRemove,
+  onConfirmPhoto,
   onClose,
   onRequestPermission,
   onFacesChange,
+  onCameraError,
 }) {
   const { width: windowWidth } = useWindowDimensions();
   const cameraStageWidth = Math.min(Math.max(windowWidth - theme.spacing.sm * 2, 320), 520);
@@ -621,27 +691,7 @@ function LiveHairCameraPanel({
     <View style={styles.liveCameraPanel}>
       <View style={[styles.liveCameraStage, { width: cameraStageWidth, height: cameraStageHeight }]}>
         {currentPhoto?.uri ? (
-          <>
-            <Image source={{ uri: currentPhoto.uri }} style={styles.liveCameraPreview} resizeMode="cover" />
-            <View style={styles.livePhotoOverlayActions}>
-              <Pressable
-                onPress={onRemove}
-                disabled={isCapturing || isUploading || isAnalyzing}
-                style={({ pressed }) => [styles.livePhotoIconButton, pressed ? styles.livePhotoIconButtonPressed : null]}
-              >
-                <AppIcon name="refresh" size="sm" state="inverse" />
-                <Text style={styles.livePhotoIconText}>Retake</Text>
-              </Pressable>
-              <Pressable
-                onPress={onUpload}
-                disabled={isCapturing || isUploading || isAnalyzing}
-                style={({ pressed }) => [styles.livePhotoIconButton, pressed ? styles.livePhotoIconButtonPressed : null]}
-              >
-                <AppIcon name="upload" size="sm" state="inverse" />
-                <Text style={styles.livePhotoIconText}>Change</Text>
-              </Pressable>
-            </View>
-          </>
+          <Image source={{ uri: currentPhoto.uri }} style={styles.liveCameraPreview} resizeMode="cover" />
         ) : hasCameraPermission ? (
           canUseNativeLiveCamera ? (
             <NativeLiveFaceCamera
@@ -650,6 +700,7 @@ function LiveHairCameraPanel({
               flashMode={flashMode}
               isActive
               onFacesChange={onFacesChange}
+              onCameraError={onCameraError}
             />
           ) : (
             <CameraView
@@ -688,38 +739,31 @@ function LiveHairCameraPanel({
           </Pressable>
           <View style={[styles.liveStatusPill, statusToneStyle]}>
             <View style={[styles.liveStatusDot, liveStatusDotStyle, isAnalyzing ? styles.liveStatusDotActive : null]} />
-            <Text style={styles.liveStatusText}>{isAnalyzing ? 'AI analyzing' : liveScanStatus.statusLabel}</Text>
+            <Text style={styles.liveStatusText}>
+              {isAnalyzing
+                ? 'AI analyzing'
+                : autoCaptureCountdown > 0
+                  ? `Capturing in ${autoCaptureCountdown}`
+                  : liveScanStatus.statusLabel}
+            </Text>
           </View>
           <Pressable
             onPress={onToggleFlash}
-            disabled={isCapturing || isUploading || isAnalyzing || currentPhoto?.uri}
+            disabled={Boolean(isCapturing || isUploading || isAnalyzing || currentPhoto?.uri)}
             style={styles.liveCameraOverlayIcon}
           >
             <AppIcon name={flashMode === 'on' ? 'flash' : 'flash-off'} size="sm" state="inverse" />
           </Pressable>
         </View>
 
-        <View style={styles.liveScanFloatingCard}>
-          <View style={styles.liveScanMetricRow}>
-            <Text style={styles.liveScanMetricLabel}>Hair Length</Text>
-            <Text style={styles.liveScanMetricValue}>{liveScanStatus.lengthLabel}</Text>
-          </View>
-          <View style={styles.liveScanMetricRow}>
-            <Text style={styles.liveScanMetricLabel}>Hair Type</Text>
-            <Text style={styles.liveScanMetricValue}>{liveScanStatus.typeLabel || shortViewHint}</Text>
-          </View>
-          <View style={styles.liveScanMetricRow}>
-            <Text style={styles.liveScanMetricLabel}>Condition</Text>
-            <Text style={styles.liveScanMetricValueAccent} numberOfLines={2}>{liveScanStatus.conditionLabel}</Text>
-          </View>
-          <View style={styles.liveScanProgressTrack}>
-            <View style={[styles.liveScanProgressFill, { width: `${liveScanStatus.progress}%` }]} />
-          </View>
-        </View>
-
         <View style={styles.liveFrameGuide} pointerEvents="none">
           {!currentPhoto ? (
             <Animated.View style={[styles.liveScanLine, scanLineStyle]} />
+          ) : null}
+          {!currentPhoto && autoCaptureCountdown > 0 ? (
+            <View style={styles.liveCountdownOverlay}>
+              <Text style={styles.liveCountdownNumber}>{autoCaptureCountdown}</Text>
+            </View>
           ) : null}
           <View style={styles.liveFrameCornerTopLeft} />
           <View style={styles.liveFrameCornerTopRight} />
@@ -730,7 +774,16 @@ function LiveHairCameraPanel({
       </View>
 
       <View style={styles.liveCameraBottomSheet}>
-        <Text style={styles.liveHoldStillText}>{liveScanStatus.instruction}</Text>
+        <View style={styles.liveBottomStatusRow}>
+          <Text style={styles.liveHoldStillText}>
+            {currentPhoto
+              ? 'Preview ready. Confirm to continue.'
+              : autoCaptureCountdown > 0
+                ? `Hold still. Taking photo in ${autoCaptureCountdown}...`
+                : liveScanStatus.instruction}
+          </Text>
+          <Text style={styles.liveViewHintDark}>{liveScanStatus.typeLabel || shortViewHint}</Text>
+        </View>
         <View style={styles.liveCaptureControls}>
           <Pressable
             onPress={onUpload}
@@ -740,7 +793,7 @@ function LiveHairCameraPanel({
             <AppIcon name="image" size="md" state="inverse" />
           </Pressable>
           <Pressable
-            onPress={currentPhoto ? onRemove : hasCameraPermission ? onCapture : onRequestPermission}
+            onPress={currentPhoto ? onConfirmPhoto : hasCameraPermission ? onCapture : onRequestPermission}
             disabled={isCapturing || isUploading || isAnalyzing}
             style={[
               styles.liveCaptureButton,
@@ -749,13 +802,14 @@ function LiveHairCameraPanel({
             ]}
           >
             {isCapturing ? <ActivityIndicator color={theme.colors.brandPrimary} /> : null}
+            {currentPhoto && !isCapturing ? <AppIcon name="check" size="lg" state="success" /> : null}
           </Pressable>
           <Pressable
-            onPress={onToggleCamera}
+            onPress={currentPhoto ? onRemove : onToggleCamera}
             disabled={isCapturing || isUploading || isAnalyzing}
             style={styles.liveRoundControl}
           >
-            <AppIcon name="camera-retake-outline" size="md" state="inverse" />
+            <AppIcon name={currentPhoto ? 'refresh' : 'camera-retake-outline'} size="md" state="inverse" />
           </Pressable>
         </View>
       </View>
@@ -763,7 +817,7 @@ function LiveHairCameraPanel({
   );
 }
 
-function NativeLiveFaceCamera({ cameraRef, facing = 'front', flashMode = 'off', isActive, onFacesChange }) {
+function NativeLiveFaceCamera({ cameraRef, facing = 'front', flashMode = 'off', isActive, onFacesChange, onCameraError }) {
   const normalizedFacing = facing === 'back' ? 'back' : 'front';
   const device = useNativeCameraDevice(normalizedFacing);
   const supportsTorch = Boolean(device?.hasTorch || device?.hasFlash);
@@ -836,36 +890,162 @@ function NativeLiveFaceCamera({ cameraRef, facing = 'front', flashMode = 'off', 
       frameProcessor={frameProcessor}
       pixelFormat="yuv"
       torch={safeTorchMode}
+      onError={onCameraError}
     />
   );
 }
 
-function ConditionInsightRow({ item }) {
-  return (
-    <View style={styles.conditionInsightRow}>
-      <AppIcon name={item.icon} size="md" state={item.state} />
-      <Text style={[styles.conditionInsightText, item.tone === 'muted' ? styles.conditionInsightTextMuted : null]}>{item.text}</Text>
-    </View>
-  );
-}
+function PreAnalysisPhotoReview({
+  photos = [],
+  requiredViews = [],
+  isAnalyzing = false,
+  isSaving = false,
+  isValidating = false,
+  validation = null,
+  onPreview,
+  onRetake,
+  onRunAnalysis,
+}) {
+  const readyCount = photos.filter(Boolean).length;
+  const allReady = readyCount === requiredViews.length && requiredViews.length > 0;
+  const validationMessage = typeof validation?.message === 'string'
+    ? validation.message
+    : validation?.message?.message || '';
+  const validationFailed = Boolean(validation && validation.ok === false);
+  const validationPassed = Boolean(validation?.ok);
+  const checklistItems = [
+    {
+      text: 'Hair is loose and visible from root or hairline to the ends.',
+      state: validationFailed ? 'unknown' : validationPassed ? 'success' : 'pending',
+    },
+    {
+      text: 'The required angle matches the label for each photo.',
+      state: validationFailed ? 'unknown' : validationPassed ? 'success' : 'pending',
+    },
+    {
+      text: 'All views show the same person and the same current hair.',
+      state: validationFailed ? 'error' : validationPassed ? 'success' : 'pending',
+    },
+    {
+      text: 'Lighting is bright enough and the background is not distracting.',
+      state: validationFailed ? 'unknown' : validationPassed ? 'success' : 'pending',
+    },
+    {
+      text: 'Only one person is in the frame and hair is not covered.',
+      state: validationFailed ? 'unknown' : validationPassed ? 'success' : 'pending',
+    },
+  ];
 
-const cleanRecommendationText = (value = '') => (
-  String(value || '')
-    .replace(/\s+/g, ' ')
-    .replace(/Philippine product options? to consider:.*?(?:\.|$)/gi, '')
-    .replace(/\b(Dove|Cream Silk|Human Nature|Vitress|Pantene(?:\s+Pro-V)?|Watsons|Lazada(?:\.ph)?|Shopee(?:\.ph)?)\b/gi, 'a suitable product type')
-    .trim()
-);
-
-function AiRecommendationRow({ recommendation }) {
   return (
-    <View style={styles.aiRecommendationRow}>
-      <View style={styles.aiRecommendationIcon}>
-        <AppIcon name={getRecommendationIconName(recommendation)} size="md" state="active" />
+    <View style={styles.analysisResultPanel}>
+      <View style={styles.analysisResultTopBar}>
+        <Pressable onPress={() => onRetake?.(0)} style={styles.resultHeaderButton}>
+          <AppIcon name="arrow-left" size="md" state="default" />
+        </Pressable>
+        <Text style={styles.analysisResultScreenTitle}>Review Photos</Text>
+        <View style={styles.resultHeaderButtonPlaceholder} />
       </View>
-      <View style={styles.aiRecommendationCopy}>
-        <Text style={styles.aiRecommendationTitle}>{cleanRecommendationText(recommendation.title) || 'Hair care'}</Text>
-        <Text style={styles.aiRecommendationText}>{cleanRecommendationText(recommendation.recommendation_text)}</Text>
+
+      <View style={styles.resultSectionCard}>
+        <View style={styles.resultSectionHeader}>
+          <Text style={styles.resultSectionTitle}>Preview before AI analysis</Text>
+          <View style={styles.conditionBadge}>
+            <View style={styles.conditionBadgeDot} />
+            <Text style={styles.conditionBadgeText}>{readyCount}/{requiredViews.length}</Text>
+          </View>
+        </View>
+        <Text style={styles.resultErrorBody}>
+          Check each photo before sending it to AI. Retake unclear views here so hair-care recommendations are based on usable images.
+        </Text>
+        {isValidating || validationMessage ? (
+          <View style={[
+            styles.preAnalysisValidationBox,
+            validation?.ok ? styles.preAnalysisValidationBoxOk : styles.preAnalysisValidationBoxError,
+          ]}>
+            <AppIcon
+              name={isValidating ? 'magnify' : validation?.ok ? 'check-circle-outline' : 'alert-circle-outline'}
+              size="sm"
+              state={!isValidating && validation?.ok ? 'success' : 'active'}
+            />
+            <Text style={styles.preAnalysisValidationText}>
+              {isValidating ? 'Checking if all photos show the same person and same current hair...' : validationMessage}
+            </Text>
+          </View>
+        ) : null}
+
+        <View style={styles.preAnalysisGrid}>
+          {requiredViews.map((view, index) => {
+            const photo = photos[index];
+            return (
+              <View key={view?.key || view?.label || index} style={styles.preAnalysisPhotoCard}>
+                <Pressable
+                  onPress={() => onPreview?.(photo?.uri)}
+                  disabled={!photo?.uri}
+                  style={({ pressed }) => [
+                    styles.preAnalysisPhotoFrame,
+                    pressed ? styles.preAnalysisPhotoPressed : null,
+                  ]}
+                >
+                  {photo?.uri ? (
+                    <Image source={{ uri: photo.uri }} style={styles.preAnalysisPhoto} resizeMode="cover" />
+                  ) : (
+                    <View style={styles.preAnalysisPhotoEmpty}>
+                      <AppIcon name="image" size="lg" state="muted" />
+                    </View>
+                  )}
+                </Pressable>
+                <View style={styles.preAnalysisPhotoMeta}>
+                  <Text style={styles.preAnalysisPhotoTitle}>{view?.label || `Photo ${index + 1}`}</Text>
+                  <Pressable
+                    onPress={() => onRetake?.(index)}
+                    disabled={isAnalyzing || isSaving}
+                    style={styles.preAnalysisRetakeButton}
+                  >
+                    <AppIcon name="camera-retake-outline" size="sm" state="active" />
+                    <Text style={styles.preAnalysisRetakeText}>Retake</Text>
+                  </Pressable>
+                </View>
+              </View>
+            );
+          })}
+        </View>
+      </View>
+
+      <View style={styles.resultSectionCard}>
+        <Text style={styles.resultSectionTitle}>Photo checklist</Text>
+        <View style={styles.preAnalysisChecklist}>
+          {checklistItems.map((item) => (
+            <View key={item.text} style={styles.preAnalysisChecklistItem}>
+              <AppIcon
+                name={item.state === 'error' ? 'alert-circle-outline' : item.state === 'success' ? 'check-circle-outline' : 'clock-outline'}
+                size="sm"
+                state={item.state === 'error' ? 'active' : item.state === 'success' ? 'success' : 'muted'}
+              />
+              <Text style={[
+                styles.preAnalysisChecklistText,
+                item.state === 'error' ? styles.preAnalysisChecklistTextError : null,
+              ]}>
+                {item.text}
+              </Text>
+            </View>
+          ))}
+        </View>
+      </View>
+
+      <View style={styles.resultActions}>
+        <AppButton
+          title={isValidating
+            ? 'Checking photos...'
+            : isAnalyzing
+              ? 'Analyzing...'
+              : validation?.ok
+                ? 'Run analysis'
+                : 'Retake required'}
+          onPress={onRunAnalysis}
+          loading={isValidating || isAnalyzing}
+          disabled={!allReady || !validation?.ok || isValidating || isAnalyzing || isSaving}
+          fullWidth
+        />
       </View>
     </View>
   );
@@ -1077,6 +1257,131 @@ const getChoiceDisplayLabel = (optionsKey, value) => {
   return option?.label || value || 'Not answered';
 };
 
+const QUESTION_MATTER_COPY = {
+  washFrequency: {
+    default: 'Washing frequency helps the AI interpret oiliness, dryness, scalp buildup, and shine in your photos.',
+    daily: 'Daily washing can make some hair look cleaner but may also dry out the ends, so the AI checks if dryness or frizz is routine-related.',
+    every_2_3_days: 'Washing every 2-3 days is a common routine. It helps the AI compare visible oil, shine, and scalp condition against a balanced wash pattern.',
+    '1_2_times_weekly': 'Washing 1-2 times a week may allow more oil or buildup to appear, so the AI weighs scalp shine and flakes more carefully.',
+    less_often: 'Washing less often matters because oil, buildup, dandruff, or dullness can affect how healthy the hair appears during the scan.',
+  },
+  scalpItch: {
+    default: 'Scalp itch helps the AI understand whether visible redness, flakes, or scalp irritation may be affecting hair condition.',
+    never: 'No itch suggests fewer scalp irritation signals, so the AI can focus more on length, ends, texture, and visible damage.',
+    sometimes: 'Occasional itch may point to dryness, buildup, or sensitivity, so the AI checks the scalp and flakes more carefully.',
+    often: 'Frequent itch can signal scalp irritation or buildup, which matters because poor scalp condition can affect donation readiness.',
+  },
+  dandruffOrFlakes: {
+    default: 'Dandruff or flakes help the AI separate scalp buildup from hair texture, shine, and dryness in the photos.',
+    no: 'No flakes means the AI can treat visible white marks or dullness as less likely to be dandruff-related.',
+    a_little: 'A little dandruff may affect scalp appearance, so the AI checks whether flakes are minor or visually affecting the scan.',
+    a_lot: 'A lot of flakes can signal scalp buildup or irritation, which may require care before donation review.',
+  },
+  oilyAfterWash: {
+    default: 'Oiliness after washing helps the AI judge whether shine in the photo is healthy shine or excess scalp oil.',
+    no: 'If your scalp does not get oily quickly, visible shine is more likely to be normal hair shine than excess oil.',
+    sometimes: 'Sometimes getting oily helps the AI treat shine and scalp appearance as variable instead of automatically unhealthy.',
+    yes: 'Quick oiliness can make hair look heavy or greasy, so the AI checks whether oil is affecting visible condition.',
+  },
+  dryOrRough: {
+    default: 'Dryness and roughness help the AI interpret frizz, dullness, uneven texture, and possible end damage.',
+    no: 'No dryness suggests rough-looking areas in the photo may come from lighting or texture instead of actual dryness.',
+    sometimes: 'Occasional dryness helps the AI check whether dry areas are limited to the ends or visible through the hair length.',
+    yes: 'Dry or rough hair can point to weak ends, frizz, or breakage, which affects donation readiness and care advice.',
+  },
+  hairFall: {
+    default: 'Hair fall history helps the AI understand whether density, scalp visibility, or thinning signs need closer review.',
+    no: 'No unusual hair fall means the AI can focus less on thinning risk and more on length and visible strand condition.',
+    not_sure: 'Not being sure tells the AI to treat density signals carefully and avoid overconfident thinning conclusions.',
+    yes: 'More hair fall matters because the AI checks density, scalp visibility, and whether the hair still appears strong enough.',
+  },
+  chemicalProcessHistory: {
+    default: 'Chemical processing matters because bleaching, coloring, rebonding, relaxing, or perming can affect donation acceptance.',
+    no: 'No chemical processing supports donation readiness because untreated hair is usually easier for partners to review and use.',
+    yes: 'Chemical processing can weaken strands or conflict with partner rules, so the AI checks damage and flags final manual review.',
+  },
+  heatUse: {
+    default: 'Heat use helps the AI judge whether dryness, frizz, split ends, or dullness may come from styling damage.',
+    never: 'No heat use lowers the chance that visible dryness or frizz is heat-related, so the AI weighs natural texture more.',
+    sometimes: 'Occasional heat use may affect ends, so the AI checks for mild dryness, frizz, or breakage near the tips.',
+    often: 'Frequent heat use can damage ends and reduce donation quality, so the AI looks more closely for dryness and breakage.',
+  },
+  followedPreviousAdvice: {
+    default: 'This helps the AI compare your current scan with the care plan from your last saved result.',
+    yes_consistently: 'Consistent care helps explain improvement and lets the AI compare whether dryness, shine, and ends changed as expected.',
+    sometimes: 'Partial follow-through helps the AI interpret mixed results, such as some improvement but remaining dryness or frizz.',
+    not_yet: 'If advice was not followed yet, the AI expects fewer condition changes and may keep similar care recommendations.',
+  },
+  hairConditionProgress: {
+    default: 'Your own progress report gives the AI context before comparing today\'s photos with your last scan.',
+    better: 'Feeling improvement helps the AI check whether photos also show better shine, smoother texture, or healthier ends.',
+    same: 'If it feels the same, the AI compares today\'s scan carefully for small changes in length, dryness, and damage.',
+    worse: 'Feeling worse matters because the AI looks for new dryness, frizz, flakes, hair fall, or visible damage.',
+    not_sure: 'Not sure tells the AI to rely more heavily on the current photos and saved history instead of subjective progress.',
+  },
+  noticedChanges: {
+    default: 'Noticed changes help the AI focus its comparison between your previous scan and today\'s photos.',
+    less_dryness: 'Less dryness helps the AI check if the ends now look smoother, less dull, and more donation-ready.',
+    less_oiliness: 'Less oiliness helps the AI judge whether scalp shine and heaviness improved since the last scan.',
+    less_hair_fall: 'Less hair fall helps the AI compare density and scalp visibility with your previous result.',
+    less_dandruff: 'Less dandruff helps the AI review whether flakes or scalp buildup are less visible now.',
+    softer_hair: 'Softer hair helps the AI look for smoother texture, better shine, and fewer rough-looking areas.',
+    no_major_change: 'No major change tells the AI to expect a similar result and focus on small differences in length or ends.',
+    got_worse: 'Worse condition tells the AI to look for new dryness, flakes, frizz, breakage, or scalp concerns.',
+  },
+  heatUseSinceLastCheck: {
+    default: 'Recent heat styling helps the AI explain new dryness, frizz, or end damage compared with the last check.',
+    never: 'No recent heat use means new dryness or frizz is less likely to come from styling tools.',
+    sometimes: 'Some heat use may explain mild frizz or dry ends, so the AI checks whether the tips look affected.',
+    often: 'Frequent recent heat use can quickly affect the ends, so the AI checks for breakage and donation quality concerns.',
+  },
+  chemicalTreatmentSinceLastCheck: {
+    default: 'Recent chemical treatment is important because it can change donation eligibility even if the hair is long enough.',
+    no: 'No recent chemical treatment supports a cleaner comparison with your previous scan and reduces eligibility conflicts.',
+    yes: 'Recent bleach, color, rebond, relax, or perm can weaken hair and may require manual review before donation.',
+  },
+  routineChangedSinceLastCheck: {
+    default: 'Routine changes help the AI explain why today\'s result may differ from your last saved scan.',
+    yes: 'A changed routine can affect oiliness, dryness, shine, and frizz, so the AI links visible changes to the new habit.',
+    no: 'No routine change means the AI compares today\'s photos against your last result without expecting major care-related changes.',
+  },
+  routineChangeFocus: {
+    default: 'The changed routine tells the AI which hair condition signals should be expected to improve first.',
+    washing_routine: 'A washing routine change can affect oiliness, flakes, scalp buildup, and dryness in the scan.',
+    hair_products: 'Product changes can affect shine, smoothness, buildup, and frizz, so the AI checks those signals.',
+    reduced_heat_styling: 'Reduced heat styling should help the AI look for less dryness, smoother ends, and fewer breakage signs.',
+    stopped_chemical_treatment: 'Stopping chemical treatment helps the AI watch for recovery in strand strength and reduced visible damage.',
+    started_scalp_care: 'Scalp care can affect flakes, itch, oiliness, and scalp visibility, so the AI reviews those areas.',
+    other: 'Other changes give the AI general context that your current scan may not match your previous routine.',
+  },
+  healthierNow: {
+    default: 'This helps the AI compare your own condition impression with visible changes in the photos.',
+    yes: 'If you feel it is healthier, the AI checks for supporting signs like better shine, smoother texture, and healthier ends.',
+    no: 'If it does not feel healthier, the AI looks for remaining dryness, frizz, flakes, or damage that may need care.',
+    not_sure: 'Not sure tells the AI to rely more on the photo evidence and saved history before judging progress.',
+  },
+};
+
+const getQuestionMatterText = (question, answers = {}) => {
+  if (!question?.key) {
+    return 'Your answers help the AI compare your photos with donation readiness rules before it checks length, texture, dryness, and visible damage.';
+  }
+
+  const copyByAnswer = QUESTION_MATTER_COPY[question.key];
+  if (!copyByAnswer) {
+    return 'Your answer gives the AI context for checking hair length, texture, dryness, scalp condition, and visible damage.';
+  }
+
+  const answerValue = answers?.[question.key];
+  if (Array.isArray(answerValue)) {
+    const selectedCopies = answerValue.map((value) => copyByAnswer[value]).filter(Boolean);
+    if (selectedCopies.length) return selectedCopies.join(' ');
+    return copyByAnswer.default;
+  }
+
+  return copyByAnswer[answerValue] || copyByAnswer.default;
+};
+
 const weekdayLabels = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
 
 const formatCalendarMonthLabel = (value) => (
@@ -1283,12 +1588,12 @@ const buildRetryCountdownMessage = (errorState, secondsRemaining) => {
   if (!Number.isFinite(secondsRemaining) || secondsRemaining <= 0) {
     const normalizedMessage = String(errorState.message || '');
     if (/retry\s+in\s+\d+(?:\.\d+)?\s*seconds?/i.test(normalizedMessage)) {
-      return 'Cannot analyze hair right now. Please try again.';
+      return 'Hair analysis is ready to try again.';
     }
-    return normalizedMessage || 'Cannot analyze hair right now. Please try again later.';
+    return normalizedMessage || 'Hair analysis is busy right now. Please try again in a moment.';
   }
 
-  return `Cannot analyze hair, please try again in ${secondsRemaining} seconds.`;
+  return `Hair analysis is busy right now. Please wait ${secondsRemaining} seconds, then try again.`;
 };
 
 const WEEKLY_SCAN_INTERVAL_DAYS = 7;
@@ -1572,6 +1877,14 @@ export function DonorHairSubmissionScreen() {
   const lastLiveFaceStatusKeyRef = useRef('');
   const autoCaptureTimeoutRef = useRef(null);
   const autoCaptureCooldownUntilRef = useRef(0);
+  const autoCaptureActiveKeyRef = useRef('');
+  const latestAutoCaptureRef = useRef(null);
+  const photoPreflightKeyRef = useRef('');
+  const pendingQuestionAdvanceTimeoutRef = useRef(null);
+  const questionInfoQuestionKeyRef = useRef('');
+  const questionInfoOpacity = useRef(new Animated.Value(0)).current;
+  const questionContentOpacity = useRef(new Animated.Value(1)).current;
+  const [autoCaptureCountdown, setAutoCaptureCountdown] = useState(0);
   const [analysisHistory, setAnalysisHistory] = useState([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [historyError, setHistoryError] = useState('');
@@ -1580,6 +1893,8 @@ export function DonorHairSubmissionScreen() {
   const [, setResultConfirmationMode] = useState('pending');
   const [retryCountdownSeconds, setRetryCountdownSeconds] = useState(0);
   const [transientErrorNotice, setTransientErrorNotice] = useState(null);
+  const [photoPreflightState, setPhotoPreflightState] = useState(null);
+  const [isPhotoPreflightRunning, setIsPhotoPreflightRunning] = useState(false);
   const { user, profile, resolvedTheme } = useAuth();
   const { logout, isLoading: isLoggingOut } = useAuthActions();
   const {
@@ -1724,8 +2039,21 @@ export function DonorHairSubmissionScreen() {
     [effectiveQuestionnaireValues, questionnaireMode]
   );
   const currentQuestion = visibleQuestions[questionIndex] || visibleQuestions[0];
+  const currentQuestionHasAnswer = isAnswered(currentQuestion, effectiveQuestionnaireValues);
+  const currentQuestionMatterText = getQuestionMatterText(currentQuestion, effectiveQuestionnaireValues);
+  const questionInfoAnimatedStyle = {
+    opacity: questionInfoOpacity,
+  };
+  const questionContentAnimatedStyle = {
+    opacity: questionContentOpacity,
+  };
   const currentView = requiredViews[photoIndex];
   const currentPhoto = photos[photoIndex];
+  const photoReviewValidationKey = useMemo(() => (
+    photos
+      .map((photo, index) => `${requiredViews[index]?.key || index}:${photo?.uri || ''}:${String(photo?.dataUrl || '').length}`)
+      .join('|')
+  ), [photos, requiredViews]);
   const canUseNativeLiveCamera = Boolean(
     NativeVisionCamera
     && useNativeCameraDevice
@@ -1783,6 +2111,7 @@ export function DonorHairSubmissionScreen() {
     } : null,
     [countdownErrorMessage, error]
   );
+  const analysisAttemptInFlightRef = useRef(false);
 
   const runFreshAnalysisAttempt = React.useCallback(async (source, options = {}) => {
     if (weeklyScanLimit.isLocked) {
@@ -1799,6 +2128,20 @@ export function DonorHairSubmissionScreen() {
         nextScanDate: weeklyScanLimit.nextScanDate,
       };
     }
+
+    if (analysisAttemptInFlightRef.current) {
+      logAppEvent('donor_hair_submission.analysis_retry', 'Duplicate donor hair analysis trigger skipped while an attempt is already running.', {
+        userId: user?.id || null,
+        source,
+      }, 'info');
+      return {
+        success: false,
+        pending: true,
+        skipped: true,
+      };
+    }
+
+    analysisAttemptInFlightRef.current = true;
 
     logAppEvent('donor_hair_submission.analysis_retry', 'Retry button tapped for a fresh donor hair analysis attempt.', {
       userId: user?.id || null,
@@ -1818,14 +2161,18 @@ export function DonorHairSubmissionScreen() {
     });
 
     const currentAnswers = getCurrentQuestionnaireAnswers();
-    return await analyzePhotos({
-      questionnaireAnswers: {
-        ...currentAnswers,
-      },
-      complianceContext: { acknowledged: Boolean(complianceAcknowledged) },
-      historyContext: buildAnalysisHistoryContext(analysisHistory),
-      correctedDetails: options.correctedDetails || null,
-    });
+    try {
+      return await analyzePhotos({
+        questionnaireAnswers: {
+          ...currentAnswers,
+        },
+        complianceContext: { acknowledged: Boolean(complianceAcknowledged) },
+        historyContext: buildAnalysisHistoryContext(analysisHistory),
+        correctedDetails: options.correctedDetails || null,
+      });
+    } finally {
+      analysisAttemptInFlightRef.current = false;
+    }
   }, [
     analysisHistory,
     analyzePhotos,
@@ -1840,18 +2187,6 @@ export function DonorHairSubmissionScreen() {
     weeklyScanLimit.message,
     weeklyScanLimit.nextScanDate,
   ]);
-
-  const runFreshAnalysisAttemptRef = useRef(null);
-  runFreshAnalysisAttemptRef.current = runFreshAnalysisAttempt;
-  const pendingAutoAnalysisRef = useRef(null);
-
-  useEffect(() => {
-    if (!pendingAutoAnalysisRef.current) return;
-    if (stepIndex !== 3 || completedPhotoCount !== requiredViews.length || analysis || isAnalyzing) return;
-    const source = pendingAutoAnalysisRef.current;
-    pendingAutoAnalysisRef.current = null;
-    runFreshAnalysisAttemptRef.current(source);
-  }, [stepIndex, completedPhotoCount, requiredViews.length, analysis, isAnalyzing]);
 
   const loadAnalysisHistory = React.useCallback(async () => {
     if (!user?.id) return;
@@ -1957,6 +2292,16 @@ export function DonorHairSubmissionScreen() {
     router.replace('/donor/donations');
   }, [router]);
 
+  const openScanImagePreview = React.useCallback((uri) => {
+    if (!uri) return;
+
+    logAppEvent('donor_hair_submission.scan_preview', 'Full scan image preview opened from analysis result.', {
+      userId: user?.id || null,
+      hasUri: Boolean(uri),
+    });
+    setPreviewImageUri(uri);
+  }, [user?.id]);
+
   useEffect(() => {
     logAppEvent('donor_hair_submission.flow', 'Donor screening flow initialized without intro wizard steps.', {
       userId: user?.id || null,
@@ -1969,6 +2314,7 @@ export function DonorHairSubmissionScreen() {
   const isAutoAdvanceQuestion = stepIndex === 0 && currentQuestion?.type === 'choice';
   const isCurrentPhotoComplete = Boolean(photos[photoIndex]);
   const showFooterPrimaryAction = stepIndex !== 1 && stepIndex !== 2 && !(stepIndex === 3 && Boolean(analysis));
+  const shouldShowFooterPrimaryAction = !isAutoAdvanceQuestion && showFooterPrimaryAction;
   const isNextDisabled = (
     (stepIndex === 0 && !canMovePastQuestion)
     || (stepIndex === 2 && !isCurrentPhotoComplete)
@@ -1982,19 +2328,75 @@ export function DonorHairSubmissionScreen() {
     return analysis ? (isSaving ? 'Saving...' : 'Save to hair log') : 'Retry analysis';
   }, [analysis, isSaving, photoIndex, questionIndex, requiredViews.length, stepIndex, visibleQuestions.length]);
 
+  const fadeInQuestionInfo = React.useCallback(() => {
+    questionInfoOpacity.setValue(0);
+    Animated.timing(questionInfoOpacity, {
+      toValue: 1,
+      duration: QUESTION_INFO_FADE_MS,
+      useNativeDriver: true,
+    }).start();
+  }, [questionInfoOpacity]);
+
+  const runQuestionTransition = React.useCallback((applyQuestionChange) => {
+    Animated.timing(questionContentOpacity, {
+      toValue: 0,
+      duration: QUESTION_TRANSITION_FADE_MS,
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (typeof applyQuestionChange === 'function') {
+        applyQuestionChange();
+      }
+
+      if (!finished) return;
+
+      requestAnimationFrame(() => {
+        Animated.timing(questionContentOpacity, {
+          toValue: 1,
+          duration: QUESTION_TRANSITION_FADE_MS,
+          useNativeDriver: true,
+        }).start();
+      });
+    });
+  }, [questionContentOpacity]);
+
+  useEffect(() => {
+    const activeQuestionKey = `${stepIndex}:${currentQuestion?.key || 'none'}`;
+    if (questionInfoQuestionKeyRef.current === activeQuestionKey) return;
+
+    questionInfoQuestionKeyRef.current = activeQuestionKey;
+    if (pendingQuestionAdvanceTimeoutRef.current) {
+      clearTimeout(pendingQuestionAdvanceTimeoutRef.current);
+      pendingQuestionAdvanceTimeoutRef.current = null;
+    }
+    questionInfoOpacity.setValue(currentQuestionHasAnswer ? 1 : 0);
+  }, [currentQuestion?.key, currentQuestionHasAnswer, questionInfoOpacity, stepIndex]);
+
+  useEffect(() => (
+    () => {
+      if (pendingQuestionAdvanceTimeoutRef.current) {
+        clearTimeout(pendingQuestionAdvanceTimeoutRef.current);
+        pendingQuestionAdvanceTimeoutRef.current = null;
+      }
+    }
+  ), []);
+
   const saveConfirmedAnalysis = async () => {
     if (!analysis) return;
+    const donationAssessment = buildDonationAssessment({ analysis, donationRequirement });
+    const analysisForSave = buildDonationReadyAnalysis(analysis, donationAssessment);
 
     logAppEvent('donor_hair_submission.confirmation', 'User confirmed AI result for saving.', {
       userId: user?.id || null,
-      analysisKeys: Object.keys(analysis || {}),
+      analysisKeys: Object.keys(analysisForSave || {}),
+      adjustedDecision: analysisForSave?.decision || null,
     });
 
     const currentAnswers = getCurrentQuestionnaireAnswers();
-    const result = await submitSubmission(buildHairReviewDefaultValues(analysis, currentAnswers), {
+    const result = await submitSubmission(buildHairReviewDefaultValues(analysisForSave, currentAnswers), {
       questionnaireAnswers: {
         ...currentAnswers,
       },
+      aiAnalysisOverride: analysisForSave,
       donationModeValue: '',
     });
 
@@ -2027,11 +2429,15 @@ export function DonorHairSubmissionScreen() {
     const activeQuestionIndex = nextVisibleQuestions.findIndex((item) => item.key === currentQuestionKey);
 
     if (activeQuestionIndex >= 0 && activeQuestionIndex < nextVisibleQuestions.length - 1) {
-      setQuestionIndex(activeQuestionIndex + 1);
+      runQuestionTransition(() => {
+        setQuestionIndex(activeQuestionIndex + 1);
+      });
       return;
     }
 
-    setStepIndex(1);
+    runQuestionTransition(() => {
+      setStepIndex(1);
+    });
   };
 
   const handleQuestionChoiceChange = async ({ fieldName, nextValue, fieldOnChange }) => {
@@ -2068,6 +2474,13 @@ export function DonorHairSubmissionScreen() {
 
     if (!isValid) return;
 
+    if (pendingQuestionAdvanceTimeoutRef.current) {
+      clearTimeout(pendingQuestionAdvanceTimeoutRef.current);
+      pendingQuestionAdvanceTimeoutRef.current = null;
+    }
+
+    fadeInQuestionInfo();
+
     logAppEvent('donor_hair_submission.questionnaire', 'Question choice auto-advance triggered.', {
       userId: user?.id || null,
       questionKey: fieldName,
@@ -2081,12 +2494,17 @@ export function DonorHairSubmissionScreen() {
       }, questionnaireMode).length - 1,
     });
 
-    goToNextQuestionStep(nextAnswers, fieldName);
+    pendingQuestionAdvanceTimeoutRef.current = setTimeout(() => {
+      pendingQuestionAdvanceTimeoutRef.current = null;
+      goToNextQuestionStep(nextAnswers, fieldName);
+    }, QUESTION_INFO_READ_DELAY_MS);
   };
 
   const goPrevious = () => {
     if (stepIndex === 0 && questionIndex > 0) {
-      setQuestionIndex((current) => current - 1);
+      runQuestionTransition(() => {
+        setQuestionIndex((current) => current - 1);
+      });
       return;
     }
     if (stepIndex === 2 && photoIndex > 0) {
@@ -2140,6 +2558,27 @@ export function DonorHairSubmissionScreen() {
     }
     setLiveFrameBrightness(brightness);
   }, [currentView]);
+
+  const handleNativeCameraError = React.useCallback((cameraError) => {
+    const code = String(cameraError?.code || cameraError?.name || '').toLowerCase();
+    const message = String(cameraError?.message || cameraError || '').trim();
+    const isRestricted = code.includes('camera-is-restricted') || message.toLowerCase().includes('restricted');
+
+    logAppEvent('donor_hair_submission.camera.native_error', 'Native live camera reported an error.', {
+      userId: user?.id || null,
+      code: cameraError?.code || null,
+      message,
+      isRestricted,
+    }, isRestricted ? 'warn' : 'error');
+
+    if (isRestricted) {
+      setNativeCameraPermission('restricted');
+      setCameraModalError('Camera is restricted on this device. Use Upload to continue this scan.');
+      return;
+    }
+
+    setCameraModalError(message || 'Live camera is unavailable. Use Upload to continue this scan.');
+  }, [user?.id]);
 
   useEffect(() => {
     if (questionIndex > visibleQuestions.length - 1) {
@@ -2227,6 +2666,9 @@ export function DonorHairSubmissionScreen() {
                   questionnaireMode,
                 }));
                 field.onChange(nextValue);
+                if (isAnswered(currentQuestion, { ...getCurrentQuestionnaireAnswers(), [fieldName]: nextValue })) {
+                  fadeInQuestionInfo();
+                }
               }}
               multi={currentQuestion.type === 'multi'}
             />
@@ -2310,16 +2752,10 @@ export function DonorHairSubmissionScreen() {
         return;
       }
 
-      const nextFilledSlots = photos.map((item, index) => (index === slotIndex ? true : Boolean(item)));
-      const nextMissingIndex = nextFilledSlots.findIndex((isFilled) => !isFilled);
-
-      if (nextMissingIndex >= 0) {
-        setPhotoIndex(nextMissingIndex);
-        return;
-      }
-
-      pendingAutoAnalysisRef.current = 'live_camera_all_views_complete';
-      setStepIndex(3);
+      setPhotoPreflightState(null);
+      photoPreflightKeyRef.current = '';
+      autoCaptureCooldownUntilRef.current = Date.now() + 3500;
+      setAutoCaptureCountdown(0);
     } catch (captureError) {
       logAppEvent('donor_hair_submission.photo_camera', 'Camera capture failed from donation photo modal.', {
         userId: user?.id || null,
@@ -2338,7 +2774,6 @@ export function DonorHairSubmissionScreen() {
     hasCameraPermission,
     isCapturingPhoto,
     photoIndex,
-    photos,
     requiredViews,
     requestLiveCameraPermission,
     savePhotoAssetForSlot,
@@ -2392,43 +2827,157 @@ export function DonorHairSubmissionScreen() {
   ]);
 
   useEffect(() => {
-    if (autoCaptureTimeoutRef.current) {
-      clearTimeout(autoCaptureTimeoutRef.current);
-      autoCaptureTimeoutRef.current = null;
-    }
+    latestAutoCaptureRef.current = () => handleCapturePhoto(photoIndex, 'auto');
+  }, [handleCapturePhoto, photoIndex]);
 
-    if (!autoCaptureEnabled) return undefined;
-    if (Date.now() < autoCaptureCooldownUntilRef.current) return undefined;
-
-    autoCaptureTimeoutRef.current = setTimeout(() => {
-      autoCaptureCooldownUntilRef.current = Date.now() + 3500;
-      handleCapturePhoto(photoIndex, 'auto');
-    }, canUseNativeLiveCamera ? 1200 : 2600);
-
-    return () => {
+  useEffect(() => {
+    const clearAutoCaptureTimer = () => {
       if (autoCaptureTimeoutRef.current) {
-        clearTimeout(autoCaptureTimeoutRef.current);
+        clearInterval(autoCaptureTimeoutRef.current);
         autoCaptureTimeoutRef.current = null;
       }
+      autoCaptureActiveKeyRef.current = '';
+      setAutoCaptureCountdown(0);
     };
-  }, [autoCaptureEnabled, canUseNativeLiveCamera, handleCapturePhoto, photoIndex]);
+
+    if (!autoCaptureEnabled) {
+      clearAutoCaptureTimer();
+      return undefined;
+    }
+
+    if (Date.now() < autoCaptureCooldownUntilRef.current) {
+      clearAutoCaptureTimer();
+      return undefined;
+    }
+
+    const captureKey = `${photoIndex}:${currentView?.key || currentView?.label || 'view'}`;
+    if (autoCaptureActiveKeyRef.current === captureKey && autoCaptureTimeoutRef.current) {
+      return undefined;
+    }
+
+    clearAutoCaptureTimer();
+    autoCaptureActiveKeyRef.current = captureKey;
+    let nextCount = 3;
+    setAutoCaptureCountdown(nextCount);
+
+    autoCaptureTimeoutRef.current = setInterval(() => {
+      nextCount -= 1;
+      setAutoCaptureCountdown(Math.max(nextCount, 0));
+
+      if (nextCount <= 0) {
+        clearInterval(autoCaptureTimeoutRef.current);
+        autoCaptureTimeoutRef.current = null;
+        autoCaptureActiveKeyRef.current = '';
+        autoCaptureCooldownUntilRef.current = Date.now() + 3500;
+        latestAutoCaptureRef.current?.();
+      }
+    }, 1000);
+
+    return undefined;
+  }, [autoCaptureEnabled, currentView?.key, currentView?.label, photoIndex]);
 
   const handleLiveUpload = async (slotIndex) => {
     setCameraModalError('');
-    const result = await pickPhotoForSlot(slotIndex);
-    if (result?.success) {
-      const nextFilledSlots = photos.map((item, index) => (index === slotIndex ? true : Boolean(item)));
-      const nextMissingIndex = nextFilledSlots.findIndex((isFilled) => !isFilled);
-
-      if (nextMissingIndex >= 0) {
-        setPhotoIndex(nextMissingIndex);
-        return;
-      }
-
-      pendingAutoAnalysisRef.current = 'live_upload_all_views_complete';
-      setStepIndex(3);
+    if (autoCaptureTimeoutRef.current) {
+      clearInterval(autoCaptureTimeoutRef.current);
+      autoCaptureTimeoutRef.current = null;
     }
+    autoCaptureActiveKeyRef.current = '';
+    setAutoCaptureCountdown(0);
+    autoCaptureCooldownUntilRef.current = Date.now() + 3500;
+    setPhotoPreflightState(null);
+    photoPreflightKeyRef.current = '';
+    await pickPhotoForSlot(slotIndex);
   };
+
+  const handleConfirmCurrentPhoto = React.useCallback(() => {
+    setPhotoPreflightState(null);
+    photoPreflightKeyRef.current = '';
+    const nextFilledSlots = photos.map(Boolean);
+    const nextMissingIndex = nextFilledSlots.findIndex((isFilled) => !isFilled);
+
+    if (nextMissingIndex >= 0) {
+      setPhotoIndex(nextMissingIndex);
+      return;
+    }
+
+    setStepIndex(3);
+  }, [photos]);
+
+  const handleRemoveCurrentPhoto = React.useCallback(() => {
+    setPhotoPreflightState(null);
+    photoPreflightKeyRef.current = '';
+    removePhoto(photoIndex);
+  }, [photoIndex, removePhoto]);
+
+  const validatePhotoReview = React.useCallback(async (source = 'review_auto') => {
+    if (photos.filter(Boolean).length !== requiredViews.length) {
+      setPhotoPreflightState({
+        ok: false,
+        title: 'Photos Incomplete',
+        message: 'Complete all required photos before running analysis.',
+      });
+      return { ok: false };
+    }
+
+    setIsPhotoPreflightRunning(true);
+    setPhotoPreflightState(null);
+
+    try {
+      const validation = await validateHairPhotosBeforeAnalysis({ photos, requiredViews });
+      setPhotoPreflightState(validation);
+
+      logAppEvent('donor_hair_submission.photo_preflight', 'Review module photo validation completed.', {
+        userId: user?.id || null,
+        source,
+        ok: validation?.ok || false,
+        skipped: validation?.skipped || false,
+        title: validation?.title || null,
+        message: validation?.message || null,
+        details: validation?.details || [],
+      }, 'info');
+
+      return validation;
+    } catch (validationError) {
+      const validation = {
+        ok: false,
+        title: 'Photo Check Failed',
+        message: 'Photo validation could not run. Please try again before analysis.',
+      };
+      setPhotoPreflightState(validation);
+      logAppEvent('donor_hair_submission.photo_preflight', 'Review module photo validation crashed.', {
+        userId: user?.id || null,
+        source,
+        message: validationError?.message || String(validationError || ''),
+      }, 'error');
+      return validation;
+    } finally {
+      setIsPhotoPreflightRunning(false);
+    }
+  }, [photos, requiredViews, user?.id]);
+
+  useEffect(() => {
+    if (stepIndex !== 3 || analysis || isAnalyzing || isSaving) return;
+    if (photos.filter(Boolean).length !== requiredViews.length) return;
+    if (!photoReviewValidationKey || photoPreflightKeyRef.current === photoReviewValidationKey) return;
+
+    photoPreflightKeyRef.current = photoReviewValidationKey;
+    validatePhotoReview('review_module_open');
+  }, [
+    analysis,
+    isAnalyzing,
+    isSaving,
+    photoReviewValidationKey,
+    photos,
+    requiredViews.length,
+    stepIndex,
+    validatePhotoReview,
+  ]);
+
+  const runReviewedAnalysis = React.useCallback(async () => {
+    if (!photoPreflightState?.ok) return;
+    await runFreshAnalysisAttempt('pre_analysis_photo_review');
+  }, [photoPreflightState?.ok, runFreshAnalysisAttempt]);
 
   const handleNext = async () => {
     if (stepIndex === 0) {
@@ -2466,9 +3015,6 @@ export function DonorHairSubmissionScreen() {
 
       if (photos.filter(Boolean).length !== requiredViews.length) return;
       setStepIndex(3);
-      if (!analysis) {
-        await runFreshAnalysisAttempt('step_2_complete');
-      }
       return;
     }
 
@@ -2568,40 +3114,36 @@ export function DonorHairSubmissionScreen() {
 
         return (
           <View style={styles.questionnaireStage}>
-            <View style={styles.questionProgressBlock}>
-              <View style={styles.questionProgressLabels}>
-                <Text style={styles.questionProgressText}>Step {questionIndex + 1} of {visibleQuestions.length}</Text>
-                <Text style={styles.questionProgressMeta}>Hair History</Text>
+            <Animated.View style={[styles.questionTransitionWrap, questionContentAnimatedStyle]}>
+              <View style={styles.questionProgressBlock}>
+                <View style={styles.questionProgressLabels}>
+                  <Text style={styles.questionProgressText}>Step {questionIndex + 1} of {visibleQuestions.length}</Text>
+                </View>
+                <View style={styles.questionProgressTrack}>
+                  <View style={[styles.questionProgressFill, { width: `${((questionIndex + 1) / visibleQuestions.length) * 100}%` }]} />
+                </View>
               </View>
-              <View style={styles.questionProgressTrack}>
-                <View style={[styles.questionProgressFill, { width: `${((questionIndex + 1) / visibleQuestions.length) * 100}%` }]} />
-              </View>
-            </View>
 
-            <View style={styles.questionPanel}>
-              {renderQuestionInput()}
-            </View>
-
-            <View style={styles.questionInfoCard}>
-              <AppIcon name="information-outline" size="md" state="active" />
-              <View style={styles.questionInfoCopy}>
-                <Text style={styles.questionInfoTitle}>Why does this matter?</Text>
-                <Text style={styles.questionInfoBody}>
-                  Your answers help the AI compare your photos with donation readiness rules before it checks length, texture, dryness, and visible damage.
-                </Text>
+              <View style={styles.questionPanel}>
+                {renderQuestionInput()}
               </View>
-            </View>
+
+              <Animated.View style={[styles.questionInfoCard, questionInfoAnimatedStyle]}>
+                <AppIcon name="information-outline" size="md" state="active" />
+                <View style={styles.questionInfoCopy}>
+                  <Text style={styles.questionInfoTitle}>Why does this matter?</Text>
+                  <Text style={styles.questionInfoBody}>
+                    {currentQuestionMatterText}
+                  </Text>
+                </View>
+              </Animated.View>
+            </Animated.View>
           </View>
         );
       case 1:
         {
           const reviewAnswers = getCurrentQuestionnaireAnswers();
           const reviewVisibleQuestions = getVisibleQuestions(reviewAnswers, questionnaireMode);
-          const answerRows = reviewVisibleQuestions.map((question) => ({
-            key: question.key,
-            label: question.title,
-            value: getChoiceDisplayLabel(question.optionsKey, reviewAnswers?.[question.key]),
-          }));
           const chemicalQuestion = reviewVisibleQuestions.find((question) => (
             question.key === 'chemicalProcessHistory' || question.key === 'chemicalTreatmentSinceLastCheck'
           ));
@@ -2615,6 +3157,12 @@ export function DonorHairSubmissionScreen() {
               ? reviewAnswers?.heatUseSinceLastCheck
               : reviewAnswers?.heatUse
           );
+          const reviewItems = [
+            { label: 'Treatment', value: bleachValue },
+            { label: 'Heat use', value: heatValue },
+            { label: 'Length', value: 'To be scanned' },
+            { label: 'Texture', value: textureAnswer || 'To be scanned' },
+          ];
 
         return (
           <View style={styles.readinessStage}>
@@ -2630,58 +3178,31 @@ export function DonorHairSubmissionScreen() {
 
             <View style={styles.readinessHeader}>
               <Text style={styles.readinessTitle}>Ready to Scan</Text>
-              <Text style={styles.readinessBody}>
-                We have gathered your answers. Check the summary before opening the camera scanner.
-              </Text>
+              <Text style={styles.readinessBody}>Review your answers, then open the camera.</Text>
             </View>
 
-            <View style={styles.readinessGrid}>
-              <View style={styles.recapCard}>
-                <View style={styles.recapHeader}>
-                  <AppIcon name="water-outline" size="md" state="active" />
-                  <Text style={styles.recapTitle}>Chemical History</Text>
-                </View>
-                <View style={styles.recapRow}>
-                  <Text style={styles.recapLabel}>Bleach / treatment</Text>
-                  <Text style={styles.recapPill}>{bleachValue}</Text>
-                </View>
-                <View style={styles.recapRow}>
-                  <Text style={styles.recapLabel}>Heat use</Text>
-                  <Text style={styles.recapPill}>{heatValue}</Text>
-                </View>
+            <View style={styles.recapCard}>
+              <View style={styles.recapHeader}>
+                <AppIcon name="clipboard-check-outline" size="md" state="active" />
+                <Text style={styles.recapTitle}>Scan summary</Text>
               </View>
-
-              <View style={styles.recapCard}>
-                <View style={styles.recapHeader}>
-                  <AppIcon name="ruler" size="md" state="active" />
-                  <Text style={styles.recapTitle}>Physical Traits</Text>
-                </View>
-                <View style={styles.recapRow}>
-                  <Text style={styles.recapLabel}>Current length</Text>
-                  <Text style={styles.recapPill}>To be scanned</Text>
-                </View>
-                <View style={styles.recapRow}>
-                  <Text style={styles.recapLabel}>Texture</Text>
-                  <Text style={styles.recapPill}>{textureAnswer || 'To be scanned'}</Text>
-                </View>
+              <View style={styles.recapGrid}>
+                {reviewItems.map((item) => (
+                  <View key={item.label} style={styles.recapMiniItem}>
+                    <Text style={styles.recapLabel}>{item.label}</Text>
+                    <Text style={styles.recapPill} numberOfLines={1}>{item.value}</Text>
+                  </View>
+                ))}
               </View>
             </View>
 
             <View style={styles.tipsCard}>
-              <Text style={styles.tipsTitle}>Tips for a perfect scan</Text>
-              {PHOTO_GUIDELINE_ITEMS.slice(0, 3).map((item) => (
+              <Text style={styles.tipsTitle}>Before you scan</Text>
+              {PHOTO_GUIDELINE_ITEMS.slice(0, 2).map((item) => (
                 <View key={item} style={styles.tipRow}>
                   <AppIcon name="check-circle-outline" size="sm" state="active" />
-                  <Text style={styles.tipText}>{item}</Text>
+                  <Text style={styles.tipText} numberOfLines={2}>{item}</Text>
                 </View>
-              ))}
-            </View>
-
-            <View style={styles.answerSummaryCompact}>
-              {answerRows.slice(0, 3).map((item) => (
-                <Text key={item.key} numberOfLines={1} style={styles.answerSummaryItem}>
-                  {item.label}: {item.value}
-                </Text>
               ))}
             </View>
 
@@ -2739,6 +3260,7 @@ export function DonorHairSubmissionScreen() {
         return (
           <LiveHairCameraPanel
             autoCaptureEnabled={autoCaptureEnabled}
+            autoCaptureCountdown={autoCaptureCountdown}
             cameraFacing={cameraFacing}
             currentView={currentView}
             currentPhoto={currentPhoto}
@@ -2757,9 +3279,11 @@ export function DonorHairSubmissionScreen() {
             onToggleCamera={toggleCameraFacing}
             onToggleFlash={toggleFlashMode}
             onUpload={() => handleLiveUpload(photoIndex)}
-            onRemove={() => removePhoto(photoIndex)}
+            onRemove={handleRemoveCurrentPhoto}
+            onConfirmPhoto={handleConfirmCurrentPhoto}
             onClose={closeAnalyzerToHome}
             onFacesChange={handleLiveFacesChange}
+            onCameraError={handleNativeCameraError}
             onRequestPermission={async () => {
               const granted = await requestLiveCameraPermission();
               if (!granted) {
@@ -2772,12 +3296,6 @@ export function DonorHairSubmissionScreen() {
         );
       case 3:
         if (analysis) {
-          const healthScore = getAnalysisHealthScore(analysis);
-          const scoreLabel = getScoreLabel(healthScore);
-          const conditionInsights = buildConditionInsights(analysis);
-          const recommendations = (analysis.recommendations || []).length
-            ? analysis.recommendations
-            : buildDefaultRecommendations(analysis);
           const donationAssessment = buildDonationAssessment({ analysis, donationRequirement });
           const sideProfileIndex = requiredViews.findIndex((view) => view?.key === 'side_profile');
           const frontViewIndex = requiredViews.findIndex((view) => view?.key === 'front_view');
@@ -2786,6 +3304,10 @@ export function DonorHairSubmissionScreen() {
             : photos[frontViewIndex]?.uri
               ? photos[frontViewIndex]
               : photos.find((photo) => photo?.uri);
+          const hairRecommendations = buildVisibleHairRecommendations({
+            analysis,
+            donationAssessment,
+          });
 
           return (
             <View style={styles.analysisResultPanel}>
@@ -2794,55 +3316,19 @@ export function DonorHairSubmissionScreen() {
                   <AppIcon name="arrow-left" size="md" state="default" />
                 </Pressable>
                 <Text style={styles.analysisResultScreenTitle}>Analysis Results</Text>
-                <Pressable style={styles.resultHeaderButton}>
-                  <AppIcon name="share-variant-outline" size="md" state="default" />
-                </Pressable>
-              </View>
-
-              <View style={styles.resultSectionCard}>
-                <View style={styles.resultSectionHeader}>
-                  <Text style={styles.resultSectionTitle}>Your Hair Condition</Text>
-                  <View style={styles.conditionBadge}>
-                    <View style={styles.conditionBadgeDot} />
-                    <Text style={styles.conditionBadgeText}>{scoreLabel}</Text>
-                  </View>
-                </View>
-                <View style={styles.healthScoreBlock}>
-                  <View style={styles.healthScoreRow}>
-                    <Text style={styles.healthScoreValue}>{healthScore}</Text>
-                    <Text style={styles.healthScoreMax}>/100</Text>
-                  </View>
-                  <View style={styles.healthScoreTrack}>
-                    <View style={[styles.healthScoreFill, { width: `${healthScore}%` }]} />
-                  </View>
-                </View>
-                <View style={styles.conditionInsightList}>
-                  {conditionInsights.map((item) => <ConditionInsightRow key={item.key} item={item} />)}
-                </View>
-              </View>
-
-              <View style={styles.resultSectionCard}>
-                <Text style={styles.resultSectionTitle}>AI Recommendations</Text>
-                <View style={styles.aiRecommendationList}>
-                  {recommendations.slice(0, 4).map((recommendation, index) => (
-                    <AiRecommendationRow
-                      key={`${recommendation.priority_order || index}-${recommendation.title || recommendation.recommendation_text}`}
-                      recommendation={recommendation}
-                    />
-                  ))}
-                </View>
+                <View style={styles.resultHeaderButtonPlaceholder} />
               </View>
 
               <View style={styles.donationAssessmentCard}>
                 <Pressable
-                  onPress={scanPhoto?.uri ? () => setPreviewImageUri(scanPhoto.uri) : undefined}
+                  onPress={() => openScanImagePreview(scanPhoto?.uri)}
                   disabled={!scanPhoto?.uri}
                   style={({ pressed }) => [
                     styles.cutLineImageWrap,
                     scanPhoto?.uri ? styles.cutLineImageTouchable : null,
-                    pressed ? styles.pressedMuted : null,
+                    pressed ? styles.cutLineImagePressed : null,
                   ]}
-                  accessibilityRole={scanPhoto?.uri ? 'imagebutton' : 'image'}
+                  accessibilityRole="button"
                   accessibilityLabel={scanPhoto?.uri ? 'Open full hair scan photo preview' : 'Hair scan photo unavailable'}
                 >
                   {scanPhoto?.uri ? (
@@ -2850,7 +3336,7 @@ export function DonorHairSubmissionScreen() {
                       <Image source={{ uri: scanPhoto.uri }} style={styles.cutLineImage} resizeMode="cover" />
                       <View style={styles.cutLinePreviewHint} pointerEvents="none">
                         <AppIcon name="image-search-outline" size="sm" state="inverse" />
-                        <Text style={styles.cutLinePreviewHintText}>Preview</Text>
+                        <Text style={styles.cutLinePreviewHintText}>Tap to view</Text>
                       </View>
                     </>
                   ) : (
@@ -2862,7 +3348,7 @@ export function DonorHairSubmissionScreen() {
                     <>
                       <View style={styles.cutLineLabel} pointerEvents="none">
                         <Text style={styles.cutLineLabelText}>
-                          Cut guide - {donationAssessment.donatableLengthLabel} donatable
+                          Cut guide - {donationAssessment.donatableLengthLabel}
                         </Text>
                       </View>
                       <View
@@ -2879,7 +3365,20 @@ export function DonorHairSubmissionScreen() {
                   ) : null}
                 </Pressable>
                 <View style={styles.donationAssessmentBody}>
-                  <Text style={styles.resultSectionTitle}>Hair Donation Assessment</Text>
+                  <View style={styles.donationAssessmentHeader}>
+                    <Text style={styles.resultSectionTitle}>Hair Donation Assessment</Text>
+                    <View style={[
+                      styles.donationReadyBadge,
+                      donationAssessment.isDonationReady ? styles.donationReadyBadgeOk : styles.donationReadyBadgeReview,
+                    ]}>
+                      <Text style={[
+                        styles.donationReadyBadgeText,
+                        donationAssessment.isDonationReady ? styles.donationReadyBadgeTextOk : styles.donationReadyBadgeTextReview,
+                      ]}>
+                        {donationAssessment.isDonationReady ? 'Can donate' : 'Needs review'}
+                      </Text>
+                    </View>
+                  </View>
                   <View style={styles.assessmentRows}>
                     <View style={styles.assessmentRow}>
                       <Text style={styles.assessmentLabel}>Donatable Length</Text>
@@ -2891,7 +3390,11 @@ export function DonorHairSubmissionScreen() {
                     </View>
                   </View>
                   <View style={styles.assessmentNote}>
-                    <AppIcon name="donations" size="md" state="active" />
+                    <AppIcon
+                      name={donationAssessment.isDonationReady ? 'content-cut' : 'alert-circle-outline'}
+                      size="md"
+                      state="active"
+                    />
                     <Text style={styles.assessmentNoteText}>{donationAssessment.summary}</Text>
                   </View>
                 </View>
@@ -2904,6 +3407,33 @@ export function DonorHairSubmissionScreen() {
                   variant="info"
                   style={styles.bannerGap}
                 />
+              ) : null}
+
+              {hairRecommendations.length ? (
+                <View style={styles.resultSectionCard}>
+                  <View style={styles.resultSectionHeader}>
+                    <Text style={styles.resultSectionTitle}>Hair recommendations</Text>
+                    <View style={styles.conditionBadge}>
+                      <View style={styles.conditionBadgeDot} />
+                      <Text style={styles.conditionBadgeText}>HAIR CARE</Text>
+                    </View>
+                  </View>
+                  <View style={styles.recommendationList}>
+                    {hairRecommendations.map((recommendation, index) => (
+                      <View
+                        key={`${recommendation.title}-${index}`}
+                        style={[
+                          styles.recommendationCard,
+                          index === 0 ? styles.recommendationCardPrimary : null,
+                        ]}
+                      >
+                        <Text style={styles.recommendationPill}>Step {index + 1}</Text>
+                        <Text style={styles.recommendationTitle}>{recommendation.title}</Text>
+                        <Text style={styles.recommendationBody}>{recommendation.recommendation_text}</Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
               ) : null}
 
               <View style={styles.resultActions}>
@@ -2999,35 +3529,58 @@ export function DonorHairSubmissionScreen() {
             </View>
           </View>
         ) : (
-          <View style={styles.analysisResultPanel}>
-            <View style={styles.analysisResultTopBar}>
-              <Pressable onPress={() => setStepIndex(2)} style={styles.resultHeaderButton}>
-                <AppIcon name="arrow-left" size="md" state="default" />
-              </Pressable>
-              <Text style={styles.analysisResultScreenTitle}>Analysis Results</Text>
-              <View style={styles.resultHeaderButtonPlaceholder} />
-            </View>
-            <View style={styles.resultSectionCard}>
-              <Text style={styles.resultSectionTitle}>Ready for AI analysis</Text>
-              <Text style={styles.resultErrorBody}>
-                Your answers and hair photos are ready. Run the analysis to generate your hair condition, recommendations, and donation assessment.
-              </Text>
-              <AppButton
-                title={isAnalyzing ? 'Analyzing...' : 'Run analysis'}
-                onPress={async () => {
-                  await runFreshAnalysisAttempt('ready_state_retry');
-                }}
-                loading={isAnalyzing}
-                disabled={isAnalyzing || isSaving}
-                fullWidth
-              />
-            </View>
-          </View>
+          <PreAnalysisPhotoReview
+            photos={photos}
+            requiredViews={requiredViews}
+            isAnalyzing={isAnalyzing}
+            isSaving={isSaving}
+            isValidating={isPhotoPreflightRunning}
+            validation={photoPreflightState}
+            onPreview={openScanImagePreview}
+            onRetake={(slotIndex = 0) => {
+              setPhotoPreflightState(null);
+              photoPreflightKeyRef.current = '';
+              setPhotoIndex(slotIndex);
+              setStepIndex(2);
+            }}
+            onRunAnalysis={runReviewedAnalysis}
+          />
         );
       default:
         return null;
     }
   };
+
+  const previewImageModal = (
+    <Modal
+      transparent
+      visible={Boolean(previewImageUri)}
+      animationType="fade"
+      presentationStyle="overFullScreen"
+      statusBarTranslucent
+      onRequestClose={() => setPreviewImageUri('')}
+    >
+      <View style={styles.imagePreviewOverlay}>
+        <Pressable style={styles.imagePreviewBackdrop} onPress={() => setPreviewImageUri('')} />
+        <View style={styles.imagePreviewCard}>
+          <View style={styles.imagePreviewHeader}>
+            <Text style={styles.imagePreviewTitle}>Photo Preview</Text>
+            <Pressable
+              onPress={() => setPreviewImageUri('')}
+              style={({ pressed }) => [styles.imagePreviewClose, pressed ? styles.pressedMuted : null]}
+              accessibilityRole="button"
+              accessibilityLabel="Close photo preview"
+            >
+              <AppIcon name="close" size="sm" state="inverse" />
+            </Pressable>
+          </View>
+          {previewImageUri ? (
+            <Image source={{ uri: previewImageUri }} style={styles.imagePreviewImage} resizeMode="contain" />
+          ) : null}
+        </View>
+      </View>
+    </Modal>
+  );
 
   if (isDonorProfileComplete && isAnalyzerActive) {
     const analyzerContent = (
@@ -3068,18 +3621,21 @@ export function DonorHairSubmissionScreen() {
     );
 
     return (
-      <View style={styles.analyzerStandalone}>
-        {stepIndex === 2 ? analyzerContent : (
-          <ScrollView
-            style={styles.analyzerScroll}
-            contentContainerStyle={styles.analyzerScrollContent}
-            showsVerticalScrollIndicator={false}
-            keyboardShouldPersistTaps="handled"
-          >
-            {analyzerContent}
-          </ScrollView>
-        )}
-      </View>
+      <>
+        <View style={styles.analyzerStandalone}>
+          {stepIndex === 2 ? analyzerContent : (
+            <ScrollView
+              style={styles.analyzerScroll}
+              contentContainerStyle={styles.analyzerScrollContent}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+            >
+              {analyzerContent}
+            </ScrollView>
+          )}
+        </View>
+        {previewImageModal}
+      </>
     );
   }
 
@@ -3205,7 +3761,7 @@ export function DonorHairSubmissionScreen() {
           </View>
 
           {weeklyScanLimit.isLocked || stepIndex === 1 || stepIndex === 2 || stepIndex === 3 ? null : (
-            <View style={styles.footerNav}>
+            <View style={[styles.footerNav, !shouldShowFooterPrimaryAction ? styles.footerNavCentered : null]}>
               <Pressable
                 onPress={goPrevious}
                 disabled={stepIndex === 0 && questionIndex === 0 && photoIndex === 0}
@@ -3213,10 +3769,11 @@ export function DonorHairSubmissionScreen() {
               >
                 <AppIcon name="arrow-left" size="md" state="muted" />
               </Pressable>
-              {!isAutoAdvanceQuestion && showFooterPrimaryAction ? (
+              {shouldShowFooterPrimaryAction ? (
                 <AppButton
                   title={nextButtonTitle}
                   fullWidth={false}
+                  style={styles.footerPrimaryButton}
                   onPress={handleNext}
                   loading={(stepIndex === 2 || stepIndex === 3) && isAnalyzing}
                   disabled={isNextDisabled}
@@ -3237,34 +3794,7 @@ export function DonorHairSubmissionScreen() {
         }}
       />
 
-      <Modal
-        transparent
-        visible={Boolean(previewImageUri)}
-        animationType="fade"
-        presentationStyle="overFullScreen"
-        statusBarTranslucent
-        onRequestClose={() => setPreviewImageUri('')}
-      >
-        <View style={styles.imagePreviewOverlay}>
-          <Pressable style={styles.imagePreviewBackdrop} onPress={() => setPreviewImageUri('')} />
-          <View style={styles.imagePreviewCard}>
-            <View style={styles.imagePreviewHeader}>
-              <Text style={styles.imagePreviewTitle}>Photo Preview</Text>
-              <Pressable
-                onPress={() => setPreviewImageUri('')}
-                style={({ pressed }) => [styles.imagePreviewClose, pressed ? styles.pressedMuted : null]}
-                accessibilityRole="button"
-                accessibilityLabel="Close photo preview"
-              >
-                <AppIcon name="close" size="sm" state="inverse" />
-              </Pressable>
-            </View>
-            {previewImageUri ? (
-              <Image source={{ uri: previewImageUri }} style={styles.imagePreviewImage} resizeMode="contain" />
-            ) : null}
-          </View>
-        </View>
-      </Modal>
+      {previewImageModal}
     </DashboardLayout>
   );
 }
@@ -4093,6 +4623,9 @@ const styles = StyleSheet.create({
   questionnaireStage: {
     gap: theme.spacing.lg,
   },
+  questionTransitionWrap: {
+    gap: theme.spacing.lg,
+  },
   questionProgressBlock: {
     gap: theme.spacing.xs,
   },
@@ -4162,23 +4695,23 @@ const styles = StyleSheet.create({
     color: theme.colors.textSecondary,
   },
   readinessStage: {
-    gap: theme.spacing.lg,
+    gap: theme.spacing.md,
   },
   readinessHeader: {
     alignItems: 'center',
-    gap: theme.spacing.xs,
+    gap: 4,
   },
   readinessTitle: {
     fontFamily: theme.typography.fontFamilyDisplay,
-    fontSize: theme.typography.semantic.titleLg,
+    fontSize: theme.typography.semantic.title,
     fontWeight: theme.typography.weights.bold,
     color: theme.colors.brandPrimary,
     textAlign: 'center',
   },
   readinessBody: {
     fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+    fontSize: theme.typography.compact.body,
+    lineHeight: theme.typography.compact.body * theme.typography.lineHeights.normal,
     color: theme.colors.textSecondary,
     textAlign: 'center',
   },
@@ -4188,23 +4721,33 @@ const styles = StyleSheet.create({
   recapCard: {
     gap: theme.spacing.sm,
     padding: theme.spacing.md,
-    borderRadius: theme.radius.xl,
+    borderRadius: theme.radius.lg,
     borderWidth: 1,
     borderColor: theme.colors.borderSubtle,
     backgroundColor: theme.colors.backgroundPrimary,
-    ...theme.shadows.soft,
   },
   recapHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.spacing.sm,
-    marginBottom: theme.spacing.xs,
   },
   recapTitle: {
     fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.body,
+    fontSize: theme.typography.semantic.bodySm,
     fontWeight: theme.typography.weights.bold,
     color: theme.colors.textPrimary,
+  },
+  recapGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.spacing.sm,
+  },
+  recapMiniItem: {
+    width: '48%',
+    gap: 4,
+    padding: theme.spacing.sm,
+    borderRadius: theme.radius.md,
+    backgroundColor: theme.colors.surfaceSoft,
   },
   recapRow: {
     flexDirection: 'row',
@@ -4218,29 +4761,28 @@ const styles = StyleSheet.create({
   recapLabel: {
     flex: 1,
     fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
+    fontSize: theme.typography.compact.caption,
     color: theme.colors.textSecondary,
   },
   recapPill: {
     overflow: 'hidden',
     borderRadius: theme.radius.full,
-    paddingHorizontal: theme.spacing.sm,
-    paddingVertical: 5,
-    backgroundColor: theme.colors.surfaceSoft,
+    paddingHorizontal: 0,
+    paddingVertical: 0,
     fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.caption,
+    fontSize: theme.typography.compact.body,
     fontWeight: theme.typography.weights.semibold,
     color: theme.colors.brandPrimary,
   },
   tipsCard: {
-    gap: theme.spacing.sm,
+    gap: theme.spacing.xs,
     padding: theme.spacing.md,
-    borderRadius: theme.radius.xl,
+    borderRadius: theme.radius.lg,
     backgroundColor: theme.colors.surfaceSoft,
   },
   tipsTitle: {
     fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.body,
+    fontSize: theme.typography.semantic.bodySm,
     fontWeight: theme.typography.weights.bold,
     color: theme.colors.brandPrimary,
   },
@@ -4252,8 +4794,8 @@ const styles = StyleSheet.create({
   tipText: {
     flex: 1,
     fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+    fontSize: theme.typography.compact.body,
+    lineHeight: theme.typography.compact.body * theme.typography.lineHeights.normal,
     color: theme.colors.textSecondary,
   },
   answerSummaryCompact: {
@@ -4426,9 +4968,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: theme.spacing.sm,
     paddingHorizontal: theme.spacing.md,
-    paddingTop: theme.spacing.md,
-    paddingBottom: theme.spacing.xl,
-    backgroundColor: 'rgba(0,0,0,0.45)',
+    paddingTop: theme.spacing.sm,
+    paddingBottom: theme.spacing.sm,
+    backgroundColor: 'rgba(0,0,0,0.24)',
     zIndex: 4,
   },
   liveCameraOverlayIcon: {
@@ -4494,10 +5036,10 @@ const styles = StyleSheet.create({
   },
   liveFrameGuide: {
     position: 'absolute',
-    top: 118,
-    left: 48,
-    right: 48,
-    bottom: 210,
+    top: 116,
+    left: 42,
+    right: 42,
+    bottom: 72,
     borderRadius: 18,
   },
   liveLengthGuide: {
@@ -4543,6 +5085,27 @@ const styles = StyleSheet.create({
     shadowRadius: 5,
     shadowOffset: { width: 0, height: 0 },
     zIndex: 2,
+  },
+  liveCountdownOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 3,
+    backgroundColor: 'rgba(0,0,0,0.10)',
+  },
+  liveCountdownNumber: {
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    overflow: 'hidden',
+    textAlign: 'center',
+    textAlignVertical: 'center',
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: 46,
+    lineHeight: 88,
+    fontWeight: theme.typography.weights.bold,
+    color: theme.colors.textInverse,
+    backgroundColor: 'rgba(0,0,0,0.34)',
   },
   liveFrameCornerTopLeft: {
     position: 'absolute',
@@ -4590,76 +5153,47 @@ const styles = StyleSheet.create({
   },
   liveCameraBottomSheet: {
     width: '100%',
-    padding: theme.spacing.md,
+    paddingHorizontal: theme.spacing.md,
+    paddingTop: theme.spacing.sm,
+    paddingBottom: theme.spacing.md,
     borderRadius: 0,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.16)',
     backgroundColor: '#111111',
     gap: theme.spacing.xs,
   },
-  liveScanFloatingCard: {
-    position: 'absolute',
-    left: theme.spacing.md,
-    right: theme.spacing.md,
-    bottom: 118,
-    zIndex: 3,
-    gap: theme.spacing.xs,
-    padding: theme.spacing.md,
-    borderRadius: theme.radius.xl,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.24)',
-    backgroundColor: 'rgba(255,255,255,0.86)',
-  },
-  liveScanMetricRow: {
+  liveBottomStatusRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: theme.spacing.sm,
+    width: '100%',
   },
-  liveScanMetricLabel: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.caption,
-    fontWeight: theme.typography.weights.semibold,
-    color: theme.colors.textSecondary,
-    textTransform: 'uppercase',
-  },
-  liveScanMetricValue: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    fontWeight: theme.typography.weights.semibold,
-    color: theme.colors.textPrimary,
-  },
-  liveScanMetricValueAccent: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    fontWeight: theme.typography.weights.semibold,
-    color: theme.colors.brandPrimary,
-  },
-  liveScanProgressTrack: {
-    height: 7,
-    borderRadius: theme.radius.full,
+  liveViewHintDark: {
     overflow: 'hidden',
-    marginTop: theme.spacing.xs,
-    backgroundColor: theme.colors.surfaceSoft,
-  },
-  liveScanProgressFill: {
-    height: '100%',
-    borderRadius: theme.radius.full,
-    backgroundColor: theme.colors.brandPrimary,
+    maxWidth: 92,
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: 4,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textInverse,
   },
   liveHoldStillText: {
+    flex: 1,
+    minWidth: 0,
     textAlign: 'center',
     fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.normal,
     color: theme.colors.textInverse,
-    marginTop: theme.spacing.xs,
   },
   liveCaptureControls: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: theme.spacing.lg,
-    paddingVertical: theme.spacing.sm,
+    paddingVertical: theme.spacing.xs,
   },
   liveRoundControl: {
     width: 48,
@@ -5218,6 +5752,9 @@ const styles = StyleSheet.create({
   cutLineImageTouchable: {
     overflow: 'hidden',
   },
+  cutLineImagePressed: {
+    opacity: 0.9,
+  },
   cutLineImage: {
     width: '100%',
     height: '100%',
@@ -5288,6 +5825,34 @@ const styles = StyleSheet.create({
   donationAssessmentBody: {
     gap: theme.spacing.md,
     padding: theme.spacing.lg,
+  },
+  donationAssessmentHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+  },
+  donationReadyBadge: {
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: 6,
+    borderRadius: theme.radius.full,
+  },
+  donationReadyBadgeOk: {
+    backgroundColor: theme.colors.brandPrimaryMuted,
+  },
+  donationReadyBadgeReview: {
+    backgroundColor: theme.colors.surfaceCardMuted,
+  },
+  donationReadyBadgeText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.bold,
+  },
+  donationReadyBadgeTextOk: {
+    color: theme.colors.brandPrimary,
+  },
+  donationReadyBadgeTextReview: {
+    color: theme.colors.textSecondary,
   },
   imagePreviewOverlay: {
     flex: 1,
@@ -5380,6 +5945,97 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.semantic.body,
     lineHeight: theme.typography.semantic.body * theme.typography.lineHeights.relaxed,
     color: theme.colors.textSecondary,
+  },
+  preAnalysisGrid: {
+    gap: theme.spacing.md,
+  },
+  preAnalysisValidationBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.spacing.sm,
+    padding: theme.spacing.md,
+    borderRadius: theme.radius.lg,
+  },
+  preAnalysisValidationBoxOk: {
+    backgroundColor: '#E9F8EE',
+  },
+  preAnalysisValidationBoxError: {
+    backgroundColor: theme.colors.surfaceCardMuted,
+  },
+  preAnalysisValidationText: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textPrimary,
+  },
+  preAnalysisPhotoCard: {
+    gap: theme.spacing.sm,
+  },
+  preAnalysisPhotoFrame: {
+    height: 190,
+    borderRadius: theme.radius.lg,
+    overflow: 'hidden',
+    backgroundColor: theme.colors.surfaceSoft,
+  },
+  preAnalysisPhotoPressed: {
+    opacity: 0.9,
+  },
+  preAnalysisPhoto: {
+    width: '100%',
+    height: '100%',
+  },
+  preAnalysisPhotoEmpty: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  preAnalysisPhotoMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+  },
+  preAnalysisPhotoTitle: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textPrimary,
+  },
+  preAnalysisRetakeButton: {
+    minHeight: 36,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: theme.spacing.sm,
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.brandPrimaryMuted,
+  },
+  preAnalysisRetakeText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.bold,
+    color: theme.colors.brandPrimary,
+  },
+  preAnalysisChecklist: {
+    gap: theme.spacing.sm,
+  },
+  preAnalysisChecklistItem: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.spacing.sm,
+  },
+  preAnalysisChecklistText: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textSecondary,
+  },
+  preAnalysisChecklistTextError: {
+    color: theme.colors.textError,
+    fontWeight: theme.typography.weights.semibold,
   },
   resultHeaderButtonPlaceholder: {
     width: 40,
@@ -5693,10 +6349,17 @@ const styles = StyleSheet.create({
   },
   footerNav: {
     flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'space-between',
     gap: theme.spacing.sm,
     marginTop: theme.spacing.xs,
     marginBottom: 0,
+  },
+  footerNavCentered: {
+    justifyContent: 'center',
+  },
+  footerPrimaryButton: {
+    minWidth: 132,
   },
   iconNavButton: {
     width: 42,

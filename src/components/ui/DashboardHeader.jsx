@@ -42,6 +42,7 @@ export const DashboardHeader = ({
   variant = 'hero',
   minimal = false,
   showAvatar,
+  onProfilePress,
 }) => {
   const { logout, isLoading } = useAuthActions();
   const { resolvedTheme } = useAuth();
@@ -103,15 +104,20 @@ export const DashboardHeader = ({
         <View style={styles.topRow}>
           <View style={styles.identityRow}>
             {shouldShowAvatar ? (
-              <View
+              <Pressable
                 key={avatarUri || avatarInitials}
-                style={[
+                accessibilityRole={onProfilePress ? 'button' : undefined}
+                accessibilityLabel={onProfilePress ? 'Open profile' : undefined}
+                disabled={!onProfilePress}
+                onPress={onProfilePress}
+                style={({ pressed }) => [
                   styles.avatar,
                   compact ? styles.avatarCompact : null,
                   {
                     backgroundColor: roles.headerUtilityBackground,
                     borderColor: roles.heroBorder,
                   },
+                  pressed && onProfilePress ? styles.avatarPressed : null,
                 ]}
               >
                 {avatarUri && !imageFailed ? (
@@ -126,7 +132,7 @@ export const DashboardHeader = ({
                 ) : (
                   <AppIcon name="profile" size="md" state="default" color={roles.headerUtilityText} />
                 )}
-              </View>
+              </Pressable>
             ) : null}
             <View style={styles.textContainer}>
               {!minimal && eyebrowText ? <Text style={[styles.eyebrow, { color: roles.heroMetaText }]}>{eyebrowText}</Text> : null}
@@ -322,6 +328,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 1,
+  },
+  avatarPressed: {
+    transform: [{ scale: 0.96 }],
+    opacity: 0.86,
   },
   avatarCompact: {
     width: 40,

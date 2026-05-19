@@ -39,6 +39,64 @@ const normalizePreview = (data) => {
   };
 };
 
+const buildFallbackPreview = ({ preferences, referenceImage }) => {
+  const normalizedReferenceImage = normalizeReferenceImage(referenceImage);
+  const visualReference = normalizedReferenceImage.dataUrl || normalizedReferenceImage.imageUrl;
+  const color = preferences?.preferredColor?.trim() || 'Natural';
+  const length = preferences?.preferredLength?.trim() || 'Medium';
+  const texture = preferences?.hairTexture?.trim() || 'Soft';
+  const capSize = preferences?.capSize?.trim() || 'Not sure';
+  const baseOptions = [
+    {
+      id: 'fallback-soft-natural',
+      option_index: 1,
+      name: `${length} ${texture}`,
+      note: `${color} tone with a simple ${texture.toLowerCase()} finish.`,
+      summary: `A ${length.toLowerCase()} ${texture.toLowerCase()} option based on your selected preferences.`,
+      style_notes: `Color: ${color}. Cap size: ${capSize}.`,
+      family: 'Natural daily style',
+      match_label: 'Suggested',
+    },
+    {
+      id: 'fallback-face-frame',
+      option_index: 2,
+      name: 'Face Frame',
+      note: 'Soft layers around the face.',
+      summary: 'A gentle face-framing option for a natural look.',
+      style_notes: `Length: ${length}. Texture: ${texture}.`,
+      family: 'Face-framing style',
+      match_label: 'Option 2',
+    },
+    {
+      id: 'fallback-lightweight',
+      option_index: 3,
+      name: 'Light Fit',
+      note: 'Lightweight everyday fit.',
+      summary: 'A comfortable style option for daily wear.',
+      style_notes: `Cap size: ${capSize}.`,
+      family: 'Comfort fit',
+      match_label: 'Option 3',
+    },
+  ];
+
+  const options = baseOptions.map((option) => ({
+    ...option,
+    preview_url: visualReference,
+    generated_image_data_url: visualReference,
+  }));
+
+  return {
+    summary: 'Preview suggestions are ready. Live AI styling is temporarily unavailable.',
+    style_notes: 'These are preference-based suggestions and can still be submitted with your request.',
+    recommended_style_name: options[0].name,
+    recommended_style_family: options[0].family,
+    preview_url: visualReference,
+    generated_image_data_url: visualReference,
+    options,
+    is_fallback: true,
+  };
+};
+
 const resolveFunctionErrorMessage = async (error) => {
   const response = error?.context;
 
@@ -151,8 +209,15 @@ export const generatePatientWigPreview = async ({ preferences, referenceImage })
   } catch (error) {
     const resolvedMessage = await resolveFunctionErrorMessage(error);
     const technicalMessage = resolvedMessage.toLowerCase();
+    const fallbackPreview = buildFallbackPreview({ preferences, referenceImage });
+    const canUseFallback = Boolean(fallbackPreview.generated_image_data_url)
+      && !technicalMessage.includes('front photo')
+      && !technicalMessage.includes('invalid jwt')
+      && !technicalMessage.includes('session has expired');
 
     if (
+      !canUseFallback
+      &&
       !technicalMessage.includes('requested function was not found')
       && !technicalMessage.includes('not_found')
       && !technicalMessage.includes('invalid jwt')
@@ -161,6 +226,20 @@ export const generatePatientWigPreview = async ({ preferences, referenceImage })
         hasReferenceImage: Boolean(referenceImage?.uri || referenceImage?.dataUrl),
         functionName: wigGenerationFunctionName,
       });
+    }
+
+    if (canUseFallback) {
+      logAppEvent('wigGeneration.generatePatientWigPreview.fallback', 'Using local wig preview fallback.', {
+        functionName: wigGenerationFunctionName,
+        reason: resolvedMessage,
+        hasReferenceImage: Boolean(referenceImage?.uri || referenceImage?.dataUrl),
+      }, 'warn');
+
+      return {
+        preview: fallbackPreview,
+        previews: fallbackPreview.options,
+        error: null,
+      };
     }
 
     const userMessage = technicalMessage.includes('front photo')

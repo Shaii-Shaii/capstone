@@ -56,6 +56,7 @@ const STEP_STATE_STYLES = {
 function TrackerStep({ step, isLast, role }) {
   const palette = STEP_STATE_STYLES[step.state] || STEP_STATE_STYLES.upcoming;
   const isPatient = role === 'patient';
+  const showDescription = !isPatient || step.state !== 'upcoming';
   const iconName = step.state === 'completed'
     ? 'success'
     : step.state === 'current'
@@ -90,9 +91,11 @@ function TrackerStep({ step, isLast, role }) {
             <Text numberOfLines={1} style={styles.stepBadgeText}>{step.label}</Text>
           </View>
         </View>
-        <Text numberOfLines={isPatient ? 2 : 3} style={[styles.stepDescription, isPatient ? styles.stepDescriptionPatient : null, { color: palette.bodyColor }]}>
-          {step.description}
-        </Text>
+        {showDescription ? (
+          <Text numberOfLines={isPatient ? 1 : 3} style={[styles.stepDescription, isPatient ? styles.stepDescriptionPatient : null, { color: palette.bodyColor }]}>
+            {step.description}
+          </Text>
+        ) : null}
       </View>
     </View>
   );
@@ -128,39 +131,53 @@ export function ProcessStatusTracker({
   const isPatient = role === 'patient';
   const summaryTone = SUMMARY_TONE_STYLES[tracker?.summary?.tone] || SUMMARY_TONE_STYLES.info;
   const cardVariant = role === 'donor' ? 'donorTint' : 'patientTint';
+  const steps = isPatient ? (tracker?.steps || []).slice(0, 4) : (tracker?.steps || []);
 
   return (
     <AppCard variant={cardVariant} radius="xl" padding={isPatient ? 'md' : 'lg'}>
-      <DashboardSectionHeader
-        title={tracker?.title || (role === 'donor' ? 'Donation Status' : 'Wig Request Status')}
-        description={isPatient ? (tracker?.subtitle || 'Track your wig request.') : (tracker?.subtitle || 'Track the latest progress updates here.')}
-        style={styles.sectionHeader}
-      />
-
-      <View style={[styles.headerActions, isPatient ? styles.headerActionsPatient : null]}>
-        <View style={[styles.summaryPill, { backgroundColor: summaryTone.backgroundColor }]}>
-          <AppIcon name="clock-time-four-outline" color={summaryTone.textColor} size="sm" />
-          <Text style={[styles.summaryPillText, { color: summaryTone.textColor }]}>
-            {tracker?.summary?.label || 'Waiting for updates'}
-          </Text>
+      {isPatient ? (
+        <View style={styles.patientTrackerHeader}>
+          <View style={styles.patientTrackerTitleWrap}>
+            <Text style={styles.patientTrackerEyebrow}>Status</Text>
+            <Text numberOfLines={1} style={styles.patientTrackerTitle}>
+              {tracker?.summary?.label || 'Pending'}
+            </Text>
+          </View>
         </View>
-
-        <AppButton
-          title="Refresh"
-          variant="secondary"
-          size="md"
-          fullWidth={false}
-          loading={isRefreshing}
-          onPress={onRefresh}
-          leading={<AppIcon name="refresh" state="muted" />}
+      ) : (
+        <DashboardSectionHeader
+          title={tracker?.title || (role === 'donor' ? 'Donation Status' : 'Wig Request Status')}
+          description={tracker?.subtitle || 'Track the latest progress updates here.'}
+          style={styles.sectionHeader}
         />
-      </View>
+      )}
+
+      {!isPatient ? (
+        <View style={styles.headerActions}>
+          <View style={[styles.summaryPill, { backgroundColor: summaryTone.backgroundColor }]}>
+            <AppIcon name="clock-time-four-outline" color={summaryTone.textColor} size="sm" />
+            <Text style={[styles.summaryPillText, { color: summaryTone.textColor }]}>
+              {tracker?.summary?.label || 'Waiting for updates'}
+            </Text>
+          </View>
+
+          <AppButton
+            title="Refresh"
+            variant="secondary"
+            size="md"
+            fullWidth={false}
+            loading={isRefreshing}
+            onPress={onRefresh}
+            leading={<AppIcon name="refresh" state="muted" />}
+          />
+        </View>
+      ) : null}
 
       {tracker?.summary?.referenceValue ? (
         <View style={[styles.summaryCard, isPatient ? styles.summaryCardPatient : null]}>
           <Text style={styles.summaryRefLabel}>{tracker.summary.referenceLabel}</Text>
           <Text style={styles.summaryRefValue}>{tracker.summary.referenceValue}</Text>
-          {tracker.summary.helperText ? <Text style={styles.summaryHelper}>{tracker.summary.helperText}</Text> : null}
+          {!isPatient && tracker.summary.helperText ? <Text style={styles.summaryHelper}>{tracker.summary.helperText}</Text> : null}
         </View>
       ) : null}
 
@@ -182,14 +199,14 @@ export function ProcessStatusTracker({
         />
       ) : null}
 
-      {tracker?.steps?.length ? (
+      {steps.length ? (
         <View style={styles.stepsWrap}>
-          {tracker.steps.map((step, index) => (
+          {steps.map((step, index) => (
             <TrackerStep
               key={step.key}
               step={step}
               role={role}
-              isLast={index === tracker.steps.length - 1}
+              isLast={index === steps.length - 1}
             />
           ))}
         </View>
@@ -203,7 +220,7 @@ export function ProcessStatusTracker({
         </View>
       )}
 
-      {tracker?.events?.length ? (
+      {!isPatient && tracker?.events?.length ? (
         <View style={styles.eventsWrap}>
           <Text style={styles.eventsTitle}>Recent updates</Text>
           {tracker.events.slice(0, 4).map((event) => (
@@ -218,6 +235,32 @@ export function ProcessStatusTracker({
 const styles = StyleSheet.create({
   sectionHeader: {
     marginBottom: theme.spacing.md,
+  },
+  patientTrackerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+    marginBottom: theme.spacing.sm,
+  },
+  patientTrackerTitleWrap: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  patientTrackerEyebrow: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  patientTrackerTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    fontWeight: theme.typography.weights.bold,
+    color: theme.colors.textPrimary,
   },
   headerActions: {
     flexDirection: 'row',
@@ -255,7 +298,12 @@ const styles = StyleSheet.create({
   },
   summaryCardPatient: {
     marginBottom: theme.spacing.sm,
-    paddingVertical: theme.spacing.sm,
+    paddingVertical: theme.spacing.xs,
+    paddingHorizontal: theme.spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
   },
   summaryRefLabel: {
     fontFamily: theme.typography.fontFamily,
@@ -331,7 +379,7 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.lg,
   },
   stepCardPatient: {
-    marginBottom: theme.spacing.sm,
+    marginBottom: theme.spacing.xs,
     paddingHorizontal: theme.spacing.md,
     paddingVertical: theme.spacing.sm,
     borderWidth: 1,
@@ -361,8 +409,8 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.backgroundPrimary,
   },
   stepBadgePatient: {
-    maxWidth: 112,
-    paddingVertical: 4,
+    maxWidth: 96,
+    paddingVertical: 3,
   },
   stepBadgeText: {
     fontFamily: theme.typography.fontFamily,

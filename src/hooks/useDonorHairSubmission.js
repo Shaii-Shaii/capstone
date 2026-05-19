@@ -107,7 +107,7 @@ const mapAnalysisError = (message = '', extras = {}) => {
   const createRetryState = (title, fallbackMessage) => createErrorState(
     title,
     retryAfterSeconds
-      ? `Cannot analyze hair, please try again in ${retryAfterSeconds} seconds.`
+      ? `Hair analysis is busy right now. Please wait ${retryAfterSeconds} seconds, then try again.`
       : fallbackMessage,
     {
       retryAfterSeconds,
@@ -164,6 +164,19 @@ const mapAnalysisError = (message = '', extras = {}) => {
   }
 
   if (
+    normalized.includes('inconsistent across views')
+    || normalized.includes('views are inconsistent')
+    || normalized.includes('different people')
+    || normalized.includes('different person')
+    || normalized.includes('different subject')
+    || normalized.includes('same current hair')
+    || normalized.includes('mismatched hair')
+    || normalized.includes('mixed hair')
+  ) {
+    return createErrorState('Photos Do Not Match', 'The required photos do not look consistent. Please retake all views with the same person and the same current hair.');
+  }
+
+  if (
     normalized.includes('accessories detected')
     || normalized.includes('remove hats')
     || normalized.includes('glasses')
@@ -188,7 +201,7 @@ const mapAnalysisError = (message = '', extras = {}) => {
   }
 
   if (providerRequestAttempted && normalized.includes('cannot analyze hair right now')) {
-    return createRetryState('Analysis Busy', 'Cannot analyze hair right now. Please try again later.');
+    return createRetryState('Analysis Busy', 'Hair analysis is busy right now. Please try again in a moment.');
   }
 
   if (
@@ -203,7 +216,7 @@ const mapAnalysisError = (message = '', extras = {}) => {
   ) {
     return createRetryState(
       retryAfterSeconds ? 'Please Wait' : 'Analysis Busy',
-      'Cannot analyze hair right now. Please try again later.'
+      'Hair analysis is busy right now. Please try again in a moment.'
     );
   }
 
@@ -401,6 +414,7 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
   const [error, setError] = useState(null);
   const [successMessage, setSuccessMessage] = useState('');
   const latestAnalysisRequestRef = useRef(0);
+  const activeAnalysisRequestRef = useRef(null);
 
   const completedPhotoCount = useMemo(
     () => photos.filter(Boolean).length,
@@ -655,8 +669,21 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
       return { success: false, error: mappedError.message };
     }
 
+    if (activeAnalysisRequestRef.current) {
+      logAppEvent('donor_hair_submission.analysis', 'Duplicate donor hair analysis request ignored while another request is running.', {
+        userId,
+        activeRequestId: activeAnalysisRequestRef.current,
+      }, 'info');
+      return {
+        success: false,
+        pending: true,
+        skipped: true,
+      };
+    }
+
     const requestId = latestAnalysisRequestRef.current + 1;
     latestAnalysisRequestRef.current = requestId;
+    activeAnalysisRequestRef.current = requestId;
 
     setIsAnalyzing(true);
     setAnalysis(null);
@@ -695,25 +722,56 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
       complianceAcknowledged: Boolean(complianceContext?.acknowledged),
     });
 
-    const result = await analyzeHairPhotos({
-      images: readyPhotos,
-      questionnaireAnswers,
-      complianceContext,
-      donationRequirementContext: analyzerContext.donationRequirement,
-      submissionContext: null,
-      historyContext: normalizedHistoryContext,
-      correctedDetails: normalizedCorrectedDetails,
-    });
+    let result;
+    try {
+      result = await analyzeHairPhotos({
+        images: readyPhotos,
+        questionnaireAnswers,
+        complianceContext,
+        donationRequirementContext: analyzerContext.donationRequirement,
+        submissionContext: null,
+        historyContext: normalizedHistoryContext,
+        correctedDetails: normalizedCorrectedDetails,
+      });
+    } catch (analysisError) {
+      if (latestAnalysisRequestRef.current !== requestId || activeAnalysisRequestRef.current !== requestId) {
+        logAppEvent('donor_hair_submission.analysis', 'Late donor hair analysis exception ignored after a newer request started.', {
+          userId,
+          requestId,
+          latestRequestId: latestAnalysisRequestRef.current,
+          message: analysisError?.message || 'Unknown analysis error.',
+        }, 'info');
+        return { success: false, stale: true, skipped: true };
+      }
 
-    if (latestAnalysisRequestRef.current !== requestId) {
-      logAppEvent('donor_hair_submission.analysis', 'Stale donor hair analysis response ignored.', {
+      activeAnalysisRequestRef.current = null;
+      setIsAnalyzing(false);
+      const mappedError = mapAnalysisError(analysisError?.message || 'Hair analysis could not start right now. Please try again.');
+      setAnalysis(null);
+      setError(mappedError);
+      logAppEvent('donor_hair_submission.analysis', 'Donor hair analysis request crashed before returning a result.', {
+        userId,
+        requestId,
+        errorTitle: mappedError.title,
+        errorMessage: mappedError.message,
+      }, 'error');
+      return { success: false, error: mappedError.message };
+    }
+
+    if (latestAnalysisRequestRef.current !== requestId || activeAnalysisRequestRef.current !== requestId) {
+      logAppEvent('donor_hair_submission.analysis', 'Late donor hair analysis response ignored after a newer request started.', {
         userId,
         requestId,
         latestRequestId: latestAnalysisRequestRef.current,
-      }, 'warn');
-      return { success: false, error: 'A newer hair analysis request is already in progress.' };
+      }, 'info');
+      return { success: false, stale: true, skipped: true };
     }
 
+    if (!result || typeof result !== 'object') {
+      result = { error: 'Hair analysis response was incomplete. Please try analyzing the photos again.' };
+    }
+
+    activeAnalysisRequestRef.current = null;
     setIsAnalyzing(false);
 
     if (result.error) {
@@ -782,11 +840,13 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
       confirmedValueKeys: Object.keys(confirmedValues || {}),
     });
 
+    const analysisForSave = options.aiAnalysisOverride || analysis;
+
     const result = await saveHairSubmissionFlow({
       userId,
       databaseUserId,
       photos: photos.filter(Boolean),
-      aiAnalysis: analysis,
+      aiAnalysis: analysisForSave,
       confirmedValues,
       questionnaireAnswers: options.questionnaireAnswers,
       donationModeValue: options.donationModeValue || '',

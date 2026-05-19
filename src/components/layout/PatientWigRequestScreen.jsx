@@ -25,7 +25,7 @@ import { AppButton } from '../ui/AppButton';
 import { AppIcon } from '../ui/AppIcon';
 import { AppInput } from '../ui/AppInput';
 import { StatusBanner } from '../ui/StatusBanner';
-import { theme } from '../../design-system/theme';
+import { resolveThemeRoles, theme } from '../../design-system/theme';
 import { patientDashboardNavItems } from '../../constants/dashboard';
 import { useAuth } from '../../providers/AuthProvider';
 import { usePatientWigRequest } from '../../hooks/usePatientWigRequest';
@@ -53,6 +53,16 @@ const buildRecommendationFamily = ({ preview, specification, draftValues }) => (
   || draftValues?.preferredLength
   || 'Patient wig recommendation'
 );
+
+const formatRequestStatus = (value) => {
+  const raw = String(value || 'Pending').trim();
+  if (!raw) return 'Pending';
+  return raw
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(' ');
+};
 
 const buildRecommendationOptions = ({ preview, specification, draftValues }) => {
   if (Array.isArray(preview?.options) && preview.options.length) {
@@ -106,43 +116,15 @@ const buildRecommendationOptions = ({ preview, specification, draftValues }) => 
   return fallbackOptions.slice(0, 3);
 };
 
-const PREFERENCE_GROUPS = [
-  {
-    name: 'preferredLength',
-    title: 'Preferred length',
-    options: ['Short', 'Shoulder length', 'Medium', 'Long'],
-  },
-  {
-    name: 'preferredColor',
-    title: 'Preferred color',
-    options: ['Natural black', 'Dark brown', 'Warm brown', 'Other'],
-  },
-  {
-    name: 'hairTexture',
-    title: 'Texture',
-    options: ['Straight', 'Wavy', 'Curly', 'Soft layers'],
-  },
-  {
-    name: 'capSize',
-    title: 'Cap size',
-    options: ['Small', 'Medium', 'Large', 'Not sure'],
-  },
-  {
-    name: 'stylePreference',
-    title: 'Style preference',
-    options: ['Natural bob', 'Layered waves', 'Soft pixie', 'Classic straight', 'Other'],
-  },
-];
-
-function ChoiceGroup({ control, name, title, options }) {
+function PreferenceChipGroup({ control, name, title, options, roles }) {
   return (
     <Controller
       control={control}
       name={name}
       render={({ field }) => (
-        <View style={styles.choiceGroup}>
-          <Text style={styles.choiceTitle}>{title}</Text>
-          <View style={styles.choiceWrap}>
+        <View style={styles.preferenceSection}>
+          <Text style={[styles.preferenceSectionTitle, { color: roles.headingText }]}>{title}</Text>
+          <View style={styles.preferenceChipWrap}>
             {options.map((option) => {
               const isSelected = field.value === option;
               return (
@@ -150,12 +132,21 @@ function ChoiceGroup({ control, name, title, options }) {
                   key={`${name}-${option}`}
                   onPress={() => field.onChange(option)}
                   style={({ pressed }) => [
-                    styles.choiceChip,
-                    isSelected ? styles.choiceChipSelected : null,
-                    pressed ? styles.choiceChipPressed : null,
+                    styles.preferenceChip,
+                    {
+                      borderColor: isSelected ? roles.primaryActionBackground : roles.defaultCardBorder,
+                      backgroundColor: isSelected ? roles.iconPrimarySurface : roles.pageBackground,
+                    },
+                    pressed ? styles.preferencePressed : null,
                   ]}
                 >
-                  <Text style={[styles.choiceText, isSelected ? styles.choiceTextSelected : null]}>
+                  <Text
+                    style={[
+                      styles.preferenceChipText,
+                      { color: isSelected ? roles.iconPrimaryColor : roles.bodyText },
+                      isSelected ? styles.preferenceChipTextSelected : null,
+                    ]}
+                  >
                     {option}
                   </Text>
                 </Pressable>
@@ -164,6 +155,120 @@ function ChoiceGroup({ control, name, title, options }) {
           </View>
         </View>
       )}
+    />
+  );
+}
+
+function StyleSelectionGroup({ control, roles }) {
+  const options = [
+    { value: 'Straight', icon: 'minus' },
+    { value: 'Wavy', icon: 'waves' },
+    { value: 'Curly', icon: 'gesture' },
+  ];
+
+  return (
+    <Controller
+      control={control}
+      name="hairTexture"
+      render={({ field }) => (
+        <View style={styles.preferenceSection}>
+          <Text style={[styles.preferenceSectionTitle, { color: roles.headingText }]}>Style Selection</Text>
+          <View style={styles.styleSelectionGrid}>
+            {options.map((option) => {
+              const isSelected = field.value === option.value;
+              return (
+                <Pressable
+                  key={option.value}
+                  onPress={() => field.onChange(option.value)}
+                  style={({ pressed }) => [
+                    styles.styleOption,
+                    {
+                      borderColor: isSelected ? roles.primaryActionBackground : roles.defaultCardBorder,
+                      backgroundColor: isSelected ? roles.iconPrimarySurface : roles.defaultCardBackground,
+                    },
+                    pressed ? styles.preferencePressed : null,
+                  ]}
+                >
+                  <AppIcon name={option.icon} size="xl" color={roles.iconPrimaryColor} />
+                  <Text
+                    numberOfLines={1}
+                    style={[
+                      styles.styleOptionText,
+                      { color: isSelected ? roles.iconPrimaryColor : roles.headingText },
+                      isSelected ? styles.preferenceChipTextSelected : null,
+                    ]}
+                  >
+                    {option.value}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
+      )}
+    />
+  );
+}
+
+function ColorPaletteGroup({ control, roles }) {
+  const colors = [
+    { value: 'Natural black', color: '#1F1712' },
+    { value: 'Dark brown', color: '#4B3621' },
+    { value: 'Warm brown', color: '#8B4513' },
+    { value: 'Light brown', color: '#B98255' },
+    { value: 'Other', color: '#E9DDCF' },
+  ];
+
+  return (
+    <Controller
+      control={control}
+      name="preferredColor"
+      render={({ field }) => {
+        const selected = colors.find((item) => item.value === field.value) || colors[0];
+
+        return (
+          <View style={styles.preferenceSection}>
+            <Text style={[styles.preferenceSectionTitle, { color: roles.headingText }]}>Color Palette</Text>
+            <View
+              style={[
+                styles.colorPaletteCard,
+                {
+                  backgroundColor: roles.defaultCardBackground,
+                  borderColor: roles.defaultCardBorder,
+                },
+              ]}
+            >
+              <View style={styles.colorSwatchGrid}>
+                {colors.map((item) => {
+                  const isSelected = field.value === item.value || (!field.value && item.value === colors[0].value);
+                  return (
+                    <Pressable
+                      key={item.value}
+                      accessibilityRole="button"
+                      accessibilityLabel={item.value}
+                      onPress={() => field.onChange(item.value)}
+                      style={({ pressed }) => [
+                        styles.colorSwatchButton,
+                        {
+                          borderColor: isSelected ? roles.primaryActionBackground : 'transparent',
+                        },
+                        pressed ? styles.preferencePressed : null,
+                      ]}
+                    >
+                      <View style={[styles.colorSwatch, { backgroundColor: item.color }]}>
+                        {isSelected ? <AppIcon name="checkmark" size="sm" color={theme.colors.textInverse} /> : null}
+                      </View>
+                    </Pressable>
+                  );
+                })}
+              </View>
+              <Text style={[styles.colorSelectedText, { color: roles.bodyText }]}>
+                Selected: {field.value || selected.value}
+              </Text>
+            </View>
+          </View>
+        );
+      }}
     />
   );
 }
@@ -202,6 +307,23 @@ function IconCircleButton({
   );
 }
 
+function WigInfoRow({ label, value, roles }) {
+  return (
+    <View
+      style={[
+        styles.referralInfoRow,
+        {
+          backgroundColor: roles.supportCardBackground,
+          borderColor: roles.supportCardBorder,
+        },
+      ]}
+    >
+      <Text style={[styles.referralInfoLabel, { color: roles.bodyText }]}>{label}</Text>
+      <Text numberOfLines={1} style={[styles.referralInfoValue, { color: roles.headingText }]}>{value}</Text>
+    </View>
+  );
+}
+
 function CaptureModal({
   visible,
   referenceImage,
@@ -219,27 +341,16 @@ function CaptureModal({
   if (!visible) return null;
 
   return (
-    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
-      <View style={styles.modalOverlay}>
-        <Pressable style={styles.modalBackdrop} onPress={onClose} />
-
-        <AppCard variant="elevated" radius="xl" padding="lg" style={styles.modalCard}>
-          <View style={styles.modalHeader}>
-            <View style={styles.stepPill}>
-              <Text style={styles.stepPillText}>Step 1 of 1</Text>
-            </View>
-
-            <View style={styles.modalHeaderActions}>
-              <Pressable onPress={onClose} style={styles.headerIconButton}>
-                <AppIcon name="close" state="muted" />
-              </Pressable>
-            </View>
+    <Modal transparent={false} visible={visible} animationType="slide" onRequestClose={onClose}>
+      <View style={styles.captureFullScreen}>
+        <View style={styles.modalHeader}>
+          <Text style={styles.modalTitle}>Front Photo</Text>
+          <View style={styles.modalHeaderActions}>
+            <Pressable onPress={onClose} style={styles.headerIconButton}>
+              <AppIcon name="close" state="muted" />
+            </Pressable>
           </View>
-
-          <Text style={styles.modalTitle}>Front</Text>
-          <Text style={styles.modalBody}>
-            Use camera or upload for this step. Keep the front view clear and centered inside the guide.
-          </Text>
+        </View>
 
           <View style={styles.captureStage}>
             {referenceImage?.uri ? (
@@ -258,7 +369,7 @@ function CaptureModal({
                 <AppIcon name="camera" state="active" size="xl" />
                 <Text style={styles.captureStagePlaceholderTitle}>Camera access needed</Text>
                 <Text style={styles.captureStagePlaceholderBody}>
-                  Allow camera access or upload a front photo from your device.
+                  Allow camera or upload a photo.
                 </Text>
               </View>
             )}
@@ -296,8 +407,8 @@ function CaptureModal({
           <View style={styles.modalFooter}>
             <Text style={styles.modalFooterText}>
               {referenceImage?.uri
-                ? 'Front photo ready. Continue to wig preferences next.'
-                : 'Upload or capture one clear front photo.'}
+                ? 'Photo ready.'
+                : 'Add a front photo.'}
             </Text>
 
             <AppButton
@@ -307,170 +418,98 @@ function CaptureModal({
               leading={<AppIcon name="success" state="inverse" />}
             />
           </View>
-        </AppCard>
       </View>
     </Modal>
   );
 }
 
-function WigOptionCard({ option, isActive, onPress, fallbackImageUri }) {
-  const imageUri = option.generatedImageUri || fallbackImageUri || '';
+function AiMatcherSkeleton({ roles }) {
+  return (
+    <View
+      style={[
+        styles.matcherSkeletonCard,
+        {
+          backgroundColor: roles.supportCardBackground,
+          borderColor: roles.supportCardBorder,
+        },
+      ]}
+    >
+      <View style={styles.matcherLoadingRow}>
+        <View style={[styles.matcherLoadingDot, { backgroundColor: roles.primaryActionBackground }]} />
+        <Text style={[styles.matcherLoadingText, { color: roles.iconPrimaryColor }]}>
+          Analyzing styles...
+        </Text>
+      </View>
+      <View style={styles.matcherSkeletonGrid}>
+        <View style={styles.matcherSkeletonMain}>
+          <View style={[styles.matcherSkeletonBlock, styles.matcherSkeletonHero]} />
+          <View style={styles.matcherSkeletonPills}>
+            <View style={[styles.matcherSkeletonBlock, styles.matcherSkeletonPillWide]} />
+            <View style={[styles.matcherSkeletonBlock, styles.matcherSkeletonPill]} />
+          </View>
+        </View>
+        <View style={styles.matcherSkeletonSide}>
+          {[0, 1, 2, 3].map((item) => (
+            <View key={item} style={[styles.matcherSkeletonBlock, styles.matcherSkeletonLine]} />
+          ))}
+        </View>
+      </View>
+    </View>
+  );
+}
 
+function MatcherRecommendationCard({
+  option,
+  isActive,
+  imageUri,
+  onPress,
+  roles,
+}) {
   return (
     <Pressable
       accessibilityRole="button"
       onPress={onPress}
       style={({ pressed }) => [
-        styles.optionCard,
-        isActive ? styles.optionCardActive : null,
-        pressed ? styles.optionCardPressed : null,
+        styles.matcherCard,
+        {
+          backgroundColor: roles.defaultCardBackground,
+          borderColor: isActive ? roles.primaryActionBackground : roles.defaultCardBorder,
+        },
+        pressed ? styles.preferencePressed : null,
       ]}
     >
-      <View style={styles.optionImageWrap}>
+      <View style={styles.matcherBadge}>
+        <AppIcon name="sparkle" size="sm" color={roles.primaryActionText} />
+        <Text style={[styles.matcherBadgeText, { color: roles.primaryActionText }]}>AI Match</Text>
+      </View>
+
+      <View style={[styles.matcherImageWrap, { backgroundColor: roles.supportCardBackground }]}>
         {imageUri ? (
-          <Image source={{ uri: imageUri }} style={styles.optionImage} />
+          <Image source={{ uri: imageUri }} style={styles.matcherImage} />
         ) : (
-          <View style={styles.optionImagePlaceholder}>
-            <AppIcon name="sparkle" state="active" />
+          <View style={styles.matcherImagePlaceholder}>
+            <AppIcon name="image" size="xl" color={roles.iconPrimaryColor} />
           </View>
         )}
       </View>
-      <Text style={styles.optionName}>{option.name}</Text>
-      <Text style={styles.optionMatch}>{option.matchLabel || 'Suggested'}</Text>
-      <Text style={styles.optionNote} numberOfLines={2}>{option.note}</Text>
-      <View style={[styles.tryOnButton, isActive ? styles.tryOnButtonActive : null]}>
-        <Text style={[styles.tryOnButtonText, isActive ? styles.tryOnButtonTextActive : null]}>
-          {isActive ? 'Selected' : 'Select'}
+
+      <View style={styles.matcherCardBody}>
+        <Text numberOfLines={1} style={[styles.matcherCardTitle, { color: roles.headingText }]}>
+          {option.name}
         </Text>
+        <Text numberOfLines={1} style={[styles.matcherCardMeta, { color: roles.bodyText }]}>
+          {option.family || option.matchLabel || 'Personalized style'}
+        </Text>
+        <View style={styles.matcherCardFooter}>
+          <Text style={[styles.matcherCardPrice, { color: roles.iconPrimaryColor }]}>
+            {option.matchLabel || 'Recommended'}
+          </Text>
+          <View style={[styles.matcherFavoriteButton, { backgroundColor: roles.supportCardBackground }]}>
+            <AppIcon name={isActive ? 'checkmarkCircle' : 'favorite'} size="md" color={roles.iconPrimaryColor} />
+          </View>
+        </View>
       </View>
     </Pressable>
-  );
-}
-
-function WigPreviewCard({
-  frontPhotoUri,
-  generatedImageUri,
-  title,
-  family,
-  summary,
-  preferredColor,
-  preferredLength,
-  requestDate,
-  onPrimaryAction,
-  primaryActionLabel,
-  primaryActionLoading = false,
-  onSecondaryAction,
-  secondaryActionLabel,
-}) {
-  return (
-    <AppCard variant="elevated" radius="xl" padding="lg" style={styles.resultCard}>
-      <View style={styles.resultHeader}>
-        <Text style={styles.resultHeaderTitle}>AI Wig Reference</Text>
-      </View>
-
-      <View style={styles.resultHero}>
-        <View style={styles.resultBadge}>
-          <AppIcon name="sparkle" state="muted" size="sm" />
-          <Text style={styles.resultBadgeText}>Reference only</Text>
-        </View>
-
-        <View style={styles.resultCircleWrap}>
-          <View style={styles.resultCircleOuter}>
-            <View style={styles.resultCircleInner}>
-              {generatedImageUri || frontPhotoUri ? (
-                <Image source={{ uri: generatedImageUri || frontPhotoUri }} style={styles.resultHeroImage} />
-              ) : (
-                <View style={styles.resultHeroPlaceholder}>
-                  <AppIcon name="image" state="muted" size="xl" />
-                </View>
-              )}
-            </View>
-          </View>
-        </View>
-
-        <Text style={styles.resultStyleTitle}>{title}</Text>
-        <Text style={styles.resultStyleFamily}>{family}</Text>
-        <Text style={styles.resultSummary}>{summary}</Text>
-      </View>
-
-      <View style={styles.resultMetaRow}>
-        {preferredLength ? (
-          <View style={styles.metaPill}>
-            <Text style={styles.metaLabel}>Length</Text>
-            <Text style={styles.metaValue}>{preferredLength}</Text>
-          </View>
-        ) : null}
-        {preferredColor ? (
-          <View style={styles.metaPill}>
-            <Text style={styles.metaLabel}>Color</Text>
-            <Text style={styles.metaValue}>{preferredColor}</Text>
-          </View>
-        ) : null}
-        {requestDate ? (
-          <View style={styles.metaPill}>
-            <Text style={styles.metaLabel}>Request</Text>
-            <Text style={styles.metaValue}>{requestDate}</Text>
-          </View>
-        ) : null}
-      </View>
-
-      <View style={styles.resultActionColumn}>
-        {secondaryActionLabel ? (
-          <AppButton
-            title={secondaryActionLabel}
-            variant="outline"
-            onPress={onSecondaryAction}
-            leading={<AppIcon name="camera" state="muted" />}
-          />
-        ) : null}
-
-        {primaryActionLabel ? (
-          <AppButton
-            title={primaryActionLabel}
-            loading={primaryActionLoading}
-            onPress={onPrimaryAction}
-            leading={<AppIcon name="sparkle" state="inverse" />}
-          />
-        ) : null}
-      </View>
-    </AppCard>
-  );
-}
-
-function WigStyleOptionsSection({
-  options,
-  frontPhotoUri,
-  selectedOptionId,
-  onSelectOption,
-  onCustomize,
-}) {
-  return (
-    <AppCard variant="elevated" radius="xl" padding="lg" style={styles.optionsSectionCard}>
-      <Text style={styles.optionsSectionTitle}>AI Wig Preview Options</Text>
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.sliderOptionsRow}
-      >
-        {options.map((option, index) => (
-          <WigOptionCard
-            key={option.id}
-            option={option}
-            isActive={selectedOptionId === option.id || (!selectedOptionId && index === 0)}
-            onPress={() => onSelectOption(option.id)}
-            fallbackImageUri={frontPhotoUri}
-          />
-        ))}
-      </ScrollView>
-
-      <View style={styles.optionsSectionFooter}>
-        <AppButton
-          title="Regenerate Options"
-          onPress={onCustomize}
-          leading={<AppIcon name="sparkle" state="inverse" />}
-        />
-      </View>
-    </AppCard>
   );
 }
 
@@ -483,8 +522,8 @@ function RequestFlowModal({
   patientCode,
   hospitalName,
   medicalCondition,
+  preferenceChoice,
   referenceImage,
-  hasOtherPreference,
   recommendationOptions,
   selectedOptionId,
   onSelectOption,
@@ -495,56 +534,45 @@ function RequestFlowModal({
   preferredLength,
   generatedImageUri,
   hasGeneratedPreview,
-  isPickingReference,
   isGeneratingPreview,
   isSavingRequest,
   onClose,
   onBackToPatient,
   onContinueToDetails,
-  onUploadPhoto,
+  onPreferenceChoiceChange,
   onOpenCamera,
-  onGeneratePreview,
-  onSkipPreview,
   onRegenerate,
   onDownloadSelected,
   onSubmitRequest,
   onViewTimeline,
+  roles,
 }) {
   const insets = useSafeAreaInsets();
 
   if (!visible) return null;
 
   return (
-    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
+    <Modal transparent={false} visible={visible} animationType="slide" onRequestClose={onClose}>
       <KeyboardAvoidingView
-        style={styles.flowKeyboardWrap}
+        style={[styles.flowKeyboardWrap, { backgroundColor: roles.pageBackground }]}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         keyboardVerticalOffset={Platform.OS === 'ios' ? insets.bottom : 0}
       >
-        <View style={styles.modalOverlay}>
-          <Pressable style={styles.modalBackdrop} onPress={onClose} />
-
-          <AppCard variant="elevated" radius="xl" padding="lg" style={styles.flowCard}>
-            <View style={styles.modalHeader}>
-              <View style={styles.stepPill}>
-                <Text style={styles.stepPillText}>
-                  {step === 'patient' ? 'Step 1'
-                    : step === 'details' ? 'Step 2'
-                    : step === 'summary' ? 'Step 3'
-                    : 'Submitted'}
-                </Text>
-              </View>
-
+        <View style={styles.flowFullScreen}>
+          <View style={styles.flowTopBar}>
+            <Text style={[styles.flowTopTitle, { color: roles.headingText }]}>
+              {step === 'summary' ? 'Wig Preview' : step === 'basicFit' ? 'Fitting Basics' : 'Wig Request'}
+            </Text>
               <Pressable onPress={onClose} style={styles.headerIconButton}>
                 <AppIcon name="close" state="muted" />
               </Pressable>
-            </View>
+          </View>
 
             <ScrollView
               style={styles.flowScroll}
               contentContainerStyle={[
                 styles.flowScrollContent,
-                { paddingBottom: Math.max(insets.bottom, theme.spacing.md) },
+                { paddingBottom: Math.max(insets.bottom, theme.spacing.xl) },
               ]}
               keyboardShouldPersistTaps="handled"
               keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
@@ -553,7 +581,6 @@ function RequestFlowModal({
               {step === 'patient' ? (
                 <View style={styles.flowSection}>
                   <Text style={styles.flowTitle}>Patient details</Text>
-                  <Text style={styles.flowBody}>Review the patient record linked to this account before starting the request.</Text>
 
                   <View style={styles.previewGrid}>
                     <View style={styles.previewRow}>
@@ -593,7 +620,7 @@ function RequestFlowModal({
                           {field.value ? <AppIcon name="success" state="inverse" size="sm" /> : null}
                         </View>
                         <Text style={styles.agreementText}>
-                          I agree that my patient record and uploaded photo may be used by the organization as reference for this wig request.
+                          I agree to use my patient details and photo for this request.
                         </Text>
                       </Pressable>
                     )}
@@ -601,6 +628,48 @@ function RequestFlowModal({
                   {errors.acceptedTerms?.message ? (
                     <Text style={styles.fieldError}>{errors.acceptedTerms.message}</Text>
                   ) : null}
+
+                  <View style={styles.preferenceSection}>
+                    <Text style={[styles.preferenceSectionTitle, { color: roles.headingText }]}>
+                      Add wig preferences?
+                    </Text>
+                    <View style={styles.preferenceChoiceGrid}>
+                      {[
+                        { key: 'preferences', title: 'Yes', body: 'Choose style, color, and AI match.' },
+                        { key: 'fitOnly', title: 'No', body: 'Only basic fitting details.' },
+                      ].map((item) => {
+                        const isSelected = preferenceChoice === item.key;
+                        return (
+                          <Pressable
+                            key={item.key}
+                            accessibilityRole="radio"
+                            accessibilityState={{ selected: isSelected }}
+                            onPress={() => onPreferenceChoiceChange(item.key)}
+                            style={({ pressed }) => [
+                              styles.preferenceChoiceCard,
+                              {
+                                backgroundColor: isSelected ? roles.iconPrimarySurface : roles.defaultCardBackground,
+                                borderColor: isSelected ? roles.primaryActionBackground : roles.defaultCardBorder,
+                              },
+                              pressed ? styles.preferencePressed : null,
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.preferenceChoiceTitle,
+                                { color: isSelected ? roles.iconPrimaryColor : roles.headingText },
+                              ]}
+                            >
+                              {item.title}
+                            </Text>
+                            <Text style={[styles.preferenceChoiceBody, { color: roles.bodyText }]}>
+                              {item.body}
+                            </Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                  </View>
 
                   <View style={styles.actionRow}>
                     <AppButton
@@ -620,70 +689,22 @@ function RequestFlowModal({
                 </View>
               ) : null}
 
-              {step === 'details' ? (
-                <View style={styles.flowSection}>
-                  <Text style={styles.flowTitle}>Photo and wig preferences</Text>
-                  <Text style={styles.flowBody}>Add one clear front photo, then choose the closest wig options.</Text>
-
-                  <View style={styles.photoPreviewBox}>
-                    {referenceImage?.uri ? (
-                      <Image source={{ uri: referenceImage.uri }} style={styles.photoPreviewImage} />
-                    ) : (
-                      <View style={styles.photoPlaceholder}>
-                        <AppIcon name="camera" state="active" size="xl" />
-                        <Text style={styles.flowBody}>No front photo yet.</Text>
-                      </View>
-                    )}
+              {step === 'basicFit' ? (
+                <View style={styles.preferencesFlow}>
+                  <View style={styles.preferencesHeaderBlock}>
+                    <Text style={[styles.preferencesTitle, { color: roles.headingText }]}>Fitting Basics</Text>
+                    <Text style={[styles.preferencesBody, { color: roles.bodyText }]}>
+                      Pick the closest cap size.
+                    </Text>
                   </View>
 
-                  <View style={styles.actionRow}>
-                    <AppButton
-                      title="Upload"
-                      variant="secondary"
-                      loading={isPickingReference}
-                      onPress={onUploadPhoto}
-                      fullWidth={false}
-                      style={styles.actionButton}
-                    />
-                    <AppButton
-                      title="Camera"
-                      variant="secondary"
-                      onPress={onOpenCamera}
-                      fullWidth={false}
-                      style={styles.actionButton}
-                    />
-                  </View>
-
-                  {PREFERENCE_GROUPS.map((group) => (
-                    <ChoiceGroup
-                      key={group.name}
-                      control={control}
-                      name={group.name}
-                      title={group.title}
-                      options={group.options}
-                    />
-                  ))}
-
-                  {hasOtherPreference ? (
-                    <Controller
-                      control={control}
-                      name="specialNotes"
-                      render={({ field }) => (
-                        <AppInput
-                          label="Other preference"
-                          placeholder="Add a short custom preference"
-                          variant="filled"
-                          multiline={true}
-                          numberOfLines={3}
-                          value={field.value}
-                          onChangeText={field.onChange}
-                          onBlur={field.onBlur}
-                          error={errors.specialNotes?.message}
-                          inputStyle={styles.multilineInput}
-                        />
-                      )}
-                    />
-                  ) : null}
+                  <PreferenceChipGroup
+                    control={control}
+                    name="capSize"
+                    title="Cap Size"
+                    options={['Small', 'Medium', 'Large', 'Not sure']}
+                    roles={roles}
+                  />
 
                   <View style={styles.actionRow}>
                     <AppButton
@@ -694,70 +715,165 @@ function RequestFlowModal({
                       style={styles.actionButton}
                     />
                     <AppButton
-                      title="Generate with AI"
-                      loading={isGeneratingPreview}
-                      disabled={!referenceImage?.uri}
-                      onPress={onGeneratePreview}
+                      title="Submit Request"
+                      loading={isSavingRequest}
+                      onPress={onSubmitRequest}
+                      fullWidth={false}
+                      style={styles.actionButton}
+                      leading={<AppIcon name="requests" state="inverse" />}
+                    />
+                  </View>
+                </View>
+              ) : null}
+
+              {step === 'details' ? (
+                <View style={styles.preferencesFlow}>
+                  <View style={styles.preferencesHeaderBlock}>
+                    <Text style={[styles.preferencesTitle, { color: roles.headingText }]}>Your Preferences</Text>
+                    <Text style={[styles.preferencesBody, { color: roles.bodyText }]}>
+                      Choose the look you want.
+                    </Text>
+                  </View>
+
+                  <PreferenceChipGroup
+                    control={control}
+                    name="preferredLength"
+                    title="Preferred Length"
+                    options={['Short', 'Medium', 'Long']}
+                    roles={roles}
+                  />
+
+                  <StyleSelectionGroup control={control} roles={roles} />
+
+                  <ColorPaletteGroup control={control} roles={roles} />
+
+                  <PreferenceChipGroup
+                    control={control}
+                    name="capSize"
+                    title="Comfort Fit"
+                    options={['Small', 'Medium', 'Large', 'Not sure']}
+                    roles={roles}
+                  />
+
+                  <View style={styles.preferenceSection}>
+                    <View style={styles.preferenceLabelRow}>
+                      <Text style={[styles.preferenceSectionTitle, { color: roles.headingText }]}>Comfort Notes</Text>
+                      <AppIcon name="information-outline" size="sm" color={roles.iconPrimaryColor} />
+                    </View>
+                    <Controller
+                      control={control}
+                      name="specialNotes"
+                      render={({ field }) => (
+                        <AppInput
+                          placeholder="Sensitive scalp, lightweight fit, lace preference..."
+                          variant="filled"
+                          multiline={true}
+                          numberOfLines={4}
+                          value={field.value}
+                          onChangeText={field.onChange}
+                          onBlur={field.onBlur}
+                          error={errors.specialNotes?.message}
+                          inputStyle={styles.multilineInput}
+                        />
+                      )}
+                    />
+                    <Text style={[styles.preferenceHelperText, { color: roles.metaText }]}>
+                      Shared with your wig specialist.
+                    </Text>
+                  </View>
+
+                  <View style={styles.actionRow}>
+                    <AppButton
+                      title="Save Draft"
+                      variant="secondary"
+                      onPress={onBackToPatient}
                       fullWidth={false}
                       style={styles.actionButton}
                     />
+                    <AppButton
+                      title="Continue"
+                      onPress={onOpenCamera}
+                      fullWidth={false}
+                      style={styles.actionButton}
+                      leading={<AppIcon name="arrow-right" state="inverse" />}
+                    />
                   </View>
-                  <AppButton
-                    title="Skip AI"
-                    variant="secondary"
-                    disabled={!referenceImage?.uri}
-                    onPress={onSkipPreview}
-                  />
                 </View>
               ) : null}
 
               {step === 'summary' ? (
-                <View style={styles.flowSection}>
-                  <Text style={styles.flowTitle}>Request summary</Text>
-                  <Text style={styles.flowBody}>Review the uploaded photo and selected wig details before submitting.</Text>
-
-                  <View style={styles.photoPreviewBox}>
-                    {referenceImage?.uri ? (
-                      <Image source={{ uri: referenceImage.uri }} style={styles.photoPreviewImage} />
-                    ) : (
-                      <View style={styles.photoPlaceholder}>
-                        <AppIcon name="image" state="active" size="xl" />
-                        <Text style={styles.flowBody}>No photo attached.</Text>
-                      </View>
-                    )}
+                <View style={styles.matcherFlow}>
+                  <View style={styles.matcherHeroHeader}>
+                    <Text style={[styles.matcherHeroTitle, { color: roles.headingText }]}>Finding Your Perfect Match</Text>
+                    <Text style={[styles.matcherHeroBody, { color: roles.bodyText }]}>
+                      AI recommendations based on your photo and preferences.
+                    </Text>
                   </View>
 
-                  {hasGeneratedPreview ? (
-                    <>
-                      <WigPreviewCard
-                        frontPhotoUri={referenceImage?.uri}
-                        generatedImageUri={generatedImageUri}
-                        title={recommendationTitle}
-                        family={recommendationFamily}
-                        summary={recommendationSummary}
-                        preferredColor={preferredColor}
-                        preferredLength={preferredLength}
-                        onSecondaryAction={onOpenCamera}
-                        secondaryActionLabel="Retake Photo"
-                      />
-
-                      {recommendationOptions.length > 1 ? (
-                        <WigStyleOptionsSection
-                          options={recommendationOptions}
-                          frontPhotoUri={referenceImage?.uri}
-                          selectedOptionId={selectedOptionId}
-                          onSelectOption={onSelectOption}
-                          onCustomize={onRegenerate}
-                        />
-                      ) : null}
-                    </>
+                  {isGeneratingPreview ? (
+                    <AiMatcherSkeleton roles={roles} />
                   ) : (
-                    <AppCard variant="subtle" radius="lg" padding="md" style={styles.summaryNoteCard}>
-                      <Text style={styles.summaryNoteTitle}>AI preview skipped</Text>
-                      <Text style={styles.flowBody}>
-                        Your request will use the uploaded photo and selected wig preferences for review.
-                      </Text>
-                    </AppCard>
+                    <>
+                      {hasGeneratedPreview ? (
+                        <View style={styles.matcherRecommendationsSection}>
+                          <View style={styles.matcherSectionHeader}>
+                            <Text style={[styles.matcherSectionTitle, { color: roles.headingText }]}>
+                              Recommended for you
+                            </Text>
+                          </View>
+
+                          <View style={styles.matcherCardsGrid}>
+                            {recommendationOptions.map((option, index) => {
+                              const optionImageUri = option.generatedImageUri || generatedImageUri || referenceImage?.uri || '';
+                              const active = selectedOptionId === option.id || (!selectedOptionId && index === 0);
+                              return (
+                                <MatcherRecommendationCard
+                                  key={option.id}
+                                  option={option}
+                                  isActive={active}
+                                  imageUri={optionImageUri}
+                                  onPress={() => onSelectOption(option.id)}
+                                  roles={roles}
+                                />
+                              );
+                            })}
+                          </View>
+
+                          <AppCard variant="soft" radius="xl" padding="lg" style={styles.matcherSelectedCard}>
+                            <Text style={[styles.matcherSelectedTitle, { color: roles.headingText }]}>
+                              {recommendationTitle}
+                            </Text>
+                            <Text style={[styles.matcherSelectedMeta, { color: roles.iconPrimaryColor }]}>
+                              {recommendationFamily}
+                            </Text>
+                            <Text style={[styles.matcherSelectedSummary, { color: roles.bodyText }]}>
+                              {recommendationSummary}
+                            </Text>
+                            <View style={styles.resultMetaRow}>
+                              {preferredLength ? (
+                                <View style={[styles.metaPill, { backgroundColor: roles.defaultCardBackground }]}>
+                                  <Text style={styles.metaLabel}>Length</Text>
+                                  <Text style={styles.metaValue}>{preferredLength}</Text>
+                                </View>
+                              ) : null}
+                              {preferredColor ? (
+                                <View style={[styles.metaPill, { backgroundColor: roles.defaultCardBackground }]}>
+                                  <Text style={styles.metaLabel}>Color</Text>
+                                  <Text style={styles.metaValue}>{preferredColor}</Text>
+                                </View>
+                              ) : null}
+                            </View>
+                          </AppCard>
+                        </View>
+                      ) : (
+                        <AppCard variant="soft" radius="xl" padding="lg" style={styles.summaryNoteCard}>
+                          <Text style={[styles.summaryNoteTitle, { color: roles.headingText }]}>AI preview skipped</Text>
+                          <Text style={[styles.flowBody, { color: roles.bodyText }]}>
+                            Your photo and preferences will be used.
+                          </Text>
+                        </AppCard>
+                      )}
+                    </>
                   )}
 
                   <AppButton
@@ -769,7 +885,7 @@ function RequestFlowModal({
 
                   {hasGeneratedPreview && generatedImageUri ? (
                     <AppButton
-                      title="Save Wig Image"
+                      title="Save Selected Image"
                       variant="secondary"
                       onPress={onDownloadSelected}
                       leading={<AppIcon name="save" state="active" />}
@@ -777,7 +893,7 @@ function RequestFlowModal({
                   ) : null}
 
                   <AppButton
-                    title={hasGeneratedPreview ? 'Regenerate' : 'Generate AI Preview'}
+                    title={hasGeneratedPreview ? 'Browse More Matches' : 'Generate AI Preview'}
                     variant="secondary"
                     loading={isGeneratingPreview}
                     onPress={onRegenerate}
@@ -790,7 +906,7 @@ function RequestFlowModal({
                 <View style={styles.waitingState}>
                   <AppIcon name="success" state="active" size="xl" />
                   <Text style={styles.flowTitle}>Request submitted</Text>
-                  <Text style={styles.flowBody}>Waiting for organization review.</Text>
+                  <Text style={styles.flowBody}>Waiting for review.</Text>
                   <AppButton
                     title="View Timeline"
                     onPress={onViewTimeline}
@@ -799,7 +915,6 @@ function RequestFlowModal({
                 </View>
               ) : null}
             </ScrollView>
-          </AppCard>
         </View>
       </KeyboardAvoidingView>
     </Modal>
@@ -816,7 +931,10 @@ export function PatientWigRequestScreen() {
   const [isFlowOpen, setIsFlowOpen] = useState(false);
   const [isTimelineOpen, setIsTimelineOpen] = useState(false);
   const [flowStep, setFlowStep] = useState('patient');
-  const { user, profile, patientProfile } = useAuth();
+  const [activeWigTab, setActiveWigTab] = useState('request');
+  const [requestPreferenceChoice, setRequestPreferenceChoice] = useState('preferences');
+  const { user, profile, patientProfile, resolvedTheme } = useAuth();
+  const roles = resolveThemeRoles(resolvedTheme);
   const { unreadCount } = useNotifications({ role: 'patient', userId: user?.id, databaseUserId: profile?.user_id });
   const {
     tracker,
@@ -839,7 +957,6 @@ export function PatientWigRequestScreen() {
     isSavingRequest,
     pickReferenceImage,
     saveCapturedReferenceImage,
-    clearPreview,
     generatePreview,
     saveRequest,
   } = usePatientWigRequest({ userId: user?.id });
@@ -867,6 +984,7 @@ export function PatientWigRequestScreen() {
   const patientCode = patientProfile?.patient_code || '';
   const hospitalName = patientProfile?.hospital_name || patientProfile?.hospital?.hospital_name || '';
   const medicalCondition = patientProfile?.medical_condition || '';
+  const requestStatus = formatRequestStatus(latestWigRequest?.status || 'Pending');
   const hasCameraPermission = Boolean(cameraPermission?.granted);
   const recommendationOptions = useMemo(() => buildRecommendationOptions({
     preview,
@@ -934,9 +1052,9 @@ export function PatientWigRequestScreen() {
         base64: true,
       });
 
-      saveCapturedReferenceImage(photo);
+      await saveCapturedReferenceImage(photo);
     } catch {
-      saveCapturedReferenceImage(null);
+      await saveCapturedReferenceImage(null);
     } finally {
       setIsCapturingPhoto(false);
     }
@@ -974,14 +1092,16 @@ export function PatientWigRequestScreen() {
     return result;
   });
 
-  const handleSkipPreview = handleSubmit(async () => {
-    clearPreview();
-    setFlowStep('summary');
-    return { success: true };
-  });
-
   const openRequestFlow = () => {
+    setRequestPreferenceChoice('preferences');
     setFlowStep('patient');
+    setIsFlowOpen(true);
+    setIsTimelineOpen(false);
+  };
+
+  const openAiPreviewFlow = () => {
+    setRequestPreferenceChoice('preferences');
+    setFlowStep('details');
     setIsFlowOpen(true);
     setIsTimelineOpen(false);
   };
@@ -1000,7 +1120,7 @@ export function PatientWigRequestScreen() {
       return { success: false, error: 'Please accept the patient record consent first.' };
     }
 
-    setFlowStep('details');
+    setFlowStep(requestPreferenceChoice === 'fitOnly' ? 'basicFit' : 'details');
     return { success: true };
   });
 
@@ -1058,17 +1178,6 @@ export function PatientWigRequestScreen() {
     await openCaptureFlow();
   };
 
-  const handleUsePhotoFromCapture = () => {
-    closeCaptureFlow();
-    setIsFlowOpen(true);
-    setFlowStep('details');
-  };
-
-  const hasOtherPreference = [
-    draftValues?.preferredColor,
-    draftValues?.stylePreference,
-  ].some((value) => String(value || '').toLowerCase() === 'other');
-
   return (
     <DashboardLayout
       navItems={patientDashboardNavItems}
@@ -1077,7 +1186,7 @@ export function PatientWigRequestScreen() {
       onNavPress={handleNavPress}
       header={(
         <DashboardHeader
-          title="Requests"
+          title={resolvedTheme?.brandName || 'Donivra'}
           subtitle=""
           summary=""
           avatarInitials={avatarInitials}
@@ -1085,6 +1194,7 @@ export function PatientWigRequestScreen() {
           variant="patient"
           minimal={true}
           showAvatar={true}
+          onProfilePress={() => router.navigate('/profile')}
           utilityActions={[
             {
               key: 'notifications',
@@ -1098,9 +1208,12 @@ export function PatientWigRequestScreen() {
     >
       {isLoadingContext ? (
         <StatusBanner
-          title="Checking request details"
-          message="Loading your patient request details."
+          title="Checking request"
+          message="Loading details."
           variant="info"
+          presentation="floating"
+          visible={isLoadingContext}
+          autoDismissMs={1800}
         />
       ) : null}
 
@@ -1109,6 +1222,9 @@ export function PatientWigRequestScreen() {
           message={error.message}
           variant="error"
           title={error.title}
+          presentation="floating"
+          visible={Boolean(error)}
+          autoDismissMs={4000}
         />
       ) : null}
 
@@ -1123,42 +1239,116 @@ export function PatientWigRequestScreen() {
         />
       ) : null}
 
-      {hasSubmittedRequest ? (
-        <AppCard variant="patientTint" radius="xl" padding="lg" style={styles.intakeCard}>
-          <Text style={styles.intakeEyebrow}>Current request</Text>
-          <Text style={styles.intakeTitle}>{latestWigRequest?.status || 'Pending review'}</Text>
-          <Text style={styles.intakeBody}>
-            Your wig request is active. New submissions are disabled until this request is closed.
-          </Text>
-          <View style={styles.actionRow}>
-            <AppButton
-              title={isTimelineOpen ? 'Hide Timeline' : 'View Timeline'}
-              onPress={() => setIsTimelineOpen((current) => !current)}
-              leading={<AppIcon name="updates" state="inverse" />}
-              fullWidth={false}
-              style={styles.actionButton}
-            />
-            <AppButton
-              title="Refresh"
-              variant="secondary"
-              onPress={refreshTracking}
-              loading={isRefreshingTracking}
-              fullWidth={false}
-              style={styles.actionButton}
-            />
-          </View>
-        </AppCard>
+      <View
+        style={[
+          styles.wigTabBar,
+          {
+            backgroundColor: roles.defaultCardBackground,
+            borderColor: roles.defaultCardBorder,
+          },
+        ]}
+      >
+        {[
+          { key: 'request', label: 'Request', icon: 'requests' },
+          { key: 'ai', label: 'Wig Preview', icon: 'sparkle' },
+        ].map((tab) => {
+          const isActive = activeWigTab === tab.key;
+          return (
+            <Pressable
+              key={tab.key}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: isActive }}
+              onPress={() => setActiveWigTab(tab.key)}
+              style={[
+                styles.wigTabButton,
+                isActive ? { backgroundColor: roles.primaryActionBackground } : null,
+              ]}
+            >
+              <AppIcon
+                name={tab.icon}
+                size="md"
+                color={isActive ? roles.primaryActionText : roles.metaText}
+              />
+              <Text style={[styles.wigTabText, { color: isActive ? roles.primaryActionText : roles.metaText }]}>
+                {tab.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+
+      {activeWigTab === 'request' ? (
+        hasSubmittedRequest ? (
+          <AppCard variant="patientTint" radius="xl" padding="lg" style={styles.currentRequestCard}>
+            <View style={styles.currentRequestBody}>
+              <View style={styles.currentRequestIcon}>
+                <AppIcon name="requests" state="active" size="xl" />
+              </View>
+              <View style={styles.currentRequestCopy}>
+                <Text style={[styles.currentRequestLabel, { color: roles.bodyText }]}>Current status</Text>
+                <Text style={[styles.currentRequestTitle, { color: roles.headingText }]}>{requestStatus}</Text>
+              </View>
+              <Pressable
+                onPress={() => setIsTimelineOpen((current) => !current)}
+                hitSlop={10}
+                accessibilityRole="button"
+                accessibilityLabel={isTimelineOpen ? 'Hide timeline' : 'Show timeline'}
+                style={({ pressed }) => [
+                  styles.timelineIconButton,
+                  { backgroundColor: roles.defaultCardBackground },
+                  pressed ? styles.preferencePressed : null,
+                ]}
+              >
+                <AppIcon
+                  name={isTimelineOpen ? 'chevron-up' : 'timeline-clock-outline'}
+                  color={roles.primaryActionBackground}
+                  size="md"
+                />
+              </Pressable>
+            </View>
+          </AppCard>
+        ) : (
+          <AppCard variant="elevated" radius="xl" padding="lg" style={styles.simpleWigCard}>
+            <View style={styles.simpleRecordHeader}>
+              <View style={[styles.referralHospitalIcon, { backgroundColor: roles.iconPrimarySurface }]}>
+                <AppIcon name="hospital-building" size="xl" color={roles.iconPrimaryColor} />
+              </View>
+              <View style={styles.referralIdentityCopy}>
+                <Text numberOfLines={1} style={[styles.referralHospitalName, { color: roles.headingText }]}>
+                  {hospitalName || 'Patient Record'}
+                </Text>
+                <Text numberOfLines={1} style={[styles.referralHospitalMeta, { color: roles.bodyText }]}>
+                  {medicalCondition || 'Ready to request'}
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.recordDetailSection}>
+              <WigInfoRow label="Patient code" value={patientCode || 'Not assigned'} roles={roles} />
+            </View>
+
+            <View style={styles.recordActionRow}>
+              <AppButton
+                title="Start Request"
+                onPress={openRequestFlow}
+                leading={<AppIcon name="arrow-right" state="inverse" />}
+              />
+            </View>
+          </AppCard>
+        )
       ) : (
-        <AppCard variant="patientTint" radius="xl" padding="lg" style={styles.intakeCard}>
-          <Text style={styles.intakeEyebrow}>Patient wig request</Text>
-          <Text style={styles.intakeTitle}>Request a wig</Text>
-          <Text style={styles.intakeBody}>
-            Start a guided request. You will choose preferences, add a front photo, and review an AI reference before submitting.
+        <AppCard variant="elevated" radius="xl" padding="lg" style={styles.simpleWigCard}>
+          <View style={[styles.aiTabIcon, { backgroundColor: roles.iconPrimarySurface }]}>
+            <AppIcon name="face-recognition" size="xl" color={roles.iconPrimaryColor} />
+          </View>
+          <Text style={[styles.aiTabTitle, { color: roles.headingText }]}>Wig Preview</Text>
+          <Text style={[styles.aiTabBody, { color: roles.bodyText }]}>
+            Upload a front photo and get matched styles.
           </Text>
           <AppButton
-            title="Request Wig"
-            onPress={openRequestFlow}
-            leading={<AppIcon name="requests" state="inverse" />}
+            title="Start Preview"
+            onPress={openAiPreviewFlow}
+            leading={<AppIcon name="sparkle" state="inverse" />}
           />
         </AppCard>
       )}
@@ -1183,8 +1373,8 @@ export function PatientWigRequestScreen() {
         patientCode={patientCode}
         hospitalName={hospitalName}
         medicalCondition={medicalCondition}
+        preferenceChoice={requestPreferenceChoice}
         referenceImage={referenceImage}
-        hasOtherPreference={hasOtherPreference}
         recommendationOptions={recommendationOptions}
         selectedOptionId={selectedOptionId}
         onSelectOption={setSelectedOptionId}
@@ -1195,16 +1385,13 @@ export function PatientWigRequestScreen() {
         preferredLength={preferredLength}
         generatedImageUri={generatedImageUri}
         hasGeneratedPreview={hasGeneratedPreview}
-        isPickingReference={isPickingReference}
         isGeneratingPreview={isGeneratingPreview}
         isSavingRequest={isSavingRequest}
         onClose={closeRequestFlow}
         onBackToPatient={() => setFlowStep('patient')}
         onContinueToDetails={handleContinueToDetails}
-        onUploadPhoto={pickReferenceImage}
+        onPreferenceChoiceChange={setRequestPreferenceChoice}
         onOpenCamera={handleStartPreview}
-        onGeneratePreview={handleGeneratePreviewFromModal}
-        onSkipPreview={handleSkipPreview}
         onRegenerate={handleGeneratePreviewFromModal}
         onDownloadSelected={handleDownloadSelectedImage}
         onSubmitRequest={handleSaveRequest}
@@ -1212,6 +1399,7 @@ export function PatientWigRequestScreen() {
           setIsFlowOpen(false);
           setIsTimelineOpen(true);
         }}
+        roles={roles}
       />
 
       <CaptureModal
@@ -1225,7 +1413,7 @@ export function PatientWigRequestScreen() {
         onClose={closeCaptureFlow}
         onUpload={pickReferenceImage}
         onCapture={handleCapturePhoto}
-        onGeneratePreview={handleUsePhotoFromCapture}
+        onGeneratePreview={handleGeneratePreviewFromModal}
         onRequestPermission={requestCameraPermission}
       />
 
@@ -1234,6 +1422,239 @@ export function PatientWigRequestScreen() {
 }
 
 const styles = StyleSheet.create({
+  wigIntroSection: {
+    gap: theme.spacing.xs,
+    marginBottom: theme.spacing.sm,
+  },
+  wigIntroTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.titleMd,
+    lineHeight: theme.typography.semantic.titleMd * theme.typography.lineHeights.snug,
+    fontWeight: theme.typography.weights.bold,
+  },
+  wigIntroBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    lineHeight: theme.typography.semantic.body * theme.typography.lineHeights.relaxed,
+  },
+  wigTabBar: {
+    minHeight: 58,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+    borderRadius: theme.radius.full,
+    borderWidth: 1,
+    padding: theme.spacing.xs,
+    marginBottom: theme.spacing.xl,
+  },
+  wigTabButton: {
+    flex: 1,
+    minHeight: 46,
+    borderRadius: theme.radius.full,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: theme.spacing.xs,
+  },
+  wigTabText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.bold,
+  },
+  simpleWigCard: {
+    gap: theme.spacing.xxl,
+    paddingHorizontal: theme.spacing.xl,
+    paddingVertical: theme.spacing.xxl,
+  },
+  simpleRecordHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.xl,
+  },
+  aiTabIcon: {
+    width: 64,
+    height: 64,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  aiTabTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.titleSm,
+    fontWeight: theme.typography.weights.bold,
+  },
+  aiTabBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    lineHeight: theme.typography.semantic.body * theme.typography.lineHeights.relaxed,
+  },
+  currentRequestCard: {
+    gap: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.lg,
+    paddingVertical: theme.spacing.lg,
+  },
+  currentRequestHeader: {
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+    borderRadius: theme.radius.lg,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+  },
+  currentRequestHeaderText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.bold,
+  },
+  currentRequestBody: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  currentRequestIcon: {
+    width: 54,
+    height: 54,
+    borderRadius: theme.radius.xl,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.surfaceSoft,
+  },
+  currentRequestCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  timelineIconButton: {
+    alignSelf: 'flex-start',
+    width: 40,
+    height: 40,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  currentRequestLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  currentRequestTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    fontWeight: theme.typography.weights.bold,
+  },
+  requestChoiceGrid: {
+    gap: theme.spacing.lg,
+  },
+  referralCard: {
+    overflow: 'hidden',
+  },
+  referralCardHeader: {
+    minHeight: 54,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.lg,
+    paddingVertical: theme.spacing.md,
+  },
+  referralCardHeaderText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.bold,
+  },
+  referralCardBody: {
+    gap: theme.spacing.lg,
+    padding: theme.spacing.lg,
+  },
+  referralIdentityRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.md,
+  },
+  referralHospitalIcon: {
+    width: 96,
+    height: 96,
+    borderRadius: theme.radius.xl,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  referralIdentityCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: theme.spacing.sm,
+  },
+  referralHospitalName: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    fontWeight: theme.typography.weights.bold,
+  },
+  referralHospitalMeta: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+  },
+  referralInfoList: {
+    gap: theme.spacing.md,
+  },
+  recordDetailSection: {
+    paddingTop: theme.spacing.sm,
+  },
+  referralInfoRow: {
+    minHeight: 66,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.md,
+    borderRadius: theme.radius.lg,
+    borderWidth: 1,
+    paddingHorizontal: theme.spacing.md,
+  },
+  recordActionRow: {
+    flexDirection: 'row',
+    gap: theme.spacing.md,
+    paddingTop: theme.spacing.sm,
+    alignItems: 'flex-start',
+  },
+  referralInfoLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  referralInfoValue: {
+    flexShrink: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.bold,
+    textAlign: 'right',
+  },
+  manualRequestCard: {
+    gap: theme.spacing.md,
+    borderWidth: 2,
+    borderStyle: 'dashed',
+    borderRadius: theme.radius.xl,
+    padding: theme.spacing.lg,
+  },
+  manualRequestIcon: {
+    width: 64,
+    height: 64,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  manualRequestTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    fontWeight: theme.typography.weights.bold,
+  },
+  manualRequestBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+  },
+  manualActionColumn: {
+    gap: theme.spacing.sm,
+  },
   intakeCard: {
     gap: theme.spacing.sm,
   },
@@ -1285,43 +1706,318 @@ const styles = StyleSheet.create({
   actionButton: {
     flex: 1,
   },
-  choiceGroup: {
+  preferencesFlow: {
+    gap: theme.spacing.xl,
+  },
+  preferencesHeaderBlock: {
+    alignItems: 'flex-start',
     gap: theme.spacing.xs,
   },
-  choiceTitle: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    fontWeight: theme.typography.weights.semibold,
-    color: theme.colors.textPrimary,
+  preferencesTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.titleMd,
+    lineHeight: theme.typography.semantic.titleMd * theme.typography.lineHeights.snug,
+    fontWeight: theme.typography.weights.bold,
   },
-  choiceWrap: {
+  preferencesBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    lineHeight: theme.typography.semantic.body * theme.typography.lineHeights.relaxed,
+  },
+  preferenceSection: {
+    gap: theme.spacing.md,
+  },
+  preferenceSectionTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    fontWeight: theme.typography.weights.bold,
+  },
+  preferenceLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.xs,
+  },
+  preferenceChipWrap: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: theme.spacing.xs,
+    gap: theme.spacing.sm,
   },
-  choiceChip: {
+  preferenceChip: {
+    minHeight: 42,
+    justifyContent: 'center',
     borderRadius: theme.radius.pill,
-    borderWidth: 1,
-    borderColor: theme.colors.borderMuted,
-    backgroundColor: theme.colors.backgroundPrimary,
-    paddingHorizontal: theme.spacing.md,
+    borderWidth: 2,
+    paddingHorizontal: theme.spacing.lg,
     paddingVertical: theme.spacing.sm,
   },
-  choiceChipSelected: {
-    borderColor: theme.colors.brandPrimary,
-    backgroundColor: theme.colors.surfaceSoft,
+  preferencePressed: {
+    opacity: 0.84,
+    transform: [{ scale: 0.98 }],
   },
-  choiceChipPressed: {
-    opacity: 0.82,
-  },
-  choiceText: {
+  preferenceChipText: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.bodySm,
-    color: theme.colors.textSecondary,
   },
-  choiceTextSelected: {
-    color: theme.colors.brandPrimary,
+  preferenceChipTextSelected: {
+    fontWeight: theme.typography.weights.bold,
+  },
+  styleSelectionGrid: {
+    flexDirection: 'row',
+    gap: theme.spacing.sm,
+  },
+  styleOption: {
+    flex: 1,
+    minHeight: 104,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: theme.spacing.sm,
+    borderRadius: theme.radius.xl,
+    borderWidth: 2,
+    paddingHorizontal: theme.spacing.xs,
+    paddingVertical: theme.spacing.md,
+  },
+  styleOptionText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
     fontWeight: theme.typography.weights.semibold,
+  },
+  colorPaletteCard: {
+    gap: theme.spacing.md,
+    borderRadius: theme.radius.xl,
+    borderWidth: 1,
+    padding: theme.spacing.md,
+  },
+  colorSwatchGrid: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+  },
+  colorSwatchButton: {
+    width: 48,
+    height: 48,
+    borderRadius: theme.radius.full,
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  colorSwatch: {
+    width: 38,
+    height: 38,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  colorSelectedText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  preferenceHelperText: {
+    marginTop: -theme.spacing.sm,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontStyle: 'italic',
+  },
+  preferenceChoiceGrid: {
+    gap: theme.spacing.sm,
+  },
+  preferenceChoiceCard: {
+    gap: theme.spacing.xs,
+    borderRadius: theme.radius.xl,
+    borderWidth: 2,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.md,
+  },
+  preferenceChoiceTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.bold,
+  },
+  preferenceChoiceBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+  },
+  matcherFlow: {
+    gap: theme.spacing.xl,
+  },
+  matcherHeroHeader: {
+    gap: theme.spacing.xs,
+  },
+  matcherHeroTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.titleMd,
+    lineHeight: theme.typography.semantic.titleMd * theme.typography.lineHeights.snug,
+    fontWeight: theme.typography.weights.bold,
+  },
+  matcherHeroBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    lineHeight: theme.typography.semantic.body * theme.typography.lineHeights.relaxed,
+  },
+  matcherSkeletonCard: {
+    gap: theme.spacing.xl,
+    borderRadius: theme.radius.xl,
+    borderWidth: 1,
+    padding: theme.spacing.lg,
+  },
+  matcherLoadingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.md,
+  },
+  matcherLoadingDot: {
+    width: 14,
+    height: 14,
+    borderRadius: theme.radius.full,
+  },
+  matcherLoadingText: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.bold,
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+  },
+  matcherSkeletonGrid: {
+    gap: theme.spacing.md,
+  },
+  matcherSkeletonMain: {
+    gap: theme.spacing.md,
+  },
+  matcherSkeletonSide: {
+    gap: theme.spacing.sm,
+  },
+  matcherSkeletonBlock: {
+    backgroundColor: theme.colors.borderSubtle,
+    opacity: 0.72,
+  },
+  matcherSkeletonHero: {
+    height: 180,
+    borderRadius: theme.radius.xl,
+  },
+  matcherSkeletonPills: {
+    flexDirection: 'row',
+    gap: theme.spacing.sm,
+  },
+  matcherSkeletonPillWide: {
+    width: '40%',
+    height: 22,
+    borderRadius: theme.radius.full,
+  },
+  matcherSkeletonPill: {
+    width: '28%',
+    height: 22,
+    borderRadius: theme.radius.full,
+  },
+  matcherSkeletonLine: {
+    height: 44,
+    borderRadius: theme.radius.lg,
+  },
+  matcherRecommendationsSection: {
+    gap: theme.spacing.lg,
+  },
+  matcherSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  matcherSectionTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.titleSm,
+    fontWeight: theme.typography.weights.bold,
+  },
+  matcherCardsGrid: {
+    gap: theme.spacing.lg,
+  },
+  matcherCard: {
+    position: 'relative',
+    overflow: 'hidden',
+    borderRadius: theme.radius.xl,
+    borderWidth: 2,
+    ...theme.shadows.soft,
+  },
+  matcherBadge: {
+    position: 'absolute',
+    top: theme.spacing.md,
+    right: theme.spacing.md,
+    zIndex: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderRadius: theme.radius.full,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: 6,
+    backgroundColor: theme.colors.brandPrimary,
+  },
+  matcherBadgeText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    fontWeight: theme.typography.weights.bold,
+  },
+  matcherImageWrap: {
+    width: '100%',
+    aspectRatio: 0.82,
+  },
+  matcherImage: {
+    width: '100%',
+    height: '100%',
+  },
+  matcherImagePlaceholder: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  matcherCardBody: {
+    gap: theme.spacing.xs,
+    padding: theme.spacing.lg,
+  },
+  matcherCardTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    fontWeight: theme.typography.weights.bold,
+  },
+  matcherCardMeta: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+  },
+  matcherCardFooter: {
+    marginTop: theme.spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+  },
+  matcherCardPrice: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.bold,
+  },
+  matcherFavoriteButton: {
+    width: 38,
+    height: 38,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  matcherSelectedCard: {
+    gap: theme.spacing.sm,
+  },
+  matcherSelectedTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    fontWeight: theme.typography.weights.bold,
+  },
+  matcherSelectedMeta: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.bold,
+  },
+  matcherSelectedSummary: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
   },
   agreementRow: {
     flexDirection: 'row',
@@ -1595,20 +2291,46 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     maxWidth: theme.layout.contentMaxWidth,
   },
-  flowKeyboardWrap: {
+  captureFullScreen: {
     flex: 1,
-  },
-  flowCard: {
     width: '100%',
     alignSelf: 'center',
     maxWidth: theme.layout.contentMaxWidth,
-    maxHeight: '86%',
+    paddingHorizontal: theme.spacing.md,
+    paddingTop: theme.spacing.lg,
+    paddingBottom: theme.spacing.lg,
+    backgroundColor: theme.colors.backgroundCanvas,
+  },
+  flowKeyboardWrap: {
+    flex: 1,
+  },
+  flowFullScreen: {
+    flex: 1,
+    width: '100%',
+    alignSelf: 'center',
+    maxWidth: theme.layout.contentMaxWidth,
+    paddingHorizontal: theme.spacing.md,
+    paddingTop: theme.spacing.lg,
+  },
+  flowTopBar: {
+    minHeight: 54,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.md,
+    marginBottom: theme.spacing.md,
+  },
+  flowTopTitle: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    fontWeight: theme.typography.weights.bold,
   },
   flowScroll: {
-    flexGrow: 0,
+    flex: 1,
   },
   flowScrollContent: {
-    gap: theme.spacing.md,
+    gap: theme.spacing.lg,
   },
   flowSection: {
     gap: theme.spacing.md,
@@ -1724,18 +2446,6 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: theme.spacing.md,
-  },
-  stepPill: {
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.xs,
-    borderRadius: theme.radius.pill,
-    backgroundColor: '#f7efef',
-  },
-  stepPillText: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    color: theme.colors.brandPrimary,
-    fontWeight: theme.typography.weights.semibold,
   },
   modalHeaderActions: {
     flexDirection: 'row',

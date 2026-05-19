@@ -42,6 +42,7 @@ export function PatientSupportChatScreen() {
           variant="patient"
           minimal={true}
           showAvatar={true}
+          onProfilePress={() => router.navigate('/profile')}
           utilityActions={[
             {
               key: 'notifications',

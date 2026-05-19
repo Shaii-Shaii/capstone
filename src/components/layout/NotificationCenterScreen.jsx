@@ -1,9 +1,8 @@
 import React from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { DashboardLayout } from './DashboardLayout';
 import { AppCard } from '../ui/AppCard';
-import { AppButton } from '../ui/AppButton';
 import { AppIcon } from '../ui/AppIcon';
 import { StatusBanner } from '../ui/StatusBanner';
 import { NotificationListItem } from '../notifications/NotificationListItem';
@@ -100,19 +99,32 @@ const getVisibleNotifications = (notifications = []) => {
   });
 };
 
-function DonorNotificationsEmptyState({ role }) {
+function DonorNotificationsEmptyState() {
   return (
     <View style={styles.emptyState}>
       <View style={styles.emptyIconWrap}>
         <AppIcon name="notifications" size="lg" state="muted" />
       </View>
-      <Text style={styles.emptyTitle}>No notifications yet</Text>
-      <Text style={styles.emptyBody}>
-        {role === 'patient'
-          ? 'Updates about wig requests and hospital review will appear here.'
-          : 'Updates about your donations and hair checks will appear here.'}
-      </Text>
+      <Text style={styles.emptyTitle}>No notifications</Text>
     </View>
+  );
+}
+
+function ToolbarIconButton({ icon, onPress, disabled = false, loading = false, label }) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      disabled={disabled || loading}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.toolbarIconButton,
+        disabled ? styles.toolbarIconButtonDisabled : null,
+        pressed ? styles.toolbarIconButtonPressed : null,
+      ]}
+    >
+      <AppIcon name={icon} state={disabled ? 'disabled' : 'active'} />
+    </Pressable>
   );
 }
 
@@ -136,25 +148,21 @@ function DonorNotificationsContent({
     <>
       <View style={styles.toolbar}>
         <View style={styles.toolbarCopy}>
-          <Text style={styles.toolbarTitle}>{unreadCount ? `${unreadCount} unread` : 'All caught up'}</Text>
-          <Text style={styles.toolbarSubtitle}>
-            {role === 'patient' ? 'Request and allocation updates only' : 'Hair check, donation, and joined drive updates only'}
-          </Text>
+          <View style={styles.toolbarTitleRow}>
+            <AppIcon name="notifications" size="md" state="active" />
+            <Text style={styles.toolbarTitle}>{unreadCount ? `${unreadCount} unread` : 'All read'}</Text>
+          </View>
         </View>
         <View style={styles.toolbarActions}>
-          <AppButton
-            title="Refresh"
-            variant="secondary"
-            size="sm"
-            fullWidth={false}
+          <ToolbarIconButton
+            icon="refresh"
+            label="Refresh notifications"
             loading={isRefreshingNotifications}
             onPress={() => onRefresh({ silent: true, force: true })}
           />
-          <AppButton
-            title="Mark all as read"
-            variant="outline"
-            size="sm"
-            fullWidth={false}
+          <ToolbarIconButton
+            icon="checkmarkCircle"
+            label="Mark all as read"
             disabled={!unreadCount}
             onPress={onMarkAllRead}
           />
@@ -173,8 +181,7 @@ function DonorNotificationsContent({
       {isLoadingNotifications ? (
         <AppCard variant="default" radius="xl" padding="lg" style={styles.loadingCard}>
           <AppIcon name="notifications" size="lg" state="muted" />
-          <Text style={styles.loadingTitle}>Loading notifications</Text>
-          <Text style={styles.loadingBody}>Checking your latest donor updates.</Text>
+          <Text style={styles.loadingTitle}>Loading</Text>
         </AppCard>
       ) : sections.length ? (
         <View style={styles.sectionsWrap}>
@@ -198,7 +205,7 @@ function DonorNotificationsContent({
         </View>
       ) : (
         <AppCard variant="default" radius="xl" padding="lg">
-          <DonorNotificationsEmptyState role={role} />
+          <DonorNotificationsEmptyState />
         </AppCard>
       )}
     </>
@@ -256,7 +263,7 @@ export function NotificationCenterScreen({ role }) {
       header={(
         <DonorTopBar
           title="Notifications"
-          subtitle={unreadCount ? `${unreadCount} unread` : (role === 'patient' ? 'Recent patient updates' : 'Recent donor updates')}
+          subtitle={unreadCount ? `${unreadCount} unread` : ''}
           showBack
           showProfileAction={false}
           showNotificationsAction={false}
@@ -296,17 +303,25 @@ const styles = StyleSheet.create({
   },
   toolbar: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: theme.spacing.md,
-    paddingHorizontal: theme.spacing.xs,
-    paddingBottom: theme.spacing.sm,
+    gap: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.md,
+    borderRadius: theme.radius.xl,
+    backgroundColor: theme.colors.surfaceCard,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
   },
   toolbarCopy: {
     flex: 1,
     minWidth: 0,
-    gap: 2,
+    gap: theme.spacing.xs,
+  },
+  toolbarTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
   },
   toolbarTitle: {
     fontFamily: theme.typography.fontFamily,
@@ -314,16 +329,27 @@ const styles = StyleSheet.create({
     fontWeight: theme.typography.weights.semibold,
     color: theme.colors.textPrimary,
   },
-  toolbarSubtitle: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.compact.caption,
-    color: theme.colors.textSecondary,
-  },
   toolbarActions: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
     justifyContent: 'flex-end',
-    gap: theme.spacing.sm,
+    gap: theme.spacing.xs,
+  },
+  toolbarIconButton: {
+    width: 42,
+    height: 42,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.surfaceSoft,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+  },
+  toolbarIconButtonDisabled: {
+    opacity: 0.48,
+  },
+  toolbarIconButtonPressed: {
+    opacity: 0.76,
+    transform: [{ scale: 0.97 }],
   },
   loadingCard: {
     alignItems: 'center',
@@ -378,13 +404,5 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.semantic.body,
     fontWeight: theme.typography.weights.semibold,
     color: theme.colors.textPrimary,
-  },
-  emptyBody: {
-    maxWidth: 260,
-    textAlign: 'center',
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
-    color: theme.colors.textSecondary,
   },
 });

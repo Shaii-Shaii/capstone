@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, StyleSheet, Text, Pressable, Alert, ScrollView, Modal, KeyboardAvoidingView, Platform, useWindowDimensions, Image } from 'react-native';
+import { View, StyleSheet, Text, Pressable, Alert, ScrollView, Modal, KeyboardAvoidingView, Platform, useWindowDimensions, Image, Linking } from 'react-native';
 import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { Controller, useForm, useWatch } from 'react-hook-form';
@@ -25,7 +25,6 @@ import { getPasswordStrengthMessage } from '../src/utils/passwordRules';
 import { logAppEvent } from '../src/utils/appErrors';
 import {
   passwordFieldConfig,
-  profileActionConfig,
   profileDisplayFields,
   profileFieldConfig,
   profileGenderOptions,
@@ -47,72 +46,13 @@ const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 const MINIMUM_BIRTHDATE = new Date(1900, 0, 1);
 const REQUIRED_PROFILE_FIELDS = new Set(['firstName', 'lastName', 'birthdate', 'gender', 'phone']);
 const APP_VERSION_LABEL = 'Donivra v1.0.0';
+const formatPhilippineMobileInput = (value) => String(value || '').replace(/\D/g, '').slice(0, 11);
 
 const getMaximumBirthdate = () => {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   return today;
 };
-
-function ActionRow({ item, onPress, roles = null }) {
-  const scale = useSharedValue(1);
-  const actionRoles = roles || {};
-  const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
-  }));
-
-  return (
-    <AnimatedPressable
-      onPress={() => onPress(item)}
-      onPressIn={() => {
-        scale.value = withSpring(0.985, theme.motion.spring);
-      }}
-      onPressOut={() => {
-        scale.value = withSpring(1, theme.motion.spring);
-      }}
-      style={[
-        styles.actionRow,
-        {
-          backgroundColor: actionRoles.defaultCardBackground || theme.colors.surfaceCard,
-          borderColor: actionRoles.defaultCardBorder || theme.colors.borderSubtle,
-        },
-        animatedStyle,
-      ]}
-    >
-      <View
-        style={[
-          styles.actionIconWrap,
-          {
-            backgroundColor: item.danger
-              ? actionRoles.supportCardBackground || theme.colors.surfaceSoft
-              : actionRoles.iconPrimarySurface || theme.colors.brandPrimaryMuted,
-          },
-        ]}
-      >
-        <AppIcon
-          name={item.icon}
-          state={item.danger ? 'danger' : 'active'}
-          color={item.danger ? theme.colors.textError : actionRoles.iconPrimaryColor}
-        />
-      </View>
-      <View style={styles.actionTextWrap}>
-        <Text
-          numberOfLines={1}
-          style={[
-            styles.actionTitle,
-            { color: item.danger ? theme.colors.textError : actionRoles.headingText || theme.colors.textPrimary },
-          ]}
-        >
-          {item.title}
-        </Text>
-        <Text numberOfLines={2} style={[styles.actionDescription, { color: actionRoles.bodyText || theme.colors.textSecondary }]}>
-          {item.description}
-        </Text>
-      </View>
-      <AppIcon name="chevronRight" state="muted" color={actionRoles.metaText} />
-    </AnimatedPressable>
-  );
-}
 
 function ProfileMenuRow({ icon, title, description, badge, danger = false, onPress }) {
   const scale = useSharedValue(1);
@@ -156,6 +96,61 @@ function ProfileMoreRow({ title, onPress }) {
     >
       <Text style={styles.profileMoreText}>{title}</Text>
       <AppIcon name="chevronRight" size="sm" state="muted" />
+    </Pressable>
+  );
+}
+
+function PatientProfileRow({ icon, title, value, badge, onPress, danger = false, roles = null }) {
+  const disabled = !onPress;
+  const rowRoles = roles || {};
+
+  return (
+    <Pressable
+      disabled={disabled}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.patientProfileRow,
+        {
+          opacity: pressed ? 0.72 : 1,
+          backgroundColor: rowRoles.supportCardBackground || theme.colors.surfaceCard,
+          borderColor: rowRoles.supportCardBorder || theme.colors.borderSubtle,
+        },
+      ]}
+    >
+      <View
+        style={[
+          styles.patientProfileRowIcon,
+          { backgroundColor: danger ? theme.colors.surfaceSoft : rowRoles.iconPrimarySurface || theme.colors.brandPrimaryMuted },
+        ]}
+      >
+        <AppIcon
+          name={icon}
+          size="md"
+          color={danger ? theme.colors.textError : rowRoles.iconPrimaryColor || theme.colors.brandPrimary}
+        />
+      </View>
+      <View style={styles.patientProfileRowCopy}>
+        <Text
+          numberOfLines={1}
+          style={[
+            styles.patientProfileRowTitle,
+            { color: danger ? theme.colors.textError : rowRoles.headingText || theme.colors.textPrimary },
+          ]}
+        >
+          {title}
+        </Text>
+        {value ? (
+          <Text numberOfLines={1} style={[styles.patientProfileRowValue, { color: rowRoles.bodyText || theme.colors.textSecondary }]}>
+            {value}
+          </Text>
+        ) : null}
+      </View>
+      {badge ? (
+        <View style={[styles.patientProfileRowBadge, { backgroundColor: rowRoles.badgeBackground || theme.colors.brandPrimaryMuted }]}>
+          <Text style={[styles.patientProfileRowBadgeText, { color: rowRoles.badgeText || theme.colors.brandPrimary }]}>{badge}</Text>
+        </View>
+      ) : null}
+      {!disabled ? <AppIcon name="chevronRight" state="muted" color={rowRoles.metaText} /> : null}
     </Pressable>
   );
 }
@@ -306,10 +301,8 @@ export default function ProfileScreen() {
   }, []);
 
   const isPatient = role === 'patient';
-  const hasOrganization = !isPatient && Boolean(staffProfile?.hospital_id);
   const navItems = role === 'donor' ? donorDashboardNavItems : patientDashboardNavItems;
   const roleLabel = roleLabelMap[normalizedRole] || roleLabelMap[role] || 'Member';
-  const donorProfileReady = profileCompletionMeta?.isComplete;
   const firstName = (profile?.first_name || '').trim();
   const middleName = (profile?.middle_name || '').trim();
   const lastName = (profile?.last_name || '').trim();
@@ -435,6 +428,8 @@ export default function ProfileScreen() {
     user?.email,
   ]);
   const watchedNewPassword = passwordForm.watch('newPassword');
+  const patientHospitalName = hospitalProfile?.hospital_name || patientProfile?.hospital_name || '';
+  const patientMedicalDocument = patientProfile?.medical_document || patientProfile?.medical_document_url || '';
   const watchedGender = useWatch({ control: profileForm.control, name: 'gender' });
   const watchedBirthdate = useWatch({ control: profileForm.control, name: 'birthdate' });
   const setupDonorAgeBadge = useMemo(() => (
@@ -443,79 +438,6 @@ export default function ProfileScreen() {
   const isMinorProfileDraft = setupDonorAgeBadge && setupDonorAgeBadge.category !== 'Adult';
   const hasActiveGuardianConsent = Boolean(guardianConsent?.guardian_consent_id || guardianConsent?.Guardian_Consent_ID);
   const guardianConsentText = guardianConsentDocument?.content || guardianConsentDocument?.summary || GUARDIAN_CONSENT_TEXT;
-  const donorActionItems = useMemo(() => (
-    [
-      {
-        key: 'edit',
-        icon: 'editProfile',
-        title: donorProfileReady ? 'Edit Profile' : 'Complete Account Setup',
-        description: donorProfileReady
-          ? 'Update your donor details and contact information.'
-          : 'Finish the core donor details on your account.',
-      },
-      {
-        key: 'achievements',
-        icon: 'sparkle',
-        title: 'Achievements',
-        description: 'View donor certificates and recognition milestones.',
-      },
-      {
-        key: 'history',
-        icon: 'checkHair',
-        title: 'Hair Analysis History',
-        description: 'Open your saved hair-check results in a separate screen.',
-      },
-      {
-        key: 'password',
-        icon: 'changePassword',
-        title: 'Change Password',
-        description: 'Update your account password for security.',
-      },
-    ]
-  ), [donorProfileReady]);
-  const patientActionItems = useMemo(() => (
-    [
-      {
-        key: 'details',
-        icon: 'profile',
-        title: 'Account Details',
-        description: 'View patient and hospital details.',
-      },
-      {
-        key: 'edit',
-        icon: 'editProfile',
-        title: 'Edit Profile',
-        description: 'Update your personal details.',
-      },
-      {
-        key: 'password',
-        icon: 'changePassword',
-        title: 'Change Password',
-        description: 'Set a new password.',
-      },
-    ]
-  ), []);
-  const actionItems = useMemo(() => (
-    role === 'donor'
-      ? donorActionItems
-      : isPatient
-        ? patientActionItems
-        : [
-          ...(!isPatient && hasOrganization ? [{
-            key: 'organization',
-            icon: 'support',
-            title: 'Open Organization',
-            description: `Go to hospital ID ${staffProfile?.hospital_id}.`,
-          }] : []),
-          ...(!isPatient && !hasOrganization ? [{
-            key: 'completeSetup',
-            icon: 'editProfile',
-            title: 'Complete Account Setup',
-            description: 'Finish your account details.',
-          }] : []),
-          ...profileActionConfig,
-        ]
-  ), [donorActionItems, hasOrganization, isPatient, patientActionItems, role, staffProfile?.hospital_id]);
   const passwordStrengthMessage = getPasswordStrengthMessage(watchedNewPassword);
   const passwordStrengthVariant = watchedNewPassword
     ? passwordStrengthMessage === 'Strong password'
@@ -701,45 +623,27 @@ export default function ProfileScreen() {
     router.replace(item.route);
   };
 
-  const handleActionPress = async (item) => {
-    await Haptics.selectionAsync();
-    setFeedback(null);
-    if (role === 'donor') {
-      if (item.key === 'edit') {
-        setMode('edit');
-        return;
-      }
-      if (item.key === 'achievements') {
-        router.navigate('/donor/achievements');
-        return;
-      }
-      if (item.key === 'history') {
-        router.navigate('/donor/donation-history');
-        return;
-      }
-      if (item.key === 'password') {
-        setMode('password');
-        return;
-      }
-    }
-    if (item.key === 'organization') {
-      router.navigate('/donor/home');
-      return;
-    }
-    if (item.key === 'completeSetup') {
-      setMode('edit');
-      return;
-    }
-    if (item.key === 'details') {
-      setMode(role === 'donor' ? 'edit' : 'details');
-      return;
-    }
-    setMode(item.key === 'edit' ? 'edit' : 'password');
-  };
-
   const handleMorePress = useCallback((label) => {
     setFloatingFeedback('info', label, `${label} settings will be available in the next update.`);
   }, [setFloatingFeedback]);
+
+  const handleOpenMedicalDocument = useCallback(async () => {
+    if (!patientMedicalDocument) {
+      setFloatingFeedback('info', 'No Document', 'No medical document is linked yet.');
+      return;
+    }
+
+    try {
+      const canOpen = await Linking.canOpenURL(patientMedicalDocument);
+      if (!canOpen) {
+        setFloatingFeedback('error', 'Cannot Open File', 'The linked document cannot be opened on this device.');
+        return;
+      }
+      await Linking.openURL(patientMedicalDocument);
+    } catch (error) {
+      setFloatingFeedback('error', 'Cannot Open File', error?.message || 'Unable to open the medical document.');
+    }
+  }, [patientMedicalDocument, setFloatingFeedback]);
 
   const handleLogoutPress = useCallback(async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -979,6 +883,123 @@ export default function ProfileScreen() {
     </View>
   );
 
+  const renderPatientProfileContent = () => (
+    <View style={styles.patientProfileShell}>
+      <View style={styles.patientProfileHero}>
+        <Pressable
+          accessibilityLabel="Change profile photo"
+          onPress={handlePhotoPress}
+          disabled={isUploadingAvatar}
+          style={({ pressed }) => [styles.patientProfileAvatarButton, { opacity: pressed ? 0.86 : 1 }]}
+        >
+          <View
+            style={[
+              styles.patientProfileAvatar,
+              {
+                backgroundColor: roles.supportCardBackground,
+                borderColor: roles.supportCardBorder,
+              },
+            ]}
+          >
+            {avatarUri ? (
+              <Image source={{ uri: avatarUri }} style={styles.profileHeroAvatarImage} resizeMode="cover" />
+            ) : (
+              <Text style={[styles.patientProfileAvatarText, { color: roles.headingText }]}>
+                {(avatarInitials || 'PT').toUpperCase().slice(0, 2)}
+              </Text>
+            )}
+          </View>
+          <View
+            style={[
+              styles.patientProfileVerifiedBadge,
+              {
+                backgroundColor: roles.primaryActionBackground,
+                borderColor: roles.pageBackground,
+              },
+            ]}
+          >
+            <AppIcon name="check-decagram" size="sm" color={roles.primaryActionText} />
+          </View>
+        </Pressable>
+
+        <Text numberOfLines={2} style={[styles.patientProfileName, { color: roles.headingText }]}>
+          {fullName || 'Patient account'}
+        </Text>
+        <View style={[styles.patientProfileStatusPill, { backgroundColor: roles.badgeStrongBackground }]}>
+          <AppIcon name="checkmarkCircle" size="sm" color={roles.badgeStrongText} />
+          <Text style={[styles.patientProfileStatusText, { color: roles.badgeStrongText }]}>Verified Patient</Text>
+        </View>
+        {patientProfile?.patient_code ? (
+          <Text numberOfLines={1} style={[styles.patientProfileCode, { color: roles.metaText }]}>
+            {patientProfile.patient_code}
+          </Text>
+        ) : null}
+      </View>
+
+      <View style={styles.patientProfileGrid}>
+        <AppCard variant="elevated" radius="xl" padding="lg" style={styles.patientProfileCard}>
+          <View style={styles.patientProfileCardHeader}>
+            <Text style={[styles.patientProfileCardTitle, { color: roles.headingText, marginBottom: 0 }]}>Medical Information</Text>
+            <AppIcon name="medical-bag" size="lg" color={roles.iconPrimaryColor} />
+          </View>
+          <View style={styles.patientProfileRows}>
+            <PatientProfileRow
+              icon="hospital-building"
+              title="Clinic / Hospital"
+              value={patientHospitalName || 'Not linked'}
+              roles={roles}
+            />
+            <PatientProfileRow
+              icon="clipboard-pulse-outline"
+              title="Condition"
+              value={patientProfile?.medical_condition || 'Not provided'}
+              roles={roles}
+            />
+            <PatientProfileRow
+              icon="account-heart-outline"
+              title="Guardian"
+              value={patientProfile?.guardian || 'Not provided'}
+              roles={roles}
+            />
+            <PatientProfileRow
+              icon="folder-account-outline"
+              title="Medical Document"
+              value={patientMedicalDocument ? 'View file' : 'No file'}
+              onPress={patientMedicalDocument ? handleOpenMedicalDocument : undefined}
+              roles={roles}
+            />
+          </View>
+        </AppCard>
+
+        <AppCard variant="elevated" radius="xl" padding="lg" style={styles.patientProfileCard}>
+          <Text style={[styles.patientProfileCardTitle, { color: roles.headingText }]}>Account Settings</Text>
+          <View style={styles.patientProfileRows}>
+            <PatientProfileRow
+              icon="profile"
+              title="Personal Information"
+              onPress={() => setMode('edit')}
+              roles={roles}
+            />
+          </View>
+        </AppCard>
+      </View>
+
+      <View style={styles.profileLogoutSection}>
+        <AppButton
+          title="Log Out"
+          variant="outline"
+          fullWidth={false}
+          onPress={handleLogoutPress}
+          leading={<AppIcon name="signOut" state="danger" />}
+          style={styles.patientProfileLogoutButton}
+          textColorOverride={theme.colors.textError}
+          borderColorOverride={theme.colors.textError}
+        />
+        <Text style={[styles.profileVersionText, { color: roles.metaText }]}>{APP_VERSION_LABEL}</Text>
+      </View>
+    </View>
+  );
+
   return (
     <>
       <DashboardLayout
@@ -989,7 +1010,7 @@ export default function ProfileScreen() {
         onNavPress={handleNavPress}
         header={role === 'donor' ? null : (
           <DashboardHeader
-            title="Profile"
+            title={resolvedTheme?.brandName || 'Donivra'}
             subtitle=""
             summary=""
             avatarInitials={avatarInitials}
@@ -1008,67 +1029,7 @@ export default function ProfileScreen() {
           />
         )}
       >
-        {role === 'donor' ? renderDonorProfileContent() : (
-          <>
-            <AppCard variant="elevated" radius="xl" padding="lg" style={styles.profileHeroCard}>
-              <View style={styles.profileHeroTopRow}>
-                <View style={styles.profileHeroIdentity}>
-                  <View style={styles.profileHeroAvatar}>
-                    {avatarUri ? (
-                      <Image source={{ uri: avatarUri }} style={styles.profileHeroAvatarImage} resizeMode="cover" />
-                    ) : (
-                      <Text style={styles.profileHeroAvatarText}>{(avatarInitials || 'PT').toUpperCase().slice(0, 2)}</Text>
-                    )}
-                  </View>
-
-                  <View style={styles.profileHeroCopy}>
-                    <Text numberOfLines={2} style={styles.profileHeroName}>{fullName || 'Patient account'}</Text>
-                    <Text numberOfLines={1} style={styles.profileHeroEmail}>{user?.email || 'No email linked'}</Text>
-                    <View style={styles.profileHeroBadgeRow}>
-                      <View style={styles.profileHeroBadge}>
-                        <Text style={styles.profileHeroBadgeText}>{roleLabel}</Text>
-                      </View>
-                      {patientProfile?.patient_code ? (
-                        <View style={[styles.profileHeroBadge, styles.profileHeroBadgeMuted]}>
-                          <Text style={styles.profileHeroBadgeText}>{patientProfile.patient_code}</Text>
-                        </View>
-                      ) : null}
-                    </View>
-                  </View>
-                </View>
-              </View>
-
-              <View style={styles.profileHeroFooter}>
-                <Text numberOfLines={1} style={styles.profileHeroJoined}>
-                  {hospitalProfile?.hospital_name || 'Hospital link pending'}
-                </Text>
-                <AppButton
-                  title="Change Photo"
-                  variant="outline"
-                  size="sm"
-                  fullWidth={false}
-                  loading={isUploadingAvatar}
-                  leading={<AppIcon name="camera" state="muted" />}
-                  onPress={handlePhotoPress}
-                />
-              </View>
-            </AppCard>
-
-            <AppCard variant="elevated" radius="xl" padding="lg">
-              <DashboardSectionHeader
-                title="Actions"
-                description="Manage your account."
-                style={styles.sectionHeader}
-              />
-
-              <View style={styles.actionList}>
-                {actionItems.map((item) => (
-                  <ActionRow key={item.key} item={item} onPress={handleActionPress} roles={roles} />
-                ))}
-              </View>
-            </AppCard>
-          </>
-        )}
+        {role === 'donor' ? renderDonorProfileContent() : renderPatientProfileContent()}
 
         <Modal transparent visible={isPopupVisible} animationType="fade" onRequestClose={handleModalClose}>
           <KeyboardAvoidingView
@@ -1288,7 +1249,12 @@ export default function ProfileScreen() {
                                   helperText={field.helperText}
                                   disabled={field.editable === false}
                                   value={controllerField.value}
-                                  onChangeText={controllerField.onChange}
+                                  onChangeText={(nextValue) => {
+                                    controllerField.onChange(
+                                      field.formKey === 'phone' ? formatPhilippineMobileInput(nextValue) : nextValue
+                                    );
+                                  }}
+                                  maxLength={field.formKey === 'phone' ? 11 : undefined}
                                   onBlur={controllerField.onBlur}
                                   error={fieldState.error?.message}
                                 />
@@ -1499,7 +1465,8 @@ export default function ProfileScreen() {
                     keyboardType="phone-pad"
                     variant="filled"
                     value={guardianConsentForm.guardianContactNumber}
-                    onChangeText={(value) => updateGuardianConsentField('guardianContactNumber', value)}
+                    onChangeText={(value) => updateGuardianConsentField('guardianContactNumber', formatPhilippineMobileInput(value))}
+                    maxLength={11}
                     error={guardianConsentErrors.guardianContactNumber}
                   />
                   <AppInput
@@ -1868,6 +1835,146 @@ const styles = StyleSheet.create({
     fontWeight: theme.typography.weights.semibold,
     letterSpacing: 0.4,
     color: theme.colors.textMuted,
+  },
+  patientProfileShell: {
+    gap: theme.spacing.xl,
+    paddingTop: theme.spacing.md,
+    paddingBottom: theme.spacing.xl,
+  },
+  patientProfileHero: {
+    alignItems: 'center',
+    gap: theme.spacing.xs,
+    paddingTop: theme.spacing.sm,
+  },
+  patientProfileAvatarButton: {
+    position: 'relative',
+    marginBottom: theme.spacing.md,
+  },
+  patientProfileAvatar: {
+    width: 128,
+    height: 128,
+    borderRadius: theme.radius.full,
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 4,
+    ...theme.shadows.soft,
+  },
+  patientProfileAvatarText: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.titleMd,
+    fontWeight: theme.typography.weights.bold,
+  },
+  patientProfileVerifiedBadge: {
+    position: 'absolute',
+    right: 4,
+    bottom: 4,
+    width: 34,
+    height: 34,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 4,
+  },
+  patientProfileName: {
+    maxWidth: '92%',
+    textAlign: 'center',
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.titleSm,
+    lineHeight: theme.typography.semantic.titleSm * theme.typography.lineHeights.snug,
+    fontWeight: theme.typography.weights.bold,
+  },
+  patientProfileStatusPill: {
+    minHeight: 30,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: theme.radius.full,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: 6,
+    marginTop: theme.spacing.xs,
+  },
+  patientProfileStatusText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.bold,
+  },
+  patientProfileCode: {
+    maxWidth: '90%',
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  patientProfileGrid: {
+    gap: theme.spacing.lg,
+  },
+  patientProfileCard: {
+    gap: theme.spacing.md,
+  },
+  patientProfileCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+    marginBottom: theme.spacing.md,
+  },
+  patientProfileCardTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    fontWeight: theme.typography.weights.bold,
+    marginBottom: theme.spacing.md,
+  },
+  patientProfileRows: {
+    gap: theme.spacing.sm,
+  },
+  patientProfileRow: {
+    minHeight: 58,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    borderRadius: theme.radius.lg,
+    borderWidth: 1,
+  },
+  patientProfileRowIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: theme.radius.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  patientProfileRowCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  patientProfileRowTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  patientProfileRowValue: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+  },
+  patientProfileRowBadge: {
+    minHeight: 28,
+    maxWidth: 96,
+    justifyContent: 'center',
+    borderRadius: theme.radius.full,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: 4,
+  },
+  patientProfileRowBadgeText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    fontWeight: theme.typography.weights.bold,
+  },
+  patientProfileLogoutButton: {
+    minWidth: 148,
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.surfaceCard,
   },
   donorProfileShell: {
     overflow: 'hidden',

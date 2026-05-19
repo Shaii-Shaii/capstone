@@ -265,16 +265,24 @@ export const savePatientWigRequestFlow = async ({
       renderKey: 'ai_wig_preview_url',
     });
 
+    let savedWigSpecification = wigSpecification;
+    let specificationWarning = null;
     if (wigSpecificationError) {
-      throw new Error(wigSpecificationError.message || 'Unable to save the wig specifications.');
+      specificationWarning = wigSpecificationError.message || 'Wig request saved without preferences.';
+      savedWigSpecification = null;
+      logAppEvent('wig_request.save', 'Wig specification save failed after request row creation.', {
+        userId,
+        reqId: wigRequest?.req_id || null,
+        error: specificationWarning,
+      }, 'warn');
+    } else {
+      logAppEvent('wig_request.save', 'Wig specification row saved.', {
+        userId,
+        reqId: wigRequest?.req_id || null,
+        reqSpecId: savedWigSpecification?.req_spec_id || null,
+        hasPreviewUrl: Boolean(savedWigSpecification?.ai_wig_preview_url),
+      });
     }
-
-    logAppEvent('wig_request.save', 'Wig specification row saved.', {
-      userId,
-      reqId: wigRequest?.req_id || null,
-      reqSpecId: wigSpecification?.req_spec_id || null,
-      hasPreviewUrl: Boolean(wigSpecification?.ai_wig_preview_url),
-    });
 
     const notificationEvents = buildImmediateNotificationEvents({
       role: 'patient',
@@ -316,7 +324,8 @@ export const savePatientWigRequestFlow = async ({
 
     return {
       wigRequest,
-      wigSpecification,
+      wigSpecification: savedWigSpecification,
+      warning: specificationWarning,
       error: null,
     };
   } catch (error) {

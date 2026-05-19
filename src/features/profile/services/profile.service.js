@@ -424,6 +424,16 @@ export const completePostLoginOnboarding = async ({
         documentType: 'patient-document',
       });
 
+      if (patientPictureUrl) {
+        const profilePhotoResult = await ProfileAPI.updateProfile(userId, {
+          photo_path: patientPictureUrl,
+        });
+
+        if (profilePhotoResult.error) {
+          throw new Error(profilePhotoResult.error.message || 'Patient photo could not be saved to the profile.');
+        }
+      }
+
       const patientResult = await ProfileAPI.updatePatientDetails(userId, {
         medical_condition: manualPatientDetails?.medical_condition || '',
         patient_picture: patientPictureUrl || '',

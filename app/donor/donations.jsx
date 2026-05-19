@@ -123,13 +123,25 @@ const getScreeningRecommendations = (entry = null) => (
       : []
 ).filter((recommendation) => String(recommendation?.recommendation_text || '').trim());
 
-const cleanRecommendationText = (value = '') => (
-  String(value || '')
+const CARE_SAFETY_NOTE = 'If you have allergies, scalp irritation, or sensitivity, consult a qualified hair or scalp care professional before trying new ingredients.';
+
+const cleanRecommendationText = (value = '') => {
+  const text = String(value || '')
     .replace(/\s+/g, ' ')
     .replace(/Philippine product options? to consider:.*?(?:\.|$)/gi, '')
+    .replace(/(?:neutral care|generic|local|country)?\s*product options? to consider:.*?(?:\.|$)/gi, '')
+    .replace(/\bPhilippine(?:s)?\b/gi, '')
+    .replace(/\b(?:country|locally|local)\s+(?:product|care)\s+options?\b/gi, '')
+    .replace(/\b[A-Z][a-z]+(?:n|ian|ese|ish|i)\s+(?:product|brand|care)\s+options?\b/g, '')
+    .replace(/Ingredient or product-type options to consider:.*?(?:\.|$)/gi, '')
     .replace(/\b(Dove|Cream Silk|Human Nature|Vitress|Pantene(?:\s+Pro-V)?|Watsons|Lazada(?:\.ph)?|Shopee(?:\.ph)?)\b/gi, 'a suitable product type')
-    .trim()
-);
+    .trim();
+
+  if (/ingredients that may help/i.test(text) && !/consult a qualified hair or scalp care professional/i.test(text)) {
+    return `${text} ${CARE_SAFETY_NOTE}`;
+  }
+  return text;
+};
 
 const hasNegatedCareConcern = (text = '') => (
   /\b(no|not|without)\s+(?:visible\s+|significant\s+|major\s+)?(?:damage|dryness|frizz|breakage|split\s+ends?|issues?)\b/i.test(text)

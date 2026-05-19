@@ -310,40 +310,38 @@ const MIN_DONATION_LENGTH_CM = 35.56;
 const MIN_ELIGIBILITY_CONFIDENCE = 0.55;
 const ELIGIBLE_STATUS = 'Eligible for hair donation';
 const IMPROVE_STATUS = 'Improve hair condition';
+const CARE_SAFETY_NOTE = 'If you have allergies, scalp irritation, or sensitivity, consult a qualified hair or scalp care professional before trying new ingredients.';
 const NON_ADVERTISING_CARE_OPTIONS: Record<string, string[]> = {
   dry: [
-    'a moisturizing shampoo and conditioner with glycerin, aloe, or panthenol',
-    'a weekly deep-conditioning mask for the mid-lengths and ends',
+    'glycerin, aloe, or panthenol',
+    'shea butter or coconut oil on the mid-lengths and ends',
   ],
   damage: [
-    'a protein or bond-support treatment used occasionally',
-    'a silicone-free or lightweight conditioner focused on damaged ends',
+    'hydrolyzed protein or amino acids used occasionally',
+    'panthenol or ceramides focused on damaged ends',
   ],
   frizz: [
-    'a lightweight anti-frizz serum or leave-on conditioner',
-    'a smoothing conditioner with argan oil, coconut oil, or shea butter',
+    'argan oil, coconut oil, or shea butter',
+    'panthenol or glycerin for smoother-looking strands',
   ],
   oily: [
-    'a gentle clarifying shampoo used mainly on the scalp',
-    'a light daily shampoo used mainly on the scalp, not the ends',
+    'salicylic acid or tea tree oil used mainly on the scalp',
+    'lightweight cleansing ingredients used on the scalp, not the ends',
   ],
   flakes: [
-    'an anti-dandruff shampoo with zinc pyrithione, selenium sulfide, or ketoconazole',
-    'a gentle scalp cleanser for visible buildup or flakes',
+    'zinc pyrithione, selenium sulfide, or ketoconazole',
+    'gentle scalp-cleansing ingredients for visible buildup or flakes',
   ],
   treated: [
-    'a color-safe shampoo and conditioner',
-    'a color-safe conditioner plus weekly repair mask',
+    'amino acids, panthenol, or ceramides',
+    'protein and moisturizing ingredients used in balance',
   ],
   healthy: [
-    'a gentle daily conditioner',
-    'a lightweight leave-on serum only on the ends',
-  ],
-  length: [
-    'a strengthening shampoo and conditioner with protein or panthenol',
-    'a gentle conditioner focused on the mid-lengths and ends',
+    'panthenol, aloe, or lightweight plant oils',
+    'small amounts of argan oil or coconut oil only on the ends',
   ],
 };
+const INGREDIENT_SUPPORTED_CONCERNS = new Set(['dry', 'damage', 'frizz', 'oily', 'flakes', 'treated']);
 const advertisedNamePatterns = [
   /\bHuman Nature\b/gi,
   /\bDove\b/gi,
@@ -357,6 +355,13 @@ const advertisedNamePatterns = [
   /\bRobinsons\b/gi,
   /\bLazada(?:\.ph)?\b/gi,
   /\bShopee(?:\.ph)?\b/gi,
+];
+const recommendationOriginPatterns = [
+  /(?:neutral care|generic|local|country)?\s*product options? to consider:.*?(?:\.|$)/gi,
+  /Ingredient or product-type options to consider:.*?(?:\.|$)/gi,
+  /\bPhilippine(?:s)?\b/gi,
+  /\b(?:country|locally|local)\s+(?:product|care)\s+options?\b/gi,
+  /\b[A-Z][a-z]+(?:n|ian|ese|ish|i)\s+(?:product|brand|care)\s+options?\b/g,
 ];
 const canonicalViewAliases: Record<string, string> = {
   'front view photo': 'Front View Photo',
@@ -397,6 +402,8 @@ const instructions = [
   '- DARK ENVIRONMENT: If any photo is significantly underexposed, very dark, or has insufficient lighting to clearly see hair details, set is_hair_detected to false and invalid_image_reason to "The photo is too dark. Please move to a well-lit area, preferably near a window with natural light, and retake the photo."',
   '- NO PERSON DETECTED: If no human subject or person is visible in the photo (e.g., photo of a wall, floor, object, or empty room), set is_hair_detected to false and invalid_image_reason to "No person detected. Please position yourself in front of the camera with your hair clearly visible and retake the photo."',
   '- MULTIPLE SUBJECTS: If more than one person is clearly visible in the photo, set is_hair_detected to false and invalid_image_reason to "Multiple subjects detected. Only one person should be in the frame. Please retake with only you in the photo."',
+  '- CROSS-VIEW SUBJECT CONSISTENCY: Compare the required views as a submission set using visible, non-identifying cues only: hair color, hair length, hair texture, hair density, hairline/parting when visible, clothing/shoulder area when visible, and overall framing. Do not identify the person, name them, or infer sensitive identity traits. If the views appear to show different people or clearly inconsistent hair lengths/texture/color that cannot be explained by angle, curl, lighting, or cropping, set is_hair_detected to false and invalid_image_reason to "Photos appear inconsistent across views. Please retake all required views with the same person and the same current hair."',
+  '- MIXED HAIR-LENGTH SUBMISSION: If one required view shows long hair and another required view shows clearly short hair, or if the ends close-up appears to belong to different hair than the front/side view, set is_hair_detected to false and invalid_image_reason to "Hair views are inconsistent. Please retake the front view, side profile, and hair ends close-up using the same current hair."',
   '- OBSTRUCTIONS ON HAIR: Carefully inspect every view for masks, face shields, caps, hats, headbands, clips, pins, claw clips, hair ties, scrunchies, scarves, bonnets, headphones, hoods, hands, towels, or fabric covering/holding the hair. Ordinary eyeglasses are allowed when they do not cover the hairline, hair shaft, or ends. If an item blocks the hairline, shaft, length, or ends, set is_hair_detected to false and invalid_image_reason to "Hair is obstructed. Remove anything covering or holding the hair, then retake the required view."',
   '- DISTRACTING BACKGROUND: If the background contains multiple other people, very cluttered objects, or items that make it hard to isolate the hair for analysis, set is_hair_detected to false and invalid_image_reason to "The background has too many distracting items. Please use a plain wall or uncluttered area and retake the photo."',
   '- BLURRY OR MOTION-BLURRED: If the photo is too blurry to distinguish hair details, set is_hair_detected to false and invalid_image_reason to "Photos not clear, please re-capture. Hold the camera steady and ensure good lighting."',
@@ -409,8 +416,10 @@ const instructions = [
   'First confirm whether the images clearly show human hair intended for screening.',
   'If the images do not clearly show hair, set is_hair_detected to false and explain briefly in invalid_image_reason.',
   'Validate photo rules before analysis: one human subject only, front view is face-forward, side profile is actually turned to the side, hair ends close-up clearly shows uncovered ends, face and hair clearly visible, no masks or face coverings, no obstructing hair accessories, no caps, no clips covering the hair, no heavy blur, and no distracting objects blocking the hair. Ordinary eyeglasses are acceptable if they do not hide the hairline or hair.',
+  'Validate cross-view consistency before hair analysis. The required views must appear to show the same current hair from the same person. Use only visible consistency cues; do not identify the person. Reject the submission if photos appear to be from different people or from different hair lengths/styles that cannot be explained by camera angle or lighting.',
   'If a photo is blurry or poorly lit enough to prevent reliable review, set is_hair_detected to false and invalid_image_reason to "Photos not clear, please re-capture."',
   'If more than one subject/person is visible in the screening photos, set is_hair_detected to false and invalid_image_reason to "Multiple subject detected, one subject is needed."',
+  'If the required views appear inconsistent across subject or hair, set is_hair_detected to false and invalid_image_reason to "Photos appear inconsistent across views. Please retake all required views with the same person and the same current hair."',
   'If masks, face shields, clips, caps, hats, headbands, pins, hair ties, scarves, headphones, hoods, hands, towels, fabric, or accessories obstruct the hairline, shaft, length, or ends, set is_hair_detected to false and invalid_image_reason to "Hair is obstructed. Remove anything covering or holding the hair, then retake the required view." Do not reject ordinary eyeglasses unless they hide the hairline or hair.',
   `When image quality or visibility is too weak for a confident donation judgment, keep the final decision as "${IMPROVE_STATUS}" and explain the limitation honestly.`,
 
@@ -491,8 +500,10 @@ const instructions = [
   // Safety
   'Use safe wording: "this check suggests", "based on the visible photos", "the photos show", "observed in the images".',
   'Do not diagnose medical conditions. Do not invent characteristics not visible in the images.',
-  'Do not mention brand names, company names, store names, shopping links, or advertised product names in recommendations.',
-  'If product guidance is needed, mention only generic product types or ingredients such as moisturizing conditioner, clarifying shampoo, anti-dandruff shampoo, glycerin, aloe, panthenol, protein, argan oil, coconut oil, or shea butter.',
+  'Do not mention brand names, company names, store names, shopping links, advertised product names, countries, country-based product origins, or country-specific product options in recommendations.',
+  'Mention neutral ingredients only when they clearly match a visible concern. Do not include ingredients for length-only, healthy-maintenance, retake-photo, or recheck-only recommendations.',
+  'Ingredient examples by concern: dryness can mention glycerin, aloe, panthenol, shea butter, or coconut oil; visible damage can mention hydrolyzed protein, amino acids, panthenol, or ceramides; frizz can mention argan oil, coconut oil, shea butter, panthenol, or glycerin; visible flakes can mention zinc pyrithione, selenium sulfide, or ketoconazole; oily roots can mention salicylic acid or tea tree oil; chemically treated hair can mention amino acids, panthenol, ceramides, or balanced protein and moisturizing ingredients.',
+  'If ingredients are mentioned, include a short caution that users with allergies, scalp irritation, or sensitivity should consult a qualified hair or scalp care professional before trying new ingredients.',
   'If a field cannot be determined from the photos, return an empty string or null.',
   'This is AI-assisted screening guidance only, not medical advice.',
 ].join('\n');
@@ -510,6 +521,7 @@ const analysisInstructions = [
   'History context, when present, is only for trend comparison and must never replace the current image observations.',
   'Treat each required image role separately and use the correct evidence from that view before deciding the final result.',
   'The Front View Photo and Side Profile Photo together are the only basis for visible root-to-end length assessment. The Hair Ends Close-Up is the main basis for ends condition and split-end evidence.',
+  'Before estimating length or generating recommendations, verify that the required views appear to show the same current hair from one person. Use visible consistency only; do not identify the person. If the views appear to show different people, mismatched hair lengths, mismatched hair color/texture, or an unrelated hair-ends close-up, reject the submission with is_hair_detected=false and a clear invalid_image_reason.',
   'For every provided required view, return one per_view_notes entry using the exact canonical label: Front View Photo, Side Profile Photo, or Hair Ends Close-Up.',
   'Each per_view_notes entry must describe actual visible evidence from that specific image, not generic statements.',
   'Analyze visible hair condition, visible hair assessment, visible hair color, visible hair length estimate, donation suitability, and improvement recommendations.',
@@ -547,7 +559,9 @@ const analysisInstructions = [
   'Return exactly 3 recommendations when hair is visible enough to analyze.',
   'Recommendations should be specific to the observed condition, such as reducing heat exposure, improving scalp care, adjusting wash routine, improving moisture care, trimming damaged ends when appropriate, and avoiding harsh chemical processing.',
   'If the visible hair is too short for donation, include guidance about length retention, healthy growth habits, or reducing breakage. If the hair is dry, recommendations must address dryness. If the hair appears healthy, recommendations must focus on maintenance rather than damage repair.',
-  'When recommending products, do not name brands, companies, stores, marketplaces, shopping links, or advertised product lines. Mention only generic product types or ingredients that match the observed concern.',
+  'Do not use recommendation slots for camera, upload, lighting, retake, photo framing, or recheck instructions. Those belong before analysis, not in hair-care recommendations.',
+  'Do not recommend or advertise products. Do not name brands, companies, stores, marketplaces, shopping links, product lines, countries, country-made products, or country-specific options. Mention only neutral ingredients that clearly match the observed concern, and skip ingredients when the recommendation is only about length, maintenance, retaking photos, or rechecking.',
+  'If ingredients are mentioned, include a short caution that users with allergies, scalp irritation, or sensitivity should consult a qualified hair or scalp care professional before trying new ingredients.',
   `For donation eligibility, require confidence_score >= ${MIN_ELIGIBILITY_CONFIDENCE}. If confidence is lower, use "${IMPROVE_STATUS}" and explain what must be clearer.`,
   'Be conservative with eligibility: if root-to-end length, ends condition, chemical treatment status, or required views are uncertain, do not mark the donor eligible.',
   'Do not diagnose disease. Use careful phrases such as "the photos show", "this check suggests", and "based on the visible images".',
@@ -563,8 +577,12 @@ const removeAdvertisedNames = (value: string) => {
   advertisedNamePatterns.forEach((pattern) => {
     cleaned = cleaned.replace(pattern, 'generic');
   });
+  recommendationOriginPatterns.forEach((pattern) => {
+    cleaned = cleaned.replace(pattern, '');
+  });
   return cleaned
     .replace(/\bgeneric\s+generic\b/gi, 'generic')
+    .replace(/\bneutral care\s+neutral care\b/gi, 'neutral care')
     .replace(/\s{2,}/g, ' ')
     .trim();
 };
@@ -713,6 +731,27 @@ const hasRootToEndLengthRationale = (value: string) => {
   return mentionsRootArea && mentionsEnds;
 };
 
+const hasCrossViewConsistencyIssue = (value: string) => {
+  const normalized = normalizeString(value).toLowerCase();
+  if (!normalized) return false;
+
+  return includesAnyKeyword(normalized, [
+    'different people',
+    'different person',
+    'different subject',
+    'inconsistent across views',
+    'views are inconsistent',
+    'photos appear inconsistent',
+    'hair views are inconsistent',
+    'mixed hair length',
+    'mixed long',
+    'unrelated hair',
+    'does not match',
+    'mismatched hair',
+    'mismatch',
+  ]);
+};
+
 const buildRecommendationKeywordChecks = ({
   detectedCondition,
   visibleDamageNotes,
@@ -827,8 +866,21 @@ const inferRecommendationConcerns = ({
 };
 
 const productLineForConcern = (concern: string) => {
+  if (!INGREDIENT_SUPPORTED_CONCERNS.has(concern)) return '';
   const options = NON_ADVERTISING_CARE_OPTIONS[concern] || NON_ADVERTISING_CARE_OPTIONS.healthy;
-  return `Ingredient or product-type options to consider: ${options.slice(0, 2).join(' or ')}.`;
+  return `Ingredients that may help: ${options.slice(0, 2).join(' or ')}.`;
+};
+
+const appendConcernIngredients = (text: string, concern: string) => {
+  const ingredients = productLineForConcern(concern);
+  return ingredients ? `${text} ${ingredients}` : text;
+};
+
+const addCareSafetyNote = (value: string) => {
+  const cleaned = normalizeString(value);
+  if (!cleaned) return '';
+  if (cleaned.toLowerCase().includes('consult a qualified hair or scalp care professional')) return cleaned;
+  return `${cleaned} ${CARE_SAFETY_NOTE}`;
 };
 
 const buildFallbackRecommendations = ({
@@ -846,7 +898,7 @@ const buildFallbackRecommendations = ({
   if (estimatedLength == null || estimatedLength < minimumDonationLengthCm || concerns.includes('length')) {
     rows.push({
       title: 'Protect Length Retention',
-      recommendation_text: `The visible length is not confidently at the ${minimumDonationLengthCm.toFixed(1)} cm donation requirement yet, so focus on gentle handling and reducing breakage while growing it out. ${productLineForConcern('length')}`,
+      recommendation_text: `The visible length is not confidently at the ${minimumDonationLengthCm.toFixed(1)} cm donation requirement yet, so focus on gentle handling, reducing breakage, and protecting the ends while growing it out.`,
       priority_order: rows.length + 1,
     });
   }
@@ -854,7 +906,7 @@ const buildFallbackRecommendations = ({
   if (concerns.includes('damage')) {
     rows.push({
       title: 'Care for Visible Damage',
-      recommendation_text: `The photos suggest damage or stressed ends, so trim visibly split tips and reduce heat styling before donation screening. ${productLineForConcern('damage')}`,
+      recommendation_text: appendConcernIngredients('The photos suggest damage or stressed ends, so trim visibly split tips and reduce heat styling before donation screening.', 'damage'),
       priority_order: rows.length + 1,
     });
   }
@@ -862,7 +914,7 @@ const buildFallbackRecommendations = ({
   if (concerns.includes('dry')) {
     rows.push({
       title: 'Restore Moisture',
-      recommendation_text: `The hair appears dry or dull in the photos, so use conditioner consistently and add a weekly moisturizing treatment on the mid-lengths and ends. ${productLineForConcern('dry')}`,
+      recommendation_text: appendConcernIngredients('The hair appears dry or dull in the photos, so use conditioner consistently and add a weekly moisturizing treatment on the mid-lengths and ends.', 'dry'),
       priority_order: rows.length + 1,
     });
   }
@@ -870,7 +922,7 @@ const buildFallbackRecommendations = ({
   if (concerns.includes('frizz')) {
     rows.push({
       title: 'Smooth Frizz Gently',
-      recommendation_text: `Visible frizz or flyaways can make the shaft look rough, so dry with a soft towel and use a small amount of smoothing product on the ends. ${productLineForConcern('frizz')}`,
+      recommendation_text: appendConcernIngredients('Visible frizz or flyaways can make the shaft look rough, so dry with a soft towel and use a small amount of smoothing care on the ends.', 'frizz'),
       priority_order: rows.length + 1,
     });
   }
@@ -878,7 +930,7 @@ const buildFallbackRecommendations = ({
   if (concerns.includes('oily') || concerns.includes('flakes')) {
     rows.push({
       title: concerns.includes('flakes') ? 'Control Visible Flakes' : 'Balance Scalp Oil',
-      recommendation_text: `The scalp or roots need clearer balance before donation readiness, so focus shampoo on the scalp and avoid heavy oils near the roots. ${productLineForConcern(concerns.includes('flakes') ? 'flakes' : 'oily')}`,
+      recommendation_text: appendConcernIngredients('The scalp or roots need clearer balance before donation readiness, so focus cleansing on the scalp and avoid heavy oils near the roots.', concerns.includes('flakes') ? 'flakes' : 'oily'),
       priority_order: rows.length + 1,
     });
   }
@@ -886,14 +938,14 @@ const buildFallbackRecommendations = ({
   if (concerns.includes('treated')) {
     rows.push({
       title: 'Support Treated Hair',
-      recommendation_text: `The photos or history suggest chemical or color treatment, so keep the routine gentle and prioritize repair before donation screening. ${productLineForConcern('treated')}`,
+      recommendation_text: appendConcernIngredients('The photos or history suggest chemical or color treatment, so keep the routine gentle and prioritize repair before donation screening.', 'treated'),
       priority_order: rows.length + 1,
     });
   }
 
   rows.push({
-    title: primaryConcern === 'healthy' ? 'Maintain Donation Readiness' : 'Prepare for Recheck',
-    recommendation_text: `Keep the hair loose, clean, and fully visible for the next CheckHair scan so the app can reassess length and ends more accurately. ${productLineForConcern(primaryConcern === 'healthy' ? 'healthy' : primaryConcern)}`,
+    title: primaryConcern === 'healthy' ? 'Maintain Donation Readiness' : 'Maintain Hair Between Checks',
+    recommendation_text: 'Keep a gentle routine while the hair grows. Avoid tight pulling styles, reduce high heat, detangle carefully, and protect the ends from breakage.',
     priority_order: rows.length + 1,
   });
 
@@ -936,13 +988,16 @@ const enhanceRecommendations = ({
 
   return rows.slice(0, 3).map((item, index) => {
     const concern = concerns[index] || concerns[0] || 'healthy';
-    const hasProductLine = item.recommendation_text.toLowerCase().includes('ingredient or product-type options');
+    const hasProductLine = item.recommendation_text.toLowerCase().includes('ingredients that may help');
+    const shouldAddIngredients = INGREDIENT_SUPPORTED_CONCERNS.has(concern);
     return {
       ...item,
       title: removeAdvertisedNames(item.title),
-      recommendation_text: removeAdvertisedNames(hasProductLine
+      recommendation_text: addCareSafetyNote(removeAdvertisedNames(hasProductLine
         ? item.recommendation_text
-        : `${item.recommendation_text} ${productLineForConcern(concern)}`),
+        : shouldAddIngredients
+          ? appendConcernIngredients(item.recommendation_text, concern)
+          : item.recommendation_text)),
       priority_order: index + 1,
     };
   });
@@ -1290,14 +1345,22 @@ const formatQuestionnaireAnswers = (answers: Record<string, unknown> = {}) => (
 const isDonationConditionAcceptable = (condition: string, visibleDamageNotes: string) => {
   const normalizedCondition = condition.toLowerCase();
   const normalizedNotes = visibleDamageNotes.toLowerCase();
+  const combined = `${normalizedCondition} ${normalizedNotes}`;
 
   if (!normalizedCondition) return false;
   if (normalizedCondition.includes('healthy')) return true;
-  if (normalizedCondition.includes('dry') || normalizedCondition.includes('damage') || normalizedCondition.includes('frizz')) return false;
-  if (normalizedCondition.includes('oily') || normalizedCondition.includes('treated')) return false;
-  if (normalizedNotes.includes('split') || normalizedNotes.includes('fray') || normalizedNotes.includes('breakage')) return false;
+  if (includesAnyKeyword(combined, [
+    'severe damage',
+    'major damage',
+    'extensive damage',
+    'heavy breakage',
+    'significant breakage',
+    'chemical damage',
+    'split ends throughout',
+    'not suitable',
+  ])) return false;
 
-  return normalizedCondition.includes('good');
+  return !includesAnyKeyword(combined, ['bleached', 'rebonded']);
 };
 
 const scoreConditionForTrend = (condition: string) => {
@@ -1418,8 +1481,10 @@ const normalizeAnalysisPayload = (
   let decision = normalizeString(analysis?.decision) === ELIGIBLE_STATUS
     ? ELIGIBLE_STATUS
     : IMPROVE_STATUS;
-  if (!hasClearEnoughEvidence || !meetsLengthRule || !conditionAcceptable || treatmentConflict || concernType === 'donation_eligibility' && normalizeString(analysis?.decision) !== ELIGIBLE_STATUS) {
+  if (!hasClearEnoughEvidence || !meetsLengthRule || !conditionAcceptable || treatmentConflict) {
     decision = IMPROVE_STATUS;
+  } else if (concernType === 'donation_eligibility') {
+    decision = ELIGIBLE_STATUS;
   }
 
   const summary = normalizeString(analysis?.summary) || buildSummaryFromAnalysisFields({
@@ -1440,10 +1505,22 @@ const normalizeAnalysisPayload = (
     estimatedLength,
     minimumDonationLengthCm,
   });
+  const consistencyIssueText = [
+    invalidImageReason,
+    summary,
+    lengthAssessment,
+    visibleDamageNotes,
+    ...normalizedViewNotes.map((item) => item.notes),
+  ].join(' ');
+  const hasConsistencyIssue = hasCrossViewConsistencyIssue(consistencyIssueText);
+  const finalIsHairDetected = isHairDetected && !hasConsistencyIssue;
+  const finalInvalidImageReason = hasConsistencyIssue
+    ? 'Photos appear inconsistent across views. Please retake all required views with the same person and the same current hair.'
+    : invalidImageReason;
 
   return {
-    is_hair_detected: isHairDetected,
-    invalid_image_reason: invalidImageReason,
+    is_hair_detected: finalIsHairDetected,
+    invalid_image_reason: finalInvalidImageReason,
     missing_views: missingViews,
     per_view_notes: normalizedViewNotes,
     estimated_length: estimatedLength,
@@ -1570,6 +1647,7 @@ Deno.serve(async (request) => {
       '- Environment: Is it well-lit? Is it dark/underexposed? Is there a person visible?',
       '- Background: Is there only one person? Are there distracting items behind the subject?',
       '- Required angle: Is the Front View face-forward? Is the Side Profile actually a side profile? Does the Hair Ends Close-Up show the uncovered ends?',
+      '- Cross-view consistency: Do all required photos appear to show the same current hair from one person? Check visible hair color, length, texture, density, ends, hairline/parting when visible, and clothing/shoulder area when visible. Do not identify the person; only check whether the submission is visually consistent.',
       '- Accessories: Are glasses, sunglasses, masks, face shields, caps, hats, headbands, clips, pins, hair ties, scrunchies, scarves, headphones, hoods, hands, towels, or fabric visible on the face or blocking the hairline, shaft, length, or ends?',
       '- Scalp condition, roots, hair shaft shine or dullness, texture, density, ends condition',
       '- Score levels: shine, frizz, dryness, oiliness, damage from 1-10',
@@ -1592,11 +1670,13 @@ Deno.serve(async (request) => {
       'Based on what you see in the photos and the supporting questionnaire context:',
       'The current result must come from the current uploaded photos only.',
       'Return one per_view_notes entry for every required current image.',
+      'If the photos look like different people, different current hair, mixed long/short hair, or an unrelated hair-ends close-up, do not analyze hair condition. Return is_hair_detected=false and invalid_image_reason="Photos appear inconsistent across views. Please retake all required views with the same person and the same current hair."',
+      'Recommendations must be about hair care, condition maintenance, length retention, scalp care, or visible damage. Do not put photo capture, retake, lighting, upload, framing, or recheck instructions in recommendations.',
       `Visible length must be at least ${MIN_DONATION_LENGTH_CM} cm for donation eligibility.`,
       `Use "${ELIGIBLE_STATUS}" only when visible condition is suitable and length appears to meet the 14-inch rule.`,
       `Use "${ELIGIBLE_STATUS}" only when confidence_score is at least ${MIN_ELIGIBILITY_CONFIDENCE} and all required views are clearly visible.`,
       'If donation requirements disallow colored, bleached, rebonded, or chemically treated hair and the photos or questionnaire suggest that treatment, mark the result as needing improvement or manual review.',
-      'Include only generic product types or ingredients when they fit the visible concern, such as moisturizing conditioner, repair mask, anti-frizz serum, clarifying shampoo, anti-dandruff shampoo, glycerin, aloe, panthenol, protein, argan oil, coconut oil, or shea butter. Do not include brand names, company names, store names, marketplaces, shopping links, or advertised product names.',
+      'Do not recommend or advertise products. Include neutral ingredients only when they clearly fit a visible concern: dryness, visible damage, frizz, visible flakes, oily roots, or chemically treated hair. Skip ingredients when the recommendation is only about length, maintenance, retaking photos, or rechecking. Do not include brand names, company names, store names, marketplaces, shopping links, advertised product names, countries, country-made products, or country-specific product options. If ingredients are mentioned, include a short caution that users with allergies, scalp irritation, or sensitivity should consult a qualified hair or scalp care professional before trying new ingredients.',
       `Use "${IMPROVE_STATUS}" when length is too short, condition needs work, or confidence is too low.`,
     ].join('\n');
 
@@ -1607,7 +1687,7 @@ Deno.serve(async (request) => {
 
     validImages.forEach((image, index) => {
       geminiParts.push({
-        text: `Image ${index + 1}: ${image.viewLabel || image.viewKey || `Photo ${index + 1}`} - examine this photo carefully for the correct required angle, environment quality (lighting, dark areas), subject detection, background, obstructing items on the hair, scalp condition, hair shine or dullness, texture, density, ends condition, and visible root-to-end length. If the hairline/root and lowest visible ends are visible, estimate approximate hair length in centimeters using face/head/body proportions even without a ruler.`,
+        text: `Image ${index + 1}: ${image.viewLabel || image.viewKey || `Photo ${index + 1}`} - examine this photo carefully for the correct required angle, environment quality (lighting, dark areas), subject detection, background, obstructing items on the hair, scalp condition, hair shine or dullness, texture, density, ends condition, visible root-to-end length, and consistency with the other required views. If the hairline/root and lowest visible ends are visible, estimate approximate hair length in centimeters using face/head/body proportions even without a ruler.`,
       });
       geminiParts.push({
         inlineData: {

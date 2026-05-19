@@ -4,6 +4,9 @@ verify_jwt = false
 [functions.analyze-hair-submission]
 verify_jwt = false
 
+[functions.validate-hair-photo-set]
+verify_jwt = false
+
 [functions.generate-wig-preview]
 verify_jwt = false
 

@@ -80,7 +80,9 @@ export const passwordField = z.string()
   });
 
 export const nameField = z.string().min(2, 'Must be at least 2 characters').max(50, 'Max 50 characters allowed');
-export const phoneField = z.string().min(10, 'Invalid phone number').max(15, 'Invalid phone number');
+export const phoneField = z.string()
+  .trim()
+  .regex(/^09\d{9}$/, 'Enter a valid PH mobile number');
 export const addressField = z.string().trim().min(2, 'This field is required').max(120, 'Max 120 characters allowed');
 export const birthdateField = z.string()
   .trim()

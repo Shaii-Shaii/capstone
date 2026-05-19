@@ -5,6 +5,7 @@ import { getErrorMessage, logAppError, logAppEvent } from '../utils/appErrors';
 
 const HAIR_ANALYSIS_MAX_INVOKE_ATTEMPTS = 3;
 const HAIR_ANALYSIS_RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+const CARE_SAFETY_NOTE = 'If you have allergies, scalp irritation, or sensitivity, consult a qualified hair or scalp care professional before trying new ingredients.';
 
 const waitFor = async (milliseconds = 0) => (
   await new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(milliseconds) || 0)))
@@ -24,13 +25,35 @@ const advertisedNamePatterns = [
   /\bLazada(?:\.ph)?\b/gi,
   /\bShopee(?:\.ph)?\b/gi,
 ];
+const recommendationOriginPatterns = [
+  /(?:neutral care|generic|local|country)?\s*product options? to consider:.*?(?:\.|$)/gi,
+  /Ingredient or product-type options to consider:.*?(?:\.|$)/gi,
+  /\bPhilippine(?:s)?\b/gi,
+  /\b(?:country|locally|local)\s+(?:product|care)\s+options?\b/gi,
+  /\b[A-Z][a-z]+(?:n|ian|ese|ish|i)\s+(?:product|brand|care)\s+options?\b/g,
+];
 
 const removeAdvertisedNames = (value = '') => {
   let cleaned = String(value || '').trim();
   advertisedNamePatterns.forEach((pattern) => {
     cleaned = cleaned.replace(pattern, 'generic');
   });
-  return cleaned.replace(/\bgeneric\s+generic\b/gi, 'generic').replace(/\s{2,}/g, ' ').trim();
+  recommendationOriginPatterns.forEach((pattern) => {
+    cleaned = cleaned.replace(pattern, '');
+  });
+  return cleaned
+    .replace(/\bgeneric\s+generic\b/gi, 'generic')
+    .replace(/\bneutral care\s+neutral care\b/gi, 'neutral care')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+};
+
+const addCareSafetyNote = (value = '') => {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  if (!/ingredients that may help/i.test(text)) return text;
+  if (/consult a qualified hair or scalp care professional/i.test(text)) return text;
+  return `${text} ${CARE_SAFETY_NOTE}`;
 };
 
 const resolveRetryDelayMs = ({ attempt = 1, retryAfterSeconds = null }) => {
@@ -51,7 +74,7 @@ const normalizeRecommendations = (source = []) => (
 
       return {
         title: removeAdvertisedNames(item?.title || item?.heading || ''),
-        recommendation_text: removeAdvertisedNames(recommendationText),
+        recommendation_text: addCareSafetyNote(removeAdvertisedNames(recommendationText)),
         priority_order: Number.isFinite(parsedPriority) && parsedPriority > 0 ? parsedPriority : index + 1,
       };
     })
@@ -137,6 +160,19 @@ const resolvePhotoQualityIssueMessage = (analysis = {}) => {
 
   if (normalized.includes('multiple subject') || normalized.includes('multiple people') || normalized.includes('more than one')) {
     return 'Multiple subjects detected. Please retake the photo with only one person in the frame.';
+  }
+
+  if (
+    normalized.includes('inconsistent across views')
+    || normalized.includes('views are inconsistent')
+    || normalized.includes('different people')
+    || normalized.includes('different person')
+    || normalized.includes('different subject')
+    || normalized.includes('same current hair')
+    || normalized.includes('mismatched hair')
+    || normalized.includes('mixed hair')
+  ) {
+    return 'The photos do not look consistent across the required views. Please retake all required views with the same person and the same current hair.';
   }
 
   if (
@@ -557,7 +593,7 @@ export const analyzeHairPhotos = async ({
           retryAfterSeconds: retryAfterSeconds ?? null,
           providerResponseStatus,
           errorType: normalizedErrorType || null,
-        }, 'warn');
+        }, 'info');
         await waitFor(retryDelayMs);
         continue;
       }
@@ -743,8 +779,8 @@ export const analyzeHairPhotos = async ({
         logAppEvent('hairAnalysis.analyzeHairPhotos', 'AI provider request returned a retryable quota or rate-limit response.', {
           ...logContext,
           message: Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
-            ? `Cannot analyze hair, please try again in ${retryAfterSeconds} seconds.`
-            : 'Cannot analyze hair right now. Please try again later.',
+            ? `Hair analysis is busy right now. Please wait ${retryAfterSeconds} seconds, then try again.`
+            : 'Hair analysis is busy right now. Please try again in a moment.',
         }, 'warn');
       } else if (isTemporaryBusyError) {
         logAppEvent('hairAnalysis.analyzeHairPhotos', 'AI provider request returned a temporary-unavailable response.', {
@@ -775,8 +811,8 @@ export const analyzeHairPhotos = async ({
       ? 'Please upload at least one clear hair photo before running the analysis.'
       : isRateLimitError
         ? Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
-          ? `Cannot analyze hair, please try again in ${retryAfterSeconds} seconds.`
-          : 'Cannot analyze hair right now. Please try again later.'
+          ? `Hair analysis is busy right now. Please wait ${retryAfterSeconds} seconds, then try again.`
+          : 'Hair analysis is busy right now. Please try again in a moment.'
       : isGatewayFailureResponse(resolvedMessage)
         ? 'Hair analysis is temporarily unavailable on the server right now. Please try again in a moment.'
       : isTemporaryBusyError

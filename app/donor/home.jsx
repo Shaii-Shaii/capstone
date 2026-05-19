@@ -186,14 +186,29 @@ const advertisedRecommendationPatterns = [
   /\bLazada(?:\.ph)?\b/gi,
   /\bShopee(?:\.ph)?\b/gi,
 ];
+const CARE_SAFETY_NOTE = 'If you have allergies, scalp irritation, or sensitivity, consult a qualified hair or scalp care professional before trying new ingredients.';
+const recommendationOriginPatterns = [
+  /Philippine product options? to consider:.*?(?:\.|$)/gi,
+  /(?:neutral care|generic|local|country)?\s*product options? to consider:.*?(?:\.|$)/gi,
+  /\bPhilippine(?:s)?\b/gi,
+  /\b(?:country|locally|local)\s+(?:product|care)\s+options?\b/gi,
+  /\b[A-Z][a-z]+(?:n|ian|ese|ish|i)\s+(?:product|brand|care)\s+options?\b/g,
+  /Ingredient or product-type options to consider:.*?(?:\.|$)/gi,
+];
 
 const cleanRecommendationText = (value = '') => {
   let text = String(value || '').replace(/\s+/g, ' ').trim();
-  text = text.replace(/Philippine product options? to consider:.*?(?:\.|$)/gi, '');
+  recommendationOriginPatterns.forEach((pattern) => {
+    text = text.replace(pattern, '');
+  });
   advertisedRecommendationPatterns.forEach((pattern) => {
     text = text.replace(pattern, 'a suitable product type');
   });
-  return text.replace(/\s+/g, ' ').trim();
+  text = text.replace(/\s+/g, ' ').trim();
+  if (/ingredients that may help/i.test(text) && !/consult a qualified hair or scalp care professional/i.test(text)) {
+    text = `${text} ${CARE_SAFETY_NOTE}`;
+  }
+  return text;
 };
 
 const hasNegatedCareConcern = (text = '') => (

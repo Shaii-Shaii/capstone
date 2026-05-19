@@ -384,6 +384,7 @@ const getFileExtension = ({ contentType = '', fileName = '' }) => {
   const normalizedContentType = String(contentType || '').toLowerCase();
   const normalizedFileName = String(fileName || '').trim().toLowerCase();
 
+  if (normalizedContentType.includes('pdf') || normalizedFileName.endsWith('.pdf')) return 'pdf';
   if (normalizedContentType.includes('png') || normalizedFileName.endsWith('.png')) return 'png';
   if (normalizedContentType.includes('webp') || normalizedFileName.endsWith('.webp')) return 'webp';
   if (normalizedContentType.includes('gif') || normalizedFileName.endsWith('.gif')) return 'gif';
