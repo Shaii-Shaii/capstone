@@ -466,17 +466,26 @@ const resolveTryOnConfig = (fitSettings = {}, layerKey = 'fullWig') => {
   const globalConfig = fitSettings?.try_on || fitSettings?.tryOn || fitSettings?.filter || {};
   const layerConfig = globalConfig?.layers?.[layerKey] || globalConfig?.[layerKey] || fitSettings?.layers?.[layerKey]?.try_on || {};
   const source = { ...globalConfig, ...layerConfig };
+  const faceHoleSource = source?.faceHole || source?.face_hole || source?.faceOpening || source?.face_opening || {};
+  const defaultFaceHole = layerKey === 'frontBangs'
+    ? { x: 0.28, y: 0.16, width: 0.44, height: 0.24 }
+    : { x: 0.28, y: 0.16, width: 0.44, height: 0.5 };
 
   return {
     scaleMultiplier: getNumericFitValue(
       source,
       ['scaleMultiplier', 'scale_multiplier', 'scale', 'widthMultiplier', 'width_multiplier'],
-      layerKey === 'frontBangs' ? 1.12 : 1.45
+      layerKey === 'frontBangs' ? 1.12 : 1.25
+    ),
+    scaleY: getNumericFitValue(
+      source,
+      ['scaleY', 'scale_y', 'heightScale', 'height_scale'],
+      layerKey === 'frontBangs' ? 1.05 : 1.2
     ),
     heightMultiplier: getNumericFitValue(
       source,
       ['heightMultiplier', 'height_multiplier', 'aspectRatio', 'aspect_ratio'],
-      layerKey === 'frontBangs' ? 0.42 : 1.28
+      layerKey === 'frontBangs' ? 0.42 : 1.9
     ),
     verticalOffset: getNumericFitValue(
       source,
@@ -494,6 +503,12 @@ const resolveTryOnConfig = (fitSettings = {}, layerKey = 'fullWig') => {
       0
     ),
     anchor: source?.anchor || 'forehead',
+    faceHole: {
+      x: getNumericFitValue(faceHoleSource, ['x', 'left'], defaultFaceHole.x),
+      y: getNumericFitValue(faceHoleSource, ['y', 'top'], defaultFaceHole.y),
+      width: getNumericFitValue(faceHoleSource, ['width', 'w'], defaultFaceHole.width),
+      height: getNumericFitValue(faceHoleSource, ['height', 'h'], defaultFaceHole.height),
+    },
   };
 };
 
@@ -677,24 +692,23 @@ const buildFaceAnchoredTryOnLayerStyle = (faceFrame, stageLayout, layerKey, zInd
   const yawScale = Math.max(0.82, 1 - (yawAngle / 120));
 
   if (faceFrame?.mediapipe && forehead && chin) {
-    const stableFaceWidth = Math.max(faceBox.width, templeDistance || 0, eyeDistance ? eyeDistance * 2.35 : 0);
-    const stableFaceHeight = Math.max(faceBox.height, distanceBetweenPoints(forehead, chin));
-    const layerWidth = stableFaceWidth * tryOnConfig.scaleMultiplier * fit.scale;
-    const layerHeight = layerWidth * tryOnConfig.heightMultiplier;
-    const anchorPoint = tryOnConfig.anchor === 'eyes'
-      ? eyeCenter || forehead
-      : forehead;
+    const targetFaceWidth = faceBox.width * tryOnConfig.scaleMultiplier;
+    const targetFaceHeight = faceBox.height * tryOnConfig.scaleY;
+    const faceHole = tryOnConfig.faceHole;
+    const layerWidth = (targetFaceWidth / Math.max(faceHole.width, 0.12)) * fit.scale;
+    const layerHeight = (targetFaceHeight / Math.max(faceHole.height, 0.12)) * fit.scale;
+    const faceHoleCenterX = faceHole.x + (faceHole.width / 2);
     const rotation = Number(fit.rotation || 0) + rollAngle + tryOnConfig.rotationOffset;
 
     return {
       position: 'absolute',
       left: Math.max(
         -stageLayout.width * 0.35,
-        faceCenterX - (layerWidth / 2) + (stableFaceWidth * tryOnConfig.horizontalOffset) + anchor.userOffsetX
+        faceBox.x + (faceBox.width / 2) - (layerWidth * faceHoleCenterX) + (faceBox.width * tryOnConfig.horizontalOffset) + anchor.userOffsetX
       ),
       top: Math.max(
         -stageLayout.height * 0.45,
-        anchorPoint.y + (stableFaceHeight * tryOnConfig.verticalOffset) + anchor.userOffsetY
+        faceBox.y - (layerHeight * faceHole.y) + (faceBox.height * tryOnConfig.verticalOffset) + anchor.userOffsetY
       ),
       width: layerWidth,
       height: layerHeight,
@@ -780,8 +794,8 @@ const buildFaceOcclusionMask = (faceFrame, stageLayout, layerStyle, fitSettings 
   }
 
   const maskSettings = fitSettings?.face_mask || fitSettings?.faceMask || fitSettings?.try_on?.faceMask || fitSettings?.try_on?.face_mask || {};
-  const scaleX = getNumericFitValue(maskSettings, ['scaleX', 'scale_x', 'faceCutoutScaleX', 'face_cutout_scale_x'], 1.18);
-  const scaleY = getNumericFitValue(maskSettings, ['scaleY', 'scale_y', 'faceCutoutScaleY', 'face_cutout_scale_y'], 1.12);
+  const scaleX = getNumericFitValue(maskSettings, ['scaleX', 'scale_x', 'faceCutoutScaleX', 'face_cutout_scale_x'], 1.08);
+  const scaleY = getNumericFitValue(maskSettings, ['scaleY', 'scale_y', 'faceCutoutScaleY', 'face_cutout_scale_y'], 1.08);
   const offsetX = getNumericFitValue(maskSettings, ['offsetX', 'offset_x'], 0);
   const offsetY = getNumericFitValue(maskSettings, ['offsetY', 'offset_y'], 0);
   const faceCenter = {
