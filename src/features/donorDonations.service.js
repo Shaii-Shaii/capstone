@@ -1237,6 +1237,29 @@ const matchesAnyToken = (source = '', tokens = []) => {
   return tokens.some((token) => normalized.includes(token));
 };
 
+const normalizeTimelineStatusKey = (value = '') => String(value || '')
+  .trim()
+  .toLowerCase()
+  .replace(/[_\s-]+/g, '');
+
+const isCutAndShipCompletedStatus = (value = '') => [
+  'cut',
+  'wiginproduction',
+  'inproduction',
+  'wigcreated',
+  'wigcompleted',
+  'completed',
+].includes(normalizeTimelineStatusKey(value));
+
+const isPresentAttendanceStatus = (value = '') => [
+  'present',
+  'attended',
+  'checkedin',
+  'marked',
+  'scanned',
+  'verified',
+].includes(normalizeTimelineStatusKey(value));
+
 const isReceivedByOrganizationEntry = (entry = null) => {
   if (matchesAnyToken(entry?.title, ['quality', 'checking', 'assessment', 'qa'])) {
     return false;
@@ -1290,7 +1313,13 @@ const resolveTimelineStages = ({
 }) => {
   const isEventFlow = flowType === 'drive' || Boolean(submission?.donation_drive_id);
   const donationSubmittedEvidenceAt = submission?.submitted_at || submission?.updated_at || submission?.created_at || null;
-  const cutAndShipScannedAt = registration?.rsvp_scanned_at || registration?.attendance_marked_at || null;
+  const hasPresentAttendance = isPresentAttendanceStatus(registration?.attendance_status);
+  const hasCutStatus = isCutAndShipCompletedStatus(submission?.status);
+  const cutAndShipScannedAt = registration?.rsvp_scanned_at
+    || registration?.attendance_marked_at
+    || (hasPresentAttendance ? registration?.updated_at || registration?.registered_at || null : null)
+    || submission?.cut_at
+    || (hasCutStatus ? submission?.updated_at || submission?.created_at || null : null);
   const waybillEvidenceAt = submission?.qr_generated_at || submission?.submitted_at || submission?.updated_at || submission?.created_at || null;
   const readyEntry = findTimelineMatch(trackingEntries, (entry) => (
     matchesAnyToken(entry?.status, ['ready for shipment', 'parcel logged', 'parcel prepared'])
@@ -2134,13 +2163,9 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
   }
 
   let certificate = certificateResult.data || null;
-  const normalizedAttendanceStatus = String(activeDrive?.registration?.attendance_status || '')
-    .trim()
-    .toLowerCase()
-    .replace(/[_-]+/g, ' ');
   const hasAttendanceScan = Boolean(activeDrive?.registration?.rsvp_scanned_at)
-    || ['present', 'attended', 'checked in', 'checked-in', 'marked', 'scanned', 'verified']
-      .includes(normalizedAttendanceStatus);
+    || isPresentAttendanceStatus(activeDrive?.registration?.attendance_status)
+    || isCutAndShipCompletedStatus(activeSubmission?.status);
 
   if (activeSubmission?.submission_id && activeDrive?.donation_drive_id && hasAttendanceScan) {
     const existingEventCertificate = await fetchDonationCertificateBySubmissionId(activeSubmission.submission_id);
@@ -2149,10 +2174,14 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
         user_id: activeSubmission.user_id,
         submission_id: activeSubmission.submission_id,
         certificate_number: createDonationCertificateNumber(activeSubmission),
-        certificate_type: 'Event Attendance Certificate',
+        certificate_type: 'Certificate of Donation',
         issued_by: null,
-        issued_at: activeDrive?.registration?.rsvp_scanned_at || new Date().toISOString(),
-        remarks: 'Issued after staff scanned your RSVP attendance.',
+        issued_at: activeDrive?.registration?.rsvp_scanned_at
+          || activeSubmission?.cut_at
+          || activeDrive?.registration?.updated_at
+          || activeSubmission?.updated_at
+          || new Date().toISOString(),
+        remarks: 'Issued after staff marked Cut & Ship complete.',
       });
       if (certificateResultFromAttendance?.data?.certificate_id) {
         certificate = certificateResultFromAttendance.data;
