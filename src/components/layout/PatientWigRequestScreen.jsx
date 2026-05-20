@@ -485,19 +485,19 @@ const resolveTryOnConfig = (fitSettings = {}, layerKey = 'fullWig') => {
   const source = { ...globalConfig, ...layerConfig };
   const faceHoleSource = source?.faceHole || source?.face_hole || source?.faceOpening || source?.face_opening || {};
   const defaultFaceHole = layerKey === 'frontBangs'
-    ? { x: 0.18, y: 0.14, width: 0.64, height: 0.7 }
-    : { x: 0.24, y: 0.14, width: 0.52, height: 0.68 };
+    ? { x: 0.18, y: 0.24, width: 0.64, height: 0.62 }
+    : { x: 0.24, y: 0.28, width: 0.52, height: 0.58 };
 
   return {
     scaleMultiplier: getNumericFitValue(
       source,
       ['scaleMultiplier', 'scale_multiplier', 'widthMultiplier', 'width_multiplier'],
-      layerKey === 'frontBangs' ? 0.96 : 1.08
+      layerKey === 'frontBangs' ? 0.92 : 1
     ),
     scaleY: getNumericFitValue(
       source,
       ['scaleY', 'scale_y', 'heightScale', 'height_scale'],
-      layerKey === 'frontBangs' ? 0.96 : 1.08
+      layerKey === 'frontBangs' ? 0.92 : 0.98
     ),
     heightMultiplier: getNumericFitValue(
       source,
@@ -507,7 +507,7 @@ const resolveTryOnConfig = (fitSettings = {}, layerKey = 'fullWig') => {
     verticalOffset: getNumericFitValue(
       source,
       ['verticalOffset', 'vertical_offset', 'offsetYRatio', 'offset_y_ratio'],
-      layerKey === 'frontBangs' ? -0.03 : -0.02
+      layerKey === 'frontBangs' ? -0.06 : -0.04
     ),
     horizontalOffset: getNumericFitValue(
       source,
@@ -1278,7 +1278,7 @@ function CaptureModal({
 
   const primaryTryOnImageUrl = getPrimaryTryOnImageUrl(selectedWig);
   const shouldRenderFullWigLayer = Boolean(selectedWig?.layer_full_wig_url);
-  const shouldRenderFrontWigLayer = Boolean(selectedWig?.layer_front_bangs_url);
+  const shouldRenderFrontWigLayer = false;
   const shouldUseSingleTryOnImage = Boolean(
     selectedWig
     && primaryTryOnImageUrl
@@ -1367,7 +1367,6 @@ function CaptureModal({
               <View style={[styles.captureCorner, styles.captureCornerTopRight]} />
               <View style={[styles.captureCorner, styles.captureCornerBottomLeft]} />
               <View style={[styles.captureCorner, styles.captureCornerBottomRight]} />
-              <View style={styles.captureGuideLine} />
               <View style={styles.captureHintPill}>
                 <Text style={styles.captureHintText}>Front</Text>
               </View>
@@ -3881,16 +3880,6 @@ const styles = StyleSheet.create({
     borderStyle: 'dashed',
     borderColor: 'rgba(255,255,255,0.68)',
     backgroundColor: 'rgba(255,255,255,0.04)',
-  },
-  captureGuideLine: {
-    position: 'absolute',
-    top: 54,
-    bottom: 28,
-    left: '50%',
-    width: 2,
-    marginLeft: -1,
-    backgroundColor: 'rgba(255,255,255,0.55)',
-    borderRadius: theme.radius.full,
   },
   captureHintPill: {
     position: 'absolute',
