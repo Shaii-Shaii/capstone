@@ -2221,6 +2221,18 @@ const isSubmissionCutAndShipComplete = (submission = null) => {
   ].includes(statusKey);
 };
 
+const isRegistrationPresentForCutAndShip = (registration = null) => {
+  const attendanceKey = normalizeTimelineKey(registration?.attendance_status || registration?.Attendance_Status || '');
+  return [
+    'present',
+    'attended',
+    'checkedin',
+    'marked',
+    'scanned',
+    'verified',
+  ].includes(attendanceKey);
+};
+
 const buildEventDonationTimelineStages = ({ item, fallbackStages = [], certificate }) => {
   const registration = item?.drive?.registration || item?.registration || null;
   const submission = item?.submission || null;
@@ -2256,6 +2268,7 @@ const buildEventDonationTimelineStages = ({ item, fallbackStages = [], certifica
     : null;
   const cutEvidenceAt = registration?.rsvp_scanned_at
     || registration?.attendance_marked_at
+    || (isRegistrationPresentForCutAndShip(registration) ? (registration?.updated_at || registration?.registered_at || null) : null)
     || submission?.cut_at
     || (isSubmissionCutAndShipComplete(submission) ? (submission?.updated_at || submission?.created_at) : null)
     || certificateIssuedAt
