@@ -336,7 +336,48 @@ const distanceBetweenPoints = (a, b) => {
   return Math.hypot(a.x - b.x, a.y - b.y);
 };
 
-const normalizeMediaPipeLandmarkPoint = (landmark, viewSize, mirrored) => {
+const getNumericFitValue = (source, keys, fallback) => {
+  const candidates = Array.isArray(keys) ? keys : [keys];
+  for (const key of candidates) {
+    const value = source?.[key];
+    const numericValue = Number(value);
+    if (Number.isFinite(numericValue)) return numericValue;
+  }
+  return fallback;
+};
+
+const resolveLayerAnchor = (fitSettings = {}, layerKey = 'fullWig') => {
+  const layerFit = resolveLayerFit(fitSettings, layerKey);
+  const layerSettings = fitSettings?.layers?.[layerKey] || fitSettings?.[layerKey] || {};
+  const anchorSettings = layerSettings?.anchor || layerSettings?.face_anchor || fitSettings?.anchor || fitSettings?.face_anchor || {};
+
+  return {
+    faceCenterX: getNumericFitValue(
+      anchorSettings,
+      ['faceCenterX', 'face_center_x', 'cutoutCenterX', 'cutout_center_x', 'anchorX', 'anchor_x'],
+      layerKey === 'frontBangs' ? 0.5 : 0.52
+    ),
+    foreheadY: getNumericFitValue(
+      anchorSettings,
+      ['foreheadY', 'forehead_y', 'hairlineY', 'hairline_y', 'anchorY', 'anchor_y'],
+      layerKey === 'frontBangs' ? 0.42 : 0.34
+    ),
+    faceWidthRatio: getNumericFitValue(
+      anchorSettings,
+      ['faceWidthRatio', 'face_width_ratio', 'cutoutWidthRatio', 'cutout_width_ratio'],
+      layerKey === 'frontBangs' ? 0.68 : 0.5
+    ),
+    faceHeightRatio: getNumericFitValue(
+      anchorSettings,
+      ['faceHeightRatio', 'face_height_ratio', 'cutoutHeightRatio', 'cutout_height_ratio'],
+      layerKey === 'frontBangs' ? 0.38 : 0.62
+    ),
+    userOffsetX: layerFit.offsetX,
+    userOffsetY: layerFit.offsetY,
+  };
+};
+
+const normalizeMediaPipeLandmarkPoint = (landmark, viewSize) => {
   const x = Number(landmark?.x);
   const y = Number(landmark?.y);
   if (!Number.isFinite(x) || !Number.isFinite(y) || !viewSize?.width || !viewSize?.height) {
@@ -344,7 +385,7 @@ const normalizeMediaPipeLandmarkPoint = (landmark, viewSize, mirrored) => {
   }
 
   return {
-    x: (mirrored ? 1 - x : x) * viewSize.width,
+    x: x * viewSize.width,
     y: y * viewSize.height,
   };
 };
@@ -465,6 +506,7 @@ const buildFaceAnchoredTryOnLayerStyle = (faceFrame, stageLayout, layerKey, zInd
     return null;
   }
   const fit = resolveLayerFit(fitSettings, layerKey);
+  const anchor = resolveLayerAnchor(fitSettings, layerKey);
 
   const leftEye = getFacePoint(faceFrame, 'LEFT_EYE');
   const rightEye = getFacePoint(faceFrame, 'RIGHT_EYE');
@@ -472,11 +514,13 @@ const buildFaceAnchoredTryOnLayerStyle = (faceFrame, stageLayout, layerKey, zInd
   const rightEar = getFacePoint(faceFrame, 'RIGHT_EAR');
   const forehead = getFacePoint(faceFrame, 'FOREHEAD');
   const chin = getFacePoint(faceFrame, 'CHIN');
+  const nose = getFacePoint(faceFrame, 'NOSE');
   const leftTemple = getFacePoint(faceFrame, 'LEFT_TEMPLE') || leftEar;
   const rightTemple = getFacePoint(faceFrame, 'RIGHT_TEMPLE') || rightEar;
   const eyeCenter = averagePoints([leftEye, rightEye]);
   const templeCenter = averagePoints([leftTemple, rightTemple]);
-  const faceCenterX = eyeCenter?.x || (faceBox.x + (faceBox.width / 2));
+  const faceCenterPoint = averagePoints([eyeCenter, nose, templeCenter]);
+  const faceCenterX = faceCenterPoint?.x || eyeCenter?.x || (faceBox.x + (faceBox.width / 2));
   const eyeLineY = eyeCenter?.y || (faceBox.y + (faceBox.height * 0.38));
   const earDistance = distanceBetweenPoints(leftEar, rightEar);
   const eyeDistance = distanceBetweenPoints(leftEye, rightEye);
@@ -495,20 +539,20 @@ const buildFaceAnchoredTryOnLayerStyle = (faceFrame, stageLayout, layerKey, zInd
   const yawScale = Math.max(0.82, 1 - (yawAngle / 120));
 
   if (faceFrame?.mediapipe && forehead && chin) {
-    const headCenterX = templeCenter?.x || faceCenterX;
-    const headHeight = Math.max(distanceBetweenPoints(forehead, chin) * 1.05, faceBox.height);
-    const headWidth = Math.max(anchorWidth, eyeDistance ? eyeDistance * 2.5 : 0);
-    const widthMultiplier = layerKey === 'frontBangs' ? 1.48 : 1.86;
-    const heightMultiplier = layerKey === 'frontBangs' ? 0.52 : 1.48;
-    const topOffset = layerKey === 'frontBangs' ? 0.18 : 0.34;
-    const layerWidth = headWidth * widthMultiplier * fit.scale;
-    const layerHeight = headHeight * heightMultiplier * fit.scale;
+    const targetFaceWidth = Math.max(
+      templeDistance || 0,
+      eyeDistance ? eyeDistance * 2.25 : 0,
+      faceBox.width * 0.86
+    );
+    const targetFaceHeight = Math.max(distanceBetweenPoints(forehead, chin), faceBox.height * 0.82);
+    const layerWidth = (targetFaceWidth / Math.max(anchor.faceWidthRatio, 0.2)) * fit.scale;
+    const layerHeight = (targetFaceHeight / Math.max(anchor.faceHeightRatio, 0.25)) * fit.scale;
     const rotation = Number(fit.rotation || 0) + rollAngle;
 
     return {
       position: 'absolute',
-      left: Math.max(-stageLayout.width * 0.35, headCenterX - (layerWidth / 2) + fit.offsetX),
-      top: Math.max(-stageLayout.height * 0.45, forehead.y - (headHeight * topOffset * fit.scale) + fit.offsetY),
+      left: Math.max(-stageLayout.width * 0.35, faceCenterX - (layerWidth * anchor.faceCenterX) + anchor.userOffsetX),
+      top: Math.max(-stageLayout.height * 0.45, forehead.y - (layerHeight * anchor.foreheadY) + anchor.userOffsetY),
       width: layerWidth,
       height: layerHeight,
       opacity: fit.opacity,
