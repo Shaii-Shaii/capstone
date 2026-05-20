@@ -1290,7 +1290,7 @@ const resolveTimelineStages = ({
 }) => {
   const isEventFlow = flowType === 'drive' || Boolean(submission?.donation_drive_id);
   const donationSubmittedEvidenceAt = submission?.submitted_at || submission?.updated_at || submission?.created_at || null;
-  const rsvpEvidenceAt = registration?.attendance_marked_at || registration?.registered_at || null;
+  const cutAndShipScannedAt = registration?.rsvp_scanned_at || registration?.attendance_marked_at || null;
   const waybillEvidenceAt = submission?.qr_generated_at || submission?.submitted_at || submission?.updated_at || submission?.created_at || null;
   const readyEntry = findTimelineMatch(trackingEntries, (entry) => (
     matchesAnyToken(entry?.status, ['ready for shipment', 'parcel logged', 'parcel prepared'])
@@ -1335,7 +1335,6 @@ const resolveTimelineStages = ({
   const releasedDbAt = production?.allocation?.released_at || null;
   const bundlingEvidenceAt = bundlingEntry?.updated_at
     || bundleEvidenceAt
-    || certificate?.issued_at
     || null;
   const wigProductionEntry = findTimelineMatch(trackingEntries, (entry) => (
     matchesAnyToken(entry?.status, ['wig production', 'in production', 'production'])
@@ -1374,16 +1373,16 @@ const resolveTimelineStages = ({
   const eventStageEntries = isEventFlow ? [
     {
       key: 'cut_and_ship',
-      label: 'Cut & ship',
-      statusLabel: transitEntry?.status || (matchesAnyToken(logistics?.shipment_status, ['transit', 'shipped']) ? logistics?.shipment_status : ''),
-      savedNote: transitEntry?.description || 'Staff scanned your Cut & Ship QR.',
-      evidenceAt: transitEvidenceAt || rsvpEvidenceAt,
+      label: 'Cut & Ship',
+      statusLabel: transitEntry?.status || (cutAndShipScannedAt ? 'Complete' : ''),
+      savedNote: transitEntry?.description || 'Staff scanned your Cut & Ship QR. Your donor certificate is issued after this scan.',
+      evidenceAt: transitEvidenceAt || cutAndShipScannedAt,
       entry: transitEntry || registration,
       parcelImages,
     },
     {
       key: 'wig_production',
-      label: 'Wig production',
+      label: 'Wig Production',
       statusLabel: wigProductionEntry?.status || wigStatus || bundleStatus || '',
       savedNote: wigProductionEntry?.description || bundlingEntry?.description || production?.wig?.wig_name || '',
       evidenceAt: wigProductionEvidenceAt || bundlingEvidenceAt || wigCompletedEvidenceAt,
@@ -1392,18 +1391,18 @@ const resolveTimelineStages = ({
     },
     {
       key: 'wig_distribution_hospitals',
-      label: 'Wig distribution for hospitals',
+      label: 'Wig Distribution for Hospitals',
       statusLabel: wigCompletedEntry?.status || (wigCompletedEvidenceAt ? 'Distributed' : ''),
-      savedNote: wigCompletedEntry?.description || 'The finished wig was distributed for hospital allocation.',
+      savedNote: wigCompletedEntry?.description || 'The finished wig is prepared for hospital distribution.',
       evidenceAt: wigCompletedEvidenceAt || assignedToPatientEvidenceAt,
       entry: wigCompletedEntry || production?.wig || production?.allocation,
       parcelImages,
     },
     {
       key: 'distribution_to_patients',
-      label: 'Distribution to patients',
+      label: 'Distribution to Patients',
       statusLabel: receivedByPatientEntry?.status || allocationStatus || '',
-      savedNote: receivedByPatientEntry?.description || production?.allocation?.notes || '',
+      savedNote: receivedByPatientEntry?.description || production?.allocation?.notes || 'The wig is released to the assigned patient.',
       evidenceAt: receivedByPatientEvidenceAt,
       entry: receivedByPatientEntry || production?.allocation,
       parcelImages,
