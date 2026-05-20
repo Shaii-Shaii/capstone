@@ -468,19 +468,19 @@ const resolveTryOnConfig = (fitSettings = {}, layerKey = 'fullWig') => {
   const source = { ...globalConfig, ...layerConfig };
   const faceHoleSource = source?.faceHole || source?.face_hole || source?.faceOpening || source?.face_opening || {};
   const defaultFaceHole = layerKey === 'frontBangs'
-    ? { x: 0.28, y: 0.16, width: 0.44, height: 0.24 }
+    ? { x: 0.25, y: 0.16, width: 0.5, height: 0.62 }
     : { x: 0.28, y: 0.16, width: 0.44, height: 0.5 };
 
   return {
     scaleMultiplier: getNumericFitValue(
       source,
       ['scaleMultiplier', 'scale_multiplier', 'scale', 'widthMultiplier', 'width_multiplier'],
-      layerKey === 'frontBangs' ? 1.12 : 1.25
+      layerKey === 'frontBangs' ? 1.15 : 1.25
     ),
     scaleY: getNumericFitValue(
       source,
       ['scaleY', 'scale_y', 'heightScale', 'height_scale'],
-      layerKey === 'frontBangs' ? 1.05 : 1.2
+      layerKey === 'frontBangs' ? 1.08 : 1.2
     ),
     heightMultiplier: getNumericFitValue(
       source,
@@ -490,7 +490,7 @@ const resolveTryOnConfig = (fitSettings = {}, layerKey = 'fullWig') => {
     verticalOffset: getNumericFitValue(
       source,
       ['verticalOffset', 'vertical_offset', 'offsetYRatio', 'offset_y_ratio'],
-      layerKey === 'frontBangs' ? -0.34 : -0.3
+      layerKey === 'frontBangs' ? -0.03 : -0.02
     ),
     horizontalOffset: getNumericFitValue(
       source,
