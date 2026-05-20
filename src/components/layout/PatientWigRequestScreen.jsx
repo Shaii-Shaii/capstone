@@ -98,6 +98,8 @@ const canUseMediaPipeTryOnCamera = Boolean(
   && useMediaPipeFaceLandmarkDetection
   && MediaPipeRunningMode
   && MediaPipeDelegate
+  && NativeVisionCamera
+  && useNativeCameraDevice
 );
 
 const canUseNativeTryOnCamera = Boolean(
@@ -620,7 +622,29 @@ const getPrimaryTryOnImageUrl = (wig) => (
   || ''
 );
 
-function MediaPipeTryOnFaceCamera({ cameraRef, onFaceBoundsChange, onCameraReady }) {
+const getCameraRuntimeMessage = (error) => {
+  const code = String(error?.code || '');
+  if (code === 'system/camera-is-restricted') {
+    return 'Camera is restricted by this device. Use upload instead or allow camera access in device policy/settings.';
+  }
+  if (code.includes('permission')) {
+    return 'Camera permission is not available. Allow camera access or upload a photo.';
+  }
+  return 'Camera is unavailable right now. Use upload instead.';
+};
+
+function CameraUnavailablePlaceholder({ message }) {
+  return (
+    <View style={styles.captureStagePlaceholder}>
+      <AppIcon name="camera" state="active" size="xl" />
+      <Text style={styles.captureStagePlaceholderTitle}>Camera unavailable</Text>
+      <Text style={styles.captureStagePlaceholderBody}>{message}</Text>
+    </View>
+  );
+}
+
+function MediaPipeTryOnFaceCamera({ cameraRef, onFaceBoundsChange, onCameraReady, onCameraUnavailable }) {
+  const device = useNativeCameraDevice('front');
   const handleResults = React.useCallback((resultBundle, viewSize, mirrored) => {
     onFaceBoundsChange?.(buildMediaPipeFaceFrame(resultBundle, viewSize, mirrored));
   }, [onFaceBoundsChange]);
@@ -646,21 +670,49 @@ function MediaPipeTryOnFaceCamera({ cameraRef, onFaceBoundsChange, onCameraReady
   );
 
   React.useEffect(() => {
-    onCameraReady?.();
-  }, [onCameraReady]);
+    if (device) {
+      solution.cameraDeviceChangeHandler(device);
+      onCameraReady?.();
+    }
+  }, [device, onCameraReady, solution]);
+
+  React.useEffect(() => {
+    solution.resizeModeChangeHandler('cover');
+  }, [solution]);
+
+  const handleCameraRuntimeError = React.useCallback((error) => {
+    logAppError('Vision camera unavailable for live wig try-on', error);
+    onFaceBoundsChange?.(null);
+    onCameraUnavailable?.(error);
+  }, [onCameraUnavailable, onFaceBoundsChange]);
+
+  if (!device) {
+    return (
+      <View style={styles.captureStagePlaceholder}>
+        <AppIcon name="camera" state="active" size="xl" />
+        <Text style={styles.captureStagePlaceholderTitle}>Camera starting</Text>
+      </View>
+    );
+  }
 
   return (
-    <MediaPipeCamera
+    <NativeVisionCamera
       ref={cameraRef}
       style={styles.captureStageImage}
-      solution={solution}
-      activeCamera="front"
+      device={device}
+      isActive
+      photo
+      frameProcessor={solution.frameProcessor}
+      onLayout={solution.cameraViewLayoutChangeHandler}
+      onOutputOrientationChanged={solution.cameraOrientationChangedHandler}
+      onError={handleCameraRuntimeError}
       resizeMode="cover"
+      pixelFormat="rgb"
     />
   );
 }
 
-function NativeTryOnFaceCamera({ cameraRef, stageLayout, onFaceBoundsChange, onCameraReady }) {
+function NativeTryOnFaceCamera({ cameraRef, stageLayout, onFaceBoundsChange, onCameraReady, onCameraUnavailable }) {
   const device = useNativeCameraDevice('front');
   const faceDetectionOptions = React.useMemo(() => ({
     performanceMode: 'fast',
@@ -703,6 +755,12 @@ function NativeTryOnFaceCamera({ cameraRef, stageLayout, onFaceBoundsChange, onC
     if (device) onCameraReady?.();
   }, [device, onCameraReady]);
 
+  const handleCameraRuntimeError = React.useCallback((error) => {
+    logAppError('Vision camera unavailable for fallback wig try-on', error);
+    onFaceBoundsChange?.(null);
+    onCameraUnavailable?.(error);
+  }, [onCameraUnavailable, onFaceBoundsChange]);
+
   if (!device) {
     return (
       <View style={styles.captureStagePlaceholder}>
@@ -721,6 +779,7 @@ function NativeTryOnFaceCamera({ cameraRef, stageLayout, onFaceBoundsChange, onC
       photo
       frameProcessor={frameProcessor}
       pixelFormat="yuv"
+      onError={handleCameraRuntimeError}
     />
   );
 }
@@ -955,12 +1014,20 @@ function CaptureModal({
 }) {
   const [stageLayout, setStageLayout] = useState({ width: 0, height: 320 });
   const [faceFrame, setFaceFrame] = useState(null);
+  const [cameraRuntimeError, setCameraRuntimeError] = useState(null);
 
   useEffect(() => {
-    if (visible && hasCameraPermission && !canUseFaceTrackingTryOnCamera) {
+    if (visible && hasCameraPermission && (!canUseFaceTrackingTryOnCamera || cameraRuntimeError)) {
       onCameraReady?.();
     }
-  }, [hasCameraPermission, onCameraReady, visible]);
+  }, [cameraRuntimeError, hasCameraPermission, onCameraReady, visible]);
+
+  useEffect(() => {
+    if (visible) {
+      setCameraRuntimeError(null);
+      setFaceFrame(null);
+    }
+  }, [visible]);
 
   if (!visible) return null;
 
@@ -973,8 +1040,9 @@ function CaptureModal({
     && !selectedWig.layer_back_hair_url
   );
   const selectedWigNeedsLayer = Boolean(selectedWig && !primaryTryOnImageUrl);
-  const isLiveCameraTryOn = Boolean(!referenceImage?.uri && hasCameraPermission && canUseFaceTrackingTryOnCamera);
+  const isLiveCameraTryOn = Boolean(!referenceImage?.uri && hasCameraPermission && canUseFaceTrackingTryOnCamera && !cameraRuntimeError);
   const isWaitingForFace = Boolean(isLiveCameraTryOn && selectedWig && primaryTryOnImageUrl && !faceFrame);
+  const cameraRuntimeMessage = getCameraRuntimeMessage(cameraRuntimeError);
   const getLayerStyle = (layerKey, zIndex) => {
     const faceAnchoredStyle = buildFaceAnchoredTryOnLayerStyle(faceFrame, stageLayout, layerKey, zIndex, selectedWig?.fit_settings);
     if (faceAnchoredStyle) return faceAnchoredStyle;
@@ -1003,6 +1071,8 @@ function CaptureModal({
           >
             {referenceImage?.uri ? (
               <Image source={{ uri: referenceImage.uri }} style={styles.captureStageImage} />
+            ) : cameraRuntimeError ? (
+              <CameraUnavailablePlaceholder message={cameraRuntimeMessage} />
             ) : hasCameraPermission ? (
               canUseFaceTrackingTryOnCamera ? (
                 canUseMediaPipeTryOnCamera ? (
@@ -1010,6 +1080,7 @@ function CaptureModal({
                     cameraRef={cameraRef}
                     onFaceBoundsChange={setFaceFrame}
                     onCameraReady={onCameraReady}
+                    onCameraUnavailable={setCameraRuntimeError}
                   />
                 ) : (
                   <NativeTryOnFaceCamera
@@ -1017,6 +1088,7 @@ function CaptureModal({
                     stageLayout={stageLayout}
                     onFaceBoundsChange={setFaceFrame}
                     onCameraReady={onCameraReady}
+                    onCameraUnavailable={setCameraRuntimeError}
                   />
                 )
               ) : (
@@ -1026,6 +1098,7 @@ function CaptureModal({
                   facing="front"
                   mode="picture"
                   animateShutter
+                  onMountError={setCameraRuntimeError}
                 />
               )
             ) : (
