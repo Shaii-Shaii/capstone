@@ -254,28 +254,41 @@ const getRecommendedWigIds = ({ wigs, preferredColor, preferredLength, hairTextu
   );
 };
 
-const resolveLayerFit = (fitSettings = {}, layerKey = 'fullWig') => {
-  const candidates = [
-    fitSettings?.layers?.[layerKey],
-    fitSettings?.[layerKey],
-    layerKey === 'fullWig' ? fitSettings?.full_wig : null,
-    layerKey === 'backHair' ? fitSettings?.back_hair : null,
-    layerKey === 'frontBangs' ? fitSettings?.front_bangs : null,
-    layerKey === 'fullWig' ? fitSettings?.full_wig_layer : null,
-    layerKey === 'backHair' ? fitSettings?.back_hair_layer : null,
-    layerKey === 'frontBangs' ? fitSettings?.front_bangs_layer : null,
+const LAYER_SETTING_KEYS = {
+  fullWig: ['fullWig', 'full_wig', 'full-wig', 'FullWig', 'Full Wig', 'full_wig_layer'],
+  backHair: ['backHair', 'back_hair', 'back-hair', 'BackHair', 'Back Hair', 'back_hair_layer'],
+  frontBangs: ['frontBangs', 'front_bangs', 'front-bangs', 'FrontBangs', 'Front Bangs', 'front_bangs_layer'],
+};
+
+const getLayerSettingsCandidates = (fitSettings = {}, layerKey = 'fullWig') => {
+  const keys = LAYER_SETTING_KEYS[layerKey] || [layerKey];
+  const scopedSources = [
+    fitSettings?.layers,
+    fitSettings?.Layers,
+    fitSettings?.layerSettings,
+    fitSettings?.layer_settings,
     fitSettings,
   ].filter(Boolean);
+
+  return [
+    ...scopedSources.flatMap((source) => keys.map((key) => source?.[key])),
+    fitSettings,
+  ].filter(Boolean);
+};
+
+const resolveLayerFit = (fitSettings = {}, layerKey = 'fullWig') => {
+  const candidates = getLayerSettingsCandidates(fitSettings, layerKey);
   const source = candidates[0] || {};
+  const offsetSource = source.offset || source.position || source.translate || {};
   const width = source.width ?? source.w ?? (layerKey === 'fullWig' ? 72 : 64);
   const height = source.height ?? source.h ?? (layerKey === 'fullWig' ? 70 : 42);
-  const x = source.x ?? source.left ?? source.offsetX ?? source.offset_x ?? (layerKey === 'fullWig' ? 14 : 18);
-  const y = source.y ?? source.top ?? source.offsetY ?? source.offset_y ?? (layerKey === 'frontBangs' ? 18 : 12);
+  const x = source.x ?? source.left ?? offsetSource.x ?? source.offsetX ?? source.offset_x ?? (layerKey === 'fullWig' ? 14 : 18);
+  const y = source.y ?? source.top ?? offsetSource.y ?? source.offsetY ?? source.offset_y ?? (layerKey === 'frontBangs' ? 18 : 12);
   const scale = Number(source.scale ?? fitSettings?.scale ?? 1) || 1;
   const rotation = source.rotation ?? source.rotate ?? fitSettings?.rotation ?? 0;
   const opacity = source.opacity ?? 1;
-  const offsetX = Number(source.offsetX ?? source.offset_x ?? source.translateX ?? source.translate_x ?? source.xOffset ?? source.x_offset ?? 0) || 0;
-  const offsetY = Number(source.offsetY ?? source.offset_y ?? source.translateY ?? source.translate_y ?? source.yOffset ?? source.y_offset ?? 0) || 0;
+  const offsetX = Number(source.offsetX ?? source.offset_x ?? source.translateX ?? source.translate_x ?? source.xOffset ?? source.x_offset ?? offsetSource.x ?? 0) || 0;
+  const offsetY = Number(source.offsetY ?? source.offset_y ?? source.translateY ?? source.translate_y ?? source.yOffset ?? source.y_offset ?? offsetSource.y ?? 0) || 0;
 
   return {
     width,
@@ -432,7 +445,7 @@ const getNumericFitValue = (source, keys, fallback) => {
 
 const resolveLayerAnchor = (fitSettings = {}, layerKey = 'fullWig') => {
   const layerFit = resolveLayerFit(fitSettings, layerKey);
-  const layerSettings = fitSettings?.layers?.[layerKey] || fitSettings?.[layerKey] || {};
+  const layerSettings = getLayerSettingsCandidates(fitSettings, layerKey)[0] || {};
   const anchorSettings = layerSettings?.anchor || layerSettings?.face_anchor || fitSettings?.anchor || fitSettings?.face_anchor || {};
 
   return {
@@ -463,7 +476,12 @@ const resolveLayerAnchor = (fitSettings = {}, layerKey = 'fullWig') => {
 
 const resolveTryOnConfig = (fitSettings = {}, layerKey = 'fullWig') => {
   const globalConfig = fitSettings?.try_on || fitSettings?.tryOn || fitSettings?.filter || {};
-  const layerConfig = globalConfig?.layers?.[layerKey] || globalConfig?.[layerKey] || fitSettings?.layers?.[layerKey]?.try_on || {};
+  const layerKeys = LAYER_SETTING_KEYS[layerKey] || [layerKey];
+  const layerConfig = [
+    ...layerKeys.map((key) => globalConfig?.layers?.[key]),
+    ...layerKeys.map((key) => globalConfig?.[key]),
+    ...getLayerSettingsCandidates(fitSettings, layerKey).map((settings) => settings?.try_on || settings?.tryOn),
+  ].filter(Boolean)[0] || {};
   const source = { ...globalConfig, ...layerConfig };
   const faceHoleSource = source?.faceHole || source?.face_hole || source?.faceOpening || source?.face_opening || {};
   const defaultFaceHole = layerKey === 'frontBangs'
@@ -1200,8 +1218,7 @@ function CaptureModal({
   if (!visible) return null;
 
   const primaryTryOnImageUrl = getPrimaryTryOnImageUrl(selectedWig);
-  const hasSplitWigLayers = Boolean(selectedWig?.layer_back_hair_url || selectedWig?.layer_front_bangs_url);
-  const shouldRenderFullWigLayer = Boolean(selectedWig?.layer_full_wig_url && !hasSplitWigLayers);
+  const shouldRenderFullWigLayer = Boolean(selectedWig?.layer_full_wig_url);
   const shouldRenderFrontWigLayer = Boolean(selectedWig?.layer_front_bangs_url);
   const shouldUseSingleTryOnImage = Boolean(
     selectedWig
@@ -1212,7 +1229,7 @@ function CaptureModal({
   );
   const selectedWigNeedsLayer = Boolean(selectedWig && !primaryTryOnImageUrl);
   const isLiveCameraTryOn = Boolean(!referenceImage?.uri && hasCameraPermission && canUseFaceTrackingTryOnCamera && !cameraRuntimeError);
-  const shouldRenderBackWigLayer = Boolean(selectedWig?.layer_back_hair_url);
+  const shouldRenderBackWigLayer = false;
   const isWaitingForFace = Boolean(isLiveCameraTryOn && selectedWig && primaryTryOnImageUrl && !faceFrame);
   const canCaptureLivePhoto = Boolean(!isLiveCameraTryOn || faceFrame);
   const canUseSelectedPhoto = Boolean(referenceImage?.uri && (!canUseFaceTrackingTryOnCamera || faceFrame || !hasCameraPermission || cameraRuntimeError));
