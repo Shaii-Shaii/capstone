@@ -1177,7 +1177,6 @@ function CaptureModal({
   const primaryTryOnImageUrl = getPrimaryTryOnImageUrl(selectedWig);
   const hasSplitWigLayers = Boolean(selectedWig?.layer_back_hair_url || selectedWig?.layer_front_bangs_url);
   const shouldRenderFullWigLayer = Boolean(selectedWig?.layer_full_wig_url && !hasSplitWigLayers);
-  const shouldRenderBackWigLayer = Boolean(selectedWig?.layer_back_hair_url);
   const shouldRenderFrontWigLayer = Boolean(selectedWig?.layer_front_bangs_url);
   const shouldUseSingleTryOnImage = Boolean(
     selectedWig
@@ -1188,6 +1187,7 @@ function CaptureModal({
   );
   const selectedWigNeedsLayer = Boolean(selectedWig && !primaryTryOnImageUrl);
   const isLiveCameraTryOn = Boolean(!referenceImage?.uri && hasCameraPermission && canUseFaceTrackingTryOnCamera && !cameraRuntimeError);
+  const shouldRenderBackWigLayer = Boolean(selectedWig?.layer_back_hair_url && !isLiveCameraTryOn);
   const isWaitingForFace = Boolean(isLiveCameraTryOn && selectedWig && primaryTryOnImageUrl && !faceFrame);
   const canCaptureLivePhoto = Boolean(!isLiveCameraTryOn || faceFrame);
   const canUseSelectedPhoto = Boolean(referenceImage?.uri && (!canUseFaceTrackingTryOnCamera || faceFrame || !hasCameraPermission || cameraRuntimeError));
