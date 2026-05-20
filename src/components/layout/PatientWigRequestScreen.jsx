@@ -117,6 +117,11 @@ const CAPTURE_FACE_GUIDE_TOP = 46;
 const CAPTURE_FACE_GUIDE_WIDTH = 142;
 const CAPTURE_FACE_GUIDE_HEIGHT = 190;
 const CAPTURE_FACE_GUIDE_RADIUS = 72;
+const DEFAULT_WIG_CALIBRATION = {
+  offsetX: 0,
+  offsetY: 0,
+  scale: 1,
+};
 
 const buildRecommendationTitle = ({ preview, specification, draftValues }) => (
   preview?.recommended_style_name
@@ -778,7 +783,7 @@ const isFaceAlignedToGuide = (faceFrame, stageLayout) => {
   );
 };
 
-const buildFaceAnchoredTryOnLayerStyle = (faceFrame, stageLayout, layerKey, zIndex, fitSettings = {}) => {
+const buildFaceAnchoredTryOnLayerStyle = (faceFrame, stageLayout, layerKey, zIndex, fitSettings = {}, userCalibration = DEFAULT_WIG_CALIBRATION) => {
   const faceBox = resolveFaceBoxInStage(faceFrame, stageLayout);
   if (!faceBox) {
     return null;
@@ -831,26 +836,23 @@ const buildFaceAnchoredTryOnLayerStyle = (faceFrame, stageLayout, layerKey, zInd
     const guideHeadBox = resolveGuideHeadBox(stageLayout);
     const headBox = resolveGuideAnchoredHeadBox(detectedHeadBox, guideHeadBox) || detectedHeadBox;
     const layerScale = normalizeLayerScale(fit.scale);
-    const offsetX = normalizeLayerOffset(anchor.userOffsetX, stageLayout);
-    const offsetY = normalizeLayerOffset(anchor.userOffsetY, stageLayout);
+    const calibrationScale = Math.min(1.25, Math.max(0.75, Number(userCalibration?.scale || 1)));
+    const offsetX = normalizeLayerOffset(anchor.userOffsetX, stageLayout) + Number(userCalibration?.offsetX || 0);
+    const offsetY = normalizeLayerOffset(anchor.userOffsetY, stageLayout) + Number(userCalibration?.offsetY || 0);
     const targetFaceWidth = headBox.width * tryOnConfig.scaleMultiplier;
     const targetFaceHeight = headBox.height * tryOnConfig.scaleY;
     const faceHole = tryOnConfig.faceHole;
-    const layerWidth = (targetFaceWidth / Math.max(faceHole.width, 0.12)) * layerScale;
-    const layerHeight = (targetFaceHeight / Math.max(faceHole.height, 0.12)) * layerScale;
+    const layerWidth = (targetFaceWidth / Math.max(faceHole.width, 0.12)) * layerScale * calibrationScale;
+    const layerHeight = (targetFaceHeight / Math.max(faceHole.height, 0.12)) * layerScale * calibrationScale;
     const faceHoleCenterX = faceHole.x + (faceHole.width / 2);
     const rotation = Number(fit.rotation || 0) + rollAngle + tryOnConfig.rotationOffset;
+    const rawLeft = headBox.x + (headBox.width / 2) - (layerWidth * faceHoleCenterX) + (headBox.width * tryOnConfig.horizontalOffset) + offsetX;
+    const rawTop = headBox.y - (layerHeight * faceHole.y) + (headBox.height * tryOnConfig.verticalOffset) + offsetY;
 
     return {
       position: 'absolute',
-      left: Math.max(
-        -stageLayout.width * 0.35,
-        headBox.x + (headBox.width / 2) - (layerWidth * faceHoleCenterX) + (headBox.width * tryOnConfig.horizontalOffset) + offsetX
-      ),
-      top: Math.max(
-        -stageLayout.height * 0.45,
-        headBox.y - (layerHeight * faceHole.y) + (headBox.height * tryOnConfig.verticalOffset) + offsetY
-      ),
+      left: Math.min(stageLayout.width - (layerWidth * 0.18), Math.max(-stageLayout.width * 0.28, rawLeft)),
+      top: Math.min(stageLayout.height - (layerHeight * 0.18), Math.max(0, rawTop)),
       width: layerWidth,
       height: layerHeight,
       opacity: fit.opacity,
@@ -1282,6 +1284,44 @@ function IconCircleButton({
   );
 }
 
+function CalibrationControl({
+  label,
+  value,
+  onDecrease,
+  onIncrease,
+}) {
+  return (
+    <View style={styles.calibrationControlRow}>
+      <Text style={styles.calibrationControlLabel}>{label}</Text>
+      <View style={styles.calibrationStepper}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Decrease ${label}`}
+          onPress={onDecrease}
+          style={({ pressed }) => [
+            styles.calibrationStepButton,
+            pressed ? styles.iconCircleButtonPressed : null,
+          ]}
+        >
+          <Text style={styles.calibrationStepButtonText}>-</Text>
+        </Pressable>
+        <Text style={styles.calibrationValue}>{value}</Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Increase ${label}`}
+          onPress={onIncrease}
+          style={({ pressed }) => [
+            styles.calibrationStepButton,
+            pressed ? styles.iconCircleButtonPressed : null,
+          ]}
+        >
+          <Text style={styles.calibrationStepButtonText}>+</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
 function WigInfoRow({ label, value, roles }) {
   return (
     <View
@@ -1322,8 +1362,22 @@ function CaptureModal({
   const [stageLayout, setStageLayout] = useState({ width: 0, height: 320 });
   const [faceFrame, setFaceFrame] = useState(null);
   const [cameraRuntimeError, setCameraRuntimeError] = useState(null);
+  const [isCalibrationOpen, setIsCalibrationOpen] = useState(false);
+  const [wigCalibration, setWigCalibration] = useState(DEFAULT_WIG_CALIBRATION);
   const handleFaceFrameChange = React.useCallback((nextFaceFrame) => {
     setFaceFrame((previousFaceFrame) => smoothFaceFrame(previousFaceFrame, nextFaceFrame));
+  }, []);
+  const adjustCalibration = React.useCallback((key, delta, min, max) => {
+    setWigCalibration((current) => {
+      const nextValue = Math.min(max, Math.max(min, Number(current?.[key] || 0) + delta));
+      return {
+        ...current,
+        [key]: Math.round(nextValue * 100) / 100,
+      };
+    });
+  }, []);
+  const resetCalibration = React.useCallback(() => {
+    setWigCalibration(DEFAULT_WIG_CALIBRATION);
   }, []);
 
   useEffect(() => {
@@ -1338,6 +1392,10 @@ function CaptureModal({
       setFaceFrame(null);
     }
   }, [visible]);
+
+  useEffect(() => {
+    setWigCalibration(DEFAULT_WIG_CALIBRATION);
+  }, [selectedWigId]);
 
   if (!visible) return null;
 
@@ -1361,7 +1419,7 @@ function CaptureModal({
   const canUseSelectedPhoto = Boolean(referenceImage?.uri && (!canUseFaceTrackingTryOnCamera || faceFrame || !hasCameraPermission || cameraRuntimeError));
   const cameraRuntimeMessage = getCameraRuntimeMessage(cameraRuntimeError);
   const getLayerStyle = (layerKey, zIndex) => {
-    const faceAnchoredStyle = buildFaceAnchoredTryOnLayerStyle(faceFrame, stageLayout, layerKey, zIndex, selectedWig?.fit_settings);
+    const faceAnchoredStyle = buildFaceAnchoredTryOnLayerStyle(faceFrame, stageLayout, layerKey, zIndex, selectedWig?.fit_settings, wigCalibration);
     if (faceAnchoredStyle) return faceAnchoredStyle;
     if (isLiveCameraTryOn) return styles.tryOnLayerHidden;
     return buildTryOnLayerStyle(selectedWig?.fit_settings, layerKey, zIndex);
@@ -1373,6 +1431,16 @@ function CaptureModal({
         <View style={styles.modalHeader}>
           <Text style={styles.modalTitle}>Front Photo</Text>
           <View style={styles.modalHeaderActions}>
+            {selectedWig ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Adjust wig calibration"
+                onPress={() => setIsCalibrationOpen(true)}
+                style={styles.headerIconButton}
+              >
+                <AppIcon name="settings" state="muted" />
+              </Pressable>
+            ) : null}
             <Pressable onPress={onClose} style={styles.headerIconButton}>
               <AppIcon name="close" state="muted" />
             </Pressable>
@@ -1592,6 +1660,51 @@ function CaptureModal({
             />
           </View>
       </View>
+      <Modal
+        transparent
+        visible={isCalibrationOpen}
+        animationType="fade"
+        onRequestClose={() => setIsCalibrationOpen(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Close wig calibration"
+            style={styles.modalBackdrop}
+            onPress={() => setIsCalibrationOpen(false)}
+          />
+          <View style={styles.calibrationCard}>
+            <View style={styles.calibrationHeader}>
+              <Text style={styles.calibrationTitle}>Wig calibration</Text>
+              <Pressable onPress={() => setIsCalibrationOpen(false)} style={styles.headerIconButton}>
+                <AppIcon name="close" state="muted" />
+              </Pressable>
+            </View>
+            <CalibrationControl
+              label="Horizontal"
+              value={`${wigCalibration.offsetX}px`}
+              onDecrease={() => adjustCalibration('offsetX', -4, -80, 80)}
+              onIncrease={() => adjustCalibration('offsetX', 4, -80, 80)}
+            />
+            <CalibrationControl
+              label="Vertical"
+              value={`${wigCalibration.offsetY}px`}
+              onDecrease={() => adjustCalibration('offsetY', -4, -80, 80)}
+              onIncrease={() => adjustCalibration('offsetY', 4, -80, 80)}
+            />
+            <CalibrationControl
+              label="Scale"
+              value={`${Math.round(wigCalibration.scale * 100)}%`}
+              onDecrease={() => adjustCalibration('scale', -0.04, 0.75, 1.25)}
+              onIncrease={() => adjustCalibration('scale', 0.04, 0.75, 1.25)}
+            />
+            <View style={styles.calibrationActions}>
+              <AppButton title="Reset" variant="secondary" fullWidth={false} onPress={resetCalibration} />
+              <AppButton title="Done" fullWidth={false} onPress={() => setIsCalibrationOpen(false)} />
+            </View>
+          </View>
+        </View>
+      </Modal>
     </Modal>
   );
 }
@@ -3506,6 +3619,76 @@ const styles = StyleSheet.create({
     width: '100%',
     alignSelf: 'center',
     maxWidth: theme.layout.contentMaxWidth,
+  },
+  calibrationCard: {
+    width: '100%',
+    alignSelf: 'center',
+    maxWidth: 420,
+    gap: theme.spacing.md,
+    borderRadius: theme.radius.xl,
+    padding: theme.spacing.lg,
+    backgroundColor: theme.colors.backgroundPrimary,
+    ...theme.shadows.lg,
+  },
+  calibrationHeader: {
+    minHeight: 40,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.md,
+  },
+  calibrationTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    fontWeight: theme.typography.weights.bold,
+    color: theme.colors.textPrimary,
+  },
+  calibrationControlRow: {
+    minHeight: 52,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.md,
+  },
+  calibrationControlLabel: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textPrimary,
+  },
+  calibrationStepper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  calibrationStepButton: {
+    width: 38,
+    height: 38,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: theme.colors.borderMuted,
+    backgroundColor: theme.colors.surfaceSoft,
+  },
+  calibrationStepButtonText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodyLg,
+    fontWeight: theme.typography.weights.bold,
+    color: theme.colors.brandPrimary,
+  },
+  calibrationValue: {
+    width: 60,
+    textAlign: 'center',
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textSecondary,
+  },
+  calibrationActions: {
+    flexDirection: 'row',
+    gap: theme.spacing.sm,
   },
   captureFullScreen: {
     flex: 1,
