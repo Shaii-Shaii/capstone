@@ -669,6 +669,52 @@ const resolveFaceBoxInStage = (faceFrame, stageLayout) => {
   };
 };
 
+const normalizeLayerScale = (scale) => {
+  const numericScale = Number(scale);
+  if (!Number.isFinite(numericScale)) return 1;
+  return Math.min(1.18, Math.max(0.82, 1 + ((numericScale - 1) * 0.45)));
+};
+
+const normalizeLayerOffset = (offset, stageLayout) => {
+  const numericOffset = Number(offset);
+  if (!Number.isFinite(numericOffset)) return 0;
+  const baseSize = Math.min(Number(stageLayout?.width || 0), Number(stageLayout?.height || 0));
+  return numericOffset * (baseSize ? baseSize / 1024 : 1);
+};
+
+const resolveLandmarkHeadBox = ({
+  fallbackFaceBox,
+  forehead,
+  chin,
+  leftEye,
+  rightEye,
+  nose,
+  leftTemple,
+  rightTemple,
+}) => {
+  if (!fallbackFaceBox) return null;
+
+  const eyeCenter = averagePoints([leftEye, rightEye]);
+  const templeCenter = averagePoints([leftTemple, rightTemple]);
+  const centerPoint = averagePoints([eyeCenter, nose, templeCenter]);
+  const faceCenterX = centerPoint?.x || fallbackFaceBox.x + (fallbackFaceBox.width / 2);
+  const templeDistance = distanceBetweenPoints(leftTemple, rightTemple);
+  const eyeDistance = distanceBetweenPoints(leftEye, rightEye);
+  const landmarkWidth = Math.max(templeDistance || 0, eyeDistance ? eyeDistance * 2.18 : 0);
+  const faceWidth = landmarkWidth || fallbackFaceBox.width;
+  const faceTop = forehead?.y ?? fallbackFaceBox.y;
+  const faceBottom = chin?.y ?? fallbackFaceBox.y + fallbackFaceBox.height;
+  const landmarkHeight = Math.max(faceBottom - faceTop, fallbackFaceBox.height * 0.72);
+  const faceHeight = landmarkHeight || fallbackFaceBox.height;
+
+  return {
+    x: faceCenterX - (faceWidth / 2),
+    y: faceTop - (faceHeight * 0.08),
+    width: faceWidth,
+    height: faceHeight * 1.08,
+  };
+};
+
 const buildFaceAnchoredTryOnLayerStyle = (faceFrame, stageLayout, layerKey, zIndex, fitSettings = {}) => {
   const faceBox = resolveFaceBoxInStage(faceFrame, stageLayout);
   if (!faceBox) {
@@ -709,11 +755,24 @@ const buildFaceAnchoredTryOnLayerStyle = (faceFrame, stageLayout, layerKey, zInd
   const yawScale = Math.max(0.82, 1 - (yawAngle / 120));
 
   if (faceFrame?.mediapipe && forehead && chin) {
-    const targetFaceWidth = faceBox.width * tryOnConfig.scaleMultiplier;
-    const targetFaceHeight = faceBox.height * tryOnConfig.scaleY;
+    const headBox = resolveLandmarkHeadBox({
+      fallbackFaceBox: faceBox,
+      forehead,
+      chin,
+      leftEye,
+      rightEye,
+      nose,
+      leftTemple,
+      rightTemple,
+    }) || faceBox;
+    const layerScale = normalizeLayerScale(fit.scale);
+    const offsetX = normalizeLayerOffset(anchor.userOffsetX, stageLayout);
+    const offsetY = normalizeLayerOffset(anchor.userOffsetY, stageLayout);
+    const targetFaceWidth = headBox.width * tryOnConfig.scaleMultiplier;
+    const targetFaceHeight = headBox.height * tryOnConfig.scaleY;
     const faceHole = tryOnConfig.faceHole;
-    const layerWidth = (targetFaceWidth / Math.max(faceHole.width, 0.12)) * fit.scale;
-    const layerHeight = (targetFaceHeight / Math.max(faceHole.height, 0.12)) * fit.scale;
+    const layerWidth = (targetFaceWidth / Math.max(faceHole.width, 0.12)) * layerScale;
+    const layerHeight = (targetFaceHeight / Math.max(faceHole.height, 0.12)) * layerScale;
     const faceHoleCenterX = faceHole.x + (faceHole.width / 2);
     const rotation = Number(fit.rotation || 0) + rollAngle + tryOnConfig.rotationOffset;
 
@@ -721,11 +780,11 @@ const buildFaceAnchoredTryOnLayerStyle = (faceFrame, stageLayout, layerKey, zInd
       position: 'absolute',
       left: Math.max(
         -stageLayout.width * 0.35,
-        faceBox.x + (faceBox.width / 2) - (layerWidth * faceHoleCenterX) + (faceBox.width * tryOnConfig.horizontalOffset) + anchor.userOffsetX
+        headBox.x + (headBox.width / 2) - (layerWidth * faceHoleCenterX) + (headBox.width * tryOnConfig.horizontalOffset) + offsetX
       ),
       top: Math.max(
         -stageLayout.height * 0.45,
-        faceBox.y - (layerHeight * faceHole.y) + (faceBox.height * tryOnConfig.verticalOffset) + anchor.userOffsetY
+        headBox.y - (layerHeight * faceHole.y) + (headBox.height * tryOnConfig.verticalOffset) + offsetY
       ),
       width: layerWidth,
       height: layerHeight,
@@ -1303,6 +1362,7 @@ function CaptureModal({
             )}
 
             <View pointerEvents="none" style={styles.captureFrame}>
+              <View style={styles.captureFaceGuide} />
               <View style={[styles.captureCorner, styles.captureCornerTopLeft]} />
               <View style={[styles.captureCorner, styles.captureCornerTopRight]} />
               <View style={[styles.captureCorner, styles.captureCornerBottomLeft]} />
@@ -3809,6 +3869,18 @@ const styles = StyleSheet.create({
     bottom: 0,
     borderRightWidth: 3,
     borderBottomWidth: 3,
+  },
+  captureFaceGuide: {
+    position: 'absolute',
+    top: 46,
+    alignSelf: 'center',
+    width: 142,
+    height: 190,
+    borderRadius: 72,
+    borderWidth: 2,
+    borderStyle: 'dashed',
+    borderColor: 'rgba(255,255,255,0.68)',
+    backgroundColor: 'rgba(255,255,255,0.04)',
   },
   captureGuideLine: {
     position: 'absolute',
