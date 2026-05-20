@@ -43,6 +43,19 @@ copyFileIfPresent(
   "android/app/src/main/assets/face_landmarker.task"
 );
 
+patchFile("node_modules/react-native-mediapipe/android/src/main/java/com/reactnativemediapipe/facelandmarkdetection/FaceLandmarkDetectionFrameProcessorPlugin.kt", [
+  [
+    `  override fun callback(frame: Frame, params: MutableMap<String, Any>?): Any? {
+    val detectorHandle: Double = params!!["detectorHandle"] as Double
+    val detector = FaceLandmarkDetectorMap.detectorMap[detectorHandle.toInt()] ?: return false
+`,
+    `  override fun callback(frame: Frame, params: MutableMap<String, Any>?): Any? {
+    val detectorHandle = params?.get("detectorHandle") as? Double ?: return false
+    val detector = FaceLandmarkDetectorMap.detectorMap[detectorHandle.toInt()] ?: return false
+`,
+  ],
+]);
+
 patchFile("node_modules/react-native-worklets/android/CMakeLists.txt", [
   [
     `set(CPP_SHARED "\${CMAKE_ANDROID_NDK}/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/\${CMAKE_ANDROID_ARCH_ABI}/libc++_shared.so")
