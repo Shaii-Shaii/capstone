@@ -486,18 +486,18 @@ const resolveTryOnConfig = (fitSettings = {}, layerKey = 'fullWig') => {
   const faceHoleSource = source?.faceHole || source?.face_hole || source?.faceOpening || source?.face_opening || {};
   const defaultFaceHole = layerKey === 'frontBangs'
     ? { x: 0.18, y: 0.14, width: 0.64, height: 0.7 }
-    : { x: 0.28, y: 0.16, width: 0.44, height: 0.5 };
+    : { x: 0.24, y: 0.14, width: 0.52, height: 0.68 };
 
   return {
     scaleMultiplier: getNumericFitValue(
       source,
-      ['scaleMultiplier', 'scale_multiplier', 'scale', 'widthMultiplier', 'width_multiplier'],
-      layerKey === 'frontBangs' ? 1.04 : 1.25
+      ['scaleMultiplier', 'scale_multiplier', 'widthMultiplier', 'width_multiplier'],
+      layerKey === 'frontBangs' ? 0.96 : 1.08
     ),
     scaleY: getNumericFitValue(
       source,
       ['scaleY', 'scale_y', 'heightScale', 'height_scale'],
-      layerKey === 'frontBangs' ? 1.05 : 1.2
+      layerKey === 'frontBangs' ? 0.96 : 1.08
     ),
     heightMultiplier: getNumericFitValue(
       source,
