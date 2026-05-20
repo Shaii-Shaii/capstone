@@ -85,13 +85,22 @@ create policy "Donors can create certificate after cut ship scan"
     and exists (
       select 1
       from public."Hair_Submissions" hs
-      join public."Event_Attendees" ea
+      left join public."Event_Attendees" ea
         on ea."Event_Request_ID" = hs."Event_Request_ID"
        and ea."User_ID" = hs."User_ID"
       where hs."Submission_ID" = public."Donation_Certificates"."Submission_ID"
         and hs."User_ID" = public.mobile_current_user_id()
         and hs."Event_Request_ID" is not null
         and (
+          lower(replace(replace(replace(coalesce(hs."Status", '')::text, '_', ''), ' ', ''), '-', '')) in (
+            'cut',
+            'wiginproduction',
+            'inproduction',
+            'wigcreated',
+            'wigcompleted',
+            'completed'
+          )
+          or
           ea."RSVP_Scanned_At" is not null
           or lower(replace(replace(replace(coalesce(ea."Attendance_Status", '')::text, '_', ''), ' ', ''), '-', '')) in (
             'present',

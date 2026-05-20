@@ -389,7 +389,7 @@ const getDriveTimeState = (drive = null) => {
 const normalizeDriveRegistrationRow = (row = null) => {
   if (!row) return null;
   const attendanceStatus = String(row?.attendance_status || '').trim().toLowerCase();
-  const isUsed = Boolean(row?.attendance_marked_at)
+  const isUsed = Boolean(row?.attendance_marked_at || row?.rsvp_scanned_at)
     || ['marked', 'attended', 'present', 'checked in', 'checked-in', 'scanned', 'verified'].some((token) => attendanceStatus.includes(token));
 
   return {
@@ -398,13 +398,15 @@ const normalizeDriveRegistrationRow = (row = null) => {
     user_id: row?.user_id || null,
     registration_status: row?.registration_status || '',
     attendance_status: row?.attendance_status || '',
+    rsvp_scanned_at: row?.rsvp_scanned_at || null,
+    rsvp_scanned_by: row?.rsvp_scanned_by || null,
     registered_at: row?.registered_at || null,
     updated_at: row?.updated_at || null,
     attendance_marked_at: row?.attendance_marked_at || null,
     qr: {
       state: isUsed ? 'used' : row?.registration_id ? 'registered' : 'missing',
       generated_at: row?.registered_at || row?.updated_at || null,
-      used_at: isUsed ? (row?.attendance_marked_at || row?.updated_at || row?.registered_at || null) : null,
+      used_at: isUsed ? (row?.rsvp_scanned_at || row?.attendance_marked_at || row?.updated_at || row?.registered_at || null) : null,
       is_used: isUsed,
       is_valid: Boolean(row?.registration_id) && !isUsed,
     },
@@ -415,7 +417,7 @@ const normalizeRsvpStatus = (value = '') => String(value || '').trim().toLowerCa
 
 const isRsvpCheckedIn = (registration = null) => {
   if (!registration) return false;
-  if (registration?.attendance_marked_at) return true;
+  if (registration?.attendance_marked_at || registration?.rsvp_scanned_at) return true;
 
   const attendanceStatus = normalizeRsvpStatus(registration?.attendance_status);
   return ['marked', 'attended', 'present', 'checked in', 'checked-in', 'scanned', 'verified']
@@ -2207,6 +2209,18 @@ const findTimelineStage = (stages = [], keys = [], labels = []) => {
   }) || null;
 };
 
+const isSubmissionCutAndShipComplete = (submission = null) => {
+  const statusKey = normalizeTimelineKey(submission?.status || submission?.Status || '');
+  return [
+    'cut',
+    'wiginproduction',
+    'inproduction',
+    'wigcreated',
+    'wigcompleted',
+    'completed',
+  ].includes(statusKey);
+};
+
 const buildEventDonationTimelineStages = ({ item, fallbackStages = [], certificate }) => {
   const registration = item?.drive?.registration || item?.registration || null;
   const submission = item?.submission || null;
@@ -2243,6 +2257,7 @@ const buildEventDonationTimelineStages = ({ item, fallbackStages = [], certifica
   const cutEvidenceAt = registration?.rsvp_scanned_at
     || registration?.attendance_marked_at
     || submission?.cut_at
+    || (isSubmissionCutAndShipComplete(submission) ? (submission?.updated_at || submission?.created_at) : null)
     || certificateIssuedAt
     || cutFallbackEvidenceAt;
 

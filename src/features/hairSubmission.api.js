@@ -269,6 +269,18 @@ const createDonationCertificateNumber = (submission = null) => {
   return `DON-CERT-${submissionPart || Date.now().toString(36).toUpperCase()}-${randomPart}`;
 };
 
+const isEventSubmissionCutAndShipComplete = (submission = null) => {
+  const statusKey = normalizeFlowKey(submission?.status || submission?.Status || '');
+  return [
+    'cut',
+    'wiginproduction',
+    'inproduction',
+    'wigcreated',
+    'wigcompleted',
+    'completed',
+  ].includes(statusKey);
+};
+
 const normalizeAiScreening = (row) => ({
   id: row?.ai_screening_id || null,
   ai_screening_id: row?.ai_screening_id || null,
@@ -954,6 +966,7 @@ export const ensureCertificatesForScannedEventDonations = async (userId, limit =
       .toLowerCase()
       .replace(/[_-]+/g, ' ');
     const hasCutAndShipScan = Boolean(attendance?.rsvp_scanned_at)
+      || isEventSubmissionCutAndShipComplete(submission)
       || ['present', 'attended', 'checked in', 'checked-in', 'marked', 'scanned', 'verified']
         .includes(normalizedAttendance);
 
@@ -967,7 +980,7 @@ export const ensureCertificatesForScannedEventDonations = async (userId, limit =
       certificate_number: createDonationCertificateNumber(submission),
       certificate_type: 'Certificate of Donation',
       issued_by: attendance?.rsvp_scanned_by || submission.cut_by_user_id || null,
-      issued_at: attendance?.rsvp_scanned_at || submission.cut_at || attendance?.updated_at || new Date().toISOString(),
+      issued_at: attendance?.rsvp_scanned_at || submission.cut_at || attendance?.updated_at || submission.updated_at || new Date().toISOString(),
       remarks: 'Issued after staff scanned the Cut & Ship stage.',
     });
 
