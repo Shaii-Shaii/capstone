@@ -338,6 +338,14 @@ const distanceBetweenPoints = (a, b) => {
   return Math.hypot(a.x - b.x, a.y - b.y);
 };
 
+const normalizeFaceTiltDegrees = (angle) => {
+  let normalized = Number(angle) || 0;
+  normalized = ((normalized + 180) % 360) - 180;
+  if (normalized > 90) normalized -= 180;
+  if (normalized < -90) normalized += 180;
+  return normalized;
+};
+
 const getNumericFitValue = (source, keys, fallback) => {
   const candidates = Array.isArray(keys) ? keys : [keys];
   for (const key of candidates) {
@@ -536,7 +544,7 @@ const buildFaceAnchoredTryOnLayerStyle = (faceFrame, stageLayout, layerKey, zInd
   const eyeRollAngle = leftEye && rightEye
     ? Math.atan2(rightEye.y - leftEye.y, rightEye.x - leftEye.x) * (180 / Math.PI)
     : 0;
-  const rollAngle = Number(faceFrame?.rollAngle ?? eyeRollAngle ?? 0);
+  const rollAngle = normalizeFaceTiltDegrees(faceFrame?.rollAngle ?? eyeRollAngle ?? 0);
   const yawAngle = Math.abs(Number(faceFrame?.yawAngle || 0));
   const yawScale = Math.max(0.82, 1 - (yawAngle / 120));
 
