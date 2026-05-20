@@ -388,7 +388,6 @@ const ensureHairSubmissionForDrive = async ({ driveId, databaseUserId }) => {
         Submission_Code: makeSubmissionCode(),
         Donation_Source: 'Event RSVP',
         Status: 'Pending',
-        QR_Status: 'Not Generated',
       })
       .select('Submission_ID')
       .single();

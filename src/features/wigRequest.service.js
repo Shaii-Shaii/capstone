@@ -148,11 +148,33 @@ export const getPatientWigRequestContext = async (userId) => {
   }
 };
 
+export const getActiveWigTryOnFilters = async () => {
+  try {
+    const { data, error } = await WigRequestAPI.fetchActiveWigAiFilters();
+
+    if (error) {
+      throw new Error(error.message || 'Unable to load available wigs.');
+    }
+
+    return {
+      wigs: data || [],
+      error: null,
+    };
+  } catch (error) {
+    logAppError('wig_request.try_on_filters', error);
+    return {
+      wigs: [],
+      error: error.message || 'Unable to load available wigs.',
+    };
+  }
+};
+
 export const savePatientWigRequestFlow = async ({
   userId,
   preferences,
   preview,
   referenceImage,
+  selectedWigId = null,
 }) => {
   try {
     if (!userId) throw new Error('Your session is not ready.');
@@ -191,6 +213,7 @@ export const savePatientWigRequestFlow = async ({
       requested_by: systemUser?.user_id || null,
       request_date: new Date().toISOString(),
       status: wigRequestStatuses.pending,
+      requested_wig_id: selectedWigId || null,
     });
 
     if (wigRequestError) {

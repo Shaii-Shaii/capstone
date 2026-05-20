@@ -13,6 +13,7 @@ import {
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Controller, useForm, useWatch } from 'react-hook-form';
 import { useRouter } from 'expo-router';
+import Constants from 'expo-constants';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
@@ -34,6 +35,81 @@ import { useProcessTracking } from '../../hooks/useProcessTracking';
 import { ProcessStatusTracker } from '../tracking/ProcessStatusTracker';
 import { wigRequestDefaultValues, wigRequestSchema } from '../../features/wigRequest.schema';
 import { logAppError } from '../../utils/appErrors';
+
+let NativeVisionCamera = null;
+let useNativeCameraDevice = null;
+let useNativeFrameProcessor = null;
+let useNativeFaceDetector = null;
+let NativeWorklets = null;
+let MediaPipeCamera = null;
+let useMediaPipeFaceLandmarkDetection = null;
+let MediaPipeRunningMode = null;
+let MediaPipeDelegate = null;
+const isExpoGoRuntime = Constants?.appOwnership === 'expo';
+
+try {
+  if (!isExpoGoRuntime) {
+    const visionCameraModule = require('react-native-vision-camera');
+    NativeVisionCamera = visionCameraModule?.Camera || null;
+    useNativeCameraDevice = visionCameraModule?.useCameraDevice || null;
+    useNativeFrameProcessor = visionCameraModule?.useFrameProcessor || null;
+  }
+} catch {
+  NativeVisionCamera = null;
+  useNativeCameraDevice = null;
+  useNativeFrameProcessor = null;
+}
+
+try {
+  if (!isExpoGoRuntime) {
+    const faceDetectorModule = require('react-native-vision-camera-face-detector');
+    useNativeFaceDetector = faceDetectorModule?.useFaceDetector || null;
+  }
+} catch {
+  useNativeFaceDetector = null;
+}
+
+try {
+  if (!isExpoGoRuntime) {
+    const workletsModule = require('react-native-worklets-core');
+    NativeWorklets = workletsModule?.Worklets || null;
+  }
+} catch {
+  NativeWorklets = null;
+}
+
+try {
+  if (!isExpoGoRuntime) {
+    const mediaPipeModule = require('react-native-mediapipe');
+    MediaPipeCamera = mediaPipeModule?.MediapipeCamera || null;
+    useMediaPipeFaceLandmarkDetection = mediaPipeModule?.useFaceLandmarkDetection || null;
+    MediaPipeRunningMode = mediaPipeModule?.RunningMode || null;
+    MediaPipeDelegate = mediaPipeModule?.Delegate || null;
+  }
+} catch {
+  MediaPipeCamera = null;
+  useMediaPipeFaceLandmarkDetection = null;
+  MediaPipeRunningMode = null;
+  MediaPipeDelegate = null;
+}
+
+const canUseMediaPipeTryOnCamera = Boolean(
+  MediaPipeCamera
+  && useMediaPipeFaceLandmarkDetection
+  && MediaPipeRunningMode
+  && MediaPipeDelegate
+);
+
+const canUseNativeTryOnCamera = Boolean(
+  NativeVisionCamera
+  && useNativeCameraDevice
+  && useNativeFrameProcessor
+  && useNativeFaceDetector
+  && NativeWorklets?.createRunOnJS
+);
+
+const canUseFaceTrackingTryOnCamera = canUseMediaPipeTryOnCamera || canUseNativeTryOnCamera;
+const FACE_LANDMARKER_MODEL = 'face_landmarker.task';
 
 const buildRecommendationTitle = ({ preview, specification, draftValues }) => (
   preview?.recommended_style_name
@@ -115,6 +191,495 @@ const buildRecommendationOptions = ({ preview, specification, draftValues }) => 
 
   return fallbackOptions.slice(0, 3);
 };
+
+const normalizeMatchText = (value) => String(value || '').trim().toLowerCase();
+
+const collectWigSearchText = (wig) => normalizeMatchText([
+  wig?.wig_name,
+  wig?.fit_settings?.label,
+  wig?.fit_settings?.style,
+  wig?.fit_settings?.color,
+  wig?.fit_settings?.length,
+  wig?.fit_settings?.texture,
+  wig?.fit_settings?.tags,
+  wig?.fit_settings?.recommended_for,
+  wig?.fit_settings?.recommendation_tags,
+  wig?.pending_wig_name,
+  wig?.pending_hair_color,
+  wig?.pending_hair_texture,
+  wig?.pending_hair_density,
+  wig?.pending_cap_size,
+  wig?.pending_style,
+].flat().filter(Boolean).join(' '));
+
+const getRecommendedWigIds = ({ wigs, preferredColor, preferredLength, hairTexture, recommendationTitle, recommendationFamily }) => {
+  const preferenceTerms = [
+    preferredColor,
+    preferredLength,
+    hairTexture,
+    recommendationTitle,
+    recommendationFamily,
+  ]
+    .map(normalizeMatchText)
+    .filter(Boolean);
+
+  if (!Array.isArray(wigs) || !wigs.length || !preferenceTerms.length) return new Set();
+
+  const scored = wigs
+    .map((wig) => {
+      const searchText = collectWigSearchText(wig);
+      const score = preferenceTerms.reduce((total, term) => {
+        if (!term) return total;
+        if (searchText.includes(term)) return total + 2;
+
+        return total + term
+          .split(/\s+/)
+          .filter((part) => part.length > 2 && searchText.includes(part))
+          .length;
+      }, 0);
+
+      return { wig, score };
+    })
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  const topScore = scored[0]?.score || 0;
+  return new Set(
+    scored
+      .filter((item) => item.score === topScore || item.score >= 2)
+      .slice(0, 3)
+      .map((item) => item.wig.id)
+  );
+};
+
+const resolveLayerFit = (fitSettings = {}, layerKey = 'fullWig') => {
+  const candidates = [
+    fitSettings?.layers?.[layerKey],
+    fitSettings?.[layerKey],
+    layerKey === 'fullWig' ? fitSettings?.full_wig : null,
+    layerKey === 'backHair' ? fitSettings?.back_hair : null,
+    layerKey === 'frontBangs' ? fitSettings?.front_bangs : null,
+    layerKey === 'fullWig' ? fitSettings?.full_wig_layer : null,
+    layerKey === 'backHair' ? fitSettings?.back_hair_layer : null,
+    layerKey === 'frontBangs' ? fitSettings?.front_bangs_layer : null,
+    fitSettings,
+  ].filter(Boolean);
+  const source = candidates[0] || {};
+  const width = source.width ?? source.w ?? (layerKey === 'fullWig' ? 72 : 64);
+  const height = source.height ?? source.h ?? (layerKey === 'fullWig' ? 70 : 42);
+  const x = source.x ?? source.left ?? source.offsetX ?? source.offset_x ?? (layerKey === 'fullWig' ? 14 : 18);
+  const y = source.y ?? source.top ?? source.offsetY ?? source.offset_y ?? (layerKey === 'frontBangs' ? 18 : 12);
+  const scale = Number(source.scale ?? fitSettings?.scale ?? 1) || 1;
+  const rotation = source.rotation ?? source.rotate ?? fitSettings?.rotation ?? 0;
+  const opacity = source.opacity ?? 1;
+  const offsetX = Number(source.offsetX ?? source.offset_x ?? source.translateX ?? source.translate_x ?? source.xOffset ?? source.x_offset ?? 0) || 0;
+  const offsetY = Number(source.offsetY ?? source.offset_y ?? source.translateY ?? source.translate_y ?? source.yOffset ?? source.y_offset ?? 0) || 0;
+
+  return {
+    width,
+    height,
+    x,
+    y,
+    scale,
+    rotation,
+    opacity,
+    offsetX,
+    offsetY,
+  };
+};
+
+const toPercent = (value, fallback) => {
+  if (typeof value === 'string') return value;
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) return `${fallback}%`;
+  return `${numericValue > 1 ? numericValue : numericValue * 100}%`;
+};
+
+const buildTryOnLayerStyle = (fitSettings, layerKey, zIndex) => {
+  const fit = resolveLayerFit(fitSettings, layerKey);
+
+  return {
+    position: 'absolute',
+    left: toPercent(fit.x, 50),
+    top: toPercent(fit.y, 12),
+    width: toPercent(fit.width, 72),
+    height: toPercent(fit.height, 70),
+    opacity: fit.opacity,
+    zIndex,
+    elevation: zIndex,
+    transform: [
+      { scale: fit.scale },
+      { rotate: typeof fit.rotation === 'number' ? `${fit.rotation}deg` : String(fit.rotation || '0deg') },
+    ],
+  };
+};
+
+const getFacePoint = (faceFrame, key) => {
+  const point = faceFrame?.landmarks?.[key];
+  const x = Number(point?.x);
+  const y = Number(point?.y);
+  return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+};
+
+const averagePoints = (points = []) => {
+  const validPoints = points.filter(Boolean);
+  if (!validPoints.length) return null;
+
+  return {
+    x: validPoints.reduce((total, point) => total + point.x, 0) / validPoints.length,
+    y: validPoints.reduce((total, point) => total + point.y, 0) / validPoints.length,
+  };
+};
+
+const distanceBetweenPoints = (a, b) => {
+  if (!a || !b) return 0;
+  return Math.hypot(a.x - b.x, a.y - b.y);
+};
+
+const normalizeMediaPipeLandmarkPoint = (landmark, viewSize, mirrored) => {
+  const x = Number(landmark?.x);
+  const y = Number(landmark?.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !viewSize?.width || !viewSize?.height) {
+    return null;
+  }
+
+  return {
+    x: (mirrored ? 1 - x : x) * viewSize.width,
+    y: y * viewSize.height,
+  };
+};
+
+const averageMediaPipeLandmarks = (landmarks, indices, viewSize, mirrored) => (
+  averagePoints(indices.map((index) => normalizeMediaPipeLandmarkPoint(landmarks?.[index], viewSize, mirrored)))
+);
+
+const buildMediaPipeFaceFrame = (resultBundle, viewSize, mirrored) => {
+  const landmarks = resultBundle?.results?.[0]?.faceLandmarks?.[0];
+  if (!Array.isArray(landmarks) || !landmarks.length || !viewSize?.width || !viewSize?.height) {
+    return null;
+  }
+
+  const points = landmarks
+    .map((landmark) => normalizeMediaPipeLandmarkPoint(landmark, viewSize, mirrored))
+    .filter(Boolean);
+  if (!points.length) return null;
+
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const leftTemple = averageMediaPipeLandmarks(landmarks, [127, 234, 93], viewSize, mirrored);
+  const rightTemple = averageMediaPipeLandmarks(landmarks, [356, 454, 323], viewSize, mirrored);
+
+  return {
+    mediapipe: true,
+    autoMode: true,
+    frameWidth: viewSize.width,
+    frameHeight: viewSize.height,
+    bounds: {
+      x: minX,
+      y: minY,
+      width: maxX - minX,
+      height: maxY - minY,
+    },
+    landmarks: {
+      LEFT_EYE: averageMediaPipeLandmarks(landmarks, [33, 133, 159, 145], viewSize, mirrored),
+      RIGHT_EYE: averageMediaPipeLandmarks(landmarks, [263, 362, 386, 374], viewSize, mirrored),
+      LEFT_EAR: leftTemple,
+      RIGHT_EAR: rightTemple,
+      LEFT_TEMPLE: leftTemple,
+      RIGHT_TEMPLE: rightTemple,
+      FOREHEAD: normalizeMediaPipeLandmarkPoint(landmarks[10], viewSize, mirrored),
+      CHIN: normalizeMediaPipeLandmarkPoint(landmarks[152], viewSize, mirrored),
+      NOSE: normalizeMediaPipeLandmarkPoint(landmarks[1], viewSize, mirrored),
+    },
+  };
+};
+
+const resolveFaceBoxInStage = (faceFrame, stageLayout) => {
+  const faceBounds = faceFrame?.bounds || faceFrame;
+  if (!faceBounds || !stageLayout?.width || !stageLayout?.height) {
+    return null;
+  }
+
+  const stageWidth = Number(stageLayout.width || 0);
+  const stageHeight = Number(stageLayout.height || 0);
+  const rawX = Number(faceBounds.x ?? faceBounds.left ?? 0);
+  const rawY = Number(faceBounds.y ?? faceBounds.top ?? 0);
+  const rawWidth = Number(faceBounds.width || 0);
+  const rawHeight = Number(faceBounds.height || 0);
+  if (!rawWidth || !rawHeight) return null;
+
+  const frameWidth = Number(faceFrame?.frameWidth || 0);
+  const frameHeight = Number(faceFrame?.frameHeight || 0);
+  if (!frameWidth || !frameHeight) {
+    const scaleX = rawX + rawWidth > stageWidth ? stageWidth / Math.max(rawX + rawWidth, 1) : 1;
+    const scaleY = rawY + rawHeight > stageHeight ? stageHeight / Math.max(rawY + rawHeight, 1) : 1;
+    return {
+      x: rawX * scaleX,
+      y: rawY * scaleY,
+      width: rawWidth * scaleX,
+      height: rawHeight * scaleY,
+    };
+  }
+
+  if (faceFrame?.autoMode) {
+    return {
+      x: rawX,
+      y: rawY,
+      width: rawWidth,
+      height: rawHeight,
+    };
+  }
+
+  // Vision Camera frame coordinates come from the camera buffer, while the UI
+  // displays that buffer with cover scaling. Front camera preview is mirrored.
+  const frameIsPortrait = frameHeight >= frameWidth;
+  const viewIsPortrait = stageHeight >= stageWidth;
+  const sourceWidth = frameIsPortrait === viewIsPortrait ? frameWidth : frameHeight;
+  const sourceHeight = frameIsPortrait === viewIsPortrait ? frameHeight : frameWidth;
+  const sourceX = frameIsPortrait === viewIsPortrait ? rawX : rawY;
+  const sourceY = frameIsPortrait === viewIsPortrait ? rawY : rawX;
+  const sourceFaceWidth = frameIsPortrait === viewIsPortrait ? rawWidth : rawHeight;
+  const sourceFaceHeight = frameIsPortrait === viewIsPortrait ? rawHeight : rawWidth;
+  const coverScale = Math.max(stageWidth / sourceWidth, stageHeight / sourceHeight);
+  const renderedWidth = sourceWidth * coverScale;
+  const renderedHeight = sourceHeight * coverScale;
+  const offsetX = (renderedWidth - stageWidth) / 2;
+  const offsetY = (renderedHeight - stageHeight) / 2;
+  const mirroredX = sourceWidth - sourceX - sourceFaceWidth;
+
+  return {
+    x: (mirroredX * coverScale) - offsetX,
+    y: (sourceY * coverScale) - offsetY,
+    width: sourceFaceWidth * coverScale,
+    height: sourceFaceHeight * coverScale,
+  };
+};
+
+const buildFaceAnchoredTryOnLayerStyle = (faceFrame, stageLayout, layerKey, zIndex, fitSettings = {}) => {
+  const faceBox = resolveFaceBoxInStage(faceFrame, stageLayout);
+  if (!faceBox) {
+    return null;
+  }
+  const fit = resolveLayerFit(fitSettings, layerKey);
+
+  const leftEye = getFacePoint(faceFrame, 'LEFT_EYE');
+  const rightEye = getFacePoint(faceFrame, 'RIGHT_EYE');
+  const leftEar = getFacePoint(faceFrame, 'LEFT_EAR');
+  const rightEar = getFacePoint(faceFrame, 'RIGHT_EAR');
+  const forehead = getFacePoint(faceFrame, 'FOREHEAD');
+  const chin = getFacePoint(faceFrame, 'CHIN');
+  const leftTemple = getFacePoint(faceFrame, 'LEFT_TEMPLE') || leftEar;
+  const rightTemple = getFacePoint(faceFrame, 'RIGHT_TEMPLE') || rightEar;
+  const eyeCenter = averagePoints([leftEye, rightEye]);
+  const templeCenter = averagePoints([leftTemple, rightTemple]);
+  const faceCenterX = eyeCenter?.x || (faceBox.x + (faceBox.width / 2));
+  const eyeLineY = eyeCenter?.y || (faceBox.y + (faceBox.height * 0.38));
+  const earDistance = distanceBetweenPoints(leftEar, rightEar);
+  const eyeDistance = distanceBetweenPoints(leftEye, rightEye);
+  const templeDistance = distanceBetweenPoints(leftTemple, rightTemple);
+  const anchorWidth = Math.max(
+    faceBox.width,
+    templeDistance || 0,
+    earDistance || 0,
+    eyeDistance ? eyeDistance * 2.35 : 0
+  );
+  const eyeRollAngle = leftEye && rightEye
+    ? Math.atan2(rightEye.y - leftEye.y, rightEye.x - leftEye.x) * (180 / Math.PI)
+    : 0;
+  const rollAngle = Number(faceFrame?.rollAngle ?? eyeRollAngle ?? 0);
+  const yawAngle = Math.abs(Number(faceFrame?.yawAngle || 0));
+  const yawScale = Math.max(0.82, 1 - (yawAngle / 120));
+
+  if (faceFrame?.mediapipe && forehead && chin) {
+    const headCenterX = templeCenter?.x || faceCenterX;
+    const headHeight = Math.max(distanceBetweenPoints(forehead, chin) * 1.05, faceBox.height);
+    const headWidth = Math.max(anchorWidth, eyeDistance ? eyeDistance * 2.5 : 0);
+    const widthMultiplier = layerKey === 'frontBangs' ? 1.48 : 1.86;
+    const heightMultiplier = layerKey === 'frontBangs' ? 0.52 : 1.48;
+    const topOffset = layerKey === 'frontBangs' ? 0.18 : 0.34;
+    const layerWidth = headWidth * widthMultiplier * fit.scale;
+    const layerHeight = headHeight * heightMultiplier * fit.scale;
+    const rotation = Number(fit.rotation || 0) + rollAngle;
+
+    return {
+      position: 'absolute',
+      left: Math.max(-stageLayout.width * 0.35, headCenterX - (layerWidth / 2) + fit.offsetX),
+      top: Math.max(-stageLayout.height * 0.45, forehead.y - (headHeight * topOffset * fit.scale) + fit.offsetY),
+      width: layerWidth,
+      height: layerHeight,
+      opacity: fit.opacity,
+      zIndex,
+      elevation: zIndex,
+      transform: [{ rotate: `${rotation}deg` }],
+    };
+  }
+
+  const layerSize = layerKey === 'frontBangs'
+    ? {
+        width: anchorWidth * 1.08 * yawScale * fit.scale,
+        height: faceBox.height * 0.44 * fit.scale,
+        top: eyeLineY - (faceBox.height * 0.5 * fit.scale),
+      }
+    : {
+        width: anchorWidth * 1.62 * yawScale * fit.scale,
+        height: faceBox.height * 1.26 * fit.scale,
+        top: eyeLineY - (faceBox.height * 0.78 * fit.scale),
+      };
+  const left = faceCenterX - (layerSize.width / 2) + fit.offsetX;
+  const top = layerSize.top + fit.offsetY;
+  const rotation = Number(fit.rotation || 0) + rollAngle;
+
+  if (faceFrame?.autoMode) {
+    return {
+      position: 'absolute',
+      left: Math.max(-stageLayout.width * 0.25, left),
+      top: Math.max(-stageLayout.height * 0.35, top),
+      width: layerSize.width,
+      height: layerSize.height,
+      opacity: fit.opacity,
+      zIndex,
+      elevation: zIndex,
+      transform: [{ rotate: `${rotation}deg` }],
+    };
+  }
+
+  const faceX = faceBox.x;
+  const faceY = faceBox.y;
+  const faceWidth = faceBox.width;
+  const faceHeight = faceBox.height;
+
+  const widthMultiplier = (layerKey === 'frontBangs' ? 1.12 : 1.62) * fit.scale;
+  const heightMultiplier = (layerKey === 'frontBangs' ? 0.48 : 1.26) * fit.scale;
+  const topOffset = (layerKey === 'frontBangs' ? 0.28 : 0.66) * fit.scale;
+
+  return {
+    position: 'absolute',
+    left: Math.max(-stageLayout.width * 0.25, faceX + (faceWidth / 2) - ((faceWidth * widthMultiplier) / 2) + fit.offsetX),
+    top: Math.max(-stageLayout.height * 0.35, faceY - (faceHeight * topOffset) + fit.offsetY),
+    width: faceWidth * widthMultiplier,
+    height: faceHeight * heightMultiplier,
+    opacity: fit.opacity,
+    zIndex,
+    elevation: zIndex,
+    transform: [{ rotate: `${Number(fit.rotation || 0)}deg` }],
+  };
+};
+
+const getPrimaryTryOnImageUrl = (wig) => (
+  wig?.layer_full_wig_url
+  || wig?.layer_front_bangs_url
+  || wig?.layer_back_hair_url
+  || ''
+);
+
+function MediaPipeTryOnFaceCamera({ cameraRef, onFaceBoundsChange, onCameraReady }) {
+  const handleResults = React.useCallback((resultBundle, viewSize, mirrored) => {
+    onFaceBoundsChange?.(buildMediaPipeFaceFrame(resultBundle, viewSize, mirrored));
+  }, [onFaceBoundsChange]);
+
+  const handleError = React.useCallback((error) => {
+    logAppError('MediaPipe face landmark detection failed', error);
+    onFaceBoundsChange?.(null);
+  }, [onFaceBoundsChange]);
+
+  const solution = useMediaPipeFaceLandmarkDetection(
+    handleResults,
+    handleError,
+    MediaPipeRunningMode.LIVE_STREAM,
+    FACE_LANDMARKER_MODEL,
+    {
+      numFaces: 1,
+      minFaceDetectionConfidence: 0.5,
+      minFacePresenceConfidence: 0.5,
+      minTrackingConfidence: 0.5,
+      delegate: MediaPipeDelegate.GPU,
+      mirrorMode: 'mirror-front-only',
+    }
+  );
+
+  React.useEffect(() => {
+    onCameraReady?.();
+  }, [onCameraReady]);
+
+  return (
+    <MediaPipeCamera
+      ref={cameraRef}
+      style={styles.captureStageImage}
+      solution={solution}
+      activeCamera="front"
+      resizeMode="cover"
+    />
+  );
+}
+
+function NativeTryOnFaceCamera({ cameraRef, stageLayout, onFaceBoundsChange, onCameraReady }) {
+  const device = useNativeCameraDevice('front');
+  const faceDetectionOptions = React.useMemo(() => ({
+    performanceMode: 'fast',
+    landmarkMode: 'all',
+    contourMode: 'all',
+    classificationMode: 'none',
+    minFaceSize: 0.16,
+    trackingEnabled: false,
+    cameraFacing: 'front',
+    autoMode: true,
+    windowWidth: Math.max(1, Number(stageLayout?.width || 1)),
+    windowHeight: Math.max(1, Number(stageLayout?.height || 1)),
+  }), [stageLayout?.height, stageLayout?.width]);
+  const { detectFaces, stopListeners } = useNativeFaceDetector(faceDetectionOptions);
+  const handleFacesOnJs = React.useMemo(
+    () => NativeWorklets.createRunOnJS((faceFrame = null) => {
+      onFaceBoundsChange?.(faceFrame);
+    }),
+    [onFaceBoundsChange]
+  );
+  const frameProcessor = useNativeFrameProcessor((frame) => {
+    'worklet';
+    const faces = detectFaces(frame);
+    const face = Array.isArray(faces) && faces.length ? faces[0] : null;
+    handleFacesOnJs(face?.bounds ? {
+      ...face,
+      autoMode: true,
+      frameWidth: frame.width,
+      frameHeight: frame.height,
+    } : null);
+  }, [detectFaces, handleFacesOnJs]);
+
+  React.useEffect(() => (
+    () => {
+      stopListeners?.();
+    }
+  ), [stopListeners]);
+
+  React.useEffect(() => {
+    if (device) onCameraReady?.();
+  }, [device, onCameraReady]);
+
+  if (!device) {
+    return (
+      <View style={styles.captureStagePlaceholder}>
+        <AppIcon name="camera" state="active" size="xl" />
+        <Text style={styles.captureStagePlaceholderTitle}>Camera starting</Text>
+      </View>
+    );
+  }
+
+  return (
+    <NativeVisionCamera
+      ref={cameraRef}
+      style={styles.captureStageImage}
+      device={device}
+      isActive
+      photo
+      frameProcessor={frameProcessor}
+      pixelFormat="yuv"
+    />
+  );
+}
 
 function PreferenceChipGroup({ control, name, title, options, roles }) {
   return (
@@ -327,6 +892,11 @@ function WigInfoRow({ label, value, roles }) {
 function CaptureModal({
   visible,
   referenceImage,
+  availableWigs,
+  selectedWig,
+  selectedWigId,
+  recommendedWigIds,
+  isLoadingAvailableWigs,
   hasCameraPermission,
   cameraRef,
   onCameraReady,
@@ -335,10 +905,38 @@ function CaptureModal({
   onClose,
   onUpload,
   onCapture,
+  onSelectWig,
   onGeneratePreview,
   onRequestPermission,
 }) {
+  const [stageLayout, setStageLayout] = useState({ width: 0, height: 320 });
+  const [faceFrame, setFaceFrame] = useState(null);
+
+  useEffect(() => {
+    if (visible && hasCameraPermission && !canUseFaceTrackingTryOnCamera) {
+      onCameraReady?.();
+    }
+  }, [hasCameraPermission, onCameraReady, visible]);
+
   if (!visible) return null;
+
+  const primaryTryOnImageUrl = getPrimaryTryOnImageUrl(selectedWig);
+  const shouldUseSingleTryOnImage = Boolean(
+    selectedWig
+    && primaryTryOnImageUrl
+    && !selectedWig.layer_full_wig_url
+    && !selectedWig.layer_front_bangs_url
+    && !selectedWig.layer_back_hair_url
+  );
+  const selectedWigNeedsLayer = Boolean(selectedWig && !primaryTryOnImageUrl);
+  const isLiveCameraTryOn = Boolean(!referenceImage?.uri && hasCameraPermission && canUseFaceTrackingTryOnCamera);
+  const isWaitingForFace = Boolean(isLiveCameraTryOn && selectedWig && primaryTryOnImageUrl && !faceFrame);
+  const getLayerStyle = (layerKey, zIndex) => {
+    const faceAnchoredStyle = buildFaceAnchoredTryOnLayerStyle(faceFrame, stageLayout, layerKey, zIndex, selectedWig?.fit_settings);
+    if (faceAnchoredStyle) return faceAnchoredStyle;
+    if (isLiveCameraTryOn) return styles.tryOnLayerHidden;
+    return buildTryOnLayerStyle(selectedWig?.fit_settings, layerKey, zIndex);
+  };
 
   return (
     <Modal transparent={false} visible={visible} animationType="slide" onRequestClose={onClose}>
@@ -352,18 +950,40 @@ function CaptureModal({
           </View>
         </View>
 
-          <View style={styles.captureStage}>
+          <View
+            style={styles.captureStage}
+            onLayout={(event) => setStageLayout({
+              width: event.nativeEvent.layout.width,
+              height: event.nativeEvent.layout.height,
+            })}
+          >
             {referenceImage?.uri ? (
               <Image source={{ uri: referenceImage.uri }} style={styles.captureStageImage} />
             ) : hasCameraPermission ? (
-              <CameraView
-                ref={cameraRef}
-                style={styles.captureStageImage}
-                facing="front"
-                mode="picture"
-                animateShutter
-                onCameraReady={onCameraReady}
-              />
+              canUseFaceTrackingTryOnCamera ? (
+                canUseMediaPipeTryOnCamera ? (
+                  <MediaPipeTryOnFaceCamera
+                    cameraRef={cameraRef}
+                    onFaceBoundsChange={setFaceFrame}
+                    onCameraReady={onCameraReady}
+                  />
+                ) : (
+                  <NativeTryOnFaceCamera
+                    cameraRef={cameraRef}
+                    stageLayout={stageLayout}
+                    onFaceBoundsChange={setFaceFrame}
+                    onCameraReady={onCameraReady}
+                  />
+                )
+              ) : (
+                <CameraView
+                  ref={cameraRef}
+                  style={styles.captureStageImage}
+                  facing="front"
+                  mode="picture"
+                  animateShutter
+                />
+              )
             ) : (
               <View style={styles.captureStagePlaceholder}>
                 <AppIcon name="camera" state="active" size="xl" />
@@ -384,6 +1004,123 @@ function CaptureModal({
                 <Text style={styles.captureHintText}>Front</Text>
               </View>
             </View>
+
+            {selectedWig && primaryTryOnImageUrl ? (
+              <View
+                key={selectedWig.id || primaryTryOnImageUrl}
+                pointerEvents="none"
+                style={styles.tryOnLayerWrap}
+                renderToHardwareTextureAndroid
+                shouldRasterizeIOS
+              >
+                {selectedWig.layer_back_hair_url ? (
+                  <Image
+                    source={{ uri: selectedWig.layer_back_hair_url }}
+                    resizeMode="contain"
+                    fadeDuration={0}
+                    style={getLayerStyle('backHair', 1)}
+                  />
+                ) : null}
+                {selectedWig.layer_full_wig_url ? (
+                  <Image
+                    source={{ uri: selectedWig.layer_full_wig_url }}
+                    resizeMode="contain"
+                    fadeDuration={0}
+                    style={getLayerStyle('fullWig', 3)}
+                  />
+                ) : null}
+                {selectedWig.layer_front_bangs_url ? (
+                  <Image
+                    source={{ uri: selectedWig.layer_front_bangs_url }}
+                    resizeMode="contain"
+                    fadeDuration={0}
+                    style={getLayerStyle('frontBangs', 4)}
+                  />
+                ) : null}
+                {shouldUseSingleTryOnImage ? (
+                  <Image
+                    source={{ uri: primaryTryOnImageUrl }}
+                    resizeMode="contain"
+                    fadeDuration={0}
+                    style={getLayerStyle('fullWig', 3)}
+                  />
+                ) : null}
+              </View>
+            ) : null}
+            {selectedWigNeedsLayer ? (
+              <View pointerEvents="none" style={styles.tryOnLayerMissingBanner}>
+                <Text style={styles.tryOnLayerMissingText}>
+                  Try-on layer missing
+                </Text>
+              </View>
+            ) : null}
+            {isWaitingForFace ? (
+              <View pointerEvents="none" style={styles.tryOnLayerMissingBanner}>
+                <Text style={styles.tryOnLayerMissingText}>
+                  Align your face to try this wig live
+                </Text>
+              </View>
+            ) : null}
+          </View>
+
+          <View style={styles.availableWigsSection}>
+            <View style={styles.availableWigsHeader}>
+              <Text style={styles.availableWigsTitle}>Available wigs</Text>
+              {isLoadingAvailableWigs ? (
+                <Text style={styles.availableWigsMeta}>Loading</Text>
+              ) : (
+                <Text style={styles.availableWigsMeta}>{availableWigs.length} active</Text>
+              )}
+            </View>
+
+            {availableWigs.length ? (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.availableWigsRow}
+              >
+                {availableWigs.map((wig) => {
+                  const isSelected = selectedWigId === wig.id;
+                  const isRecommended = recommendedWigIds.has(wig.id);
+
+                  return (
+                    <Pressable
+                      key={wig.id || `${wig.wig_id}-${wig.wig_name}`}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${wig.wig_name}${isRecommended ? ', AI recommended' : ''}`}
+                      onPress={() => onSelectWig(wig.id)}
+                      style={({ pressed }) => [
+                        styles.tryOnWigCard,
+                        isSelected ? styles.tryOnWigCardActive : null,
+                        pressed ? styles.optionCardPressed : null,
+                      ]}
+                    >
+                      <View style={styles.tryOnWigImageWrap}>
+                        {wig.thumbnail_url ? (
+                          <Image source={{ uri: wig.thumbnail_url }} resizeMode="cover" style={styles.tryOnWigImage} />
+                        ) : (
+                          <View style={styles.tryOnWigImagePlaceholder}>
+                            <AppIcon name="image" size="lg" color={theme.colors.brandPrimary} />
+                          </View>
+                        )}
+                        {isRecommended ? (
+                          <View style={styles.tryOnRecommendedBadge}>
+                            <AppIcon name="sparkle" size="sm" color={theme.colors.textInverse} />
+                          </View>
+                        ) : null}
+                      </View>
+                      <Text numberOfLines={1} style={styles.tryOnWigName}>{wig.wig_name}</Text>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            ) : (
+              <View style={styles.availableWigsEmpty}>
+                <Text style={styles.availableWigsEmptyText}>
+                  No active try-on wigs yet.
+                </Text>
+              </View>
+            )}
           </View>
 
           <View style={styles.captureControls}>
@@ -928,6 +1665,7 @@ export function PatientWigRequestScreen() {
   const [isCaptureOpen, setIsCaptureOpen] = useState(false);
   const [isCapturingPhoto, setIsCapturingPhoto] = useState(false);
   const [selectedOptionId, setSelectedOptionId] = useState('');
+  const [selectedWigFilterId, setSelectedWigFilterId] = useState('');
   const [isFlowOpen, setIsFlowOpen] = useState(false);
   const [isTimelineOpen, setIsTimelineOpen] = useState(false);
   const [flowStep, setFlowStep] = useState('patient');
@@ -955,6 +1693,8 @@ export function PatientWigRequestScreen() {
     isPickingReference,
     isGeneratingPreview,
     isSavingRequest,
+    availableWigs,
+    isLoadingAvailableWigs,
     pickReferenceImage,
     saveCapturedReferenceImage,
     generatePreview,
@@ -1012,12 +1752,38 @@ export function PatientWigRequestScreen() {
     || 'Your suggested wig recommendation will appear here after the front photo is processed.';
   const preferredColor = latestWigSpecification?.preferred_color || draftValues?.preferredColor || '';
   const preferredLength = latestWigSpecification?.preferred_length || draftValues?.preferredLength || '';
+  const hairTexture = latestWigSpecification?.hair_texture || draftValues?.hairTexture || '';
   const generatedImageUri = selectedOption?.generatedImageUri || preview?.generated_image_data_url || latestWigSpecification?.ai_wig_preview_url || '';
   const hasGeneratedPreview = Boolean(preview);
+  const recommendedWigIds = useMemo(() => getRecommendedWigIds({
+    wigs: availableWigs,
+    preferredColor,
+    preferredLength,
+    hairTexture,
+    recommendationTitle,
+    recommendationFamily,
+  }), [availableWigs, hairTexture, preferredColor, preferredLength, recommendationFamily, recommendationTitle]);
+  const selectedWig = useMemo(
+    () => availableWigs.find((wig) => wig.id === selectedWigFilterId) || availableWigs[0] || null,
+    [availableWigs, selectedWigFilterId]
+  );
 
   useEffect(() => {
     setSelectedOptionId(recommendationOptions[0]?.id || '');
   }, [latestWigSpecification?.ai_wig_preview_url, preview?.generated_image_data_url, recommendationOptions]);
+
+  useEffect(() => {
+    if (!availableWigs.length) {
+      setSelectedWigFilterId('');
+      return;
+    }
+
+    setSelectedWigFilterId((current) => {
+      if (current && availableWigs.some((wig) => wig.id === current)) return current;
+      const recommended = availableWigs.find((wig) => recommendedWigIds.has(wig.id));
+      return recommended?.id || availableWigs[0]?.id || '';
+    });
+  }, [availableWigs, recommendedWigIds]);
 
   const handleNavPress = (item) => {
     if (!item.route || item.route === '/patient/requests') return;
@@ -1046,11 +1812,16 @@ export function PatientWigRequestScreen() {
 
     setIsCapturingPhoto(true);
 
-    try {
-      const photo = await cameraRef.current.takePictureAsync({
-        quality: 0.8,
-        base64: true,
-      });
+  try {
+      const photo = typeof cameraRef.current.takePhoto === 'function'
+        ? await cameraRef.current.takePhoto().then((result) => ({
+            ...result,
+            uri: result?.uri || (result?.path ? `file://${result.path}` : ''),
+          }))
+        : await cameraRef.current.takePictureAsync({
+            quality: 0.8,
+            base64: true,
+          });
 
       await saveCapturedReferenceImage(photo);
     } catch {
@@ -1081,7 +1852,10 @@ export function PatientWigRequestScreen() {
       return { success: false, error: 'Please accept the request agreement first.' };
     }
 
-    const result = await saveRequest(values, selectedOptionId);
+    const requestedWigId = requestPreferenceChoice === 'preferences'
+      ? selectedWig?.wig_id || null
+      : null;
+    const result = await saveRequest(values, selectedOptionId, requestedWigId);
 
     if (result?.success) {
       await refreshTracking();
@@ -1405,6 +2179,11 @@ export function PatientWigRequestScreen() {
       <CaptureModal
         visible={isCaptureOpen}
         referenceImage={referenceImage}
+        availableWigs={availableWigs}
+        selectedWig={selectedWig}
+        selectedWigId={selectedWigFilterId}
+        recommendedWigIds={recommendedWigIds}
+        isLoadingAvailableWigs={isLoadingAvailableWigs}
         hasCameraPermission={hasCameraPermission}
         cameraRef={cameraRef}
         onCameraReady={() => {}}
@@ -1413,6 +2192,7 @@ export function PatientWigRequestScreen() {
         onClose={closeCaptureFlow}
         onUpload={pickReferenceImage}
         onCapture={handleCapturePhoto}
+        onSelectWig={setSelectedWigFilterId}
         onGeneratePreview={handleGeneratePreviewFromModal}
         onRequestPermission={requestCameraPermission}
       />
@@ -2543,8 +3323,129 @@ const styles = StyleSheet.create({
     marginBottom: theme.spacing.md,
   },
   captureStageImage: {
+    position: 'relative',
+    zIndex: 1,
     width: '100%',
     height: 320,
+  },
+  tryOnLayerWrap: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 6,
+    elevation: 6,
+  },
+  tryOnLayerHidden: {
+    position: 'absolute',
+    width: 0,
+    height: 0,
+    opacity: 0,
+  },
+  tryOnLayerMissingBanner: {
+    position: 'absolute',
+    left: theme.spacing.md,
+    right: theme.spacing.md,
+    bottom: theme.spacing.md,
+    zIndex: 12,
+    elevation: 12,
+    alignItems: 'center',
+    borderRadius: theme.radius.full,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.xs,
+    backgroundColor: 'rgba(17, 14, 17, 0.72)',
+  },
+  tryOnLayerMissingText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textInverse,
+  },
+  availableWigsSection: {
+    gap: theme.spacing.sm,
+    marginBottom: theme.spacing.md,
+  },
+  availableWigsHeader: {
+    minHeight: 24,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.md,
+  },
+  availableWigsTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.bold,
+    color: theme.colors.textPrimary,
+  },
+  availableWigsMeta: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textSecondary,
+  },
+  availableWigsRow: {
+    gap: theme.spacing.sm,
+    paddingRight: theme.spacing.md,
+  },
+  tryOnWigCard: {
+    width: 116,
+    gap: theme.spacing.xs,
+    borderRadius: theme.radius.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.borderMuted,
+    backgroundColor: theme.colors.backgroundPrimary,
+    padding: theme.spacing.xs,
+  },
+  tryOnWigCardActive: {
+    borderWidth: 2,
+    borderColor: theme.colors.brandPrimary,
+  },
+  tryOnWigImageWrap: {
+    position: 'relative',
+    height: 86,
+    overflow: 'hidden',
+    borderRadius: theme.radius.md,
+    backgroundColor: theme.colors.surfaceSoft,
+  },
+  tryOnWigImage: {
+    width: '100%',
+    height: '100%',
+  },
+  tryOnWigImagePlaceholder: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tryOnRecommendedBadge: {
+    position: 'absolute',
+    top: 6,
+    right: 6,
+    width: 28,
+    height: 28,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.brandPrimary,
+  },
+  tryOnWigName: {
+    minHeight: 18,
+    textAlign: 'center',
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textPrimary,
+  },
+  availableWigsEmpty: {
+    minHeight: 72,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: theme.radius.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.borderMuted,
+    backgroundColor: theme.colors.backgroundPrimary,
+  },
+  availableWigsEmptyText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    color: theme.colors.textSecondary,
   },
   captureStagePlaceholder: {
     minHeight: 320,
@@ -2573,6 +3474,8 @@ const styles = StyleSheet.create({
     bottom: 20,
     left: 20,
     borderRadius: theme.radius.xl,
+    zIndex: 10,
+    elevation: 10,
   },
   captureCorner: {
     position: 'absolute',

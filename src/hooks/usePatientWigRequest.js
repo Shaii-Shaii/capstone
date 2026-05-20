@@ -4,6 +4,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { generatePatientWigPreview } from '../features/wigGeneration.service';
 import {
+  getActiveWigTryOnFilters,
   getPatientWigRequestContext,
   savePatientWigRequestFlow,
 } from '../features/wigRequest.service';
@@ -245,6 +246,8 @@ export const usePatientWigRequest = ({ userId }) => {
   const [isPickingReference, setIsPickingReference] = useState(false);
   const [isGeneratingPreview, setIsGeneratingPreview] = useState(false);
   const [isSavingRequest, setIsSavingRequest] = useState(false);
+  const [availableWigs, setAvailableWigs] = useState([]);
+  const [isLoadingAvailableWigs, setIsLoadingAvailableWigs] = useState(false);
   const [requestedSavedPreviewId, setRequestedSavedPreviewId] = useState(null);
 
   const hasSubmittedRequest = isOngoingWigRequest(context.latestWigRequest);
@@ -336,6 +339,24 @@ export const usePatientWigRequest = ({ userId }) => {
     if (!userId) return;
     refreshContext();
   }, [refreshContext, userId]);
+
+  const refreshAvailableWigs = useCallback(async () => {
+    setIsLoadingAvailableWigs(true);
+
+    const result = await getActiveWigTryOnFilters();
+    setAvailableWigs(result.wigs || []);
+    setIsLoadingAvailableWigs(false);
+
+    if (result.error) {
+      logAppError('patientWigRequest.refreshAvailableWigs', result.error, { userId });
+    }
+
+    return { success: !result.error, wigs: result.wigs || [], error: result.error };
+  }, [userId]);
+
+  useEffect(() => {
+    refreshAvailableWigs();
+  }, [refreshAvailableWigs]);
 
   useEffect(() => {
     setRequestedSavedPreviewId(null);
@@ -501,7 +522,7 @@ export const usePatientWigRequest = ({ userId }) => {
     });
   }, [buildSavedPreferences, buildSavedReferenceImage, referenceImage, requestPreview]);
 
-  const saveRequest = async (preferences, selectedOptionId = '') => {
+  const saveRequest = async (preferences, selectedOptionId = '', selectedWigId = null) => {
     setIsSavingRequest(true);
     setError(null);
     setSuccessMessage('');
@@ -521,6 +542,7 @@ export const usePatientWigRequest = ({ userId }) => {
       preferences,
       preview: selectedPreview,
       referenceImage,
+      selectedWigId,
     });
 
     setIsSavingRequest(false);
@@ -551,6 +573,8 @@ export const usePatientWigRequest = ({ userId }) => {
     isPickingReference,
     isGeneratingPreview,
     isSavingRequest,
+    availableWigs,
+    isLoadingAvailableWigs,
     progressLabel,
     pickReferenceImage,
     saveCapturedReferenceImage,
@@ -560,5 +584,6 @@ export const usePatientWigRequest = ({ userId }) => {
     regenerateSavedRecommendation,
     saveRequest,
     refreshContext,
+    refreshAvailableWigs,
   };
 };

@@ -24,6 +24,25 @@ function patchFile(relativePath, replacements) {
   }
 }
 
+function copyFileIfPresent(sourceRelativePath, destinationRelativePath) {
+  const sourcePath = path.join(root, sourceRelativePath);
+  const destinationPath = path.join(root, destinationRelativePath);
+
+  if (!fs.existsSync(sourcePath)) {
+    console.warn(`[patch-worklets-cmake] Skipped missing file: ${sourceRelativePath}`);
+    return;
+  }
+
+  fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
+  fs.copyFileSync(sourcePath, destinationPath);
+  console.log(`[patch-worklets-cmake] Copied ${sourceRelativePath} to ${destinationRelativePath}`);
+}
+
+copyFileIfPresent(
+  "assets/models/face_landmarker.task",
+  "android/app/src/main/assets/face_landmarker.task"
+);
+
 patchFile("node_modules/react-native-worklets/android/CMakeLists.txt", [
   [
     `set(CPP_SHARED "\${CMAKE_ANDROID_NDK}/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/\${CMAKE_ANDROID_ARCH_ABI}/libc++_shared.so")

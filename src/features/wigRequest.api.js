@@ -6,6 +6,8 @@ const wigRequestsTable = 'Wig_Requests';
 const wigRequestSpecificationsTable = 'Wig_Request_Specifications';
 const wigAllocationsTable = 'Wig_Allocations';
 const wigsTable = 'Wigs';
+const wigAiFiltersTable = 'Wig_AI_Filters';
+const wigAiFiltersStorageBucket = 'wig_ai_filters';
 const wigPhysicalSpecificationsTable = 'Wig_Specifications';
 const patientsTable = 'Patients';
 
@@ -20,7 +22,8 @@ const wigRequestSelect = `
   updated_at:Updated_At,
   pdf_url:Pdf_Url,
   status_reason:Status_Reason,
-  hospital_id:Hospital_ID
+  hospital_id:Hospital_ID,
+  requested_wig_id:Requested_Wig_ID
 `;
 
 const wigSpecificationSelect = `
@@ -52,6 +55,10 @@ const wigSelect = `
   wig_code:Wig_Code,
   wig_name:Wig_Name,
   wig_status:Wig_Status,
+  stock_count:Stock_Count,
+  wig_front_image_path:Wig_Front_Image_Path,
+  wig_side_image_path:Wig_Side_Image_Path,
+  wig_top_image_path:Wig_Top_Image_Path,
   production_notes:Production_Notes,
   completed_at:Completed_At,
   updated_at:Updated_At
@@ -73,6 +80,64 @@ const patientPictureSelect = `
 `;
 
 const firstRelation = (value) => (Array.isArray(value) ? value[0] || null : value || null);
+
+const parseJsonValue = (value) => {
+  if (!value) return {};
+  if (typeof value === 'object') return value;
+
+  try {
+    return JSON.parse(value);
+  } catch {
+    return {};
+  }
+};
+
+const buildWigFilterPublicUrl = (path) => {
+  if (!path) return '';
+  if (/^https?:\/\//i.test(path)) return path;
+
+  return supabase.storage
+    .from(wigAiFiltersStorageBucket)
+    .getPublicUrl(path)
+    .data?.publicUrl || '';
+};
+
+const normalizeWigAiFilter = (row) => {
+  const wig = firstRelation(row?.Wigs);
+
+  return {
+    id: row?.Filter_ID || null,
+    filter_id: row?.Filter_ID || null,
+    wig_id: row?.Wig_ID || null,
+    version: row?.Version ?? null,
+    status: row?.Status || '',
+    is_active: Boolean(row?.Is_Active),
+    wig_name: wig?.Wig_Name || row?.Pending_Wig_Name || `Wig ${row?.Wig_ID || ''}`.trim(),
+    wig_code: wig?.Wig_Code || row?.Pending_Wig_Code || '',
+    stock_count: wig?.Stock_Count ?? null,
+    fit_settings: parseJsonValue(row?.Fit_Settings),
+    thumbnail_path: row?.Thumbnail_Path || '',
+    layer_full_wig_path: row?.Layer_Full_Wig_Path || '',
+    layer_back_hair_path: row?.Layer_Back_Hair_Path || '',
+    layer_front_bangs_path: row?.Layer_Front_Bangs_Path || '',
+    layer_hair_mask_path: row?.Layer_Hair_Mask_Path || '',
+    layer_face_mask_path: row?.Layer_Face_Mask_Path || '',
+    thumbnail_url: buildWigFilterPublicUrl(row?.Thumbnail_Path),
+    layer_full_wig_url: buildWigFilterPublicUrl(row?.Layer_Full_Wig_Path),
+    layer_back_hair_url: buildWigFilterPublicUrl(row?.Layer_Back_Hair_Path),
+    layer_front_bangs_url: buildWigFilterPublicUrl(row?.Layer_Front_Bangs_Path),
+    layer_hair_mask_url: buildWigFilterPublicUrl(row?.Layer_Hair_Mask_Path),
+    layer_face_mask_url: buildWigFilterPublicUrl(row?.Layer_Face_Mask_Path),
+    pending_wig_name: row?.Pending_Wig_Name || '',
+    pending_wig_code: row?.Pending_Wig_Code || '',
+    pending_hair_length: row?.Pending_Hair_Length ?? null,
+    pending_hair_color: row?.Pending_Hair_Color || '',
+    pending_hair_texture: row?.Pending_Hair_Texture || '',
+    pending_hair_density: row?.Pending_Hair_Density || '',
+    pending_cap_size: row?.Pending_Cap_Size || '',
+    pending_style: row?.Pending_Style || '',
+  };
+};
 
 const logWigQuery = (source, extras = {}) => {
   logAppEvent('wig_request.query', 'Wig request query started.', {
@@ -96,6 +161,7 @@ const normalizeWigRequest = (row) => {
     updated_at: row?.updated_at || null,
     pdf_url: row?.pdf_url || '',
     status_reason: row?.status_reason || '',
+    requested_wig_id: row?.requested_wig_id || null,
     notes: specification?.special_notes || '',
     ai_wig_preview_url: specification?.ai_wig_preview_url || '',
   };
@@ -147,6 +213,10 @@ const normalizeWigAllocation = (row) => {
           wig_code: wig?.wig_code || '',
           wig_name: wig?.wig_name || physicalSpec?.style || 'Assigned Wig',
           wig_status: wig?.wig_status || '',
+          stock_count: wig?.stock_count ?? null,
+          wig_front_image_path: wig?.wig_front_image_path || '',
+          wig_side_image_path: wig?.wig_side_image_path || '',
+          wig_top_image_path: wig?.wig_top_image_path || '',
           completed_at: wig?.completed_at || null,
           updated_at: wig?.updated_at || null,
           production_notes: wig?.production_notes || '',
@@ -181,7 +251,7 @@ export const createWigRequest = async (payload) => {
     table: wigRequestsTable,
     phase: 'create',
     filters: { Patient_ID: payload?.patient_id || null },
-    columns: ['Patient_ID', 'Status', 'Request_Date', 'Requested_By', 'Approved_By', 'Approved_At', 'Updated_At', 'Pdf_Url', 'Status_Reason', 'Hospital_ID'],
+    columns: ['Patient_ID', 'Status', 'Request_Date', 'Requested_By', 'Approved_By', 'Approved_At', 'Updated_At', 'Pdf_Url', 'Status_Reason', 'Hospital_ID', 'Requested_Wig_ID'],
   });
 
   const result = await supabase
@@ -197,6 +267,7 @@ export const createWigRequest = async (payload) => {
       Pdf_Url: payload?.pdf_url || null,
       Status_Reason: payload?.status_reason || null,
       Hospital_ID: payload?.hospital_id || null,
+      Requested_Wig_ID: payload?.requested_wig_id || null,
     }])
     .select(wigRequestSelect)
     .single();
@@ -395,6 +466,48 @@ export const getStoragePublicUrl = ({ path, bucket = wigReferenceStorageBucket }
     .from(bucket)
     .getPublicUrl(path)
 );
+
+export const fetchActiveWigAiFilters = async () => {
+  logWigQuery('fetchActiveWigAiFilters', {
+    table: wigAiFiltersTable,
+    phase: 'read',
+    filters: { Is_Active: true },
+    columns: [
+      'Filter_ID',
+      'Wig_ID',
+      'Version',
+      'Status',
+      'Is_Active',
+      'Fit_Settings',
+      'Thumbnail_Path',
+      'Layer_Full_Wig_Path',
+      'Layer_Back_Hair_Path',
+      'Layer_Front_Bangs_Path',
+      'Layer_Hair_Mask_Path',
+      'Layer_Face_Mask_Path',
+      'Pending_Wig_Name',
+      'Pending_Wig_Code',
+      'Pending_Hair_Length',
+      'Pending_Hair_Color',
+      'Pending_Hair_Texture',
+      'Pending_Hair_Density',
+      'Pending_Cap_Size',
+      'Pending_Style',
+      'Wigs.Wig_Name',
+    ],
+  });
+
+  const result = await supabase
+    .from(wigAiFiltersTable)
+    .select('Filter_ID, Wig_ID, Version, Status, Is_Active, Fit_Settings, Thumbnail_Path, Layer_Full_Wig_Path, Layer_Back_Hair_Path, Layer_Front_Bangs_Path, Layer_Hair_Mask_Path, Layer_Face_Mask_Path, Pending_Wig_Name, Pending_Wig_Code, Pending_Hair_Length, Pending_Hair_Color, Pending_Hair_Texture, Pending_Hair_Density, Pending_Cap_Size, Pending_Style, Wigs:Wig_ID(Wig_Name, Wig_Code, Stock_Count)')
+    .eq('Is_Active', true)
+    .order('Filter_ID', { ascending: false });
+
+  return {
+    data: Array.isArray(result.data) ? result.data.map(normalizeWigAiFilter) : [],
+    error: result.error,
+  };
+};
 
 export const fetchLatestWigAllocationByPatientDetailsId = async (patientId) => {
   logWigQuery('fetchLatestWigAllocationByPatientDetailsId', {

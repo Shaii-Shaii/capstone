@@ -7,7 +7,6 @@ const hairSubmissionsTable = 'Hair_Submissions';
 const hairSubmissionDetailsTable = 'Hair_Submission_Details';
 const hairSubmissionImagesTable = 'Hair_Submission_Images';
 const hairSubmissionLogisticsTable = 'Hair_Submission_Logistics';
-const hairSubmissionLogisticsItemsTable = 'Hair_Submission_Logistics_Items';
 const hairBundleTrackingHistoryTable = 'Hair_Bundle_Tracking_History';
 const aiScreeningsTable = 'AI_Screenings';
 const donorRecommendationsTable = 'Donor_Recommendations';
@@ -41,11 +40,8 @@ const hairSubmissionSelect = `
   donation_source:Donation_Source,
   donor_notes:Donor_Notes,
   recipient_type:Recipient_Type,
-  recipient_patient_id:Recipient_Patient_ID,
   status:Status,
   bundle_id:Bundle_ID,
-  qr_status:QR_Status,
-  qr_generated_at:QR_Generated_At,
   submitted_at:Submitted_At,
   cancelled_at:Cancelled_At,
   created_at:Created_At,
@@ -292,10 +288,7 @@ const normalizeHairSubmission = (row) => ({
   donation_source: row?.donation_source || '',
   donor_notes: row?.donor_notes || '',
   recipient_type: row?.recipient_type || '',
-  recipient_patient_id: row?.recipient_patient_id || null,
   bundle_id: row?.bundle_id || null,
-  qr_status: row?.qr_status || '',
-  qr_generated_at: row?.qr_generated_at || null,
   submitted_at: row?.submitted_at || null,
   cancelled_at: row?.cancelled_at || null,
   status: row?.status || '',
@@ -447,7 +440,7 @@ export const createHairSubmission = async (payload) => {
     table: hairSubmissionsTable,
     phase: 'create',
     userId,
-    columns: ['User_ID', 'Donation_Drive_ID', 'Submission_Code', 'Donation_Source', 'Donor_Notes', 'Recipient_Type', 'Recipient_Patient_ID', 'Status', 'QR_Status', 'QR_Generated_At'],
+    columns: ['User_ID', 'Donation_Drive_ID', 'Submission_Code', 'Donation_Source', 'Donor_Notes', 'Recipient_Type', 'Status', 'Submitted_At', 'Cancelled_At'],
   });
 
   const insertPayload = {
@@ -457,10 +450,7 @@ export const createHairSubmission = async (payload) => {
     Donation_Source: payload?.donation_source || null,
     Donor_Notes: payload?.donor_notes || null,
     Recipient_Type: payload?.recipient_type || null,
-    Recipient_Patient_ID: payload?.recipient_patient_id ?? null,
     Status: payload?.status || null,
-    QR_Status: payload?.qr_status || 'Not Generated',
-    QR_Generated_At: payload?.qr_generated_at || null,
     Submitted_At: payload?.submitted_at || null,
     Cancelled_At: payload?.cancelled_at || null,
     Created_At: getPhilippineDatabaseTimestamp(),
@@ -1116,7 +1106,7 @@ export const fetchHairSubmissionsByUserId = async (userId, limit = 10) => {
     table: hairSubmissionsTable,
     phase: 'read',
     filters: { User_ID: resolvedUserId.userId },
-    columns: ['Submission_ID', 'User_ID', 'Donation_Drive_ID', 'Submission_Code', 'Donation_Source', 'Donor_Notes', 'Status', 'Bundle_ID', 'QR_Status', 'QR_Generated_At', 'Created_At', 'Updated_At'],
+    columns: ['Submission_ID', 'User_ID', 'Donation_Drive_ID', 'Submission_Code', 'Donation_Source', 'Donor_Notes', 'Recipient_Type', 'Status', 'Bundle_ID', 'Submitted_At', 'Cancelled_At', 'Created_At', 'Updated_At'],
   });
 
   const result = await supabase
@@ -1267,7 +1257,7 @@ export const fetchLatestHairSubmissionByUserId = async (userId) => {
     table: hairSubmissionsTable,
     phase: 'read',
     filters: { User_ID: resolvedUserId.userId },
-    columns: ['Submission_ID', 'User_ID', 'Donation_Drive_ID', 'Submission_Code', 'Donation_Source', 'Donor_Notes', 'Status', 'Bundle_ID', 'QR_Status', 'QR_Generated_At', 'Created_At', 'Updated_At'],
+    columns: ['Submission_ID', 'User_ID', 'Donation_Drive_ID', 'Submission_Code', 'Donation_Source', 'Donor_Notes', 'Recipient_Type', 'Status', 'Bundle_ID', 'Submitted_At', 'Cancelled_At', 'Created_At', 'Updated_At'],
   });
 
   const result = await supabase
@@ -1432,41 +1422,14 @@ export const createHairSubmissionLogistics = async (payload) => {
 };
 
 export const createHairSubmissionLogisticsItems = async (rows = []) => {
-  const insertRows = (rows || [])
-    .filter((row) => row?.submission_logistics_id && row?.submission_detail_id)
-    .map((row) => ({
-      Submission_Logistics_ID: row.submission_logistics_id,
-      Submission_Detail_ID: row.submission_detail_id,
-      Item_Logistics_Status: row.item_logistics_status || 'Pending',
-      Last_Scanned_At: row.last_scanned_at || null,
-      Received_At: row.received_at || null,
-      Received_By: row.received_by || null,
-    }));
-
-  if (!insertRows.length) {
-    return { data: [], error: null };
-  }
-
   logHairQuery('createHairSubmissionLogisticsItems', {
-    table: hairSubmissionLogisticsItemsTable,
-    phase: 'create',
-    rowCount: insertRows.length,
-    columns: ['Submission_Logistics_ID', 'Submission_Detail_ID', 'Item_Logistics_Status'],
+    table: 'Hair_Submission_Logistics',
+    phase: 'skipped',
+    rowCount: (rows || []).length,
+    reason: 'The current mobile schema tracks logistics at the submission level only.',
   });
 
-  const result = await supabase
-    .from(hairSubmissionLogisticsItemsTable)
-    .upsert(insertRows, { onConflict: 'Submission_Logistics_ID,Submission_Detail_ID' })
-    .select('*');
-
-  if (result.error?.code === 'PGRST205' || /schema cache|could not find/i.test(result.error?.message || '')) {
-    return { data: [], error: null };
-  }
-
-  return {
-    data: result.data || [],
-    error: result.error,
-  };
+  return { data: [], error: null };
 };
 
 export const updateHairSubmissionLogisticsItemsByDetailIds = async ({
@@ -1481,27 +1444,18 @@ export const updateHairSubmissionLogisticsItemsByDetailIds = async ({
     return { data: [], error: null };
   }
 
-  const updatePayload = {
-    Item_Logistics_Status: itemLogisticsStatus,
-    Last_Scanned_At: lastScannedAt || undefined,
-    Received_At: receivedAt || undefined,
-    Received_By: receivedBy || undefined,
-  };
+  logHairQuery('updateHairSubmissionLogisticsItemsByDetailIds', {
+    table: 'Hair_Submission_Logistics',
+    phase: 'skipped',
+    submissionDetailCount: ids.length,
+    itemLogisticsStatus,
+    lastScannedAt,
+    receivedAt,
+    receivedBy,
+    reason: 'The current mobile schema has no Hair_Submission_Logistics_Items table.',
+  });
 
-  const result = await supabase
-    .from(hairSubmissionLogisticsItemsTable)
-    .update(updatePayload)
-    .in('Submission_Detail_ID', ids)
-    .select('*');
-
-  if (result.error?.code === 'PGRST205' || /schema cache|could not find/i.test(result.error?.message || '')) {
-    return { data: [], error: null };
-  }
-
-  return {
-    data: result.data || [],
-    error: result.error,
-  };
+  return { data: [], error: null };
 };
 
 export const updateHairSubmissionById = async (submissionId, payload) => {
@@ -1513,7 +1467,7 @@ export const updateHairSubmissionById = async (submissionId, payload) => {
     table: hairSubmissionsTable,
     phase: 'update',
     filters: { Submission_ID: submissionId },
-    columns: ['Donation_Drive_ID', 'Submission_Code', 'Donation_Source', 'Donor_Notes', 'Recipient_Type', 'Recipient_Patient_ID', 'Status', 'Bundle_ID', 'QR_Status', 'QR_Generated_At'],
+    columns: ['Donation_Drive_ID', 'Submission_Code', 'Donation_Source', 'Donor_Notes', 'Recipient_Type', 'Status', 'Bundle_ID', 'Submitted_At', 'Cancelled_At'],
   });
 
   const result = await supabase
@@ -1526,12 +1480,7 @@ export const updateHairSubmissionById = async (submissionId, payload) => {
       Recipient_Type: Object.prototype.hasOwnProperty.call(payload || {}, 'recipient_type')
         ? payload?.recipient_type
         : undefined,
-      Recipient_Patient_ID: Object.prototype.hasOwnProperty.call(payload || {}, 'recipient_patient_id')
-        ? payload?.recipient_patient_id
-        : undefined,
       Bundle_ID: payload?.bundle_id ?? undefined,
-      QR_Status: payload?.qr_status ?? undefined,
-      QR_Generated_At: payload?.qr_generated_at ?? undefined,
       Submitted_At: payload?.submitted_at ?? undefined,
       Cancelled_At: payload?.cancelled_at ?? undefined,
       Status: payload?.status ?? undefined,
