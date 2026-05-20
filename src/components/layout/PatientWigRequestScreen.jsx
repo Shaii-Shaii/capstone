@@ -3,6 +3,7 @@ import {
   Image,
   KeyboardAvoidingView,
   Modal,
+  PanResponder,
   Platform,
   Pressable,
   ScrollView,
@@ -692,6 +693,15 @@ const normalizeLayerOffset = (offset, stageLayout) => {
   return numericOffset * (baseSize ? baseSize / 1024 : 1);
 };
 
+const getTouchDistance = (touches = []) => {
+  if (!Array.isArray(touches) || touches.length < 2) return 0;
+  const [firstTouch, secondTouch] = touches;
+  return Math.hypot(
+    Number(secondTouch.pageX || 0) - Number(firstTouch.pageX || 0),
+    Number(secondTouch.pageY || 0) - Number(firstTouch.pageY || 0)
+  );
+};
+
 const resolveLandmarkHeadBox = ({
   fallbackFaceBox,
   forehead,
@@ -1284,44 +1294,6 @@ function IconCircleButton({
   );
 }
 
-function CalibrationControl({
-  label,
-  value,
-  onDecrease,
-  onIncrease,
-}) {
-  return (
-    <View style={styles.calibrationControlRow}>
-      <Text style={styles.calibrationControlLabel}>{label}</Text>
-      <View style={styles.calibrationStepper}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`Decrease ${label}`}
-          onPress={onDecrease}
-          style={({ pressed }) => [
-            styles.calibrationStepButton,
-            pressed ? styles.iconCircleButtonPressed : null,
-          ]}
-        >
-          <Text style={styles.calibrationStepButtonText}>-</Text>
-        </Pressable>
-        <Text style={styles.calibrationValue}>{value}</Text>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`Increase ${label}`}
-          onPress={onIncrease}
-          style={({ pressed }) => [
-            styles.calibrationStepButton,
-            pressed ? styles.iconCircleButtonPressed : null,
-          ]}
-        >
-          <Text style={styles.calibrationStepButtonText}>+</Text>
-        </Pressable>
-      </View>
-    </View>
-  );
-}
-
 function WigInfoRow({ label, value, roles }) {
   return (
     <View
@@ -1362,22 +1334,13 @@ function CaptureModal({
   const [stageLayout, setStageLayout] = useState({ width: 0, height: 320 });
   const [faceFrame, setFaceFrame] = useState(null);
   const [cameraRuntimeError, setCameraRuntimeError] = useState(null);
-  const [isCalibrationOpen, setIsCalibrationOpen] = useState(false);
   const [wigCalibration, setWigCalibration] = useState(DEFAULT_WIG_CALIBRATION);
+  const gestureStartRef = useRef({
+    ...DEFAULT_WIG_CALIBRATION,
+    distance: 0,
+  });
   const handleFaceFrameChange = React.useCallback((nextFaceFrame) => {
     setFaceFrame((previousFaceFrame) => smoothFaceFrame(previousFaceFrame, nextFaceFrame));
-  }, []);
-  const adjustCalibration = React.useCallback((key, delta, min, max) => {
-    setWigCalibration((current) => {
-      const nextValue = Math.min(max, Math.max(min, Number(current?.[key] || 0) + delta));
-      return {
-        ...current,
-        [key]: Math.round(nextValue * 100) / 100,
-      };
-    });
-  }, []);
-  const resetCalibration = React.useCallback(() => {
-    setWigCalibration(DEFAULT_WIG_CALIBRATION);
   }, []);
 
   useEffect(() => {
@@ -1397,9 +1360,45 @@ function CaptureModal({
     setWigCalibration(DEFAULT_WIG_CALIBRATION);
   }, [selectedWigId]);
 
+  const primaryTryOnImageUrl = getPrimaryTryOnImageUrl(selectedWig);
+  const calibrationPanResponder = useMemo(() => PanResponder.create({
+    onStartShouldSetPanResponder: () => Boolean(selectedWig && primaryTryOnImageUrl),
+    onMoveShouldSetPanResponder: (_, gestureState) => Boolean(
+      selectedWig
+      && primaryTryOnImageUrl
+      && (Math.abs(gestureState.dx) > 2 || Math.abs(gestureState.dy) > 2)
+    ),
+    onPanResponderGrant: (event) => {
+      gestureStartRef.current = {
+        ...wigCalibration,
+        distance: getTouchDistance(event.nativeEvent.touches),
+      };
+    },
+    onPanResponderMove: (event, gestureState) => {
+      const touches = event.nativeEvent.touches || [];
+      const start = gestureStartRef.current || DEFAULT_WIG_CALIBRATION;
+      if (touches.length >= 2) {
+        const currentDistance = getTouchDistance(touches);
+        const nextScale = start.distance
+          ? Math.min(1.35, Math.max(0.65, start.scale * (currentDistance / start.distance)))
+          : start.scale;
+        setWigCalibration((current) => ({
+          ...current,
+          scale: Math.round(nextScale * 100) / 100,
+        }));
+        return;
+      }
+
+      setWigCalibration((current) => ({
+        ...current,
+        offsetX: Math.round(Math.min(120, Math.max(-120, start.offsetX + gestureState.dx))),
+        offsetY: Math.round(Math.min(120, Math.max(-120, start.offsetY + gestureState.dy))),
+      }));
+    },
+  }), [primaryTryOnImageUrl, selectedWig, wigCalibration]);
+
   if (!visible) return null;
 
-  const primaryTryOnImageUrl = getPrimaryTryOnImageUrl(selectedWig);
   const shouldRenderFullWigLayer = Boolean(selectedWig?.layer_full_wig_url);
   const shouldRenderFrontWigLayer = false;
   const shouldUseSingleTryOnImage = Boolean(
@@ -1431,16 +1430,6 @@ function CaptureModal({
         <View style={styles.modalHeader}>
           <Text style={styles.modalTitle}>Front Photo</Text>
           <View style={styles.modalHeaderActions}>
-            {selectedWig ? (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Adjust wig calibration"
-                onPress={() => setIsCalibrationOpen(true)}
-                style={styles.headerIconButton}
-              >
-                <AppIcon name="settings" state="muted" />
-              </Pressable>
-            ) : null}
             <Pressable onPress={onClose} style={styles.headerIconButton}>
               <AppIcon name="close" state="muted" />
             </Pressable>
@@ -1510,10 +1499,11 @@ function CaptureModal({
             {selectedWig && primaryTryOnImageUrl ? (
               <View
                 key={selectedWig.id || primaryTryOnImageUrl}
-                pointerEvents="none"
+                pointerEvents="auto"
                 style={styles.tryOnLayerWrap}
                 renderToHardwareTextureAndroid
                 shouldRasterizeIOS
+                {...calibrationPanResponder.panHandlers}
               >
                 {shouldRenderBackWigLayer ? (
                   <WigLayerImage
@@ -1649,7 +1639,9 @@ function CaptureModal({
             <Text style={styles.modalFooterText}>
               {referenceImage?.uri
                 ? 'Photo ready.'
-                : 'Add a front photo.'}
+                : selectedWig
+                  ? 'Drag wig to move. Pinch to resize.'
+                  : 'Add a front photo.'}
             </Text>
 
             <AppButton
@@ -1660,51 +1652,6 @@ function CaptureModal({
             />
           </View>
       </View>
-      <Modal
-        transparent
-        visible={isCalibrationOpen}
-        animationType="fade"
-        onRequestClose={() => setIsCalibrationOpen(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Close wig calibration"
-            style={styles.modalBackdrop}
-            onPress={() => setIsCalibrationOpen(false)}
-          />
-          <View style={styles.calibrationCard}>
-            <View style={styles.calibrationHeader}>
-              <Text style={styles.calibrationTitle}>Wig calibration</Text>
-              <Pressable onPress={() => setIsCalibrationOpen(false)} style={styles.headerIconButton}>
-                <AppIcon name="close" state="muted" />
-              </Pressable>
-            </View>
-            <CalibrationControl
-              label="Horizontal"
-              value={`${wigCalibration.offsetX}px`}
-              onDecrease={() => adjustCalibration('offsetX', -4, -80, 80)}
-              onIncrease={() => adjustCalibration('offsetX', 4, -80, 80)}
-            />
-            <CalibrationControl
-              label="Vertical"
-              value={`${wigCalibration.offsetY}px`}
-              onDecrease={() => adjustCalibration('offsetY', -4, -80, 80)}
-              onIncrease={() => adjustCalibration('offsetY', 4, -80, 80)}
-            />
-            <CalibrationControl
-              label="Scale"
-              value={`${Math.round(wigCalibration.scale * 100)}%`}
-              onDecrease={() => adjustCalibration('scale', -0.04, 0.75, 1.25)}
-              onIncrease={() => adjustCalibration('scale', 0.04, 0.75, 1.25)}
-            />
-            <View style={styles.calibrationActions}>
-              <AppButton title="Reset" variant="secondary" fullWidth={false} onPress={resetCalibration} />
-              <AppButton title="Done" fullWidth={false} onPress={() => setIsCalibrationOpen(false)} />
-            </View>
-          </View>
-        </View>
-      </Modal>
     </Modal>
   );
 }
@@ -3619,76 +3566,6 @@ const styles = StyleSheet.create({
     width: '100%',
     alignSelf: 'center',
     maxWidth: theme.layout.contentMaxWidth,
-  },
-  calibrationCard: {
-    width: '100%',
-    alignSelf: 'center',
-    maxWidth: 420,
-    gap: theme.spacing.md,
-    borderRadius: theme.radius.xl,
-    padding: theme.spacing.lg,
-    backgroundColor: theme.colors.backgroundPrimary,
-    ...theme.shadows.lg,
-  },
-  calibrationHeader: {
-    minHeight: 40,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: theme.spacing.md,
-  },
-  calibrationTitle: {
-    fontFamily: theme.typography.fontFamilyDisplay,
-    fontSize: theme.typography.semantic.bodyLg,
-    fontWeight: theme.typography.weights.bold,
-    color: theme.colors.textPrimary,
-  },
-  calibrationControlRow: {
-    minHeight: 52,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: theme.spacing.md,
-  },
-  calibrationControlLabel: {
-    flex: 1,
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    fontWeight: theme.typography.weights.semibold,
-    color: theme.colors.textPrimary,
-  },
-  calibrationStepper: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.spacing.sm,
-  },
-  calibrationStepButton: {
-    width: 38,
-    height: 38,
-    borderRadius: theme.radius.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: theme.colors.borderMuted,
-    backgroundColor: theme.colors.surfaceSoft,
-  },
-  calibrationStepButtonText: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodyLg,
-    fontWeight: theme.typography.weights.bold,
-    color: theme.colors.brandPrimary,
-  },
-  calibrationValue: {
-    width: 60,
-    textAlign: 'center',
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    fontWeight: theme.typography.weights.semibold,
-    color: theme.colors.textSecondary,
-  },
-  calibrationActions: {
-    flexDirection: 'row',
-    gap: theme.spacing.sm,
   },
   captureFullScreen: {
     flex: 1,
