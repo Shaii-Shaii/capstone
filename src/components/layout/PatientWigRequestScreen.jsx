@@ -112,6 +112,11 @@ const canUseNativeTryOnCamera = Boolean(
 
 const canUseFaceTrackingTryOnCamera = canUseMediaPipeTryOnCamera || canUseNativeTryOnCamera;
 const FACE_LANDMARKER_MODEL = 'face_landmarker.task';
+const CAPTURE_FRAME_INSET = 20;
+const CAPTURE_FACE_GUIDE_TOP = 46;
+const CAPTURE_FACE_GUIDE_WIDTH = 142;
+const CAPTURE_FACE_GUIDE_HEIGHT = 190;
+const CAPTURE_FACE_GUIDE_RADIUS = 72;
 
 const buildRecommendationTitle = ({ preview, specification, draftValues }) => (
   preview?.recommended_style_name
@@ -715,6 +720,43 @@ const resolveLandmarkHeadBox = ({
   };
 };
 
+const resolveGuideHeadBox = (stageLayout) => {
+  const stageWidth = Number(stageLayout?.width || 0);
+  const stageHeight = Number(stageLayout?.height || 0);
+  if (!stageWidth || !stageHeight) return null;
+
+  return {
+    x: (stageWidth - CAPTURE_FACE_GUIDE_WIDTH) / 2,
+    y: CAPTURE_FRAME_INSET + CAPTURE_FACE_GUIDE_TOP,
+    width: CAPTURE_FACE_GUIDE_WIDTH,
+    height: CAPTURE_FACE_GUIDE_HEIGHT,
+  };
+};
+
+const isFaceAlignedToGuide = (faceFrame, stageLayout) => {
+  const faceBox = resolveFaceBoxInStage(faceFrame, stageLayout);
+  const guideBox = resolveGuideHeadBox(stageLayout);
+  if (!faceBox || !guideBox) return false;
+
+  const faceCenterX = faceBox.x + (faceBox.width / 2);
+  const faceCenterY = faceBox.y + (faceBox.height / 2);
+  const guideCenterX = guideBox.x + (guideBox.width / 2);
+  const guideCenterY = guideBox.y + (guideBox.height / 2);
+  const centerDeltaX = Math.abs(faceCenterX - guideCenterX);
+  const centerDeltaY = Math.abs(faceCenterY - guideCenterY);
+  const widthRatio = faceBox.width / guideBox.width;
+  const heightRatio = faceBox.height / guideBox.height;
+
+  return (
+    centerDeltaX <= guideBox.width * 0.32
+    && centerDeltaY <= guideBox.height * 0.3
+    && widthRatio >= 0.62
+    && widthRatio <= 1.55
+    && heightRatio >= 0.62
+    && heightRatio <= 1.65
+  );
+};
+
 const buildFaceAnchoredTryOnLayerStyle = (faceFrame, stageLayout, layerKey, zIndex, fitSettings = {}) => {
   const faceBox = resolveFaceBoxInStage(faceFrame, stageLayout);
   if (!faceBox) {
@@ -755,7 +797,7 @@ const buildFaceAnchoredTryOnLayerStyle = (faceFrame, stageLayout, layerKey, zInd
   const yawScale = Math.max(0.82, 1 - (yawAngle / 120));
 
   if (faceFrame?.mediapipe && forehead && chin) {
-    const headBox = resolveLandmarkHeadBox({
+    const detectedHeadBox = resolveLandmarkHeadBox({
       fallbackFaceBox: faceBox,
       forehead,
       chin,
@@ -765,6 +807,8 @@ const buildFaceAnchoredTryOnLayerStyle = (faceFrame, stageLayout, layerKey, zInd
       leftTemple,
       rightTemple,
     }) || faceBox;
+    const guideHeadBox = resolveGuideHeadBox(stageLayout);
+    const headBox = guideHeadBox || detectedHeadBox;
     const layerScale = normalizeLayerScale(fit.scale);
     const offsetX = normalizeLayerOffset(anchor.userOffsetX, stageLayout);
     const offsetY = normalizeLayerOffset(anchor.userOffsetY, stageLayout);
@@ -1290,7 +1334,9 @@ function CaptureModal({
   const isLiveCameraTryOn = Boolean(!referenceImage?.uri && hasCameraPermission && canUseFaceTrackingTryOnCamera && !cameraRuntimeError);
   const shouldRenderBackWigLayer = false;
   const isWaitingForFace = Boolean(isLiveCameraTryOn && selectedWig && primaryTryOnImageUrl && !faceFrame);
-  const canCaptureLivePhoto = Boolean(!isLiveCameraTryOn || faceFrame);
+  const isFaceGuideAligned = Boolean(faceFrame && isFaceAlignedToGuide(faceFrame, stageLayout));
+  const isWaitingForGuideAlignment = Boolean(isLiveCameraTryOn && selectedWig && primaryTryOnImageUrl && faceFrame && !isFaceGuideAligned);
+  const canCaptureLivePhoto = Boolean(!isLiveCameraTryOn || isFaceGuideAligned);
   const canUseSelectedPhoto = Boolean(referenceImage?.uri && (!canUseFaceTrackingTryOnCamera || faceFrame || !hasCameraPermission || cameraRuntimeError));
   const cameraRuntimeMessage = getCameraRuntimeMessage(cameraRuntimeError);
   const getLayerStyle = (layerKey, zIndex) => {
@@ -1419,6 +1465,13 @@ function CaptureModal({
               <View pointerEvents="none" style={styles.tryOnLayerMissingBanner}>
                 <Text style={styles.tryOnLayerMissingText}>
                   Align your face to try this wig live
+                </Text>
+              </View>
+            ) : null}
+            {isWaitingForGuideAlignment ? (
+              <View pointerEvents="none" style={styles.tryOnLayerMissingBanner}>
+                <Text style={styles.tryOnLayerMissingText}>
+                  Fit your face inside the guide
                 </Text>
               </View>
             ) : null}
@@ -3831,10 +3884,10 @@ const styles = StyleSheet.create({
   },
   captureFrame: {
     position: 'absolute',
-    top: 20,
-    right: 20,
-    bottom: 20,
-    left: 20,
+    top: CAPTURE_FRAME_INSET,
+    right: CAPTURE_FRAME_INSET,
+    bottom: CAPTURE_FRAME_INSET,
+    left: CAPTURE_FRAME_INSET,
     borderRadius: theme.radius.xl,
     zIndex: 10,
     elevation: 10,
@@ -3871,11 +3924,11 @@ const styles = StyleSheet.create({
   },
   captureFaceGuide: {
     position: 'absolute',
-    top: 46,
+    top: CAPTURE_FACE_GUIDE_TOP,
     alignSelf: 'center',
-    width: 142,
-    height: 190,
-    borderRadius: 72,
+    width: CAPTURE_FACE_GUIDE_WIDTH,
+    height: CAPTURE_FACE_GUIDE_HEIGHT,
+    borderRadius: CAPTURE_FACE_GUIDE_RADIUS,
     borderWidth: 2,
     borderStyle: 'dashed',
     borderColor: 'rgba(255,255,255,0.68)',
