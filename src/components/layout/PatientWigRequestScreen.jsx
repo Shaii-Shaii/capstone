@@ -15,6 +15,7 @@ import { Controller, useForm, useWatch } from 'react-hook-form';
 import { useRouter } from 'expo-router';
 import Constants from 'expo-constants';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import Svg, { Defs, Ellipse, Image as SvgImage, Mask, Rect } from 'react-native-svg';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -762,6 +763,75 @@ const getPrimaryTryOnImageUrl = (wig) => (
   || ''
 );
 
+const getNumericStyleValue = (style, key) => {
+  const value = style?.[key];
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue : null;
+};
+
+const buildFaceOcclusionMask = (faceFrame, stageLayout, layerStyle, fitSettings = {}) => {
+  const faceBox = resolveFaceBoxInStage(faceFrame, stageLayout);
+  const layerLeft = getNumericStyleValue(layerStyle, 'left');
+  const layerTop = getNumericStyleValue(layerStyle, 'top');
+  const layerWidth = getNumericStyleValue(layerStyle, 'width');
+  const layerHeight = getNumericStyleValue(layerStyle, 'height');
+  if (!faceBox || layerLeft === null || layerTop === null || !layerWidth || !layerHeight) {
+    return null;
+  }
+
+  const maskSettings = fitSettings?.face_mask || fitSettings?.faceMask || fitSettings?.try_on?.faceMask || fitSettings?.try_on?.face_mask || {};
+  const scaleX = getNumericFitValue(maskSettings, ['scaleX', 'scale_x', 'faceCutoutScaleX', 'face_cutout_scale_x'], 1.18);
+  const scaleY = getNumericFitValue(maskSettings, ['scaleY', 'scale_y', 'faceCutoutScaleY', 'face_cutout_scale_y'], 1.12);
+  const offsetX = getNumericFitValue(maskSettings, ['offsetX', 'offset_x'], 0);
+  const offsetY = getNumericFitValue(maskSettings, ['offsetY', 'offset_y'], 0);
+  const faceCenter = {
+    x: faceBox.x + (faceBox.width / 2) + (faceBox.width * offsetX),
+    y: faceBox.y + (faceBox.height * 0.52) + (faceBox.height * offsetY),
+  };
+
+  return {
+    cx: faceCenter.x - layerLeft,
+    cy: faceCenter.y - layerTop,
+    rx: (faceBox.width * scaleX) / 2,
+    ry: (faceBox.height * scaleY) / 2,
+  };
+};
+
+function WigLayerImage({ sourceUri, style, mask, maskId }) {
+  if (!mask) {
+    return (
+      <Image
+        source={{ uri: sourceUri }}
+        resizeMode="contain"
+        fadeDuration={0}
+        style={style}
+      />
+    );
+  }
+
+  return (
+    <View style={style}>
+      <Svg width="100%" height="100%" viewBox={`0 0 ${style.width} ${style.height}`}>
+        <Defs>
+          <Mask id={maskId} x="0" y="0" width={style.width} height={style.height} maskUnits="userSpaceOnUse" maskType="luminance">
+            <Rect x="0" y="0" width={style.width} height={style.height} fill="white" />
+            <Ellipse cx={mask.cx} cy={mask.cy} rx={mask.rx} ry={mask.ry} fill="black" />
+          </Mask>
+        </Defs>
+        <SvgImage
+          href={{ uri: sourceUri }}
+          x="0"
+          y="0"
+          width={style.width}
+          height={style.height}
+          preserveAspectRatio="xMidYMid meet"
+          mask={`url(#${maskId})`}
+        />
+      </Svg>
+    </View>
+  );
+}
+
 const getCameraRuntimeMessage = (error) => {
   const code = String(error?.code || '');
   if (code === 'system/camera-is-restricted') {
@@ -1187,17 +1257,23 @@ function CaptureModal({
   );
   const selectedWigNeedsLayer = Boolean(selectedWig && !primaryTryOnImageUrl);
   const isLiveCameraTryOn = Boolean(!referenceImage?.uri && hasCameraPermission && canUseFaceTrackingTryOnCamera && !cameraRuntimeError);
-  const shouldRenderBackWigLayer = Boolean(selectedWig?.layer_back_hair_url && !isLiveCameraTryOn);
+  const shouldRenderBackWigLayer = Boolean(selectedWig?.layer_back_hair_url);
   const isWaitingForFace = Boolean(isLiveCameraTryOn && selectedWig && primaryTryOnImageUrl && !faceFrame);
   const canCaptureLivePhoto = Boolean(!isLiveCameraTryOn || faceFrame);
   const canUseSelectedPhoto = Boolean(referenceImage?.uri && (!canUseFaceTrackingTryOnCamera || faceFrame || !hasCameraPermission || cameraRuntimeError));
   const cameraRuntimeMessage = getCameraRuntimeMessage(cameraRuntimeError);
+  const shouldMaskBackLayers = Boolean(isLiveCameraTryOn && faceFrame);
   const getLayerStyle = (layerKey, zIndex) => {
     const faceAnchoredStyle = buildFaceAnchoredTryOnLayerStyle(faceFrame, stageLayout, layerKey, zIndex, selectedWig?.fit_settings);
     if (faceAnchoredStyle) return faceAnchoredStyle;
     if (isLiveCameraTryOn) return styles.tryOnLayerHidden;
     return buildTryOnLayerStyle(selectedWig?.fit_settings, layerKey, zIndex);
   };
+  const getLayerMask = (layerStyle) => (
+    shouldMaskBackLayers
+      ? buildFaceOcclusionMask(faceFrame, stageLayout, layerStyle, selectedWig?.fit_settings)
+      : null
+  );
 
   return (
     <Modal transparent={false} visible={visible} animationType="slide" onRequestClose={onClose}>
@@ -1280,19 +1356,19 @@ function CaptureModal({
                 shouldRasterizeIOS
               >
                 {shouldRenderBackWigLayer ? (
-                  <Image
-                    source={{ uri: selectedWig.layer_back_hair_url }}
-                    resizeMode="contain"
-                    fadeDuration={0}
+                  <WigLayerImage
+                    sourceUri={selectedWig.layer_back_hair_url}
                     style={getLayerStyle('backHair', 1)}
+                    mask={getLayerMask(getLayerStyle('backHair', 1))}
+                    maskId={`wig-back-mask-${selectedWig.id || 'selected'}`}
                   />
                 ) : null}
                 {shouldRenderFullWigLayer ? (
-                  <Image
-                    source={{ uri: selectedWig.layer_full_wig_url }}
-                    resizeMode="contain"
-                    fadeDuration={0}
+                  <WigLayerImage
+                    sourceUri={selectedWig.layer_full_wig_url}
                     style={getLayerStyle('fullWig', 3)}
+                    mask={getLayerMask(getLayerStyle('fullWig', 3))}
+                    maskId={`wig-full-mask-${selectedWig.id || 'selected'}`}
                   />
                 ) : null}
                 {shouldRenderFrontWigLayer ? (
@@ -1304,11 +1380,11 @@ function CaptureModal({
                   />
                 ) : null}
                 {shouldUseSingleTryOnImage ? (
-                  <Image
-                    source={{ uri: primaryTryOnImageUrl }}
-                    resizeMode="contain"
-                    fadeDuration={0}
+                  <WigLayerImage
+                    sourceUri={primaryTryOnImageUrl}
                     style={getLayerStyle('fullWig', 3)}
+                    mask={getLayerMask(getLayerStyle('fullWig', 3))}
+                    maskId={`wig-single-mask-${selectedWig.id || 'selected'}`}
                   />
                 ) : null}
               </View>
