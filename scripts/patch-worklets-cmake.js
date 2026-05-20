@@ -54,6 +54,32 @@ patchFile("node_modules/react-native-mediapipe/android/src/main/java/com/reactna
     val detector = FaceLandmarkDetectorMap.detectorMap[detectorHandle.toInt()] ?: return false
 `,
   ],
+  [
+    `    if (bitmap != null) {
+      val rotated = rotateBitmap(bitmap, orientationToDegrees(frame.orientation).toFloat())
+      val mpImage = BitmapImageBuilder(rotated).build()
+      detector.detectLiveStream(mpImage, frame.orientation)
+    }
+`,
+    `    if (bitmap != null) {
+      val mpImage = BitmapImageBuilder(bitmap).build()
+      detector.detectLiveStream(mpImage, frame.orientation)
+    }
+`,
+  ],
+]);
+
+patchFile("node_modules/react-native-mediapipe/android/src/main/java/com/reactnativemediapipe/facelandmarkdetection/FaceLandmarkDetectorHelper.kt", [
+  [
+    `      faceLandmarkDetectorListener?.onResults(
+        ResultBundle(listOf(result), inferenceTime, input.height, input.width)
+      )
+`,
+    `      faceLandmarkDetectorListener?.onResults(
+        ResultBundle(listOf(result), inferenceTime, input.height, input.width, this.imageRotation)
+      )
+`,
+  ],
 ]);
 
 patchFile("node_modules/react-native-worklets/android/CMakeLists.txt", [

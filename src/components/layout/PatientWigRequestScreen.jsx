@@ -346,6 +346,45 @@ const normalizeFaceTiltDegrees = (angle) => {
   return normalized;
 };
 
+const rotateNormalizedMediaPipePoint = (point, rotation = 0) => {
+  const normalizedRotation = ((Number(rotation) || 0) + 360) % 360;
+  if (normalizedRotation === 90) return { x: point.y, y: 1 - point.x };
+  if (normalizedRotation === 180) return { x: 1 - point.x, y: 1 - point.y };
+  if (normalizedRotation === 270) return { x: 1 - point.y, y: point.x };
+  return point;
+};
+
+const resolveRotatedFrameSize = (width, height, rotation = 0) => {
+  const normalizedRotation = ((Number(rotation) || 0) + 360) % 360;
+  if (normalizedRotation === 90 || normalizedRotation === 270) {
+    return { width: height, height: width };
+  }
+  return { width, height };
+};
+
+const mapFramePointToView = (point, frameSize, viewSize, mirrored = false) => {
+  if (!point || !frameSize?.width || !frameSize?.height || !viewSize?.width || !viewSize?.height) {
+    return null;
+  }
+
+  const framePoint = {
+    x: mirrored ? frameSize.width - point.x : point.x,
+    y: point.y,
+  };
+  const frameRatio = frameSize.width / frameSize.height;
+  const viewRatio = viewSize.width / viewSize.height;
+  const scale = frameRatio > viewRatio
+    ? viewSize.height / frameSize.height
+    : viewSize.width / frameSize.width;
+  const offsetX = frameRatio > viewRatio ? (viewSize.width - (frameSize.width * scale)) / 2 : 0;
+  const offsetY = frameRatio > viewRatio ? 0 : (viewSize.height - (frameSize.height * scale)) / 2;
+
+  return {
+    x: (framePoint.x * scale) + offsetX,
+    y: (framePoint.y * scale) + offsetY,
+  };
+};
+
 const getNumericFitValue = (source, keys, fallback) => {
   const candidates = Array.isArray(keys) ? keys : [keys];
   for (const key of candidates) {
@@ -387,21 +426,29 @@ const resolveLayerAnchor = (fitSettings = {}, layerKey = 'fullWig') => {
   };
 };
 
-const normalizeMediaPipeLandmarkPoint = (landmark, viewSize) => {
+const normalizeMediaPipeLandmarkPoint = (landmark, coordinateSpace) => {
   const x = Number(landmark?.x);
   const y = Number(landmark?.y);
-  if (!Number.isFinite(x) || !Number.isFinite(y) || !viewSize?.width || !viewSize?.height) {
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !coordinateSpace?.viewSize?.width || !coordinateSpace?.viewSize?.height) {
     return null;
   }
 
-  return {
-    x: x * viewSize.width,
-    y: y * viewSize.height,
+  const rotatedPoint = rotateNormalizedMediaPipePoint({ x, y }, coordinateSpace.rotation);
+  const framePoint = {
+    x: rotatedPoint.x * coordinateSpace.frameSize.width,
+    y: rotatedPoint.y * coordinateSpace.frameSize.height,
   };
+
+  return mapFramePointToView(
+    framePoint,
+    coordinateSpace.frameSize,
+    coordinateSpace.viewSize,
+    coordinateSpace.mirrored
+  );
 };
 
-const averageMediaPipeLandmarks = (landmarks, indices, viewSize, mirrored) => (
-  averagePoints(indices.map((index) => normalizeMediaPipeLandmarkPoint(landmarks?.[index], viewSize, mirrored)))
+const averageMediaPipeLandmarks = (landmarks, indices, coordinateSpace) => (
+  averagePoints(indices.map((index) => normalizeMediaPipeLandmarkPoint(landmarks?.[index], coordinateSpace)))
 );
 
 const buildMediaPipeFaceFrame = (resultBundle, viewSize, mirrored) => {
@@ -410,8 +457,17 @@ const buildMediaPipeFaceFrame = (resultBundle, viewSize, mirrored) => {
     return null;
   }
 
+  const inputWidth = Number(resultBundle?.inputImageWidth || viewSize.width);
+  const inputHeight = Number(resultBundle?.inputImageHeight || viewSize.height);
+  const rotation = Number(resultBundle?.inputImageRotation || 0);
+  const coordinateSpace = {
+    frameSize: resolveRotatedFrameSize(inputWidth, inputHeight, rotation),
+    mirrored,
+    rotation,
+    viewSize,
+  };
   const points = landmarks
-    .map((landmark) => normalizeMediaPipeLandmarkPoint(landmark, viewSize, mirrored))
+    .map((landmark) => normalizeMediaPipeLandmarkPoint(landmark, coordinateSpace))
     .filter(Boolean);
   if (!points.length) return null;
 
@@ -421,8 +477,8 @@ const buildMediaPipeFaceFrame = (resultBundle, viewSize, mirrored) => {
   const maxX = Math.max(...xs);
   const minY = Math.min(...ys);
   const maxY = Math.max(...ys);
-  const leftTemple = averageMediaPipeLandmarks(landmarks, [127, 234, 93], viewSize, mirrored);
-  const rightTemple = averageMediaPipeLandmarks(landmarks, [356, 454, 323], viewSize, mirrored);
+  const leftTemple = averageMediaPipeLandmarks(landmarks, [127, 234, 93], coordinateSpace);
+  const rightTemple = averageMediaPipeLandmarks(landmarks, [356, 454, 323], coordinateSpace);
 
   return {
     mediapipe: true,
@@ -436,15 +492,15 @@ const buildMediaPipeFaceFrame = (resultBundle, viewSize, mirrored) => {
       height: maxY - minY,
     },
     landmarks: {
-      LEFT_EYE: averageMediaPipeLandmarks(landmarks, [33, 133, 159, 145], viewSize, mirrored),
-      RIGHT_EYE: averageMediaPipeLandmarks(landmarks, [263, 362, 386, 374], viewSize, mirrored),
+      LEFT_EYE: averageMediaPipeLandmarks(landmarks, [33, 133, 159, 145], coordinateSpace),
+      RIGHT_EYE: averageMediaPipeLandmarks(landmarks, [263, 362, 386, 374], coordinateSpace),
       LEFT_EAR: leftTemple,
       RIGHT_EAR: rightTemple,
       LEFT_TEMPLE: leftTemple,
       RIGHT_TEMPLE: rightTemple,
-      FOREHEAD: normalizeMediaPipeLandmarkPoint(landmarks[10], viewSize, mirrored),
-      CHIN: normalizeMediaPipeLandmarkPoint(landmarks[152], viewSize, mirrored),
-      NOSE: normalizeMediaPipeLandmarkPoint(landmarks[1], viewSize, mirrored),
+      FOREHEAD: normalizeMediaPipeLandmarkPoint(landmarks[10], coordinateSpace),
+      CHIN: normalizeMediaPipeLandmarkPoint(landmarks[152], coordinateSpace),
+      NOSE: normalizeMediaPipeLandmarkPoint(landmarks[1], coordinateSpace),
     },
   };
 };
