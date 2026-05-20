@@ -468,19 +468,19 @@ const resolveTryOnConfig = (fitSettings = {}, layerKey = 'fullWig') => {
   const source = { ...globalConfig, ...layerConfig };
   const faceHoleSource = source?.faceHole || source?.face_hole || source?.faceOpening || source?.face_opening || {};
   const defaultFaceHole = layerKey === 'frontBangs'
-    ? { x: 0.25, y: 0.16, width: 0.5, height: 0.62 }
+    ? { x: 0.18, y: 0.14, width: 0.64, height: 0.7 }
     : { x: 0.28, y: 0.16, width: 0.44, height: 0.5 };
 
   return {
     scaleMultiplier: getNumericFitValue(
       source,
       ['scaleMultiplier', 'scale_multiplier', 'scale', 'widthMultiplier', 'width_multiplier'],
-      layerKey === 'frontBangs' ? 1.15 : 1.25
+      layerKey === 'frontBangs' ? 1.04 : 1.25
     ),
     scaleY: getNumericFitValue(
       source,
       ['scaleY', 'scale_y', 'heightScale', 'height_scale'],
-      layerKey === 'frontBangs' ? 1.08 : 1.2
+      layerKey === 'frontBangs' ? 1.05 : 1.2
     ),
     heightMultiplier: getNumericFitValue(
       source,
@@ -503,6 +503,7 @@ const resolveTryOnConfig = (fitSettings = {}, layerKey = 'fullWig') => {
       0
     ),
     anchor: source?.anchor || 'forehead',
+    forceFaceCutout: Boolean(source?.forceFaceCutout || source?.force_face_cutout || source?.applyFaceCutout || source?.apply_face_cutout),
     faceHole: {
       x: getNumericFitValue(faceHoleSource, ['x', 'left'], defaultFaceHole.x),
       y: getNumericFitValue(faceHoleSource, ['y', 'top'], defaultFaceHole.y),
@@ -1276,7 +1277,18 @@ function CaptureModal({
   const canCaptureLivePhoto = Boolean(!isLiveCameraTryOn || faceFrame);
   const canUseSelectedPhoto = Boolean(referenceImage?.uri && (!canUseFaceTrackingTryOnCamera || faceFrame || !hasCameraPermission || cameraRuntimeError));
   const cameraRuntimeMessage = getCameraRuntimeMessage(cameraRuntimeError);
-  const shouldMaskBackLayers = Boolean(isLiveCameraTryOn && faceFrame);
+  const shouldMaskBackLayers = Boolean(
+    isLiveCameraTryOn
+    && faceFrame
+    && (
+      selectedWig?.fit_settings?.try_on?.forceFaceCutout
+      || selectedWig?.fit_settings?.try_on?.force_face_cutout
+      || selectedWig?.fit_settings?.forceFaceCutout
+      || selectedWig?.fit_settings?.force_face_cutout
+      || selectedWig?.fit_settings?.face_mask?.force
+      || selectedWig?.fit_settings?.faceMask?.force
+    )
+  );
   const getLayerStyle = (layerKey, zIndex) => {
     const faceAnchoredStyle = buildFaceAnchoredTryOnLayerStyle(faceFrame, stageLayout, layerKey, zIndex, selectedWig?.fit_settings);
     if (faceAnchoredStyle) return faceAnchoredStyle;
