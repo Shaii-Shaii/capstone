@@ -491,7 +491,7 @@ const resolveTryOnConfig = (fitSettings = {}, layerKey = 'fullWig') => {
   const faceHoleSource = source?.faceHole || source?.face_hole || source?.faceOpening || source?.face_opening || {};
   const defaultFaceHole = layerKey === 'frontBangs'
     ? { x: 0.18, y: 0.24, width: 0.64, height: 0.62 }
-    : { x: 0.21, y: 0.16, width: 0.58, height: 0.72 };
+    : { x: 0.2, y: 0.18, width: 0.6, height: 0.72 };
 
   return {
     scaleMultiplier: getNumericFitValue(
@@ -741,14 +741,16 @@ const resolveGuideAnchoredHeadBox = (detectedHeadBox, guideHeadBox) => {
   const detectedCenterY = detectedHeadBox.y + (detectedHeadBox.height / 2);
   const guideCenterX = guideHeadBox.x + (guideHeadBox.width / 2);
   const guideCenterY = guideHeadBox.y + (guideHeadBox.height / 2);
-  const followX = lerp(guideCenterX, detectedCenterX, 0.45);
-  const followY = lerp(guideCenterY, detectedCenterY, 0.28);
+  const followX = lerp(guideCenterX, detectedCenterX, 0.9);
+  const followY = lerp(guideCenterY, detectedCenterY, 0.78);
+  const stableWidth = lerp(guideHeadBox.width, detectedHeadBox.width, 0.22);
+  const stableHeight = lerp(guideHeadBox.height, detectedHeadBox.height, 0.18);
 
   return {
-    x: followX - (guideHeadBox.width / 2),
-    y: followY - (guideHeadBox.height / 2),
-    width: guideHeadBox.width,
-    height: guideHeadBox.height,
+    x: followX - (stableWidth / 2),
+    y: followY - (stableHeight / 2),
+    width: stableWidth,
+    height: stableHeight,
   };
 };
 
