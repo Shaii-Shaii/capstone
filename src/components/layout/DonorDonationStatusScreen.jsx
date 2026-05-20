@@ -435,7 +435,14 @@ const getDonationCardMeta = ({ submission = null, drive = null, logistics = null
   }
 
   if (submission?.submission_id) {
-    if (normalized.includes('submitted')) {
+    if (
+      normalized.includes('submitted')
+      || normalized === 'cut'
+      || normalized.includes('ready for shipping')
+      || normalized.includes('in transit')
+      || normalized.includes('received')
+      || normalized.includes('under review')
+    ) {
       return { label: 'Submitted', category: 'submitted', icon: 'upload-check-outline' };
     }
 
@@ -2038,6 +2045,21 @@ function MyJoinedDonationsScreen({
   onCancelDonation,
   hasOngoingDonation = false,
 }) {
+  const getDonationActionTitle = React.useCallback((item) => {
+    if (item?.submission) return 'View';
+    if (item?.drive?.registration?.registration_id) return 'View';
+    return 'Register';
+  }, []);
+
+  const handleDonationActionPress = React.useCallback((item) => {
+    if (item?.submission) {
+      onViewDonation?.(item);
+      return;
+    }
+
+    onSubmitDriveDonation?.(item.drive);
+  }, [onSubmitDriveDonation, onViewDonation]);
+
   const filteredItems = React.useMemo(() => (
     donationItems
       .filter((item) => {
@@ -2049,7 +2071,7 @@ function MyJoinedDonationsScreen({
       .filter((item) => {
       if (hasOngoingDonation && !item.submission) return false;
       if (activeFilter === 'all') return true;
-      if (activeFilter === 'active') return ['active', 'submitted'].includes(item.statusCategory);
+      if (activeFilter === 'active') return item.statusCategory === 'active';
       return item.statusCategory === activeFilter;
     })
   ), [activeFilter, donationItems, hasOngoingDonation]);
@@ -2126,8 +2148,8 @@ function MyJoinedDonationsScreen({
 
               <View style={styles.myDonationCardActions}>
                 <AppButton
-                  title={item.submission ? 'View My Donation' : 'Submit hair donation'}
-                  onPress={() => (item.submission ? onViewDonation?.(item) : onSubmitDriveDonation?.(item.drive))}
+                  title={getDonationActionTitle(item)}
+                  onPress={() => handleDonationActionPress(item)}
                 />
                 {item.submission && item.canCancel ? (
                   <AppButton
@@ -2799,9 +2821,8 @@ export function DonorDonationStatusScreen() {
   }, [hasGeneratedDonationQr, moduleFeedback?.message]);
 
   const certificate = moduleData?.certificate || null;
-  // Joined drives: drives the user has already registered for
-  const joinedDrives = React.useMemo(() => (
-    (moduleData?.drives || []).filter((d) => Boolean(d?.registration))
+  const donationDrives = React.useMemo(() => (
+    moduleData?.drives || []
   ), [moduleData?.drives]);
 
   React.useEffect(() => {
@@ -2846,7 +2867,7 @@ export function DonorDonationStatusScreen() {
 
   // Active drive from submission
   const activeDriveFromSubmission = moduleData?.activeDrive || null;
-  const displayDrive = activeDriveFromSubmission || selectedDriveForDonation || joinedDrives[0] || null;
+  const displayDrive = activeDriveFromSubmission || selectedDriveForDonation || donationDrives[0] || null;
   const selectedDriveFromList = (moduleData?.drives || []).find(
     (drive) => Number(drive?.donation_drive_id) === Number(selectedDriveForDonation?.donation_drive_id)
   ) || null;
@@ -3040,7 +3061,7 @@ export function DonorDonationStatusScreen() {
   );
   const myDonationItems = React.useMemo(() => {
     const driveById = new Map(
-      [activeDriveFromSubmission, selectedDriveForDonation, ...joinedDrives]
+      [activeDriveFromSubmission, selectedDriveForDonation, ...donationDrives]
         .filter(Boolean)
         .map((drive) => [Number(drive?.donation_drive_id), drive])
     );
@@ -3119,7 +3140,7 @@ export function DonorDonationStatusScreen() {
         .filter((value) => Number.isFinite(value) && value > 0)
     );
 
-    joinedDrives
+    donationDrives
       .filter((drive) => !activeSubmissionDriveIds.has(Number(drive?.donation_drive_id)))
       .forEach((drive) => {
         const statusMeta = getDonationCardMeta({ drive });
@@ -3155,7 +3176,7 @@ export function DonorDonationStatusScreen() {
     activeDonationQrItems,
     activeDriveFromSubmission,
     certificate,
-    joinedDrives,
+    donationDrives,
     moduleData?.activeSubmissions,
     moduleData?.latestSubmission,
     moduleData?.logistics,

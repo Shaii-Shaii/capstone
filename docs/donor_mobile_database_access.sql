@@ -20,6 +20,7 @@ $$;
 grant execute on function public.mobile_current_user_id() to authenticated;
 
 grant select on table public.users to authenticated;
+grant select on table public."Private_Event_Access" to authenticated;
 grant select on table public."Event_Requests" to anon, authenticated;
 grant select, insert, update on table public."Event_Attendees" to authenticated;
 grant select, insert, update on table public."Hair_Submissions" to authenticated;
@@ -34,6 +35,7 @@ grant select on table public."Logistics_Settings" to authenticated;
 grant select on table public.wig_requirements to anon, authenticated;
 
 alter table public.users enable row level security;
+alter table public."Private_Event_Access" enable row level security;
 alter table public."Event_Requests" enable row level security;
 alter table public."Event_Attendees" enable row level security;
 alter table public."Hair_Submissions" enable row level security;
@@ -53,6 +55,13 @@ create policy "Mobile users can read own account row"
   for select
   to authenticated
   using (auth_user_id = auth.uid());
+
+drop policy if exists "Donors can read own private event access" on public."Private_Event_Access";
+create policy "Donors can read own private event access"
+  on public."Private_Event_Access"
+  for select
+  to authenticated
+  using ("User_ID" = public.mobile_current_user_id());
 
 drop policy if exists "Mobile users can read visible approved events" on public."Event_Requests";
 create policy "Mobile users can read visible approved events"

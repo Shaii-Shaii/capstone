@@ -2123,6 +2123,17 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
     productionTimelineError = productionTimelineResult.error || null;
   }
 
+  const matchingDriveFromList = (drivesResult.data || [])
+    .find((drive) => drive?.donation_drive_id === activeSubmission?.donation_drive_id) || null;
+  let activeDrive = matchingDriveFromList;
+  let activeDriveError = null;
+
+  if (activeSubmission?.donation_drive_id && databaseUserId && !matchingDriveFromList?.registration) {
+    const activeDriveResult = await fetchDonationDrivePreview(activeSubmission.donation_drive_id, databaseUserId);
+    activeDrive = activeDriveResult.data || matchingDriveFromList || null;
+    activeDriveError = activeDriveResult.error || null;
+  }
+
   let certificate = certificateResult.data || null;
   const normalizedAttendanceStatus = String(activeDrive?.registration?.attendance_status || '')
     .trim()
@@ -2167,17 +2178,6 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
     logistics,
     trackingEntries,
   });
-  const matchingDriveFromList = (drivesResult.data || [])
-    .find((drive) => drive?.donation_drive_id === activeSubmission?.donation_drive_id) || null;
-  let activeDrive = matchingDriveFromList;
-  let activeDriveError = null;
-
-  if (activeSubmission?.donation_drive_id && databaseUserId && !matchingDriveFromList?.registration) {
-    const activeDriveResult = await fetchDonationDrivePreview(activeSubmission.donation_drive_id, databaseUserId);
-    activeDrive = activeDriveResult.data || matchingDriveFromList || null;
-    activeDriveError = activeDriveResult.error || null;
-  }
-
   const hasIndependentFlow = Boolean(
     independentQrState?.reference
     || logistics
