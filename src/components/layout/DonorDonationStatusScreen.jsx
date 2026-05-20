@@ -2181,6 +2181,120 @@ function MyJoinedDonationsScreen({
   );
 }
 
+const normalizeTimelineKey = (value = '') => String(value || '')
+  .toLowerCase()
+  .replace(/[^a-z0-9]+/g, '');
+
+const getTimelineEvidenceAt = (stage) => (
+  stage?.displayEvidenceAt
+  || stage?.completedAt
+  || stage?.evidenceAt
+  || stage?.timestamp
+  || stage?.created_at
+  || null
+);
+
+const findTimelineStage = (stages = [], keys = [], labels = []) => {
+  const keySet = new Set(keys.map(normalizeTimelineKey));
+  const labelTokens = labels.map(normalizeTimelineKey).filter(Boolean);
+
+  return stages.find((stage) => {
+    const stageKey = normalizeTimelineKey(stage?.key || stage?.id || '');
+    if (stageKey && keySet.has(stageKey)) return true;
+
+    const searchable = normalizeTimelineKey(`${stage?.label || ''} ${stage?.title || ''} ${stage?.savedNote || ''}`);
+    return labelTokens.some((token) => searchable.includes(token));
+  }) || null;
+};
+
+const buildEventDonationTimelineStages = ({ item, fallbackStages = [], certificate }) => {
+  const registration = item?.drive?.registration || item?.registration || null;
+  const submission = item?.submission || null;
+  const submissionId = Number(submission?.submission_id || submission?.Submission_ID || 0);
+  const certificateSubmissionId = Number(certificate?.submission_id || certificate?.Submission_ID || 0);
+  const certificateIssuedAt = submissionId && certificateSubmissionId === submissionId
+    ? (certificate?.issued_at || certificate?.Issued_At || null)
+    : null;
+
+  const cutFallback = findTimelineStage(
+    fallbackStages,
+    ['cut_and_ship', 'cutship', 'received_by_company', 'receivedbyhairforhope'],
+    ['cut ship', 'received by hair', 'received by company'],
+  );
+  const productionFallback = findTimelineStage(
+    fallbackStages,
+    ['wig_production', 'wigproduction', 'for_bundling', 'forbundling'],
+    ['wig production', 'for bundling'],
+  );
+  const hospitalFallback = findTimelineStage(
+    fallbackStages,
+    ['wig_distribution_hospitals', 'wigdistributionhospitals', 'wig_completed', 'wigcompleted', 'assigned_to_patient'],
+    ['wig distribution hospital', 'wig completed', 'assigned to patient'],
+  );
+  const patientFallback = findTimelineStage(
+    fallbackStages,
+    ['distribution_to_patients', 'distributiontopatients', 'received_by_patient', 'receivedbypatient'],
+    ['distribution to patient', 'received by patient'],
+  );
+
+  const cutFallbackEvidenceAt = normalizeTimelineKey(cutFallback?.key || '') === 'cutandship'
+    ? getTimelineEvidenceAt(cutFallback)
+    : null;
+  const cutEvidenceAt = registration?.rsvp_scanned_at
+    || registration?.attendance_marked_at
+    || submission?.cut_at
+    || certificateIssuedAt
+    || cutFallbackEvidenceAt;
+
+  const eventStages = [
+    {
+      key: 'cut_and_ship',
+      label: 'Cut & Ship',
+      savedNote: 'Staff scans the Cut & Ship QR. The donor certificate is issued after this scan.',
+      evidenceAt: cutEvidenceAt,
+      statusLabel: cutEvidenceAt ? 'Complete' : '',
+    },
+    {
+      key: 'wig_production',
+      label: 'Wig Production',
+      savedNote: productionFallback?.savedNote || 'Approved hair is used in the wig production process.',
+      evidenceAt: getTimelineEvidenceAt(productionFallback),
+      statusLabel: productionFallback?.statusLabel || '',
+    },
+    {
+      key: 'wig_distribution_hospitals',
+      label: 'Wig Distribution for Hospitals',
+      savedNote: hospitalFallback?.savedNote || 'Completed wigs are prepared and released for hospital distribution.',
+      evidenceAt: getTimelineEvidenceAt(hospitalFallback),
+      statusLabel: hospitalFallback?.statusLabel || '',
+    },
+    {
+      key: 'distribution_to_patients',
+      label: 'Distribution to Patients',
+      savedNote: patientFallback?.savedNote || 'The wig is distributed to the assigned patient.',
+      evidenceAt: getTimelineEvidenceAt(patientFallback),
+      statusLabel: patientFallback?.statusLabel || '',
+    },
+  ];
+
+  const lastCompletedIndex = eventStages.reduce((latestIndex, stage, index) => (
+    stage.evidenceAt ? index : latestIndex
+  ), -1);
+  const currentIndex = Math.min(lastCompletedIndex + 1, eventStages.length - 1);
+
+  return eventStages.map((stage, index) => {
+    const isCompleted = Boolean(stage.evidenceAt);
+    const isCurrent = !isCompleted && index === currentIndex;
+    return {
+      ...stage,
+      displayEvidenceAt: stage.evidenceAt,
+      state: isCompleted ? 'completed' : (isCurrent ? 'current' : 'upcoming'),
+      progressLabel: isCompleted ? 'Complete' : (isCurrent ? 'Ongoing' : 'On waiting'),
+      statusLabel: stage.statusLabel || (isCompleted ? 'Complete' : ''),
+    };
+  });
+};
+
 function DonationTimelineStatusScreen({
   roles,
   item,
@@ -2209,7 +2323,9 @@ function DonationTimelineStatusScreen({
     && isSubmittedDonationItem({ submission: item?.submission })
     && previewItems.some((previewItem) => previewItem?.qrPayload)
   );
-  const stages = timelineStages;
+  const stages = isEventDonation
+    ? buildEventDonationTimelineStages({ item, fallbackStages: timelineStages, certificate })
+    : timelineStages;
 
   return (
     <View style={styles.flowScreen}>
@@ -3920,8 +4036,11 @@ export function DonorDonationStatusScreen() {
         registration_id:Event_Attendee_ID,
         donation_drive_id:Event_Request_ID,
         user_id:User_ID,
+        waybill_code:Waybill_Code,
         registration_status:Registration_Status,
         attendance_status:Attendance_Status,
+        rsvp_scanned_at:RSVP_Scanned_At,
+        rsvp_scanned_by:RSVP_Scanned_By,
         registered_at:Created_At,
         updated_at:Updated_At
       `)
