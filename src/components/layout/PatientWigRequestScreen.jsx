@@ -491,7 +491,7 @@ const resolveTryOnConfig = (fitSettings = {}, layerKey = 'fullWig') => {
   const faceHoleSource = source?.faceHole || source?.face_hole || source?.faceOpening || source?.face_opening || {};
   const defaultFaceHole = layerKey === 'frontBangs'
     ? { x: 0.18, y: 0.24, width: 0.64, height: 0.62 }
-    : { x: 0.24, y: 0.28, width: 0.52, height: 0.58 };
+    : { x: 0.21, y: 0.16, width: 0.58, height: 0.72 };
 
   return {
     scaleMultiplier: getNumericFitValue(
@@ -502,7 +502,7 @@ const resolveTryOnConfig = (fitSettings = {}, layerKey = 'fullWig') => {
     scaleY: getNumericFitValue(
       source,
       ['scaleY', 'scale_y', 'heightScale', 'height_scale'],
-      layerKey === 'frontBangs' ? 0.92 : 0.98
+      layerKey === 'frontBangs' ? 0.92 : 1
     ),
     heightMultiplier: getNumericFitValue(
       source,
@@ -512,7 +512,7 @@ const resolveTryOnConfig = (fitSettings = {}, layerKey = 'fullWig') => {
     verticalOffset: getNumericFitValue(
       source,
       ['verticalOffset', 'vertical_offset', 'offsetYRatio', 'offset_y_ratio'],
-      layerKey === 'frontBangs' ? -0.06 : -0.04
+      layerKey === 'frontBangs' ? -0.06 : 0.03
     ),
     horizontalOffset: getNumericFitValue(
       source,
@@ -733,6 +733,25 @@ const resolveGuideHeadBox = (stageLayout) => {
   };
 };
 
+const resolveGuideAnchoredHeadBox = (detectedHeadBox, guideHeadBox) => {
+  if (!guideHeadBox) return detectedHeadBox;
+  if (!detectedHeadBox) return guideHeadBox;
+
+  const detectedCenterX = detectedHeadBox.x + (detectedHeadBox.width / 2);
+  const detectedCenterY = detectedHeadBox.y + (detectedHeadBox.height / 2);
+  const guideCenterX = guideHeadBox.x + (guideHeadBox.width / 2);
+  const guideCenterY = guideHeadBox.y + (guideHeadBox.height / 2);
+  const followX = lerp(guideCenterX, detectedCenterX, 0.45);
+  const followY = lerp(guideCenterY, detectedCenterY, 0.28);
+
+  return {
+    x: followX - (guideHeadBox.width / 2),
+    y: followY - (guideHeadBox.height / 2),
+    width: guideHeadBox.width,
+    height: guideHeadBox.height,
+  };
+};
+
 const isFaceAlignedToGuide = (faceFrame, stageLayout) => {
   const faceBox = resolveFaceBoxInStage(faceFrame, stageLayout);
   const guideBox = resolveGuideHeadBox(stageLayout);
@@ -808,7 +827,7 @@ const buildFaceAnchoredTryOnLayerStyle = (faceFrame, stageLayout, layerKey, zInd
       rightTemple,
     }) || faceBox;
     const guideHeadBox = resolveGuideHeadBox(stageLayout);
-    const headBox = guideHeadBox || detectedHeadBox;
+    const headBox = resolveGuideAnchoredHeadBox(detectedHeadBox, guideHeadBox) || detectedHeadBox;
     const layerScale = normalizeLayerScale(fit.scale);
     const offsetX = normalizeLayerOffset(anchor.userOffsetX, stageLayout);
     const offsetY = normalizeLayerOffset(anchor.userOffsetY, stageLayout);
