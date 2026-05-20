@@ -260,6 +260,15 @@ const resolveSubmissionUserId = async (userId, databaseUserId = null) => {
   };
 };
 
+const createDonationCertificateNumber = (submission = null) => {
+  const submissionPart = String(submission?.submission_code || submission?.submission_id || Date.now())
+    .replace(/[^a-z0-9]+/gi, '')
+    .slice(-10)
+    .toUpperCase();
+  const randomPart = Math.random().toString(36).slice(2, 6).toUpperCase();
+  return `DON-CERT-${submissionPart || Date.now().toString(36).toUpperCase()}-${randomPart}`;
+};
+
 const normalizeAiScreening = (row) => ({
   id: row?.ai_screening_id || null,
   ai_screening_id: row?.ai_screening_id || null,
@@ -867,6 +876,110 @@ export const fetchDonationCertificatesByUserId = async (userId, limit = 20) => {
   return {
     data: (result.data || []).map(normalizeDonationCertificate),
     error: result.error,
+  };
+};
+
+export const ensureCertificatesForScannedEventDonations = async (userId, limit = 50) => {
+  const resolvedUserId = await resolveSubmissionUserId(userId);
+  if (resolvedUserId.error) {
+    return { data: [], error: resolvedUserId.error };
+  }
+
+  const submissionsResult = await supabase
+    .from(hairSubmissionsTable)
+    .select(hairSubmissionSelect)
+    .eq('User_ID', resolvedUserId.userId)
+    .not('Event_Request_ID', 'is', null)
+    .order('Updated_At', { ascending: false })
+    .limit(limit);
+
+  if (submissionsResult.error) {
+    return { data: [], error: submissionsResult.error };
+  }
+
+  const submissions = (submissionsResult.data || []).map(normalizeHairSubmission);
+  const submissionIds = submissions.map((submission) => submission.submission_id).filter(Boolean);
+  const driveIds = [...new Set(submissions.map((submission) => submission.event_request_id).filter(Boolean))];
+
+  if (!submissionIds.length || !driveIds.length) {
+    return { data: [], error: null };
+  }
+
+  const [existingCertificatesResult, attendanceResult] = await Promise.all([
+    supabase
+      .from(donationCertificatesTable)
+      .select(donationCertificateSelect)
+      .in('Submission_ID', submissionIds),
+    supabase
+      .from('Event_Attendees')
+      .select(`
+        event_request_id:Event_Request_ID,
+        user_id:User_ID,
+        attendance_status:Attendance_Status,
+        rsvp_scanned_at:RSVP_Scanned_At,
+        rsvp_scanned_by:RSVP_Scanned_By,
+        updated_at:Updated_At
+      `)
+      .eq('User_ID', resolvedUserId.userId)
+      .in('Event_Request_ID', driveIds),
+  ]);
+
+  if (existingCertificatesResult.error || attendanceResult.error) {
+    return {
+      data: (existingCertificatesResult.data || []).map(normalizeDonationCertificate),
+      error: existingCertificatesResult.error || attendanceResult.error,
+    };
+  }
+
+  const existingBySubmissionId = new Map(
+    (existingCertificatesResult.data || [])
+      .map(normalizeDonationCertificate)
+      .filter((certificate) => certificate?.submission_id)
+      .map((certificate) => [Number(certificate.submission_id), certificate])
+  );
+  const attendanceByDriveId = new Map(
+    (attendanceResult.data || []).map((attendance) => [Number(attendance?.event_request_id), attendance])
+  );
+
+  const certificates = [...existingBySubmissionId.values()];
+
+  for (const submission of submissions) {
+    if (existingBySubmissionId.has(Number(submission.submission_id))) {
+      continue;
+    }
+
+    const attendance = attendanceByDriveId.get(Number(submission.event_request_id));
+    const normalizedAttendance = String(attendance?.attendance_status || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[_-]+/g, ' ');
+    const hasCutAndShipScan = Boolean(attendance?.rsvp_scanned_at)
+      || ['present', 'attended', 'checked in', 'checked-in', 'marked', 'scanned', 'verified']
+        .includes(normalizedAttendance);
+
+    if (!hasCutAndShipScan) {
+      continue;
+    }
+
+    const certificateResult = await createDonationCertificate({
+      user_id: resolvedUserId.userId,
+      submission_id: submission.submission_id,
+      certificate_number: createDonationCertificateNumber(submission),
+      certificate_type: 'Certificate of Donation',
+      issued_by: attendance?.rsvp_scanned_by || submission.cut_by_user_id || null,
+      issued_at: attendance?.rsvp_scanned_at || submission.cut_at || attendance?.updated_at || new Date().toISOString(),
+      remarks: 'Issued after staff scanned the Cut & Ship stage.',
+    });
+
+    if (certificateResult.data?.certificate_id) {
+      certificates.push(certificateResult.data);
+      existingBySubmissionId.set(Number(submission.submission_id), certificateResult.data);
+    }
+  }
+
+  return {
+    data: certificates,
+    error: null,
   };
 };
 

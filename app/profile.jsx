@@ -33,7 +33,11 @@ import {
 import { changePasswordSchema, profileUpdateSchema } from '../src/features/profile/profile.schema';
 import { donorDashboardNavItems, patientDashboardNavItems } from '../src/constants/dashboard';
 import { fetchOrganizationMembershipsByUserId } from '../src/features/donorHome.api';
-import { fetchDonationCertificatesByUserId, fetchHairSubmissionsByUserId } from '../src/features/hairSubmission.api';
+import {
+  ensureCertificatesForScannedEventDonations,
+  fetchDonationCertificatesByUserId,
+  fetchHairSubmissionsByUserId,
+} from '../src/features/hairSubmission.api';
 import {
   fetchActiveGuardianConsent,
   fetchActiveLegalDocument,
@@ -264,11 +268,12 @@ export default function ProfileScreen() {
         return;
       }
 
-      const [submissionsResult, membershipsResult, certificatesResult] = await Promise.all([
+      const [submissionsResult, membershipsResult] = await Promise.all([
         fetchHairSubmissionsByUserId(user.id, 100),
         fetchOrganizationMembershipsByUserId(profile?.user_id || null),
-        fetchDonationCertificatesByUserId(user.id, 100),
       ]);
+      await ensureCertificatesForScannedEventDonations(user.id, 100);
+      const certificatesResult = await fetchDonationCertificatesByUserId(user.id, 100);
 
       if (!isMounted) return;
 
