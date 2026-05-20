@@ -43,7 +43,6 @@ const donationDriveRegistrationSelect = `
   registration_id:Event_Attendee_ID,
   donation_drive_id:Event_Request_ID,
   user_id:User_ID,
-  created_by_user_id:Created_By_User_ID,
   waybill_code:Waybill_Code,
   registration_status:Registration_Status,
   attendance_status:Attendance_Status,
@@ -250,7 +249,7 @@ const ensureAttendanceCertificateForDrive = async ({
     .from(hairSubmissionsTable)
     .select('Submission_ID,Submission_Code,User_ID,Created_At')
     .eq('User_ID', databaseUserId)
-    .eq('Donation_Drive_ID', driveId)
+    .eq('Event_Request_ID', driveId)
     .order('Created_At', { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -367,7 +366,7 @@ const ensureHairSubmissionForDrive = async ({ driveId, databaseUserId }) => {
     .from(hairSubmissionsTable)
     .select('Submission_ID,Created_At,Status')
     .eq('User_ID', databaseUserId)
-    .eq('Donation_Drive_ID', driveId)
+    .eq('Event_Request_ID', driveId)
     .not('Status', 'ilike', 'cancelled')
     .order('Created_At', { ascending: false })
     .limit(1)
@@ -384,9 +383,9 @@ const ensureHairSubmissionForDrive = async ({ driveId, databaseUserId }) => {
       .from(hairSubmissionsTable)
       .insert({
         User_ID: databaseUserId,
-        Donation_Drive_ID: driveId,
+        Event_Request_ID: driveId,
+        From_Event: true,
         Submission_Code: makeSubmissionCode(),
-        Donation_Source: 'Event RSVP',
         Status: 'Pending',
       })
       .select('Submission_ID')
@@ -420,11 +419,6 @@ const ensureHairSubmissionForDrive = async ({ driveId, databaseUserId }) => {
       .from(hairSubmissionDetailsTable)
       .insert({
         Submission_ID: submissionId,
-        Input_Method: 'Manual',
-        Hair_Owner_Type: 'Self',
-        Consent_Confirmed: false,
-        QR_Status: 'Not Generated',
-        Current_Tracking_Status: 'Draft',
         Status: 'Pending',
       })
       .select('Submission_Detail_ID')

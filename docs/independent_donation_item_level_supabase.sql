@@ -1,5 +1,6 @@
+-- OBSOLETE for the current donor schema. Do not run this against the updated
+-- database unless you intentionally want to reintroduce removed item QR columns.
 -- Independent donation item-level tracking support.
--- Run this in Supabase SQL editor before using Donate Independently.
 
 ALTER TABLE public.Hair_Submission_Details
 ADD COLUMN IF NOT EXISTS Hair_Item_Code character varying UNIQUE,

@@ -35,15 +35,14 @@ const defaultDonationRequirement = {
 const hairSubmissionSelect = `
   submission_id:Submission_ID,
   user_id:User_ID,
-  donation_drive_id:Donation_Drive_ID,
+  event_request_id:Event_Request_ID,
   submission_code:Submission_Code,
-  donation_source:Donation_Source,
+  from_event:From_Event,
   donor_notes:Donor_Notes,
-  recipient_type:Recipient_Type,
   status:Status,
   bundle_id:Bundle_ID,
-  submitted_at:Submitted_At,
-  cancelled_at:Cancelled_At,
+  cut_at:Cut_At,
+  cut_by_user_id:Cut_By_User_ID,
   created_at:Created_At,
   updated_at:Updated_At
 `;
@@ -61,18 +60,6 @@ const hairSubmissionDetailSelect = `
   is_bleached:Is_Bleached,
   is_rebonded:Is_Rebonded,
   detail_notes:Detail_Notes,
-  hair_item_code:Hair_Item_Code,
-  hair_owner_type:Hair_Owner_Type,
-  hair_owner_display_name:Hair_Owner_Display_Name,
-  relationship_to_submitter:Relationship_To_Submitter,
-  input_method:Input_Method,
-  consent_confirmed:Consent_Confirmed,
-  consent_confirmed_at:Consent_Confirmed_At,
-  qr_token:QR_Token,
-  qr_image_path:QR_Image_Path,
-  qr_status:QR_Status,
-  qr_generated_at:QR_Generated_At,
-  current_tracking_status:Current_Tracking_Status,
   rejection_reason:Rejection_Reason,
   status:Status,
   created_at:Created_At,
@@ -135,12 +122,7 @@ const hairSubmissionLogisticsSelect = `
   submission_logistics_id:Submission_Logistics_ID,
   submission_id:Submission_ID,
   logistics_type:Logistics_Type,
-  courier_name:Courier_Name,
-  tracking_number:Tracking_Number,
   shipment_status:Shipment_Status,
-  pickup_scheduled_at:Pickup_Scheduled_At,
-  pickup_schedule_date:Pickup_Schedule_Date,
-  pickup_approved_at:Pickup_Approved_At,
   received_by:Received_By,
   received_at:Received_At,
   notes:Notes,
@@ -216,6 +198,37 @@ const normalizeSubmissionUserId = (value) => {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 };
 
+const normalizeFlowKey = (value = '') => (
+  String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_\s-]+/g, '')
+);
+
+const normalizeHairSubmissionStatusForDb = (status, fallback = 'Pending') => {
+  const key = normalizeFlowKey(status);
+  if (!key) return fallback;
+  if (key === 'pending' || key === 'draft' || key === 'qrgenerated' || key === 'waybillready') return 'Pending';
+  if (
+    key === 'cut'
+    || key === 'submitted'
+    || key === 'readyforshipping'
+    || key === 'shipped'
+    || key === 'intransit'
+    || key === 'received'
+    || key === 'partiallyreceived'
+    || key === 'underreview'
+    || key === 'underqareview'
+    || key === 'accepted'
+    || key === 'partiallyaccepted'
+    || key === 'rejected'
+  ) return 'Cut';
+  if (key === 'wiginproduction' || key === 'inproduction') return 'Wig in Production';
+  if (key === 'wigcreated' || key === 'wigcompleted' || key === 'completed') return 'Wig Created';
+  if (key === 'cancelled' || key === 'canceled') return 'Cancelled';
+  return fallback;
+};
+
 const resolveSubmissionUserId = async (userId, databaseUserId = null) => {
   const explicitDatabaseUserId = normalizeSubmissionUserId(databaseUserId);
   if (explicitDatabaseUserId) {
@@ -283,13 +296,17 @@ const normalizeHairSubmission = (row) => ({
   id: row?.submission_id || null,
   submission_id: row?.submission_id || null,
   user_id: row?.user_id || null,
-  donation_drive_id: row?.donation_drive_id || null,
+  event_request_id: row?.event_request_id || null,
+  donation_drive_id: row?.event_request_id || row?.donation_drive_id || null,
   submission_code: row?.submission_code || '',
-  donation_source: row?.donation_source || '',
+  from_event: row?.from_event ?? null,
+  donation_source: row?.donation_source || (row?.from_event ? 'Event RSVP' : 'Independent'),
   donor_notes: row?.donor_notes || '',
   recipient_type: row?.recipient_type || '',
   bundle_id: row?.bundle_id || null,
-  submitted_at: row?.submitted_at || null,
+  cut_at: row?.cut_at || null,
+  cut_by_user_id: row?.cut_by_user_id || null,
+  submitted_at: row?.submitted_at || row?.cut_at || null,
   cancelled_at: row?.cancelled_at || null,
   status: row?.status || '',
   created_at: row?.created_at || null,
@@ -440,19 +457,18 @@ export const createHairSubmission = async (payload) => {
     table: hairSubmissionsTable,
     phase: 'create',
     userId,
-    columns: ['User_ID', 'Donation_Drive_ID', 'Submission_Code', 'Donation_Source', 'Donor_Notes', 'Recipient_Type', 'Status', 'Submitted_At', 'Cancelled_At'],
+    columns: ['User_ID', 'Event_Request_ID', 'Submission_Code', 'From_Event', 'Donor_Notes', 'Status', 'Cut_At', 'Cut_By_User_ID'],
   });
 
   const insertPayload = {
     User_ID: userId,
-    Donation_Drive_ID: payload?.donation_drive_id || null,
+    Event_Request_ID: payload?.event_request_id || payload?.donation_drive_id || null,
     Submission_Code: payload?.submission_code || null,
-    Donation_Source: payload?.donation_source || null,
+    From_Event: payload?.from_event ?? Boolean(payload?.event_request_id || payload?.donation_drive_id),
     Donor_Notes: payload?.donor_notes || null,
-    Recipient_Type: payload?.recipient_type || null,
-    Status: payload?.status || null,
-    Submitted_At: payload?.submitted_at || null,
-    Cancelled_At: payload?.cancelled_at || null,
+    Status: normalizeHairSubmissionStatusForDb(payload?.status, 'Pending'),
+    Cut_At: payload?.cut_at || payload?.submitted_at || null,
+    Cut_By_User_ID: payload?.cut_by_user_id || null,
     Created_At: getPhilippineDatabaseTimestamp(),
     Updated_At: getPhilippineDatabaseTimestamp(),
   };
@@ -491,18 +507,6 @@ export const createHairSubmissionDetail = async (payload) => {
       Is_Bleached: payload?.is_bleached ?? false,
       Is_Rebonded: payload?.is_rebonded ?? false,
       Detail_Notes: payload?.detail_notes || null,
-      Hair_Item_Code: payload?.hair_item_code || null,
-      Hair_Owner_Type: payload?.hair_owner_type || 'Self',
-      Hair_Owner_Display_Name: payload?.hair_owner_display_name || null,
-      Relationship_To_Submitter: payload?.relationship_to_submitter || null,
-      Input_Method: payload?.input_method || 'Manual',
-      Consent_Confirmed: payload?.consent_confirmed ?? false,
-      Consent_Confirmed_At: payload?.consent_confirmed_at || null,
-      QR_Token: payload?.qr_token || null,
-      QR_Image_Path: payload?.qr_image_path || null,
-      QR_Status: payload?.qr_status || 'Not Generated',
-      QR_Generated_At: payload?.qr_generated_at || null,
-      Current_Tracking_Status: payload?.current_tracking_status || 'Draft',
       Rejection_Reason: payload?.rejection_reason || null,
       Status: payload?.status || null,
       Updated_By: payload?.updated_by || null,
@@ -543,18 +547,6 @@ export const updateHairSubmissionDetailById = async (submissionDetailId, payload
       Is_Bleached: payload?.is_bleached ?? undefined,
       Is_Rebonded: payload?.is_rebonded ?? undefined,
       Detail_Notes: payload?.detail_notes ?? undefined,
-      Hair_Item_Code: payload?.hair_item_code ?? undefined,
-      Hair_Owner_Type: payload?.hair_owner_type ?? undefined,
-      Hair_Owner_Display_Name: payload?.hair_owner_display_name ?? undefined,
-      Relationship_To_Submitter: payload?.relationship_to_submitter ?? undefined,
-      Input_Method: payload?.input_method ?? undefined,
-      Consent_Confirmed: payload?.consent_confirmed ?? undefined,
-      Consent_Confirmed_At: payload?.consent_confirmed_at ?? undefined,
-      QR_Token: payload?.qr_token ?? undefined,
-      QR_Image_Path: payload?.qr_image_path ?? undefined,
-      QR_Status: payload?.qr_status ?? undefined,
-      QR_Generated_At: payload?.qr_generated_at ?? undefined,
-      Current_Tracking_Status: payload?.current_tracking_status ?? undefined,
       Rejection_Reason: payload?.rejection_reason ?? undefined,
       Status: payload?.status ?? undefined,
       Updated_By: payload?.updated_by ?? undefined,
@@ -1106,7 +1098,7 @@ export const fetchHairSubmissionsByUserId = async (userId, limit = 10) => {
     table: hairSubmissionsTable,
     phase: 'read',
     filters: { User_ID: resolvedUserId.userId },
-    columns: ['Submission_ID', 'User_ID', 'Donation_Drive_ID', 'Submission_Code', 'Donation_Source', 'Donor_Notes', 'Recipient_Type', 'Status', 'Bundle_ID', 'Submitted_At', 'Cancelled_At', 'Created_At', 'Updated_At'],
+    columns: ['Submission_ID', 'User_ID', 'Event_Request_ID', 'Submission_Code', 'From_Event', 'Donor_Notes', 'Status', 'Bundle_ID', 'Cut_At', 'Cut_By_User_ID', 'Created_At', 'Updated_At'],
   });
 
   const result = await supabase
@@ -1257,7 +1249,7 @@ export const fetchLatestHairSubmissionByUserId = async (userId) => {
     table: hairSubmissionsTable,
     phase: 'read',
     filters: { User_ID: resolvedUserId.userId },
-    columns: ['Submission_ID', 'User_ID', 'Donation_Drive_ID', 'Submission_Code', 'Donation_Source', 'Donor_Notes', 'Recipient_Type', 'Status', 'Bundle_ID', 'Submitted_At', 'Cancelled_At', 'Created_At', 'Updated_At'],
+    columns: ['Submission_ID', 'User_ID', 'Event_Request_ID', 'Submission_Code', 'From_Event', 'Donor_Notes', 'Status', 'Bundle_ID', 'Cut_At', 'Cut_By_User_ID', 'Created_At', 'Updated_At'],
   });
 
   const result = await supabase
@@ -1305,7 +1297,7 @@ export const fetchHairSubmissionById = async (submissionId) => {
     table: hairSubmissionsTable,
     phase: 'read',
     filters: { Submission_ID: submissionId },
-    columns: ['Submission_ID', 'User_ID', 'Donation_Drive_ID', 'Submission_Code', 'Donation_Source', 'Status'],
+    columns: ['Submission_ID', 'User_ID', 'Event_Request_ID', 'Submission_Code', 'From_Event', 'Status'],
   });
 
   const result = await supabase
@@ -1329,7 +1321,7 @@ export const fetchHairSubmissionDetailById = async (submissionDetailId) => {
     table: hairSubmissionDetailsTable,
     phase: 'read',
     filters: { Submission_Detail_ID: submissionDetailId },
-    columns: ['Submission_Detail_ID', 'Submission_ID', 'Hair_Item_Code', 'QR_Token', 'Current_Tracking_Status', 'Status'],
+    columns: ['Submission_Detail_ID', 'Submission_ID', 'Declared_Length', 'Declared_Color', 'Status'],
   });
 
   const result = await supabase
@@ -1352,21 +1344,12 @@ export const fetchHairSubmissionDetailByQrToken = async (qrToken) => {
 
   logHairQuery('fetchHairSubmissionDetailByQrToken', {
     table: hairSubmissionDetailsTable,
-    phase: 'read',
-    filters: { QR_Token: token ? '[provided]' : '' },
-    columns: ['Submission_Detail_ID', 'Submission_ID', 'Hair_Item_Code', 'QR_Token', 'Current_Tracking_Status', 'Status'],
+    phase: 'skipped',
+    filters: { legacyQrToken: token ? '[provided]' : '' },
+    reason: 'QR token lookup is no longer part of the current donor schema.',
   });
 
-  const result = await supabase
-    .from(hairSubmissionDetailsTable)
-    .select(hairSubmissionDetailSelect)
-    .eq('QR_Token', token)
-    .maybeSingle();
-
-  return {
-    data: result.data ? normalizeHairSubmissionDetail(result.data) : null,
-    error: result.error,
-  };
+  return { data: null, error: new Error('QR token lookup is not supported by the current donor schema.') };
 };
 
 export const fetchHairSubmissionDetailsBySubmissionId = async (submissionId) => {
@@ -1378,7 +1361,7 @@ export const fetchHairSubmissionDetailsBySubmissionId = async (submissionId) => 
     table: hairSubmissionDetailsTable,
     phase: 'read',
     filters: { Submission_ID: submissionId },
-    columns: ['Submission_Detail_ID', 'Submission_ID', 'Hair_Item_Code', 'QR_Token', 'Current_Tracking_Status', 'Status'],
+    columns: ['Submission_Detail_ID', 'Submission_ID', 'Declared_Length', 'Declared_Color', 'Status'],
   });
 
   const result = await supabase
@@ -1398,7 +1381,7 @@ export const createHairSubmissionLogistics = async (payload) => {
     table: hairSubmissionLogisticsTable,
     phase: 'create',
     filters: { Submission_ID: payload?.submission_id },
-    columns: ['Submission_ID', 'Logistics_Type', 'Shipment_Status', 'Pickup_Schedule_Date', 'Notes'],
+    columns: ['Submission_ID', 'Logistics_Type', 'Shipment_Status', 'Received_By', 'Received_At', 'Notes'],
   });
 
   const result = await supabase
@@ -1406,10 +1389,9 @@ export const createHairSubmissionLogistics = async (payload) => {
     .insert([{
       Submission_ID: payload?.submission_id || null,
       Logistics_Type: payload?.logistics_type || null,
-      Courier_Name: payload?.courier_name || null,
-      Tracking_Number: payload?.tracking_number || null,
       Shipment_Status: payload?.shipment_status || null,
-      Pickup_Schedule_Date: payload?.pickup_schedule_date || null,
+      Received_By: payload?.received_by || null,
+      Received_At: payload?.received_at || null,
       Notes: payload?.notes || null,
     }])
     .select(hairSubmissionLogisticsSelect)
@@ -1467,23 +1449,20 @@ export const updateHairSubmissionById = async (submissionId, payload) => {
     table: hairSubmissionsTable,
     phase: 'update',
     filters: { Submission_ID: submissionId },
-    columns: ['Donation_Drive_ID', 'Submission_Code', 'Donation_Source', 'Donor_Notes', 'Recipient_Type', 'Status', 'Bundle_ID', 'Submitted_At', 'Cancelled_At'],
+    columns: ['Event_Request_ID', 'Submission_Code', 'From_Event', 'Donor_Notes', 'Status', 'Bundle_ID', 'Cut_At', 'Cut_By_User_ID'],
   });
 
   const result = await supabase
     .from(hairSubmissionsTable)
     .update({
-      Donation_Drive_ID: payload?.donation_drive_id ?? undefined,
+      Event_Request_ID: payload?.event_request_id ?? payload?.donation_drive_id ?? undefined,
       Submission_Code: payload?.submission_code ?? undefined,
-      Donation_Source: payload?.donation_source ?? undefined,
+      From_Event: payload?.from_event ?? undefined,
       Donor_Notes: payload?.donor_notes ?? undefined,
-      Recipient_Type: Object.prototype.hasOwnProperty.call(payload || {}, 'recipient_type')
-        ? payload?.recipient_type
-        : undefined,
       Bundle_ID: payload?.bundle_id ?? undefined,
-      Submitted_At: payload?.submitted_at ?? undefined,
-      Cancelled_At: payload?.cancelled_at ?? undefined,
-      Status: payload?.status ?? undefined,
+      Cut_At: payload?.cut_at ?? payload?.submitted_at ?? undefined,
+      Cut_By_User_ID: payload?.cut_by_user_id ?? undefined,
+      Status: payload?.status == null ? undefined : normalizeHairSubmissionStatusForDb(payload.status),
       Updated_At: getPhilippineDatabaseTimestamp(),
     })
     .eq('Submission_ID', submissionId)
@@ -1505,19 +1484,14 @@ export const updateHairSubmissionLogisticsById = async (submissionLogisticsId, p
     table: hairSubmissionLogisticsTable,
     phase: 'update',
     filters: { Submission_Logistics_ID: submissionLogisticsId },
-    columns: ['Logistics_Type', 'Courier_Name', 'Tracking_Number', 'Shipment_Status', 'Pickup_Schedule_Date', 'Notes'],
+    columns: ['Logistics_Type', 'Shipment_Status', 'Received_By', 'Received_At', 'Notes'],
   });
 
   const result = await supabase
     .from(hairSubmissionLogisticsTable)
     .update({
       Logistics_Type: payload?.logistics_type || null,
-      Courier_Name: payload?.courier_name || null,
-      Tracking_Number: payload?.tracking_number || null,
       Shipment_Status: payload?.shipment_status || null,
-      Pickup_Schedule_Date: payload?.pickup_schedule_date || null,
-      Pickup_Scheduled_At: payload?.pickup_scheduled_at || null,
-      Pickup_Approved_At: payload?.pickup_approved_at || null,
       Received_By: payload?.received_by || null,
       Received_At: payload?.received_at || null,
       Notes: payload?.notes || null,
@@ -1537,7 +1511,7 @@ export const fetchHairSubmissionLogisticsBySubmissionId = async (submissionId) =
     table: hairSubmissionLogisticsTable,
     phase: 'read',
     filters: { Submission_ID: submissionId },
-    columns: ['Submission_Logistics_ID', 'Submission_ID', 'Logistics_Type', 'Courier_Name', 'Tracking_Number', 'Shipment_Status', 'Pickup_Scheduled_At', 'Pickup_Schedule_Date', 'Pickup_Approved_At', 'Received_By', 'Received_At', 'Notes', 'Created_At'],
+    columns: ['Submission_Logistics_ID', 'Submission_ID', 'Logistics_Type', 'Shipment_Status', 'Received_By', 'Received_At', 'Notes', 'Created_At'],
   });
 
   const result = await supabase

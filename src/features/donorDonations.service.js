@@ -1633,7 +1633,7 @@ export const buildDriveInvitationQrPayload = ({ drive, registration }) => (
   JSON.stringify({
     Payload_Type: 'Donation_Drive_Registration',
     Registration_ID: registration?.registration_id || null,
-    Donation_Drive_ID: registration?.donation_drive_id || drive?.donation_drive_id || null,
+    Event_Request_ID: registration?.donation_drive_id || drive?.event_request_id || drive?.donation_drive_id || null,
     User_ID: registration?.user_id || null,
     Registration_Status: registration?.registration_status || '',
     Attendance_Status: registration?.attendance_status || '',
@@ -1755,7 +1755,8 @@ const parseDonationTrackingQrPayload = (payloadText = '') => {
       || getDonationQrPayloadValue(payloadText, 'Donation_Source'),
     donation_status: getDonationQrPayloadValue(payloadText, 'Hair_Submissions.Status')
       || getDonationQrPayloadValue(payloadText, 'Status'),
-    donation_drive_id: getDonationQrPayloadValue(payloadText, 'Donation_Drive_ID'),
+    donation_drive_id: getDonationQrPayloadValue(payloadText, 'Event_Request_ID')
+      || getDonationQrPayloadValue(payloadText, 'Donation_Drive_ID'),
   };
 };
 
