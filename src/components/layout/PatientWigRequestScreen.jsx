@@ -338,6 +338,41 @@ const distanceBetweenPoints = (a, b) => {
   return Math.hypot(a.x - b.x, a.y - b.y);
 };
 
+const lerp = (from, to, amount = 0.35) => from + ((to - from) * amount);
+
+const lerpPoint = (previous, next, amount) => {
+  if (!previous || !next) return next || null;
+  return {
+    x: lerp(previous.x, next.x, amount),
+    y: lerp(previous.y, next.y, amount),
+  };
+};
+
+const smoothFaceFrame = (previous, next, amount = 0.35) => {
+  if (!next) return null;
+  if (!previous) return next;
+
+  const nextBounds = next.bounds || next;
+  const previousBounds = previous.bounds || previous;
+  const landmarks = Object.keys(next.landmarks || {}).reduce((result, key) => ({
+    ...result,
+    [key]: lerpPoint(previous.landmarks?.[key], next.landmarks?.[key], amount),
+  }), {});
+
+  return {
+    ...next,
+    rollAngle: lerp(Number(previous.rollAngle || 0), Number(next.rollAngle || 0), amount),
+    yawAngle: lerp(Number(previous.yawAngle || 0), Number(next.yawAngle || 0), amount),
+    bounds: {
+      x: lerp(Number(previousBounds.x ?? previousBounds.left ?? 0), Number(nextBounds.x ?? nextBounds.left ?? 0), amount),
+      y: lerp(Number(previousBounds.y ?? previousBounds.top ?? 0), Number(nextBounds.y ?? nextBounds.top ?? 0), amount),
+      width: lerp(Number(previousBounds.width || 0), Number(nextBounds.width || 0), amount),
+      height: lerp(Number(previousBounds.height || 0), Number(nextBounds.height || 0), amount),
+    },
+    landmarks,
+  };
+};
+
 const normalizeFaceTiltDegrees = (angle) => {
   let normalized = Number(angle) || 0;
   normalized = ((normalized + 180) % 360) - 180;
@@ -423,6 +458,41 @@ const resolveLayerAnchor = (fitSettings = {}, layerKey = 'fullWig') => {
     ),
     userOffsetX: layerFit.offsetX,
     userOffsetY: layerFit.offsetY,
+  };
+};
+
+const resolveTryOnConfig = (fitSettings = {}, layerKey = 'fullWig') => {
+  const globalConfig = fitSettings?.try_on || fitSettings?.tryOn || fitSettings?.filter || {};
+  const layerConfig = globalConfig?.layers?.[layerKey] || globalConfig?.[layerKey] || fitSettings?.layers?.[layerKey]?.try_on || {};
+  const source = { ...globalConfig, ...layerConfig };
+
+  return {
+    scaleMultiplier: getNumericFitValue(
+      source,
+      ['scaleMultiplier', 'scale_multiplier', 'scale', 'widthMultiplier', 'width_multiplier'],
+      layerKey === 'frontBangs' ? 1.12 : 1.45
+    ),
+    heightMultiplier: getNumericFitValue(
+      source,
+      ['heightMultiplier', 'height_multiplier', 'aspectRatio', 'aspect_ratio'],
+      layerKey === 'frontBangs' ? 0.42 : 1.28
+    ),
+    verticalOffset: getNumericFitValue(
+      source,
+      ['verticalOffset', 'vertical_offset', 'offsetYRatio', 'offset_y_ratio'],
+      layerKey === 'frontBangs' ? -0.34 : -0.3
+    ),
+    horizontalOffset: getNumericFitValue(
+      source,
+      ['horizontalOffset', 'horizontal_offset', 'offsetXRatio', 'offset_x_ratio'],
+      0
+    ),
+    rotationOffset: getNumericFitValue(
+      source,
+      ['rotationOffset', 'rotation_offset'],
+      0
+    ),
+    anchor: source?.anchor || 'forehead',
   };
 };
 
@@ -573,6 +643,7 @@ const buildFaceAnchoredTryOnLayerStyle = (faceFrame, stageLayout, layerKey, zInd
   }
   const fit = resolveLayerFit(fitSettings, layerKey);
   const anchor = resolveLayerAnchor(fitSettings, layerKey);
+  const tryOnConfig = resolveTryOnConfig(fitSettings, layerKey);
 
   const leftEye = getFacePoint(faceFrame, 'LEFT_EYE');
   const rightEye = getFacePoint(faceFrame, 'RIGHT_EYE');
@@ -605,20 +676,25 @@ const buildFaceAnchoredTryOnLayerStyle = (faceFrame, stageLayout, layerKey, zInd
   const yawScale = Math.max(0.82, 1 - (yawAngle / 120));
 
   if (faceFrame?.mediapipe && forehead && chin) {
-    const targetFaceWidth = Math.max(
-      templeDistance || 0,
-      eyeDistance ? eyeDistance * 2.25 : 0,
-      faceBox.width * 0.86
-    );
-    const targetFaceHeight = Math.max(distanceBetweenPoints(forehead, chin), faceBox.height * 0.82);
-    const layerWidth = (targetFaceWidth / Math.max(anchor.faceWidthRatio, 0.2)) * fit.scale;
-    const layerHeight = (targetFaceHeight / Math.max(anchor.faceHeightRatio, 0.25)) * fit.scale;
-    const rotation = Number(fit.rotation || 0) + rollAngle;
+    const stableFaceWidth = Math.max(faceBox.width, templeDistance || 0, eyeDistance ? eyeDistance * 2.35 : 0);
+    const stableFaceHeight = Math.max(faceBox.height, distanceBetweenPoints(forehead, chin));
+    const layerWidth = stableFaceWidth * tryOnConfig.scaleMultiplier * fit.scale;
+    const layerHeight = layerWidth * tryOnConfig.heightMultiplier;
+    const anchorPoint = tryOnConfig.anchor === 'eyes'
+      ? eyeCenter || forehead
+      : forehead;
+    const rotation = Number(fit.rotation || 0) + rollAngle + tryOnConfig.rotationOffset;
 
     return {
       position: 'absolute',
-      left: Math.max(-stageLayout.width * 0.35, faceCenterX - (layerWidth * anchor.faceCenterX) + anchor.userOffsetX),
-      top: Math.max(-stageLayout.height * 0.45, forehead.y - (layerHeight * anchor.foreheadY) + anchor.userOffsetY),
+      left: Math.max(
+        -stageLayout.width * 0.35,
+        faceCenterX - (layerWidth / 2) + (stableFaceWidth * tryOnConfig.horizontalOffset) + anchor.userOffsetX
+      ),
+      top: Math.max(
+        -stageLayout.height * 0.45,
+        anchorPoint.y + (stableFaceHeight * tryOnConfig.verticalOffset) + anchor.userOffsetY
+      ),
       width: layerWidth,
       height: layerHeight,
       opacity: fit.opacity,
@@ -1079,6 +1155,9 @@ function CaptureModal({
   const [stageLayout, setStageLayout] = useState({ width: 0, height: 320 });
   const [faceFrame, setFaceFrame] = useState(null);
   const [cameraRuntimeError, setCameraRuntimeError] = useState(null);
+  const handleFaceFrameChange = React.useCallback((nextFaceFrame) => {
+    setFaceFrame((previousFaceFrame) => smoothFaceFrame(previousFaceFrame, nextFaceFrame));
+  }, []);
 
   useEffect(() => {
     if (visible && hasCameraPermission && (!canUseFaceTrackingTryOnCamera || cameraRuntimeError)) {
@@ -1096,6 +1175,10 @@ function CaptureModal({
   if (!visible) return null;
 
   const primaryTryOnImageUrl = getPrimaryTryOnImageUrl(selectedWig);
+  const hasSplitWigLayers = Boolean(selectedWig?.layer_back_hair_url || selectedWig?.layer_front_bangs_url);
+  const shouldRenderFullWigLayer = Boolean(selectedWig?.layer_full_wig_url && !hasSplitWigLayers);
+  const shouldRenderBackWigLayer = Boolean(selectedWig?.layer_back_hair_url);
+  const shouldRenderFrontWigLayer = Boolean(selectedWig?.layer_front_bangs_url);
   const shouldUseSingleTryOnImage = Boolean(
     selectedWig
     && primaryTryOnImageUrl
@@ -1106,6 +1189,8 @@ function CaptureModal({
   const selectedWigNeedsLayer = Boolean(selectedWig && !primaryTryOnImageUrl);
   const isLiveCameraTryOn = Boolean(!referenceImage?.uri && hasCameraPermission && canUseFaceTrackingTryOnCamera && !cameraRuntimeError);
   const isWaitingForFace = Boolean(isLiveCameraTryOn && selectedWig && primaryTryOnImageUrl && !faceFrame);
+  const canCaptureLivePhoto = Boolean(!isLiveCameraTryOn || faceFrame);
+  const canUseSelectedPhoto = Boolean(referenceImage?.uri && (!canUseFaceTrackingTryOnCamera || faceFrame || !hasCameraPermission || cameraRuntimeError));
   const cameraRuntimeMessage = getCameraRuntimeMessage(cameraRuntimeError);
   const getLayerStyle = (layerKey, zIndex) => {
     const faceAnchoredStyle = buildFaceAnchoredTryOnLayerStyle(faceFrame, stageLayout, layerKey, zIndex, selectedWig?.fit_settings);
@@ -1142,7 +1227,7 @@ function CaptureModal({
                 canUseMediaPipeTryOnCamera ? (
                   <MediaPipeTryOnFaceCamera
                     cameraRef={cameraRef}
-                    onFaceBoundsChange={setFaceFrame}
+                    onFaceBoundsChange={handleFaceFrameChange}
                     onCameraReady={onCameraReady}
                     onCameraUnavailable={setCameraRuntimeError}
                   />
@@ -1150,7 +1235,7 @@ function CaptureModal({
                   <NativeTryOnFaceCamera
                     cameraRef={cameraRef}
                     stageLayout={stageLayout}
-                    onFaceBoundsChange={setFaceFrame}
+                    onFaceBoundsChange={handleFaceFrameChange}
                     onCameraReady={onCameraReady}
                     onCameraUnavailable={setCameraRuntimeError}
                   />
@@ -1194,7 +1279,7 @@ function CaptureModal({
                 renderToHardwareTextureAndroid
                 shouldRasterizeIOS
               >
-                {selectedWig.layer_back_hair_url ? (
+                {shouldRenderBackWigLayer ? (
                   <Image
                     source={{ uri: selectedWig.layer_back_hair_url }}
                     resizeMode="contain"
@@ -1202,7 +1287,7 @@ function CaptureModal({
                     style={getLayerStyle('backHair', 1)}
                   />
                 ) : null}
-                {selectedWig.layer_full_wig_url ? (
+                {shouldRenderFullWigLayer ? (
                   <Image
                     source={{ uri: selectedWig.layer_full_wig_url }}
                     resizeMode="contain"
@@ -1210,7 +1295,7 @@ function CaptureModal({
                     style={getLayerStyle('fullWig', 3)}
                   />
                 ) : null}
-                {selectedWig.layer_front_bangs_url ? (
+                {shouldRenderFrontWigLayer ? (
                   <Image
                     source={{ uri: selectedWig.layer_front_bangs_url }}
                     resizeMode="contain"
@@ -1316,6 +1401,7 @@ function CaptureModal({
               accessibilityLabel="Capture front photo"
               variant="primary"
               loading={isCapturingPhoto}
+              disabled={!canCaptureLivePhoto}
               onPress={hasCameraPermission ? onCapture : onRequestPermission}
               style={styles.captureButtonPrimary}
             />
@@ -1331,7 +1417,7 @@ function CaptureModal({
 
             <AppButton
               title="Use Photo"
-              disabled={!referenceImage?.uri}
+              disabled={!canUseSelectedPhoto}
               onPress={onGeneratePreview}
               leading={<AppIcon name="success" state="inverse" />}
             />
