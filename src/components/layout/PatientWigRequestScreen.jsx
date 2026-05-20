@@ -1277,17 +1277,13 @@ function CaptureModal({
   const canCaptureLivePhoto = Boolean(!isLiveCameraTryOn || faceFrame);
   const canUseSelectedPhoto = Boolean(referenceImage?.uri && (!canUseFaceTrackingTryOnCamera || faceFrame || !hasCameraPermission || cameraRuntimeError));
   const cameraRuntimeMessage = getCameraRuntimeMessage(cameraRuntimeError);
-  const shouldMaskBackLayers = Boolean(
-    isLiveCameraTryOn
-    && faceFrame
-    && (
-      selectedWig?.fit_settings?.try_on?.forceFaceCutout
-      || selectedWig?.fit_settings?.try_on?.force_face_cutout
-      || selectedWig?.fit_settings?.forceFaceCutout
-      || selectedWig?.fit_settings?.force_face_cutout
-      || selectedWig?.fit_settings?.face_mask?.force
-      || selectedWig?.fit_settings?.faceMask?.force
-    )
+  const shouldForceFaceCutout = Boolean(
+    selectedWig?.fit_settings?.try_on?.forceFaceCutout
+    || selectedWig?.fit_settings?.try_on?.force_face_cutout
+    || selectedWig?.fit_settings?.forceFaceCutout
+    || selectedWig?.fit_settings?.force_face_cutout
+    || selectedWig?.fit_settings?.face_mask?.force
+    || selectedWig?.fit_settings?.faceMask?.force
   );
   const getLayerStyle = (layerKey, zIndex) => {
     const faceAnchoredStyle = buildFaceAnchoredTryOnLayerStyle(faceFrame, stageLayout, layerKey, zIndex, selectedWig?.fit_settings);
@@ -1295,8 +1291,10 @@ function CaptureModal({
     if (isLiveCameraTryOn) return styles.tryOnLayerHidden;
     return buildTryOnLayerStyle(selectedWig?.fit_settings, layerKey, zIndex);
   };
-  const getLayerMask = (layerStyle) => (
-    shouldMaskBackLayers
+  const getLayerMask = (layerKey, layerStyle) => (
+    isLiveCameraTryOn
+    && faceFrame
+    && (layerKey === 'backHair' || layerKey === 'fullWig' || shouldForceFaceCutout)
       ? buildFaceOcclusionMask(faceFrame, stageLayout, layerStyle, selectedWig?.fit_settings)
       : null
   );
@@ -1385,7 +1383,7 @@ function CaptureModal({
                   <WigLayerImage
                     sourceUri={selectedWig.layer_back_hair_url}
                     style={getLayerStyle('backHair', 1)}
-                    mask={getLayerMask(getLayerStyle('backHair', 1))}
+                    mask={getLayerMask('backHair', getLayerStyle('backHair', 1))}
                     maskId={`wig-back-mask-${selectedWig.id || 'selected'}`}
                   />
                 ) : null}
@@ -1393,7 +1391,7 @@ function CaptureModal({
                   <WigLayerImage
                     sourceUri={selectedWig.layer_full_wig_url}
                     style={getLayerStyle('fullWig', 3)}
-                    mask={getLayerMask(getLayerStyle('fullWig', 3))}
+                    mask={getLayerMask('fullWig', getLayerStyle('fullWig', 3))}
                     maskId={`wig-full-mask-${selectedWig.id || 'selected'}`}
                   />
                 ) : null}
@@ -1409,7 +1407,7 @@ function CaptureModal({
                   <WigLayerImage
                     sourceUri={primaryTryOnImageUrl}
                     style={getLayerStyle('fullWig', 3)}
-                    mask={getLayerMask(getLayerStyle('fullWig', 3))}
+                    mask={getLayerMask('fullWig', getLayerStyle('fullWig', 3))}
                     maskId={`wig-single-mask-${selectedWig.id || 'selected'}`}
                   />
                 ) : null}
