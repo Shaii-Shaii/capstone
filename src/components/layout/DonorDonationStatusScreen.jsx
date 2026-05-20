@@ -2038,15 +2038,13 @@ function MyJoinedDonationsScreen({
   onCancelDonation,
   hasOngoingDonation = false,
 }) {
-  const [donationTypeTab, setDonationTypeTab] = React.useState('event');
   const filteredItems = React.useMemo(() => (
     donationItems
       .filter((item) => {
-        const isEventDonation = Boolean(
+        return Boolean(
           item?.drive?.donation_drive_id
           || item?.submission?.donation_drive_id
         );
-        return donationTypeTab === 'event' ? isEventDonation : !isEventDonation;
       })
       .filter((item) => {
       if (hasOngoingDonation && !item.submission) return false;
@@ -2054,35 +2052,10 @@ function MyJoinedDonationsScreen({
       if (activeFilter === 'active') return ['active', 'submitted'].includes(item.statusCategory);
       return item.statusCategory === activeFilter;
     })
-  ), [activeFilter, donationItems, donationTypeTab, hasOngoingDonation]);
+  ), [activeFilter, donationItems, hasOngoingDonation]);
 
   return (
     <View style={styles.flowScreen}>
-      <View style={[styles.donationTypeTabs, { backgroundColor: roles.pageBackground, borderBottomColor: roles.defaultCardBorder }]}>
-        {[
-          { key: 'event', label: 'Donation Drive' },
-          { key: 'independent', label: 'Organization' },
-        ].map((tab) => {
-          const isActive = donationTypeTab === tab.key;
-          return (
-            <Pressable
-              key={tab.key}
-              onPress={() => setDonationTypeTab(tab.key)}
-              style={({ pressed }) => [
-                styles.donationTypeTab,
-                {
-                  borderBottomColor: isActive ? roles.primaryActionBackground : 'transparent',
-                  opacity: pressed ? 0.72 : 1,
-                },
-              ]}
-            >
-              <Text numberOfLines={1} style={[styles.donationTypeTabText, { color: isActive ? roles.primaryActionBackground : roles.headingText }]}>
-                {tab.label}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </View>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.myDonationFilters}>
         {MY_DONATION_FILTERS.map((filter) => {
           const isActive = activeFilter === filter.key;
@@ -2166,12 +2139,6 @@ function MyJoinedDonationsScreen({
               </View>
             </View>
           ))}
-        </View>
-      ) : donationTypeTab === 'independent' ? (
-        <View style={[styles.emptyDonationCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
-          <Text style={[styles.emptyDonationText, { color: roles.bodyText }]}>
-            Independent donation creation is temporarily disabled.
-          </Text>
         </View>
       ) : (
         <View style={[styles.emptyDonationCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
