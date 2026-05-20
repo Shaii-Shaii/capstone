@@ -6,6 +6,11 @@ import { donorDashboardNavItems } from '../../src/constants/dashboard';
 
 const DONOR_NAV_HIDDEN_PATHS = new Set(['/donor/login', '/donor/signup']);
 
+const shouldHideDonorNav = (pathname = '') => (
+  DONOR_NAV_HIDDEN_PATHS.has(pathname)
+  || /^\/donor\/drives\/[^/]+/.test(pathname)
+);
+
 const getDonorActiveNavKey = (pathname = '') => {
   if (pathname.startsWith('/donor/donations')) return 'checkhair';
   if (
@@ -29,7 +34,7 @@ export default function DonorRoutesLayout() {
   const pathname = usePathname();
   const navLockRef = React.useRef(false);
   const activeNavKey = getDonorActiveNavKey(pathname);
-  const showNav = !DONOR_NAV_HIDDEN_PATHS.has(pathname);
+  const showNav = !shouldHideDonorNav(pathname);
 
   const handleNavPress = React.useCallback((item) => {
     if (!item?.route || item.key === activeNavKey || navLockRef.current) return;

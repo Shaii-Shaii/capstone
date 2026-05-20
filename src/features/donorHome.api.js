@@ -2,48 +2,86 @@ import { supabase } from '../api/supabase/client';
 import { logAppError, logAppEvent } from '../utils/appErrors';
 import { canSubmitHairDonation, mapDonationPermissionError } from './donorCompliance.service';
 
-const donationDriveRequestsTable = 'Event_Applications';
+const donationDriveRequestsTable = 'Event_Requests';
 const donationDriveRegistrationsTable = 'Event_Attendees';
+const hairSubmissionsTable = 'Hair_Submissions';
+const hairSubmissionDetailsTable = 'Hair_Submission_Details';
 
 const donationDriveSelect = `
-  donation_drive_id:Event_Application_ID,
-  applicant_first_name:Applicant_First_Name,
-  applicant_last_name:Applicant_Last_Name,
-  applicant_email:Applicant_Email,
-  applicant_contact_number:Applicant_Contact_Number,
+  event_request_id:Event_Request_ID,
+  donation_drive_id:Event_Request_ID,
+  event_application_id:Event_Application_ID,
   event_title:Event_Name,
-  event_overview:Event_Overview,
-  start_date:Proposed_Start_At,
-  end_date:Proposed_End_At,
-  event_image_url:Event_Place_Photo_URL,
-  event_image_path:Event_Place_Photo_Path,
+  event_by:Event_By,
+  partnered_with:Partnered_With,
+  partner_social_media_link:Partner_Social_Media_Link,
+  start_date:Start_Date,
+  end_date:End_Date,
+  venue_name:Venue_Name,
+  event_image_url:Event_Photo_URL,
   street:Street,
   region:Region,
   barangay:Barangay,
-  city:City,
+  city:City_Municipality,
   province:Province,
   country:Country,
   latitude:Latitude,
   longitude:Longitude,
   status:Status,
+  event_visibility:Event_Visibility,
   staff_contact_notes:Staff_Contact_Notes,
-  staff_review_notes:Staff_Review_Notes,
+  admin_decision_reason:Admin_Decision_Reason,
   updated_at:Updated_At
+`;
+
+const donationDrivePrivateSelect = `
+  ${donationDriveSelect},
+  private_event_code:Private_Event_Code
 `;
 
 const donationDriveRegistrationSelect = `
   registration_id:Event_Attendee_ID,
-  donation_drive_id:Event_Application_ID,
+  donation_drive_id:Event_Request_ID,
   user_id:User_ID,
   created_by_user_id:Created_By_User_ID,
+  waybill_code:Waybill_Code,
   registration_status:Registration_Status,
   attendance_status:Attendance_Status,
+  rsvp_scanned_at:RSVP_Scanned_At,
+  rsvp_scanned_by:RSVP_Scanned_By,
   registered_at:Created_At,
   updated_at:Updated_At
 `;
 
 const normalizeRegistrationStatus = (value = '') => String(value || '').trim().toLowerCase();
 const normalizeDriveStatus = (value = '') => String(value || '').trim().toLowerCase();
+const normalizeVisibility = (value = '') => String(value || '').trim().toLowerCase();
+
+const resolveDatabaseUserIdFromSession = async (fallbackDatabaseUserId = null) => {
+  try {
+    const { data: authData, error: authError } = await supabase.auth.getUser();
+    if (authError || !authData?.user?.id) {
+      return Number(fallbackDatabaseUserId) || null;
+    }
+
+    const userLookup = await supabase
+      .from('users')
+      .select('user_id')
+      .eq('auth_user_id', authData.user.id)
+      .maybeSingle();
+
+    if (userLookup.error) {
+      return Number(fallbackDatabaseUserId) || null;
+    }
+
+    const mappedUserId = Number(userLookup.data?.user_id);
+    return Number.isFinite(mappedUserId) && mappedUserId > 0
+      ? mappedUserId
+      : (Number(fallbackDatabaseUserId) || null);
+  } catch (_error) {
+    return Number(fallbackDatabaseUserId) || null;
+  }
+};
 const getStartOfTodayIso = () => {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -51,10 +89,8 @@ const getStartOfTodayIso = () => {
 };
 
 const getDriveCompareDate = (drive) => drive?.end_date || drive?.start_date || null;
-const isDrivePublic = (_drive = null) => true;
-const doesDriveRequireMembership = (drive = null) => (
-  Boolean(drive?.organization_id) && !isDrivePublic(drive)
-);
+const isDrivePublic = (drive = null) => normalizeVisibility(drive?.event_visibility || 'Public') !== 'private';
+const doesDriveRequireMembership = (_drive = null) => false;
 
 const isUpcomingDrive = (drive) => {
   const compareDate = getDriveCompareDate(drive);
@@ -105,19 +141,19 @@ const buildLocationLabel = (row) => (
 );
 
 const buildFullAddressLabel = (row) => (
-  [row?.street, row?.barangay, row?.city, row?.province, row?.country]
+  [row?.venue_name, row?.street, row?.barangay, row?.city, row?.province, row?.country]
     .filter(Boolean)
     .join(', ')
     .trim()
 );
 
 const getEventHostKey = (row = {}) => (
-  `event-${row?.donation_drive_id || 'unknown'}`
+  `event-${row?.event_application_id || row?.donation_drive_id || 'unknown'}`
 );
 
 const getEventHostName = (row = {}) => (
-  [row?.applicant_first_name, row?.applicant_last_name].filter(Boolean).join(' ').trim()
-  || row?.applicant_email
+  row?.partnered_with
+  || row?.event_by
   || 'Event host'
 );
 
@@ -168,24 +204,112 @@ const normalizeDonationDriveRegistration = (row) => ({
   registration_id: row?.registration_id || null,
   donation_drive_id: row?.donation_drive_id || null,
   user_id: row?.user_id || null,
+  waybill_code: row?.waybill_code || null,
   registration_status: row?.registration_status || '',
   attendance_status: row?.attendance_status || '',
+  rsvp_scanned_at: row?.rsvp_scanned_at || null,
+  rsvp_scanned_by: row?.rsvp_scanned_by || null,
   registered_at: row?.registered_at || null,
   updated_at: row?.updated_at || null,
   attendance_marked_at: row?.attendance_marked_at || null,
   qr: resolveDriveQrState(row),
 });
 
+const RSVP_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const generateRsvpCode = () => {
+  let suffix = '';
+  for (let i = 0; i < 6; i += 1) {
+    suffix += RSVP_CODE_CHARS[Math.floor(Math.random() * RSVP_CODE_CHARS.length)];
+  }
+  return `WV${suffix}`;
+};
+
+const createAttendanceCertificateNumber = (submission = null) => {
+  const submissionCode = String(submission?.submission_code || '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '')
+    .slice(-6);
+  const suffix = submissionCode || Math.random().toString(36).slice(2, 8).toUpperCase();
+  return `ATD-${suffix}`;
+};
+
+const ensureAttendanceCertificateForDrive = async ({
+  driveId,
+  databaseUserId,
+  attendanceStatus = '',
+}) => {
+  const normalizedAttendance = normalizeRegistrationStatus(attendanceStatus);
+  const isPresent = ['present', 'attended', 'checked in', 'checked-in', 'marked', 'scanned', 'verified']
+    .includes(normalizedAttendance);
+
+  if (!driveId || !databaseUserId || !isPresent) {
+    return { data: null, error: null };
+  }
+
+  const submissionResult = await supabase
+    .from(hairSubmissionsTable)
+    .select('Submission_ID,Submission_Code,User_ID,Created_At')
+    .eq('User_ID', databaseUserId)
+    .eq('Donation_Drive_ID', driveId)
+    .order('Created_At', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (submissionResult.error || !submissionResult.data?.Submission_ID) {
+    return { data: null, error: submissionResult.error || null };
+  }
+
+  const submissionId = submissionResult.data.Submission_ID;
+  const existingCertificateResult = await supabase
+    .from('Donation_Certificates')
+    .select('Certificate_ID,Certificate_Number,Certificate_Type,Issued_At,Submission_ID')
+    .eq('Submission_ID', submissionId)
+    .order('Issued_At', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (existingCertificateResult.error) {
+    return { data: null, error: existingCertificateResult.error };
+  }
+
+  if (existingCertificateResult.data?.Certificate_ID) {
+    return { data: existingCertificateResult.data, error: null };
+  }
+
+  const insertCertificateResult = await supabase
+    .from('Donation_Certificates')
+    .insert({
+      User_ID: databaseUserId,
+      Submission_ID: submissionId,
+      Certificate_Number: createAttendanceCertificateNumber({
+        submission_code: submissionResult.data.Submission_Code,
+      }),
+      Certificate_Type: 'Event Attendance Certificate',
+      Issued_At: new Date().toISOString(),
+      Remarks: 'Issued after staff scanned RSVP QR and marked attendance as Present.',
+    })
+    .select('Certificate_ID,Certificate_Number,Certificate_Type,Issued_At,Submission_ID')
+    .maybeSingle();
+
+  if (insertCertificateResult.error) {
+    return { data: null, error: insertCertificateResult.error };
+  }
+
+  return { data: insertCertificateResult.data || null, error: null };
+};
+
 const normalizeDonationDrive = (row, organization = null, registration = null, membership = null) => ({
   id: row?.donation_drive_id || null,
   donation_drive_id: row?.donation_drive_id || null,
+  event_request_id: row?.event_request_id || null,
   organization_id: row?.organization_id || null,
   created_by_user_id: row?.created_by_user_id || null,
   event_title: row?.event_title || '',
-  event_overview: row?.event_overview || '',
-  short_overview: buildShortOverview(row?.event_overview),
+  event_overview: row?.event_overview || row?.staff_contact_notes || '',
+  short_overview: buildShortOverview(row?.event_overview || row?.staff_contact_notes),
   start_date: row?.start_date || null,
   end_date: row?.end_date || null,
+  venue_name: row?.venue_name || '',
   proposal_attachment: row?.proposal_attachment || row?.event_image_path || '',
   proposal_attachment_bucket: row?.proposal_attachment_bucket || '',
   event_image_url: buildDonationDriveAttachmentUrl(row),
@@ -198,12 +322,13 @@ const normalizeDonationDrive = (row, organization = null, registration = null, m
   latitude: row?.latitude ?? null,
   longitude: row?.longitude ?? null,
   status: row?.status || '',
-  is_open_for_all: true,
+  event_visibility: row?.event_visibility || 'Public',
+  is_open_for_all: isDrivePublic(row),
   donation_setup_type: row?.donation_setup_type || 'Event',
   updated_at: row?.updated_at || null,
   location_label: buildLocationLabel(row),
   address_label: buildFullAddressLabel(row),
-  organization_name: organization?.organization_name || [row?.applicant_first_name, row?.applicant_last_name].filter(Boolean).join(' ') || 'Event host',
+  organization_name: organization?.organization_name || getEventHostName(row),
   organization_logo_url: organization?.organization_logo_url || '',
   organization: organization || null,
   registration: registration || null,
@@ -212,8 +337,8 @@ const normalizeDonationDrive = (row, organization = null, registration = null, m
   visibility_scope: isDrivePublic(row) ? 'public' : 'private',
   requires_membership: doesDriveRequireMembership(row),
   is_member: Boolean(membership?.is_active),
-  can_view: !doesDriveRequireMembership(row) || Boolean(membership?.is_active) || Boolean(registration?.registration_id),
-  can_join: !registration && (!doesDriveRequireMembership(row) || Boolean(membership?.is_active)),
+  can_view: true,
+  can_join: !registration,
 });
 
 const sortByNewestTimestamp = (rows = [], timestampFields = []) => (
@@ -233,6 +358,87 @@ const sortByNewestTimestamp = (rows = [], timestampFields = []) => (
   })
 );
 
+const makeSubmissionCode = () => `SUB-${Date.now().toString().slice(-8)}`;
+
+const ensureHairSubmissionForDrive = async ({ driveId, databaseUserId }) => {
+  if (!driveId || !databaseUserId) return { data: null, error: null };
+
+  const existingSubmissionResult = await supabase
+    .from(hairSubmissionsTable)
+    .select('Submission_ID,Created_At,Status')
+    .eq('User_ID', databaseUserId)
+    .eq('Donation_Drive_ID', driveId)
+    .not('Status', 'ilike', 'cancelled')
+    .order('Created_At', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (existingSubmissionResult.error) {
+    return { data: null, error: existingSubmissionResult.error };
+  }
+
+  let submissionId = existingSubmissionResult.data?.Submission_ID || null;
+
+  if (!submissionId) {
+    const insertSubmissionResult = await supabase
+      .from(hairSubmissionsTable)
+      .insert({
+        User_ID: databaseUserId,
+        Donation_Drive_ID: driveId,
+        Submission_Code: makeSubmissionCode(),
+        Donation_Source: 'Event RSVP',
+        Status: 'Pending',
+        QR_Status: 'Not Generated',
+      })
+      .select('Submission_ID')
+      .single();
+
+    if (insertSubmissionResult.error) {
+      return { data: null, error: insertSubmissionResult.error };
+    }
+
+    submissionId = insertSubmissionResult.data?.Submission_ID || null;
+  }
+
+  if (!submissionId) {
+    return { data: null, error: new Error('Unable to create hair submission.') };
+  }
+
+  const existingDetailResult = await supabase
+    .from(hairSubmissionDetailsTable)
+    .select('Submission_Detail_ID')
+    .eq('Submission_ID', submissionId)
+    .order('Created_At', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (existingDetailResult.error) {
+    return { data: { submission_id: submissionId }, error: existingDetailResult.error };
+  }
+
+  if (!existingDetailResult.data?.Submission_Detail_ID) {
+    const insertDetailResult = await supabase
+      .from(hairSubmissionDetailsTable)
+      .insert({
+        Submission_ID: submissionId,
+        Input_Method: 'Manual',
+        Hair_Owner_Type: 'Self',
+        Consent_Confirmed: false,
+        QR_Status: 'Not Generated',
+        Current_Tracking_Status: 'Draft',
+        Status: 'Pending',
+      })
+      .select('Submission_Detail_ID')
+      .single();
+
+    if (insertDetailResult.error) {
+      return { data: { submission_id: submissionId }, error: insertDetailResult.error };
+    }
+  }
+
+  return { data: { submission_id: submissionId }, error: null };
+};
+
 const findExistingDriveRegistration = async (driveId, databaseUserId) => {
   if (!driveId || !databaseUserId) {
     return { data: null, error: null };
@@ -241,7 +447,7 @@ const findExistingDriveRegistration = async (driveId, databaseUserId) => {
   const result = await supabase
     .from(donationDriveRegistrationsTable)
     .select(donationDriveRegistrationSelect)
-    .eq('Event_Application_ID', driveId)
+    .eq('Event_Request_ID', driveId)
     .eq('User_ID', databaseUserId)
     .order('Updated_At', { ascending: false });
 
@@ -286,7 +492,7 @@ const findDriveRegistrationsByUserIdAndDriveIds = async (driveIds = [], database
     .from(donationDriveRegistrationsTable)
     .select(donationDriveRegistrationSelect)
     .eq('User_ID', databaseUserId)
-    .in('Event_Application_ID', driveIds)
+    .in('Event_Request_ID', driveIds)
     .order('Updated_At', { ascending: false });
 
   if (result.error) {
@@ -370,7 +576,9 @@ export const createDonationDriveRegistration = async ({
   databaseUserId,
   hasEligibleHairScan = null,
 }) => {
-  if (!driveId || !databaseUserId) {
+  const effectiveDatabaseUserId = await resolveDatabaseUserIdFromSession(databaseUserId);
+
+  if (!driveId || !effectiveDatabaseUserId) {
     return {
       data: null,
       error: new Error('Donation drive and donor account are required before joining a drive.'),
@@ -388,7 +596,7 @@ export const createDonationDriveRegistration = async ({
     };
   }
 
-  const permission = await canSubmitHairDonation(databaseUserId);
+  const permission = await canSubmitHairDonation(effectiveDatabaseUserId);
   if (!permission.allowed) {
     const permissionError = new Error(mapDonationPermissionError(permission.reason));
     permissionError.code = permission.reason;
@@ -401,8 +609,9 @@ export const createDonationDriveRegistration = async ({
 
   const driveResult = await supabase
     .from(donationDriveRequestsTable)
-    .select(donationDriveSelect)
-    .eq('Event_Application_ID', driveId)
+    .select(donationDrivePrivateSelect)
+    .eq('Event_Request_ID', driveId)
+    .ilike('Status', 'approved')
     .maybeSingle();
 
   if (driveResult.error) {
@@ -438,7 +647,7 @@ export const createDonationDriveRegistration = async ({
     };
   }
 
-  const existingResult = await findExistingDriveRegistration(driveId, databaseUserId);
+  const existingResult = await findExistingDriveRegistration(driveId, effectiveDatabaseUserId);
   if (existingResult.error) {
     return {
       data: null,
@@ -448,6 +657,18 @@ export const createDonationDriveRegistration = async ({
   }
 
   if (existingResult.data?.registration_id) {
+    const ensured = await ensureHairSubmissionForDrive({
+      driveId,
+      databaseUserId: effectiveDatabaseUserId,
+    });
+    if (ensured.error) {
+      return {
+        data: null,
+        error: ensured.error,
+        alreadyRegistered: true,
+      };
+    }
+
     return {
       data: existingResult.data,
       error: null,
@@ -458,9 +679,9 @@ export const createDonationDriveRegistration = async ({
   const insertResult = await supabase
     .from(donationDriveRegistrationsTable)
     .insert({
-      Event_Application_ID: driveId,
-      User_ID: databaseUserId,
-      Created_By_User_ID: databaseUserId,
+      Event_Request_ID: driveId,
+      User_ID: effectiveDatabaseUserId,
+      Waybill_Code: generateRsvpCode(),
       Registration_Status: 'Registered',
       Attendance_Status: 'Not Marked',
     })
@@ -472,6 +693,7 @@ export const createDonationDriveRegistration = async ({
       table: donationDriveRegistrationsTable,
       driveId,
       databaseUserId,
+      effectiveDatabaseUserId,
     });
 
     return {
@@ -481,11 +703,58 @@ export const createDonationDriveRegistration = async ({
     };
   }
 
+  const ensured = await ensureHairSubmissionForDrive({
+    driveId,
+    databaseUserId: effectiveDatabaseUserId,
+  });
+  if (ensured.error) {
+    return {
+      data: null,
+      error: ensured.error,
+      alreadyRegistered: false,
+    };
+  }
+
   return {
     data: normalizeDonationDriveRegistration(insertResult.data),
     error: null,
     alreadyRegistered: false,
   };
+};
+
+export const unlockPrivateEventAccess = async ({
+  driveId = null,
+  accessCode = '',
+}) => {
+  const normalizedDriveId = Number(driveId);
+  const normalizedCode = String(accessCode || '').trim();
+
+  if (!normalizedCode) {
+    return { data: null, error: new Error('Enter the private event code.') };
+  }
+
+  if (Number.isFinite(normalizedDriveId) && normalizedDriveId > 0) {
+    const result = await supabase.rpc('unlock_private_event', {
+      p_event_application_id: normalizedDriveId,
+      p_access_code: normalizedCode,
+    });
+
+    if (result.error) {
+      return { data: null, error: result.error };
+    }
+
+    return { data: result.data || null, error: null };
+  }
+
+  const byCodeResult = await supabase.rpc('unlock_private_event_by_code', {
+    p_access_code: normalizedCode,
+  });
+
+  if (byCodeResult.error) {
+    return { data: null, error: byCodeResult.error };
+  }
+
+  return { data: byCodeResult.data || null, error: null };
 };
 
 export const fetchOrganizationMembership = async ({
@@ -541,6 +810,7 @@ export const fetchFeaturedOrganizations = async (limit = 8) => {
     .from(donationDriveRequestsTable)
     .select(donationDriveSelect)
     .ilike('Status', 'approved')
+    .ilike('Event_Visibility', 'public')
     .order('Updated_At', { ascending: false })
     .limit(Math.max(Number(limit) || 8, 8) * 3);
 
@@ -591,7 +861,7 @@ export const fetchUpcomingDonationDrives = async (limit = 6, databaseUserId = nu
     .from(donationDriveRequestsTable)
     .select(donationDriveSelect)
     .ilike('Status', 'approved')
-    .order('Proposed_Start_At', { ascending: true })
+    .order('Start_Date', { ascending: true })
     .limit(queryLimit);
 
   if (result.error) {
@@ -638,7 +908,6 @@ export const fetchUpcomingDonationDrives = async (limit = 6, databaseUserId = nu
 
   const visibleRows = normalizedRows.filter((drive) => (
     normalizeDriveStatus(drive.status) === 'approved'
-    && drive.can_view
     && isUpcomingDrive(drive)
   ));
 
@@ -665,7 +934,8 @@ export const fetchDonationDrivePreview = async (driveId, databaseUserId = null) 
   const driveResult = await supabase
     .from(donationDriveRequestsTable)
     .select(donationDriveSelect)
-    .eq('Event_Application_ID', driveId)
+    .eq('Event_Request_ID', driveId)
+    .ilike('Status', 'approved')
     .maybeSingle();
 
   if (driveResult.error) {
@@ -724,7 +994,7 @@ export const fetchOrganizationPreview = async (organizationId, databaseUserId = 
     .from(donationDriveRequestsTable)
     .select(donationDriveSelect)
     .ilike('Status', 'approved')
-    .order('Proposed_Start_At', { ascending: true })
+    .order('Start_Date', { ascending: true })
     .limit(Math.max(Number(driveLimit) || 3, 1));
 
   if (isEventHost) {
@@ -802,7 +1072,7 @@ export const fetchRelevantDonationDriveUpdates = async ({
   const registeredDrivesResult = await supabase
     .from(donationDriveRequestsTable)
     .select(donationDriveSelect)
-    .in('Event_Application_ID', driveIds)
+    .in('Event_Request_ID', driveIds)
     .ilike('Status', 'approved')
     .order('Updated_At', { ascending: false })
     .limit(limit);

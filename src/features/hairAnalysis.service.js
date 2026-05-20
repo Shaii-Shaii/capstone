@@ -316,7 +316,7 @@ const buildLowConfidenceFallbackAnalysis = ({ images = [], message = '' } = {}) 
     summary: message
       ? `The photos reached the AI provider, but the returned analysis was incomplete. ${message}`
       : 'The photos reached the AI provider, but the returned analysis was incomplete. Please retake clear front, side profile, and hair ends photos if this result does not look accurate. Final screening requires manual review.',
-    length_assessment: 'The AI provider did not return enough structured detail to estimate visible root-to-end hair length reliably.',
+    length_assessment: 'The AI provider did not return enough structured detail to estimate visible cheek/neck-to-ends donation length reliably.',
     donation_readiness_note: '',
     history_assessment: '',
     recommendations: [

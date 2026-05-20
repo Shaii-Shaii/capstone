@@ -275,7 +275,7 @@ export const validateDonationDetails = (donationDetails = {}, donationRequiremen
       : donationDetails.hairLengthValue;
 
     if (hairLengthInches < minLengthInches) {
-      errors.push(`Hair must be at least ${minLengthInches} inches (${minLength} cm)`);
+      errors.push(`Hair must be at least ${minLengthInches} inches`);
     }
   }
 

@@ -223,10 +223,24 @@ const isReceivedByOrganizationSignal = (item = null) => (
   || textIncludesAny(item?.description, ['received by hair for hope', 'received by organization', 'received by the organization', 'organization received'])
 );
 
+const isCutAndShippedSignal = (item = null) => (
+  textIncludesAny(item?.status, ['cut & shipped', 'cut and shipped', 'cut shipped', 'sent_by_donor', 'transit', 'shipped'])
+  || textIncludesAny(item?.title, ['cut & shipped', 'cut and shipped', 'cut shipped', 'sent by donor', 'transit', 'shipped'])
+  || textIncludesAny(item?.description, ['cut & shipped', 'cut and shipped', 'cut shipped', 'sent by donor', 'transit', 'shipped'])
+);
+
 const findDonationApprovalEvidence = ({ trackingEntries = [] } = {}) => {
   const sortedEntries = (trackingEntries || [])
     .slice()
     .sort((left, right) => new Date(right?.updated_at || 0).getTime() - new Date(left?.updated_at || 0).getTime());
+  const cutAndShippedEntry = sortedEntries.find((entry) => isCutAndShippedSignal(entry));
+  if (cutAndShippedEntry) {
+    return {
+      issuedBy: normalizeCertificateIssuerId(cutAndShippedEntry.changed_by),
+      issuedAt: cutAndShippedEntry.updated_at || null,
+    };
+  }
+
   const receivedEntry = sortedEntries.find((entry) => isReceivedByOrganizationSignal(entry));
 
   if (receivedEntry) {
@@ -260,7 +274,7 @@ const ensureDonationCertificateForNotification = async ({
     certificate_type: 'Certificate of Donation',
     issued_by: approvalEvidence.issuedBy,
     issued_at: approvalEvidence.issuedAt || new Date().toISOString(),
-    remarks: 'Issued after the hair donation was received.',
+    remarks: 'Issued after staff scanned the Cut & Ship stage.',
   });
 
   return certificateResult.data || null;

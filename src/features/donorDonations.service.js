@@ -261,8 +261,7 @@ const buildAiConditionReasons = (screening = null) => {
 const buildLengthRequirementMessage = ({ screening = null, minimumLengthCm = 0 }) => {
   const logMessage = getScreeningLogMessage(screening);
   const minimumInches = toRoundedNumber(minimumLengthCm / CM_PER_INCH, 1);
-  const minimumCm = toRoundedNumber(minimumLengthCm, 1);
-  const requirementMessage = `Minimum hair length: ${minimumInches} inches (${minimumCm} cm).`;
+  const requirementMessage = `Minimum hair length: ${minimumInches} inches.`;
   return [logMessage, requirementMessage].filter(Boolean).join(' ');
 };
 
@@ -500,10 +499,25 @@ const isReceivedByOrganizationSignal = (item = null) => (
   || matchesAnyToken(item?.description, ['received by hair for hope', 'received by organization', 'received by the organization', 'organization received'])
 );
 
+const isCutAndShippedSignal = (item = null) => (
+  matchesAnyToken(item?.status, ['cut & shipped', 'cut and shipped', 'cut shipped', 'sent_by_donor', 'transit', 'shipped'])
+  || matchesAnyToken(item?.title, ['cut & shipped', 'cut and shipped', 'cut shipped', 'sent by donor', 'transit', 'shipped'])
+  || matchesAnyToken(item?.description, ['cut & shipped', 'cut and shipped', 'cut shipped', 'sent by donor', 'transit', 'shipped'])
+);
+
 const findDonationApprovalEvidence = ({ trackingEntries = [], logistics = null } = {}) => {
   const sortedEntries = (trackingEntries || [])
     .slice()
     .sort((left, right) => new Date(right?.updated_at || 0).getTime() - new Date(left?.updated_at || 0).getTime());
+  const cutAndShippedEntry = sortedEntries.find((entry) => isCutAndShippedSignal(entry));
+  if (cutAndShippedEntry) {
+    return {
+      entry: cutAndShippedEntry,
+      issuedBy: normalizeCertificateIssuerId(cutAndShippedEntry.changed_by),
+      issuedAt: cutAndShippedEntry.updated_at || null,
+    };
+  }
+
   const receivedEntry = sortedEntries.find((entry) => isReceivedByOrganizationSignal(entry));
 
   if (receivedEntry) {
@@ -581,7 +595,7 @@ const ensureDonationCertificateForApprovedSubmission = async ({
     certificate_type: 'Certificate of Donation',
     issued_by: approvalEvidence.issuedBy,
     issued_at: approvalEvidence.issuedAt || new Date().toISOString(),
-    remarks: 'Issued after Hair for Hope received the hair donation.',
+    remarks: 'Issued after staff scanned the Cut & Ship stage.',
   });
 
   if (certificateResult.error || !certificateResult.data?.certificate_id) {
@@ -595,7 +609,7 @@ const ensureDonationCertificateForApprovedSubmission = async ({
         dedupeKey: `${notificationTypes.certificateAvailable}:${certificateResult.data.certificate_id}`,
         type: notificationTypes.certificateAvailable,
         title: 'Certificate available',
-        message: 'Hair for Hope received your donation. Your certificate is ready in Achievements.',
+        message: 'Your Cut & Ship was scanned. Your certificate is ready in Achievements.',
         createdAt: certificateResult.data.issued_at || new Date().toISOString(),
         referenceType: 'route',
         referenceId: '/donor/achievements',
@@ -660,7 +674,7 @@ const isIndependentDonationSource = (source = '') => (
 );
 
 const isDriveDonationSource = (source = '') => (
-  String(source || '').trim().toLowerCase() === DRIVE_DONATION_SOURCE
+  ['drive_donation', 'event rsvp', 'event_rsvp'].includes(String(source || '').trim().toLowerCase())
 );
 
 const upsertSubmissionLogistics = async ({
@@ -1100,8 +1114,12 @@ const resolveCurrentDonationRecord = ({
   fallbackRecord = null,
 }) => {
   const sortedSubmissions = sortSubmissionsByCreatedAt(submissions);
+  const driveFirstSubmissions = [
+    ...sortedSubmissions.filter((submission) => Boolean(submission?.donation_drive_id)),
+    ...sortedSubmissions.filter((submission) => !submission?.donation_drive_id),
+  ];
 
-  const flowMatchedRecord = sortedSubmissions
+  const flowMatchedRecord = driveFirstSubmissions
     .filter((submission) => !isSubmissionCompleted({ submission }))
     .find((submission) => (
       Boolean(submission?.donation_drive_id)
@@ -1134,8 +1152,12 @@ const resolveCurrentFlowSubmission = ({
   submissions = [],
 } = {}) => {
   const sortedSubmissions = sortSubmissionsByCreatedAt(submissions);
+  const driveFirstSubmissions = [
+    ...sortedSubmissions.filter((submission) => Boolean(submission?.donation_drive_id)),
+    ...sortedSubmissions.filter((submission) => !submission?.donation_drive_id),
+  ];
 
-  return sortedSubmissions
+  return driveFirstSubmissions
     .filter((submission) => !isSubmissionCompleted({ submission }))
     .find((submission) => (
       Boolean(submission?.donation_drive_id)
@@ -1151,8 +1173,12 @@ const resolveCurrentFlowSubmissions = ({
   submissions = [],
 } = {}) => {
   const sortedSubmissions = sortSubmissionsByCreatedAt(submissions);
+  const driveFirstSubmissions = [
+    ...sortedSubmissions.filter((submission) => Boolean(submission?.donation_drive_id)),
+    ...sortedSubmissions.filter((submission) => !submission?.donation_drive_id),
+  ];
 
-  return sortedSubmissions
+  return driveFirstSubmissions
     .filter((submission) => !isSubmissionCompleted({ submission }))
     .filter((submission) => (
       Boolean(submission?.donation_drive_id)
@@ -1283,10 +1309,10 @@ const resolveTimelineStages = ({
   const receivedOrgEvidenceAt = receivedOrgEntry?.updated_at
     || logistics?.received_at
     || (matchesAnyToken(logistics?.shipment_status, ['received by the organization', 'organization received', 'received', 'quality']) ? logistics?.created_at || null : null);
-  const qualityEntry = findTimelineMatch(trackingEntries, isQualityAssessmentEntry);
   const latestDetail = getLatestSubmissionDetailSnapshot(submission);
   const latestScreening = [...(submission?.ai_screenings || [])]
     .sort((left, right) => new Date(right?.created_at || 0).getTime() - new Date(left?.created_at || 0).getTime())[0] || null;
+  const qualityEntry = findTimelineMatch(trackingEntries, isQualityAssessmentEntry);
   const detailStatus = latestDetail?.status || '';
   const screeningDecision = latestScreening?.decision || '';
   const hasQualityDbStatus = Boolean(detailStatus || screeningDecision);
@@ -1347,33 +1373,12 @@ const resolveTimelineStages = ({
 
   const eventStageEntries = isEventFlow ? [
     {
-      key: 'event_rsvp',
-      label: 'RSVP approved',
-      statusLabel: registration?.attendance_marked_at
-        ? registration?.attendance_status || registration?.registration_status || 'Present'
-        : registration?.registration_status || '',
-      savedNote: registration?.attendance_marked_at
-        ? 'Your attendance is marked Present for this donation drive.'
-        : 'Your RSVP is approved for this donation drive.',
-      evidenceAt: rsvpEvidenceAt,
-      entry: registration,
-    },
-    {
-      key: 'received_by_company',
-      label: 'Received by Hair for Hope',
-      statusLabel: receivedOrgEntry?.status || (logistics?.received_at ? 'Received' : ''),
-      savedNote: receivedOrgEntry?.description || (logistics?.received_at ? logistics?.notes || '' : ''),
-      evidenceAt: receivedOrgEvidenceAt,
-      entry: receivedOrgEntry,
-      parcelImages,
-    },
-    {
-      key: 'qa_assessment',
-      label: 'QA Assessment',
-      statusLabel: qualityEntry?.status || detailStatus || screeningDecision || '',
-      savedNote: qualityEntry?.description || (hasQualityDbStatus ? 'QA status is loaded from the saved hair submission assessment.' : ''),
-      evidenceAt: qualityEvidenceAt,
-      entry: qualityEntry || latestDetail || latestScreening,
+      key: 'cut_and_ship',
+      label: 'Cut & ship',
+      statusLabel: transitEntry?.status || (matchesAnyToken(logistics?.shipment_status, ['transit', 'shipped']) ? logistics?.shipment_status : ''),
+      savedNote: transitEntry?.description || 'Staff scanned your Cut & Ship QR.',
+      evidenceAt: transitEvidenceAt || rsvpEvidenceAt,
+      entry: transitEntry || registration,
       parcelImages,
     },
     {
@@ -1386,8 +1391,17 @@ const resolveTimelineStages = ({
       parcelImages,
     },
     {
-      key: 'received_by_patient',
-      label: 'Received by patient',
+      key: 'wig_distribution_hospitals',
+      label: 'Wig distribution for hospitals',
+      statusLabel: wigCompletedEntry?.status || (wigCompletedEvidenceAt ? 'Distributed' : ''),
+      savedNote: wigCompletedEntry?.description || 'The finished wig was distributed for hospital allocation.',
+      evidenceAt: wigCompletedEvidenceAt || assignedToPatientEvidenceAt,
+      entry: wigCompletedEntry || production?.wig || production?.allocation,
+      parcelImages,
+    },
+    {
+      key: 'distribution_to_patients',
+      label: 'Distribution to patients',
       statusLabel: receivedByPatientEntry?.status || allocationStatus || '',
       savedNote: receivedByPatientEntry?.description || production?.allocation?.notes || '',
       evidenceAt: receivedByPatientEvidenceAt,
@@ -2109,6 +2123,34 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
   }
 
   let certificate = certificateResult.data || null;
+  const normalizedAttendanceStatus = String(activeDrive?.registration?.attendance_status || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, ' ');
+  const hasAttendanceScan = Boolean(activeDrive?.registration?.rsvp_scanned_at)
+    || ['present', 'attended', 'checked in', 'checked-in', 'marked', 'scanned', 'verified']
+      .includes(normalizedAttendanceStatus);
+
+  if (activeSubmission?.submission_id && activeDrive?.donation_drive_id && hasAttendanceScan) {
+    const existingEventCertificate = await fetchDonationCertificateBySubmissionId(activeSubmission.submission_id);
+    if (!existingEventCertificate?.data?.certificate_id) {
+      const certificateResultFromAttendance = await createDonationCertificate({
+        user_id: activeSubmission.user_id,
+        submission_id: activeSubmission.submission_id,
+        certificate_number: createDonationCertificateNumber(activeSubmission),
+        certificate_type: 'Event Attendance Certificate',
+        issued_by: null,
+        issued_at: activeDrive?.registration?.rsvp_scanned_at || new Date().toISOString(),
+        remarks: 'Issued after staff scanned your RSVP attendance.',
+      });
+      if (certificateResultFromAttendance?.data?.certificate_id) {
+        certificate = certificateResultFromAttendance.data;
+      }
+    } else {
+      certificate = existingEventCertificate.data;
+    }
+  }
+
   if (activeSubmission?.submission_id) {
     certificate = await ensureDonationCertificateForApprovedSubmission({
       userId,
@@ -3189,9 +3231,11 @@ export const addDonationBundleFromAnalysis = async ({
     donorIsMinor,
   });
 
+  const estimatedLengthInches = convertLengthToInches(screening?.estimated_length, 'cm');
+
   const detailResult = await createHairSubmissionDetail({
     submission_id: submission.submission_id,
-    declared_length: screening?.estimated_length ?? referenceDetail?.declared_length ?? null,
+    declared_length: estimatedLengthInches ?? referenceDetail?.declared_length ?? null,
     declared_color: screening?.detected_color || referenceDetail?.declared_color || null,
     declared_texture: screening?.detected_texture || referenceDetail?.declared_texture || null,
     declared_density: screening?.detected_density || referenceDetail?.declared_density || null,

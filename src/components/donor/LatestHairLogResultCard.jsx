@@ -67,7 +67,7 @@ export const LatestHairLogResultCard = ({
       {/* Action button */}
       <View style={styles.actions}>
         <AppButton
-          title={latestRecommendation ? 'View latest result' : 'Check again'}
+          title={latestRecommendation ? 'View Hair Log' : 'Check again'}
           size="sm"
           fullWidth={false}
           onPress={latestRecommendation ? onViewResult : onStartCheckHair}

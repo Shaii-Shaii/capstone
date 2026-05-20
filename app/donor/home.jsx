@@ -13,7 +13,7 @@ import {
   View,
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import { DashboardLayout } from '../../src/components/layout/DashboardLayout';
 import { AppButton } from '../../src/components/ui/AppButton';
@@ -28,19 +28,15 @@ import {
   fetchLatestDonorRecommendationByUserId,
 } from '../../src/features/hairSubmission.api';
 import {
-  fetchFeaturedOrganizations,
-  fetchOrganizationMembershipsByUserId,
-  fetchOrganizationPreview,
   fetchUpcomingDonationDrives,
-  joinOrganizationMembership,
+  unlockPrivateEventAccess,
 } from '../../src/features/donorHome.api';
 import { getDonorDonationsModuleData } from '../../src/features/donorDonations.service';
 import { useAuthActions } from '../../src/features/auth/hooks/useAuthActions';
 import { useNotifications } from '../../src/hooks/useNotifications';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { resolveThemeRoles, theme } from '../../src/design-system/theme';
-import { invokeEdgeFunction, supabase } from '../../src/api/supabase/client';
-import { loadChatbotBootstrap, resolveChatbotReply } from '../../src/features/chatbot.service';
+import { supabase } from '../../src/api/supabase/client';
 import { buildProfileCompletionMeta } from '../../src/features/profile/services/profile.service';
 
 const formatDayLabel = (value) => (
@@ -108,6 +104,7 @@ const getBestMembershipByOrganization = (memberships = []) => {
   return membershipByOrganizationId;
 };
 
+// eslint-disable-next-line no-unused-vars
 const attachMembershipsToOrganizations = (organizations = [], memberships = []) => {
   const membershipByOrganizationId = getBestMembershipByOrganization(memberships);
 
@@ -126,6 +123,7 @@ const isDriveActiveForHome = (drive = null) => {
   return new Date(compareDate).getTime() >= today.getTime();
 };
 
+// eslint-disable-next-line no-unused-vars
 const getMobileOrganizationError = (error, fallback = 'Something went wrong. Please try again.') => {
   const message = String(error?.message || error || '').toLowerCase();
   if (!message) return fallback;
@@ -956,7 +954,7 @@ function UpcomingDriveHero({ drive, onPress }) {
       <AppCard variant="outline" radius="xl" padding="md" contentStyle={styles.emptyDriveHero}>
         <Text style={[styles.emptyDriveTitle, { color: roles.headingText }]}>No upcoming drives yet</Text>
         <Text style={[styles.emptyDriveText, { color: roles.bodyText }]}>
-          Public events and private organization drives will appear here when available.
+          Public and private events will appear here when available.
         </Text>
       </AppCard>
     );
@@ -986,47 +984,12 @@ function UpcomingDriveHero({ drive, onPress }) {
   );
 }
 
-function HomeModeTabs({ activeTab, onChange }) {
-  const { resolvedTheme } = useAuth();
-  const roles = resolveThemeRoles(resolvedTheme);
-  const items = [
-    { key: 'drives', label: 'Donation Drive' },
-    { key: 'organizations', label: 'Organization' },
-  ];
-
-  return (
-    <View style={[styles.homeModeTabs, { backgroundColor: roles.pageBackground, borderBottomColor: roles.defaultCardBorder }]}>
-      {items.map((item) => {
-        const isActive = activeTab === item.key;
-        return (
-          <Pressable
-            key={item.key}
-            onPress={() => onChange(item.key)}
-            style={({ pressed }) => [
-              styles.homeModeTab,
-              isActive ? [styles.homeModeTabActive, { borderBottomColor: roles.primaryActionBackground }] : null,
-              pressed ? styles.cardPressed : null,
-            ]}
-          >
-            <Text
-              numberOfLines={1}
-              style={[styles.homeModeTabText, { color: isActive ? roles.primaryActionBackground : roles.headingText }]}
-            >
-              {item.label}
-            </Text>
-          </Pressable>
-        );
-      })}
-    </View>
-  );
-}
-
 function ActiveDonationDriveCard({ drive, onOpenFlow, style }) {
   const { resolvedTheme } = useAuth();
   const roles = resolveThemeRoles(resolvedTheme);
   const [imageFailed, setImageFailed] = React.useState(false);
   const imageUrl = drive?.event_image_url || drive?.organization_logo_url || '';
-  const scopeLabel = drive?.is_public ? 'Public' : 'Members';
+  const scopeLabel = drive?.is_public ? 'Public' : 'Private';
 
   React.useEffect(() => {
     setImageFailed(false);
@@ -1034,8 +997,8 @@ function ActiveDonationDriveCard({ drive, onOpenFlow, style }) {
 
   const checkedIn = isRsvpCheckedIn(drive?.registration || null);
   const primaryLabel = drive?.registration
-    ? (checkedIn ? 'Open Donation Module' : 'Show RSVP QR')
-    : 'RSVP Now';
+    ? (checkedIn ? 'Open Donation Module' : 'View Event Details')
+    : 'Register Now';
 
   return (
     <View style={[styles.activeDriveCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }, style]}>
@@ -1106,7 +1069,7 @@ function EmptyDonationDriveCard() {
       </View>
       <Text style={[styles.emptyDriveTitle, { color: roles.headingText }]}>No active donation drives yet</Text>
       <Text style={[styles.emptyDriveText, { color: roles.bodyText }]}>
-        Public drives and private drives from joined organizations will appear here.
+        Public and private events will appear here.
       </Text>
     </View>
   );
@@ -1197,6 +1160,7 @@ function OrganizationHomeCard({ organization, onPress }) {
   );
 }
 
+// eslint-disable-next-line no-unused-vars
 function OrganizationHomeSection({
   organizations,
   searchQuery,
@@ -1273,6 +1237,7 @@ function HomeSectionHeader({ title, actionLabel, onActionPress }) {
   );
 }
 
+// eslint-disable-next-line no-unused-vars
 function AiInsightCard({ message, name }) {
   const { resolvedTheme } = useAuth();
   const roles = resolveThemeRoles(resolvedTheme);
@@ -1289,7 +1254,7 @@ function AiInsightCard({ message, name }) {
           <Text numberOfLines={1} style={[styles.homeGreetingTitle, { color: roles.headingText, fontFamily: headingFont }]}>
             Hello, {name}!
           </Text>
-          <Text style={[styles.aiInsightText, { color: roles.bodyText, fontFamily: bodyFont }]}>
+          <Text style={[styles.aiInsightText, { color: roles.bodyText, fontFamily: bodyFont }]} numberOfLines={2}>
             {message || 'Start your first hair check when you are ready.'}
           </Text>
         </View>
@@ -1297,6 +1262,7 @@ function AiInsightCard({ message, name }) {
     </View>
   );
 }
+// eslint-disable-next-line no-unused-vars
 function OrganizationPreviewModal({
   visible,
   organization,
@@ -1536,6 +1502,7 @@ const buildAnalyticsData = (submissions = []) => {
 };
 
 // Build daily reminder state from submissions
+// eslint-disable-next-line no-unused-vars
 const buildDailyReminder = (submissions = []) => {
   const today = toLocalDateKey(new Date());
 
@@ -1568,7 +1535,7 @@ const buildDailyReminder = (submissions = []) => {
       type: 'analyzed-today',
       title: "Today's care tip",
       subtitle: summary || 'Check your latest result for more details',
-      buttonLabel: 'View latest result',
+      buttonLabel: 'View Hair Log',
     };
   }
 
@@ -1581,6 +1548,36 @@ const buildDailyReminder = (submissions = []) => {
   };
 };
 
+const WEEKLY_SCAN_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
+
+const buildHairReminderMessage = (submissions = []) => {
+  const entries = getScreeningEntries(submissions);
+  if (!entries.length) {
+    return 'You have no hair log yet. Start CheckHair to track your progress.';
+  }
+
+  const latest = entries[0]?.screening || null;
+  const assessment = getCanonicalHairAssessment(latest);
+  const needsCare = assessment.needsCare;
+  const createdAt = latest?.created_at ? new Date(latest.created_at) : null;
+  const nextScanAt = createdAt ? new Date(createdAt.getTime() + WEEKLY_SCAN_INTERVAL_MS) : null;
+  const scanReady = !nextScanAt || Date.now() >= nextScanAt.getTime();
+  const nextScanLabel = nextScanAt
+    ? new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(nextScanAt)
+    : '';
+
+  if (scanReady) {
+    return needsCare
+      ? `Your weekly scan is ready. Last result: ${assessment.label}. Run a new check to see if your hair improved.`
+      : `Your weekly scan is ready. Last result: ${assessment.label}. Run a quick check to confirm it is maintained.`;
+  }
+
+  return needsCare
+    ? `Last result: ${assessment.label}. Continue gentle care this week. Next scan: ${nextScanLabel}.`
+    : `Great job. Last result: ${assessment.label}. Keep your routine. Next scan: ${nextScanLabel}.`;
+};
+
+// eslint-disable-next-line no-unused-vars
 const buildContextualGreeting = ({ hasHistory, latestCondition, checkedToday, daysSinceLastLog, latestRecommendation }) => {
   if (!hasHistory) return 'Start your first hair check to get personalized insights.';
   const tone = normalizeConditionTone(latestCondition || '');
@@ -1604,10 +1601,9 @@ const buildContextualGreeting = ({ hasHistory, latestCondition, checkedToday, da
 
 export default function DonorHomeScreen() {
   const router = useRouter();
-  const params = useLocalSearchParams();
-  const tabParam = Array.isArray(params.tab) ? params.tab[0] : params.tab;
   const { width: viewportWidth } = useWindowDimensions();
-  const { user, profile } = useAuth();
+  const { user, profile, resolvedTheme } = useAuth();
+  const roles = resolveThemeRoles(resolvedTheme);
   const { logout, isLoading: isLoggingOut } = useAuthActions();
   const {
     unreadCount,
@@ -1625,38 +1621,23 @@ export default function DonorHomeScreen() {
   const shouldAnimateHomeSections = !homeCacheMatchesUser;
   const [isLoadingHome, setIsLoadingHome] = React.useState(!homeCacheMatchesUser);
   const [homeError, setHomeError] = React.useState('');
-  const [homeTab, setHomeTab] = React.useState(tabParam === 'organizations' ? 'organizations' : 'drives');
-  const [organizationSearchQuery, setOrganizationSearchQuery] = React.useState('');
   const [donationDrives, setDonationDrives] = React.useState(cachedHome?.donationDrives || []);
-  const [organizations, setOrganizations] = React.useState(cachedHome?.organizations || []);
   const [hairSubmissions, setHairSubmissions] = React.useState(cachedHome?.hairSubmissions || []);
-  const [isOrganizationPreviewOpen, setIsOrganizationPreviewOpen] = React.useState(false);
-  const [isLoadingOrganizationPreview] = React.useState(false);
-  const [selectedOrganizationPreview, setSelectedOrganizationPreview] = React.useState(null);
-  const [organizationPreviewError, setOrganizationPreviewError] = React.useState('');
-  const [organizationPreviewFeedback, setOrganizationPreviewFeedback] = React.useState({ message: '', variant: 'info' });
-  const [isJoiningOrganizationPreview, setIsJoiningOrganizationPreview] = React.useState(false);
   // Hair log detail modal
   const [isHairLogModalOpen, setIsHairLogModalOpen] = React.useState(false);
   const [selectedHairLogEntries, setSelectedHairLogEntries] = React.useState([]);
   const [latestRecommendation, setLatestRecommendation] = React.useState(cachedHome?.latestRecommendation || null);
-  const [aiGreeting, setAiGreeting] = React.useState(cachedHome?.aiGreeting || '');
+  const [privateEventCode, setPrivateEventCode] = React.useState('');
+  const [isUnlockingPrivateEvent, setIsUnlockingPrivateEvent] = React.useState(false);
+  const [privateUnlockMessage, setPrivateUnlockMessage] = React.useState('');
+  const [privateUnlockVariant, setPrivateUnlockVariant] = React.useState('info');
+  const [certificateToastMessage, setCertificateToastMessage] = React.useState('');
 
   const firstName = String(profile?.first_name || '').trim();
   const lastName = String(profile?.last_name || '').trim();
-  const greetingName = firstName || String(profile?.email || user?.email || 'Donor').split('@')[0];
   const avatarInitials = [firstName?.[0], lastName?.[0]].filter(Boolean).join('').toUpperCase();
   const avatarUri = profile?.avatar_url || profile?.photo_path || '';
 
-  React.useEffect(() => {
-    if (tabParam === 'organizations') {
-      setHomeTab('organizations');
-      return;
-    }
-    if (tabParam === 'drives') {
-      setHomeTab('drives');
-    }
-  }, [tabParam]);
   const profileCompletionMeta = React.useMemo(() => buildProfileCompletionMeta({
     photo_path: profile?.photo_path || profile?.avatar_url || '',
     first_name: profile?.first_name || '',
@@ -1705,8 +1686,6 @@ export default function DonorHomeScreen() {
 
     const [
       donationModuleResult,
-      organizationsResult,
-      organizationMembershipsResult,
       upcomingDrivesResult,
       submissionsResult,
       recommendationResult,
@@ -1716,8 +1695,6 @@ export default function DonorHomeScreen() {
         databaseUserId: profile?.user_id || null,
         driveLimit: 8,
       }),
-      fetchFeaturedOrganizations(10),
-      fetchOrganizationMembershipsByUserId(profile?.user_id || null),
       fetchUpcomingDonationDrives(12, profile?.user_id || null),
       fetchHairSubmissionsByUserId(user.id, 12),
       fetchLatestDonorRecommendationByUserId(user.id).catch(() => ({ data: null })),
@@ -1727,121 +1704,29 @@ export default function DonorHomeScreen() {
       ? upcomingDrivesResult.data
       : (donationModuleResult.drives || []);
     const nextDonationDrives = visibleDriveRows.filter(isDriveActiveForHome);
-    const nextOrganizations = attachMembershipsToOrganizations(
-      organizationsResult.data || [],
-      organizationMembershipsResult.data || []
-    );
     const nextHairSubmissions = submissionsResult.data || [];
     const nextLatestRecommendation = recommendationResult?.data || null;
     const nextHomeData = {
       donationDrives: nextDonationDrives,
-      organizations: nextOrganizations,
       hairSubmissions: nextHairSubmissions,
       latestRecommendation: nextLatestRecommendation,
-      aiGreeting: homeCacheRef.current?.aiGreeting || '',
       cachedAt: Date.now(),
     };
     cachedDonorHomeData = nextHomeData;
     cachedDonorHomeUserId = user.id;
     homeCacheRef.current = nextHomeData;
     setDonationDrives(nextDonationDrives);
-    setOrganizations(nextOrganizations);
     setHairSubmissions(nextHairSubmissions);
     setLatestRecommendation(nextLatestRecommendation);
     const loadFailed = Boolean(
       donationModuleResult.error
-      || organizationsResult.error
-      || organizationMembershipsResult.error
       || upcomingDrivesResult.error
       || submissionsResult.error
     );
     setHomeError(loadFailed ? 'Some updates could not load.' : '');
     setIsLoadingHome(false);
 
-    // Build contextual AI greeting from loaded data
-    const analytics = buildAnalyticsData(nextHairSubmissions);
-    const todayStr = toLocalDateKey(new Date());
-    const checkedToday = nextHairSubmissions.some((s) =>
-      (s?.ai_screenings || []).some(
-        (sc) => sc?.created_at && toLocalDateKey(sc.created_at) === todayStr
-      )
-    );
-    const greetName = String(profile?.first_name || '').trim()
-      || String(user?.email || '').split('@')[0]
-      || 'Donor';
-
-    // Compute days since last log
-    const allEntries = getScreeningEntries(nextHairSubmissions);
-    const latestEntry = allEntries[0] || null;
-    let daysSinceLastLog = 0;
-    if (latestEntry?.screening?.created_at) {
-      const lastDate = new Date(latestEntry.screening.created_at);
-      daysSinceLastLog = Math.max(0, Math.floor((Date.now() - lastDate.getTime()) / 86400000));
-    }
-
-    const greetingContext = {
-      donorName: greetName,
-      hasHistory: analytics.hasHistory,
-      latestCondition: analytics.latestAnalysis?.detected_condition || null,
-      checkedToday,
-      daysSinceLastLog,
-      latestRecommendation: recommendationResult?.data?.recommendation_text || null,
-    };
-
-    // Set immediate fallback, then try AI enhancement
-    const fallbackGreeting = buildContextualGreeting(greetingContext);
-    cachedDonorHomeData = { ...(homeCacheRef.current || {}), aiGreeting: fallbackGreeting };
-    homeCacheRef.current = cachedDonorHomeData;
-    setAiGreeting(fallbackGreeting);
-    if (!analytics.hasHistory) return;
-
-    // Try OpenAI edge function, then chatbot fallback
-    const latestConditionText = analytics.latestAnalysis?.detected_condition || 'no result yet';
-    const aiPrompt = [
-      'Write one warm, personal home greeting for a hair donor.',
-      analytics.hasHistory
-        ? `Their last hair check: ${latestConditionText}. Days since last log: ${daysSinceLastLog}.`
-        : 'They have not done a hair check yet.',
-      checkedToday ? 'They already checked today.' : '',
-      recommendationResult?.data?.recommendation_text
-        ? `Previous tip given: ${recommendationResult.data.recommendation_text.slice(0, 80)}` : '',
-      'Return one short sentence under 20 words. Mention condition or days since last log. Do not include the donor name. No markdown.',
-    ].filter(Boolean).join(' ');
-
-    invokeEdgeFunction('home-greeting', { body: { prompt: aiPrompt, donorName: greetName, condition: latestConditionText, daysSinceLastLog } })
-      .then(({ data, error }) => {
-        const text = String(data?.greeting || data?.message || '').replace(/\s+/g, ' ').trim();
-        if (!error && text) {
-          const nextGreeting = text.slice(0, 200);
-          cachedDonorHomeData = { ...(homeCacheRef.current || {}), aiGreeting: nextGreeting };
-          homeCacheRef.current = cachedDonorHomeData;
-          setAiGreeting(nextGreeting);
-          return;
-        }
-        return loadChatbotBootstrap({ role: 'donor', userId: user.id });
-      })
-      .then((bootstrap) => {
-        if (!bootstrap) return null;
-        return resolveChatbotReply({
-          role: 'donor',
-          userId: user.id,
-          text: aiPrompt,
-          faqs: bootstrap.faqs || [],
-          settings: bootstrap.settings,
-          recentMessages: [],
-        });
-      })
-      .then((reply) => {
-        const text = String(reply?.text || '').replace(/\s+/g, ' ').trim();
-        if (text) {
-          const nextGreeting = text.slice(0, 200);
-          cachedDonorHomeData = { ...(homeCacheRef.current || {}), aiGreeting: nextGreeting };
-          homeCacheRef.current = cachedDonorHomeData;
-          setAiGreeting(nextGreeting);
-        }
-      })
-      .catch(() => {});
-  }, [homeCacheRef, profile?.first_name, profile?.user_id, user?.email, user?.id]);
+  }, [profile?.user_id, user?.id]);
 
   const homeRealtimeRefreshRef = React.useRef(null);
   const scheduleHomeRealtimeRefresh = React.useCallback(() => {
@@ -1881,12 +1766,17 @@ export default function DonorHomeScreen() {
     const onRealtimeEvent = () => {
       scheduleHomeRealtimeRefresh();
     };
+    const onCertificateRealtimeEvent = (payload = {}) => {
+      if (payload?.eventType !== 'INSERT') return;
+      setCertificateToastMessage('Certificate is now available in Achievements.');
+      scheduleHomeRealtimeRefresh();
+    };
 
     channel
       .on('postgres_changes', {
         event: '*',
         schema: 'public',
-        table: 'Event_Applications',
+        table: 'Event_Requests',
       }, onRealtimeEvent)
       .on('postgres_changes', {
         event: '*',
@@ -1900,6 +1790,12 @@ export default function DonorHomeScreen() {
         table: 'Hair_Submissions',
         filter: `User_ID=eq.${profile.user_id}`,
       }, onRealtimeEvent)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'Donation_Certificates',
+        filter: `User_ID=eq.${profile.user_id}`,
+      }, onCertificateRealtimeEvent)
       .subscribe();
 
     return () => {
@@ -1908,8 +1804,8 @@ export default function DonorHomeScreen() {
   }, [profile?.user_id, scheduleHomeRealtimeRefresh, user?.id]);
 
   // Compute daily reminder and analytics data
-  const dailyReminder = React.useMemo(() => buildDailyReminder(hairSubmissions), [hairSubmissions]);
   const analyticsData = React.useMemo(() => buildAnalyticsData(hairSubmissions), [hairSubmissions]);
+  const homeReminderMessage = React.useMemo(() => buildHairReminderMessage(hairSubmissions), [hairSubmissions]);
   // Build entries array for latest result modal
   const latestResultEntries = React.useMemo(() => {
     if (!analyticsData.latestAnalysis) return [];
@@ -1944,93 +1840,35 @@ export default function DonorHomeScreen() {
     setSelectedHairLogEntries([]);
   }, []);
 
+  const handleUnlockPrivateEvent = React.useCallback(async () => {
+    if (!String(privateEventCode || '').trim()) {
+      setPrivateUnlockMessage('Enter the private event code.');
+      setPrivateUnlockVariant('error');
+      return;
+    }
+
+    setIsUnlockingPrivateEvent(true);
+    const result = await unlockPrivateEventAccess({
+      accessCode: privateEventCode,
+    });
+    setIsUnlockingPrivateEvent(false);
+
+    if (result.error) {
+      setPrivateUnlockMessage(result.error.message || 'Private event unlock failed.');
+      setPrivateUnlockVariant('error');
+      return;
+    }
+
+    setPrivateUnlockMessage('Private event unlocked. You can now register.');
+    setPrivateUnlockVariant('success');
+    setPrivateEventCode('');
+    await loadHome({ silent: false });
+  }, [loadHome, privateEventCode]);
+
   const handleNavPress = (item) => {
     if (!item.route) return;
     router.navigate(item.route);
   };
-
-  const handleOpenOrganizationPreview = React.useCallback(async (organization) => {
-    if (!organization?.organization_id) return;
-    router.navigate(`/donor/organizations?organizationId=${organization.organization_id}`);
-  }, [router]);
-
-  const handleJoinOrganizationPreview = React.useCallback(async () => {
-    const organizationId = selectedOrganizationPreview?.organization_id;
-    if (!organizationId || !profile?.user_id) {
-      setOrganizationPreviewFeedback({
-        message: 'Your donor account is required before joining an organization.',
-        variant: 'error',
-      });
-      return;
-    }
-
-    setOrganizationPreviewFeedback({ message: '', variant: 'info' });
-    setOrganizationPreviewError('');
-    setIsJoiningOrganizationPreview(true);
-    const result = await joinOrganizationMembership({
-      organizationId,
-      databaseUserId: profile.user_id,
-    });
-    setIsJoiningOrganizationPreview(false);
-
-    if (result.error) {
-      setOrganizationPreviewFeedback({
-        message: getMobileOrganizationError(result.error, 'Organization membership could not be saved right now.'),
-        variant: 'error',
-      });
-      return;
-    }
-
-    const refreshed = await fetchOrganizationPreview(organizationId, profile.user_id);
-    if (refreshed.data) {
-      setSelectedOrganizationPreview(refreshed.data);
-    } else if (result.data) {
-      setSelectedOrganizationPreview((current) => (
-        current
-          ? {
-              ...current,
-              membership: result.data,
-              drives: (current.drives || []).map((drive) => ({
-                ...drive,
-                membership: result.data,
-              })),
-            }
-          : current
-      ));
-    }
-
-    const nextMembership = refreshed.data?.membership || result.data || null;
-    if (nextMembership) {
-      setOrganizations((currentOrganizations) => currentOrganizations.map((organization) => (
-        organization.organization_id === organizationId
-          ? {
-              ...organization,
-              membership: nextMembership,
-            }
-          : organization
-      )));
-    }
-
-    setOrganizationPreviewFeedback({
-      message: result.alreadyMember
-        ? 'You are already a member of this organization.'
-        : result.alreadyPending
-          ? 'Your request is still pending approval.'
-          : result.requestSubmitted
-            ? 'Join request submitted. Waiting for organization approval.'
-            : 'Organization membership updated.',
-      variant: result.requestSubmitted || result.alreadyPending ? 'info' : 'success',
-    });
-  }, [profile?.user_id, selectedOrganizationPreview?.organization_id]);
-
-  const handleViewOrganizationPreview = React.useCallback(() => {
-    const organizationId = selectedOrganizationPreview?.organization_id;
-    if (!organizationId) return;
-    setIsOrganizationPreviewOpen(false);
-    setOrganizationPreviewError('');
-    setOrganizationPreviewFeedback({ message: '', variant: 'info' });
-    router.navigate(`/donor/organizations?organizationId=${organizationId}`);
-  }, [router, selectedOrganizationPreview?.organization_id]);
 
   return (
     <DashboardLayout
@@ -2076,25 +1914,35 @@ export default function DonorHomeScreen() {
         />
       ) : null}
 
-      <View style={styles.homeFeed}>
-        <AnimatedHomeSection delay={10} animate={shouldAnimateHomeSections}>
-          <HomeModeTabs activeTab={homeTab} onChange={setHomeTab} />
-        </AnimatedHomeSection>
+      {privateUnlockMessage ? (
+        <StatusBanner
+          variant={privateUnlockVariant}
+          message={privateUnlockMessage}
+          presentation="floating"
+          visible={Boolean(privateUnlockMessage)}
+          autoDismissMs={2200}
+          onDismiss={() => setPrivateUnlockMessage('')}
+        />
+      ) : null}
 
-        {homeTab === 'drives' ? (
-          <AnimatedHomeSection delay={20} animate={shouldAnimateHomeSections}>
-            <AiInsightCard
-              name={greetingName}
-              message={aiGreeting || buildContextualGreeting({
-                donorName: greetingName,
-                hasHistory: analyticsData.hasHistory,
-                latestCondition: analyticsData.latestAnalysis?.detected_condition || null,
-                checkedToday: dailyReminder.type === 'analyzed-today',
-                latestRecommendation: latestRecommendation?.recommendation_text || null,
-              })}
-            />
-          </AnimatedHomeSection>
-        ) : null}
+      {certificateToastMessage ? (
+        <StatusBanner
+          variant="success"
+          message={certificateToastMessage}
+          presentation="floating"
+          visible={Boolean(certificateToastMessage)}
+          autoDismissMs={2800}
+          onDismiss={() => setCertificateToastMessage('')}
+        />
+      ) : null}
+
+      <View style={styles.homeFeed}>
+        <AnimatedHomeSection delay={20} animate={shouldAnimateHomeSections}>
+          <AiInsightCard
+            name={firstName || 'there'}
+            message={homeReminderMessage}
+          />
+        </AnimatedHomeSection>
 
         {!areCredentialsCompleted ? (
           <AnimatedHomeSection delay={60} animate={shouldAnimateHomeSections}>
@@ -2105,78 +1953,84 @@ export default function DonorHomeScreen() {
           </AnimatedHomeSection>
         ) : null}
 
-        {homeTab === 'drives' ? (
-          <>
-            <AnimatedHomeSection delay={90} style={styles.section} animate={shouldAnimateHomeSections}>
-              <HomeSectionHeader title="Recent Hair Log" />
-              <RecentHairLogWidget
-                hairSubmissions={hairSubmissions}
-                latestRecommendation={latestRecommendation}
-                onOpenLog={handleOpenHairLogEntry}
+        <AnimatedHomeSection delay={90} style={styles.section} animate={shouldAnimateHomeSections}>
+          <HomeSectionHeader title="Recent Hair Log" />
+          <RecentHairLogWidget
+            hairSubmissions={hairSubmissions}
+            latestRecommendation={latestRecommendation}
+            onOpenLog={handleOpenHairLogEntry}
+          />
+        </AnimatedHomeSection>
+
+        <AnimatedHomeSection delay={140} style={styles.section} animate={shouldAnimateHomeSections}>
+          <HomeSectionHeader title="Enter Private Event Code" />
+          <AppCard
+            variant="default"
+            radius="xl"
+            padding="md"
+            style={[styles.privateUnlockCard, { borderColor: roles.defaultCardBorder, backgroundColor: roles.defaultCardBackground }]}
+          >
+            <View style={styles.privateUnlockHeaderRow}>
+              <View style={[styles.privateUnlockHeaderIcon, { backgroundColor: roles.iconPrimarySurface }]}>
+                <MaterialCommunityIcons name="lock-outline" size={16} color={roles.primaryActionBackground} />
+              </View>
+              <Text style={[styles.privateUnlockHelperText, { color: roles.bodyText }]}>
+                Enter the event code from the organizer.
+              </Text>
+            </View>
+            <View style={styles.privateUnlockInputRow}>
+              <TextInput
+                value={privateEventCode}
+                onChangeText={setPrivateEventCode}
+                autoCapitalize="characters"
+                autoCorrect={false}
+                maxLength={8}
+                placeholder="Private code"
+                placeholderTextColor={roles.metaText}
+                style={[styles.privateUnlockInput, styles.privateUnlockInputSingle, { color: roles.headingText, borderColor: roles.defaultCardBorder, backgroundColor: roles.pageBackground }]}
               />
-            </AnimatedHomeSection>
-
-            <AnimatedHomeSection delay={140} style={styles.section} animate={shouldAnimateHomeSections}>
-              <HomeSectionHeader title="Active Donation Drives" />
-              {donationDrives.length ? (
-                <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  decelerationRate="fast"
-                  snapToInterval={activeDriveSnapInterval}
-                  snapToAlignment="start"
-                  contentContainerStyle={styles.activeDriveCarouselContent}
-                  style={styles.activeDriveCarousel}
-                >
-                  {donationDrives.slice(0, 8).map((drive) => (
-                      <ActiveDonationDriveCard
-                        key={`active-drive-${drive.donation_drive_id}`}
-                        drive={drive}
-                        onOpenFlow={() => {
-                          const checkedIn = isRsvpCheckedIn(drive?.registration || null);
-                          router.navigate(checkedIn
-                            ? `/donor/status?driveId=${drive.donation_drive_id}`
-                            : `/donor/drives/${drive.donation_drive_id}`);
-                        }}
-                        style={{ width: activeDriveCardWidth }}
-                      />
-                    ))}
-                </ScrollView>
-              ) : (
-                <View style={styles.activeDriveList}>
-                  <EmptyDonationDriveCard />
-                </View>
-              )}
-            </AnimatedHomeSection>
-          </>
-        ) : (
-          <AnimatedHomeSection delay={90} animate={shouldAnimateHomeSections}>
-            <OrganizationHomeSection
-              organizations={organizations}
-              searchQuery={organizationSearchQuery}
-              onSearchChange={setOrganizationSearchQuery}
-              onOpenOrganization={handleOpenOrganizationPreview}
+            </View>
+            <AppButton
+              title="Unlock Private Event"
+              onPress={handleUnlockPrivateEvent}
+              loading={isUnlockingPrivateEvent}
             />
-          </AnimatedHomeSection>
-        )}
-      </View>
+          </AppCard>
+        </AnimatedHomeSection>
 
-      <OrganizationPreviewModal
-        visible={isOrganizationPreviewOpen}
-        organization={selectedOrganizationPreview}
-        isLoading={isLoadingOrganizationPreview}
-        errorMessage={organizationPreviewError}
-        feedbackMessage={organizationPreviewFeedback.message}
-        feedbackVariant={organizationPreviewFeedback.variant}
-        isJoining={isJoiningOrganizationPreview}
-        onClose={() => {
-          setIsOrganizationPreviewOpen(false);
-          setOrganizationPreviewError('');
-          setOrganizationPreviewFeedback({ message: '', variant: 'info' });
-        }}
-        onJoinOrganization={handleJoinOrganizationPreview}
-        onViewOrganization={handleViewOrganizationPreview}
-      />
+        <AnimatedHomeSection delay={180} style={styles.section} animate={shouldAnimateHomeSections}>
+          <HomeSectionHeader title="Active Donation Drives" />
+          {donationDrives.length ? (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              decelerationRate="fast"
+              snapToInterval={activeDriveSnapInterval}
+              snapToAlignment="start"
+              contentContainerStyle={styles.activeDriveCarouselContent}
+              style={styles.activeDriveCarousel}
+            >
+              {donationDrives.slice(0, 8).map((drive) => (
+                  <ActiveDonationDriveCard
+                    key={`active-drive-${drive.donation_drive_id}`}
+                    drive={drive}
+                    onOpenFlow={() => {
+                      const checkedIn = isRsvpCheckedIn(drive?.registration || null);
+                      router.navigate(checkedIn
+                        ? `/donor/status?driveId=${drive.donation_drive_id}`
+                        : `/donor/drives/${drive.donation_drive_id}`);
+                    }}
+                    style={{ width: activeDriveCardWidth }}
+                  />
+                ))}
+            </ScrollView>
+          ) : (
+            <View style={styles.activeDriveList}>
+              <EmptyDonationDriveCard />
+            </View>
+          )}
+        </AnimatedHomeSection>
+      </View>
 
       <SharedHairLogDetailModal
         visible={isHairLogModalOpen}
@@ -2224,6 +2078,49 @@ const styles = StyleSheet.create({
   },
   activeDriveList: {
     gap: theme.spacing.md,
+  },
+  privateUnlockInputRow: {
+    flexDirection: 'row',
+    gap: theme.spacing.sm,
+    marginBottom: theme.spacing.sm,
+  },
+  privateUnlockCard: {
+    gap: theme.spacing.sm,
+    borderWidth: 1,
+    ...theme.shadows.soft,
+  },
+  privateUnlockHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  privateUnlockHeaderIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  privateUnlockHelperText: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+  },
+  privateUnlockInput: {
+    flex: 1,
+    minHeight: 48,
+    borderWidth: 1,
+    borderRadius: theme.radius.lg,
+    paddingHorizontal: theme.spacing.md,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    letterSpacing: 0.4,
+  },
+  privateUnlockInputSingle: {
+    flex: 0,
+    width: '100%',
   },
   activeDriveCarousel: {
     marginHorizontal: -theme.spacing.md,

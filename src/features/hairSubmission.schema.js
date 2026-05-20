@@ -200,7 +200,7 @@ export const hairReviewSchema = z.object({
 
 export const buildHairReviewDefaultValues = (analysis, answers = {}) => ({
   declaredLength: analysis?.estimated_length != null
-    ? String(analysis.estimated_length)
+    ? String((Number(analysis.estimated_length) / 2.54).toFixed(1))
     : '',
   declaredColor: analysis?.detected_color || '',
   declaredTexture: analysis?.detected_texture || '',
@@ -216,16 +216,16 @@ export const hairResultCorrectionSchema = z.object({
   }, {
     message: 'Length must be a valid number greater than zero',
   }),
-  correctedLengthUnit: z.enum(['cm', 'in']),
+  correctedLengthUnit: z.enum(['in']),
   correctedTexture: z.string().trim().min(2, 'Texture is required'),
   correctedDensity: z.string().trim().min(2, 'Density is required'),
 });
 
 export const buildHairResultCorrectionDefaultValues = (analysis) => ({
   correctedLengthValue: analysis?.estimated_length != null
-    ? String(Number(analysis.estimated_length).toFixed(1))
+    ? String((Number(analysis.estimated_length) / 2.54).toFixed(1))
     : '',
-  correctedLengthUnit: 'cm',
+  correctedLengthUnit: 'in',
   correctedTexture: analysis?.detected_texture || '',
   correctedDensity: analysis?.detected_density || '',
 });

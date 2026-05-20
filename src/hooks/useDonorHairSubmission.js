@@ -380,7 +380,7 @@ const normalizeCorrectedDetailsForAnalysis = (correctedDetails = null) => {
   if (!correctedDetails) return null;
 
   const lengthValue = Number(correctedDetails.correctedLengthValue);
-  const lengthUnit = String(correctedDetails.correctedLengthUnit || 'cm').trim().toLowerCase();
+  const lengthUnit = String(correctedDetails.correctedLengthUnit || 'in').trim().toLowerCase();
   const normalizedLengthCm = Number.isFinite(lengthValue)
     ? (lengthUnit === 'in' ? lengthValue * 2.54 : lengthValue)
     : null;

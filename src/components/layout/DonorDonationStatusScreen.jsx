@@ -73,7 +73,6 @@ const ADDITIONAL_BUNDLE_DEFAULTS = {
 
 const LENGTH_UNIT_OPTIONS = [
   { label: 'Inches', value: 'in' },
-  { label: 'Centimeters', value: 'cm' },
 ];
 const DONATION_REALTIME_DEBOUNCE_MS = 420;
 let cachedDonorDonationModuleData = null;
@@ -177,7 +176,7 @@ const buildDonationDecisionText = ({ screening = null, isEligible = false, ineli
 const formatScreeningLengthInches = (screening = null) => {
   const lengthCm = Number(screening?.estimated_length);
   if (!Number.isFinite(lengthCm) || lengthCm <= 0) return 'N/A';
-  return `${(lengthCm / 2.54).toFixed(1)}"`;
+  return `${(lengthCm / 2.54).toFixed(1)} inches`;
 };
 
 const getDriveDateLabel = (drive = null) => (
@@ -1121,7 +1120,7 @@ function HairLogCard({
         <View style={[styles.hairLogTile, { backgroundColor: roles.supportCardBackground }]}>
           <Text style={[styles.hairLogTileLabel, { color: roles.metaText }]}>Length</Text>
           <Text style={[styles.hairLogTileValue, { color: roles.headingText }]}>
-            {lengthIn ? `${lengthIn} in` : 'â€”'}
+            {lengthIn ? `${lengthIn} inches` : 'â€”'}
           </Text>
         </View>
         <View style={[styles.hairLogTile, { backgroundColor: roles.supportCardBackground }]}>
@@ -2414,8 +2413,12 @@ function buildHairSubmissionPreviewItems(submission = null, fallbackDetail = nul
 
   return details.map((detail, index) => {
     const rawLength = Number(detail?.declared_length);
-    const lengthLabel = Number.isFinite(rawLength) && rawLength > 0
-      ? `${rawLength.toFixed(1)} ${rawLength > 40 ? 'cm' : 'in'}`
+    const inputMethod = String(detail?.input_method || '').toLowerCase();
+    const lengthInches = Number.isFinite(rawLength) && rawLength > 0
+      ? (rawLength > 40 || (inputMethod.includes('ai') && rawLength > 30) ? rawLength / 2.54 : rawLength)
+      : null;
+    const lengthLabel = lengthInches
+      ? `${lengthInches.toFixed(1)} inches`
       : 'Not recorded';
     const notes = [detail?.detail_notes, submission?.donor_notes].filter(Boolean).join(' ');
     const condition = getPreviewConditionLabel(detail?.declared_condition);
@@ -2919,12 +2922,20 @@ export function DonorDonationStatusScreen() {
     const onRealtimeEvent = () => {
       scheduleDonationRealtimeRefresh();
     };
+    const onCertificateRealtimeEvent = (payload = {}) => {
+      if (payload?.eventType !== 'INSERT') return;
+      setModuleFeedback({
+        message: 'Certificate is now available in Achievements.',
+        variant: 'success',
+      });
+      scheduleDonationRealtimeRefresh();
+    };
 
     channel
       .on('postgres_changes', {
         event: '*',
         schema: 'public',
-        table: 'Event_Applications',
+        table: 'Event_Requests',
       }, onRealtimeEvent)
       .on('postgres_changes', {
         event: '*',
@@ -2943,7 +2954,7 @@ export function DonorDonationStatusScreen() {
         schema: 'public',
         table: 'Donation_Certificates',
         filter: `User_ID=eq.${profile.user_id}`,
-      }, onRealtimeEvent);
+      }, onCertificateRealtimeEvent);
 
     if (trackedSubmissionId) {
       channel
@@ -2970,7 +2981,7 @@ export function DonorDonationStatusScreen() {
           schema: 'public',
           table: 'Donation_Certificates',
           filter: `Submission_ID=eq.${trackedSubmissionId}`,
-        }, onRealtimeEvent);
+        }, onCertificateRealtimeEvent);
     }
 
     trackedDetailIds.forEach((detailId) => {
@@ -3910,14 +3921,14 @@ export function DonorDonationStatusScreen() {
       .from('Event_Attendees')
       .select(`
         registration_id:Event_Attendee_ID,
-        donation_drive_id:Event_Application_ID,
+        donation_drive_id:Event_Request_ID,
         user_id:User_ID,
         registration_status:Registration_Status,
         attendance_status:Attendance_Status,
         registered_at:Created_At,
         updated_at:Updated_At
       `)
-      .eq('Event_Application_ID', driveId)
+      .eq('Event_Request_ID', driveId)
       .eq('User_ID', profile.user_id)
       .order('Updated_At', { ascending: false })
       .limit(1)

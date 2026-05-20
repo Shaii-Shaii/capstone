@@ -95,7 +95,6 @@ const hairSubmissionImageSelect = `
 const aiScreeningSelect = `
   ai_screening_id:AI_Screening_ID,
   submission_id:Submission_ID,
-  submission_detail_id:Submission_Detail_ID,
   estimated_length:Estimated_Length,
   detected_color:Detected_Color,
   detected_texture:Detected_Texture,
@@ -614,7 +613,6 @@ export const createAiScreening = async (payload) => {
     .from(aiScreeningsTable)
     .insert([{
       Submission_ID: payload?.submission_id || null,
-      Submission_Detail_ID: payload?.submission_detail_id || null,
       Estimated_Length: payload?.estimated_length ?? null,
       Detected_Color: payload?.detected_color || null,
       Detected_Texture: payload?.detected_texture || null,

@@ -4,7 +4,7 @@ import {
   Image,
   ImageBackground,
   Linking,
-  Modal,
+  NativeModules,
   Pressable,
   Platform,
   ScrollView,
@@ -26,18 +26,28 @@ import {
   createDonationDriveRegistration,
   fetchDonationDriveDetail,
   fetchDonationDrivePreview,
-  joinOrganizationMembership,
 } from '../../../src/features/donorHome.api';
 import {
   buildDriveInvitationQrPayload,
   buildQrImageUrl,
-  getDonorDonationsModuleData,
 } from '../../../src/features/donorDonations.service';
+import { getDonorDonationsModuleData } from '../../../src/features/donorDonations.service';
 import { DONOR_PERMISSION_REASONS } from '../../../src/features/donorCompliance.service';
 import { supabase } from '../../../src/api/supabase/client';
 import { resolveThemeRoles, theme } from '../../../src/design-system/theme';
 
 const DRIVE_REALTIME_DEBOUNCE_MS = 380;
+
+const resolveWebView = () => {
+  if (!NativeModules?.RNCWebViewModule) return null;
+  try {
+    return require('react-native-webview').WebView;
+  } catch (_error) {
+    return null;
+  }
+};
+
+const WebView = resolveWebView();
 
 const formatDriveDate = (startDate, endDate) => {
   if (!startDate) return 'Date to follow';
@@ -75,8 +85,9 @@ const isDriveEnded = (drive = null) => {
 
 const normalizeRealtimeDriveRegistration = (row = {}) => ({
   registration_id: row?.Event_Attendee_ID || row?.registration_id || null,
-  donation_drive_id: row?.Event_Application_ID || row?.donation_drive_id || null,
+  donation_drive_id: row?.Event_Request_ID || row?.donation_drive_id || null,
   user_id: row?.User_ID || row?.user_id || null,
+  waybill_code: row?.Waybill_Code || row?.waybill_code || null,
   registration_status: row?.Registration_Status || row?.registration_status || '',
   attendance_status: row?.Attendance_Status || row?.attendance_status || '',
   registered_at: row?.Created_At || row?.registered_at || null,
@@ -128,6 +139,30 @@ const buildDirectionsUrl = (drive = null) => {
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
 };
 
+const buildCoordinateMapHtml = (latitude, longitude) => `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    html, body, #map { height: 100%; width: 100%; margin: 0; padding: 0; background: #f7f7f7; }
+    .leaflet-control-container { display: none; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    const lat = ${latitude};
+    const lng = ${longitude};
+    const map = L.map('map', { zoomControl: false, attributionControl: false, dragging: false, scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false, keyboard: false, tap: false }).setView([lat, lng], 16);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+    L.marker([lat, lng]).addTo(map);
+  </script>
+</body>
+</html>`;
+
 function EventTopBar({ title, onBack }) {
   const { resolvedTheme } = useAuth();
   const roles = resolveThemeRoles(resolvedTheme);
@@ -154,31 +189,6 @@ function EventTopBar({ title, onBack }) {
   );
 }
 
-function InfoRow({ icon, title, primary, secondary, action, onActionPress }) {
-  const { resolvedTheme } = useAuth();
-  const roles = resolveThemeRoles(resolvedTheme);
-
-  if (!primary && !secondary) return null;
-
-  return (
-    <View style={styles.infoRow}>
-      <View style={[styles.infoIcon, { backgroundColor: roles.iconPrimarySurface }]}>
-        <MaterialCommunityIcons name={icon} size={22} color={roles.primaryActionBackground} />
-      </View>
-      <View style={styles.infoCopy}>
-        <Text style={[styles.infoTitle, { color: roles.headingText }]}>{title}</Text>
-        {primary ? <Text style={[styles.infoPrimary, { color: roles.bodyText }]}>{primary}</Text> : null}
-        {secondary ? <Text style={[styles.infoSecondary, { color: roles.metaText }]}>{secondary}</Text> : null}
-        {action ? (
-          <Pressable disabled={!onActionPress} onPress={onActionPress}>
-            <Text style={[styles.infoAction, { color: roles.primaryActionBackground }]}>{action}</Text>
-          </Pressable>
-        ) : null}
-      </View>
-    </View>
-  );
-}
-
 function EventMapPreview({ drive }) {
   const { resolvedTheme } = useAuth();
   const roles = resolveThemeRoles(resolvedTheme);
@@ -186,23 +196,59 @@ function EventMapPreview({ drive }) {
   const longitude = Number(drive?.longitude);
   const hasCoordinates = Number.isFinite(latitude) && Number.isFinite(longitude);
   const directionsUrl = buildDirectionsUrl(drive);
+  const mapHtml = hasCoordinates ? buildCoordinateMapHtml(latitude, longitude) : '';
+  const [mapFailed, setMapFailed] = React.useState(false);
 
   const handleOpenDirections = React.useCallback(async () => {
     if (!directionsUrl) return;
     await Linking.openURL(directionsUrl);
   }, [directionsUrl]);
 
-  if (!directionsUrl) return null;
+  React.useEffect(() => {
+    setMapFailed(false);
+  }, [mapHtml]);
+
+  if (!directionsUrl && !mapHtml) return null;
 
   return (
     <View style={[styles.mapPreview, { backgroundColor: roles.supportCardBackground, borderColor: roles.defaultCardBorder }]}>
-      <View style={styles.mapGrid}>
-        <View style={[styles.mapGridLineHorizontal, { backgroundColor: roles.defaultCardBorder }]} />
-        <View style={[styles.mapGridLineVertical, { backgroundColor: roles.defaultCardBorder }]} />
-      </View>
-      <View style={[styles.mapPin, { backgroundColor: roles.defaultCardBackground }]}>
-        <MaterialCommunityIcons name="map-marker" size={34} color={roles.primaryActionBackground} />
-      </View>
+      {WebView && mapHtml && !mapFailed ? (
+        <WebView
+          source={{ html: mapHtml }}
+          baseUrl="https://maps.local"
+          style={styles.mapWebView}
+          containerStyle={styles.mapWebViewContainer}
+          javaScriptEnabled
+          domStorageEnabled
+          scrollEnabled={false}
+          originWhitelist={['*']}
+          onError={() => setMapFailed(true)}
+          onHttpError={() => setMapFailed(true)}
+          pointerEvents="none"
+        />
+      ) : (
+        <>
+          <View style={styles.mapGrid}>
+            <View style={[styles.mapGridLineHorizontal, { backgroundColor: roles.defaultCardBorder }]} />
+            <View style={[styles.mapGridLineVertical, { backgroundColor: roles.defaultCardBorder }]} />
+          </View>
+          <View style={[styles.mapPin, { backgroundColor: roles.defaultCardBackground }]}>
+            <MaterialCommunityIcons name="map-marker" size={34} color={roles.primaryActionBackground} />
+          </View>
+          <Pressable
+            onPress={handleOpenDirections}
+            style={styles.mapFallbackTapTarget}
+            accessibilityRole="button"
+            accessibilityLabel="Open event location in maps"
+          />
+        </>
+      )}
+      <LinearGradient
+        colors={['rgba(255,255,255,0.88)', 'rgba(255,255,255,0.22)', 'rgba(255,255,255,0.88)']}
+        locations={[0, 0.46, 1]}
+        style={styles.mapOverlay}
+        pointerEvents="none"
+      />
       <View style={styles.mapCopy}>
         <Text numberOfLines={1} style={[styles.mapTitle, { color: roles.headingText }]}>
           {hasCoordinates ? `${latitude.toFixed(5)}, ${longitude.toFixed(5)}` : 'Event location'}
@@ -226,110 +272,101 @@ function EventMapPreview({ drive }) {
   );
 }
 
-function HostCard({ drive }) {
+function DetailIconRow({ icon, label, value, meta, badge, onPress }) {
   const { resolvedTheme } = useAuth();
   const roles = resolveThemeRoles(resolvedTheme);
-  const [imageFailed, setImageFailed] = React.useState(false);
-  const orgName = drive?.organization_name || 'Donivra partner organization';
-
-  React.useEffect(() => setImageFailed(false), [drive?.organization_logo_url]);
-
-  return (
-    <AppCard variant="default" radius="xl" padding="lg" style={styles.sideCard}>
-      <Text style={[styles.cardTitle, { color: roles.headingText }]}>Host Organization</Text>
-      <View style={styles.hostRow}>
-        <View style={[styles.hostLogo, { backgroundColor: roles.iconPrimarySurface, borderColor: roles.defaultCardBorder }]}>
-          {drive?.organization_logo_url && !imageFailed ? (
-            <Image
-              source={{ uri: drive.organization_logo_url }}
-              style={styles.hostLogoImage}
-              resizeMode="cover"
-              onError={() => setImageFailed(true)}
-            />
-          ) : (
-            <Text style={[styles.hostInitials, { color: roles.primaryActionBackground }]}>
-              {initialsFromName(orgName)}
-            </Text>
-          )}
-        </View>
-        <View style={styles.hostCopy}>
-          <Text numberOfLines={2} style={[styles.hostName, { color: roles.headingText }]}>{orgName}</Text>
-          <Text style={[styles.hostMeta, { color: roles.metaText }]}>
-            {drive?.organization?.organization_type || 'Partner organization'}
-          </Text>
-        </View>
+  const content = (
+    <View style={styles.detailIconRow}>
+      <View style={[styles.detailIcon, { backgroundColor: roles.iconPrimarySurface }]}>
+        <MaterialCommunityIcons name={icon} size={20} color={roles.primaryActionBackground} />
       </View>
-    </AppCard>
+      <View style={styles.detailIconCopy}>
+        <Text style={[styles.detailIconLabel, { color: roles.metaText }]}>{label}</Text>
+        <Text numberOfLines={2} style={[styles.detailIconValue, { color: roles.headingText }]}>{value}</Text>
+        {meta ? <Text numberOfLines={2} style={[styles.detailIconMeta, { color: roles.bodyText }]}>{meta}</Text> : null}
+      </View>
+      {badge ? (
+        <View style={[styles.detailBadge, { backgroundColor: roles.iconPrimarySurface }]}>
+          <Text style={[styles.detailBadgeText, { color: roles.primaryActionBackground }]}>{badge}</Text>
+        </View>
+      ) : null}
+      {onPress ? <MaterialCommunityIcons name="chevron-right" size={22} color={roles.metaText} /> : null}
+    </View>
+  );
+
+  return onPress ? (
+    <Pressable onPress={onPress} style={({ pressed }) => [pressed ? styles.pressed : null]}>
+      {content}
+    </Pressable>
+  ) : (
+    content
   );
 }
 
-function DonorCommunityCard({ count = 0, isRegistered = false, isOrganizationMember = false }) {
+function EventDetailsPanel({
+  drive,
+  shownRegistrationCount = 0,
+  isRegisteredForDrive = false,
+}) {
   const { resolvedTheme } = useAuth();
   const roles = resolveThemeRoles(resolvedTheme);
-  const shownCount = Number(count) || 0;
-  const avatarCount = Math.min(shownCount, 4);
-  const avatars = Array.from({ length: avatarCount }, (_item, index) => (
-    index === 0 && isRegistered ? 'You' : String(index + 1)
-  ));
+  const directionsUrl = buildDirectionsUrl(drive);
+  const shownCount = Number(shownRegistrationCount) || 0;
+  const orgName = drive?.event_by || drive?.organization_name || 'Event host';
+  const missionText = drive?.event_overview
+    || 'Join this Donivra hair donation drive and help provide meaningful support to people who need wigs and care.';
+  const attendeeMeta = isRegisteredForDrive
+    ? 'You are counted for this drive.'
+    : 'Register to be counted for this drive.';
 
   return (
-    <AppCard variant="default" radius="xl" padding="lg" style={styles.sideCard}>
-      <View style={styles.communityHeader}>
-        <View style={styles.communityTitleCopy}>
-          <Text style={[styles.cardTitle, styles.communityCardTitle, { color: roles.headingText }]}>Donors Attending</Text>
-          <Text style={[styles.communitySubtitle, { color: roles.metaText }]}>
-            {shownCount > 0 ? 'Registered donors for this event.' : 'No registered donors yet.'}
-          </Text>
-        </View>
-        <View style={[styles.joinedPill, { backgroundColor: roles.iconPrimarySurface }]}>
-          <Text style={[styles.joinedCount, { color: roles.primaryActionBackground }]}>
-            {shownCount} Joined
+    <AppCard variant="default" radius="xl" padding="lg" style={styles.sectionGap}>
+      <View style={styles.eventPanelHeader}>
+        <Text style={[styles.eventPanelTitle, { color: roles.headingText }]}>Event Details</Text>
+        <View style={[styles.detailBadge, { backgroundColor: roles.iconPrimarySurface }]}>
+          <Text style={[styles.detailBadgeText, { color: roles.primaryActionBackground }]}>
+            {drive?.is_public ? 'Public' : 'Private'}
           </Text>
         </View>
       </View>
-      {shownCount > 0 ? (
-        <View style={styles.avatarStack}>
-          {avatars.map((item, index) => (
-            <View
-              key={item}
-              style={[
-                styles.communityAvatar,
-                {
-                  marginLeft: index === 0 ? 0 : -12,
-                  backgroundColor: roles.iconPrimarySurface,
-                  borderColor: roles.defaultCardBackground,
-                },
-              ]}
-            >
-              <Text style={[styles.communityAvatarText, { color: roles.primaryActionBackground }]}>{item}</Text>
-            </View>
-          ))}
-          {shownCount > avatars.length ? (
-            <View
-              style={[
-                styles.communityAvatar,
-                styles.communityMore,
-                {
-                  marginLeft: -12,
-                  backgroundColor: roles.supportCardBackground,
-                  borderColor: roles.defaultCardBackground,
-                },
-              ]}
-            >
-              <Text style={[styles.communityAvatarText, { color: roles.headingText }]}>
-                +{Math.max(0, shownCount - avatars.length)}
-              </Text>
-            </View>
-          ) : null}
-        </View>
-      ) : null}
-      <Text style={[styles.communityHint, { color: roles.bodyText }]}>
-        {isRegistered
-          ? 'You are counted for this drive.'
-          : isOrganizationMember
-            ? 'You are a member of the host organization. Register to be counted for this drive.'
-            : 'Register to be counted for this drive.'}
-      </Text>
+
+      <View style={styles.detailIconList}>
+        <DetailIconRow
+          icon="calendar-today"
+          label="Date & time"
+          value={formatDriveDate(drive?.start_date, drive?.end_date)}
+          meta={formatDriveTime(drive?.start_date, drive?.end_date)}
+        />
+        <DetailIconRow
+          icon="map-marker-outline"
+          label="Location"
+          value={drive?.address_label || drive?.location_label || 'Location to follow'}
+          meta={directionsUrl ? 'Open directions in Maps' : ''}
+          onPress={directionsUrl ? () => Linking.openURL(directionsUrl) : null}
+        />
+        <DetailIconRow
+          icon="account-group-outline"
+          label="Donors attending"
+          value={shownCount > 0 ? `${shownCount} joined` : 'No registered donors yet'}
+          meta={attendeeMeta}
+          badge={isRegisteredForDrive ? 'Joined' : ''}
+        />
+        <DetailIconRow
+          icon="domain"
+          label="Host"
+          value={orgName}
+          meta="Event host"
+          badge={initialsFromName(orgName)}
+        />
+      </View>
+
+      <View style={[styles.compactDivider, { backgroundColor: roles.defaultCardBorder }]} />
+      <View style={styles.missionRow}>
+        <MaterialCommunityIcons name="hand-heart-outline" size={21} color={roles.primaryActionBackground} />
+        <Text style={[styles.missionText, { color: roles.bodyText }]}>{missionText}</Text>
+      </View>
+
+      <EventMapPreview drive={drive} />
     </AppCard>
   );
 }
@@ -348,10 +385,7 @@ export default function DonorDriveDetailRoute() {
   const [errorMessage, setErrorMessage] = React.useState('');
   const [feedbackMessage, setFeedbackMessage] = React.useState('');
   const [feedbackVariant, setFeedbackVariant] = React.useState('info');
-  const [isJoiningOrganization, setIsJoiningOrganization] = React.useState(false);
-  const [isJoinOrganizationConfirmOpen, setIsJoinOrganizationConfirmOpen] = React.useState(false);
   const [isSubmittingRsvp, setIsSubmittingRsvp] = React.useState(false);
-  const [driveQrPayload, setDriveQrPayload] = React.useState('');
   const [donationFlowState, setDonationFlowState] = React.useState({
     hasOngoingDonation: false,
     ongoingDonationMessage: '',
@@ -361,13 +395,10 @@ export default function DonorDriveDetailRoute() {
   });
 
   const driveImageUrl = drive?.event_image_url || drive?.organization_logo_url || '';
-  const requiresMembership = Boolean(drive?.requires_membership);
-  const isMembershipPending = Boolean(drive?.membership?.is_pending);
   const hasOngoingDonation = Boolean(donationFlowState.hasOngoingDonation);
   const hasHairScanLog = Boolean(donationFlowState.hasHairScanLog);
   const hasSubmittedDonationForDrive = Boolean(donationFlowState.hasSubmittedDonationForDrive);
   const ended = isDriveEnded(drive);
-  const driveQrImageUrl = driveQrPayload ? buildQrImageUrl(driveQrPayload, 420) : '';
   const ongoingDonationMessage = donationFlowState.ongoingDonationMessage
     || 'You already have an ongoing donation. Please complete or wait for the current donation process to finish before starting a new one.';
   const hairEligibilityMessage = donationFlowState.hairEligibilityMessage
@@ -378,7 +409,7 @@ export default function DonorDriveDetailRoute() {
     const countResult = await supabase
       .from('Event_Attendees')
       .select('Event_Attendee_ID', { count: 'exact', head: true })
-      .eq('Event_Application_ID', numericDriveId);
+      .eq('Event_Request_ID', numericDriveId);
 
     if (!countResult.error && Number.isFinite(countResult.count)) {
       setRegistrationCount(countResult.count || 0);
@@ -388,7 +419,7 @@ export default function DonorDriveDetailRoute() {
     const rowsResult = await supabase
       .from('Event_Attendees')
       .select('Event_Attendee_ID,User_ID')
-      .eq('Event_Application_ID', numericDriveId)
+      .eq('Event_Request_ID', numericDriveId)
       .limit(500);
 
     if (!rowsResult.error) {
@@ -429,14 +460,6 @@ export default function DonorDriveDetailRoute() {
 
     const nextDrive = driveResult.data || null;
     setDrive(nextDrive);
-    if (nextDrive?.registration?.registration_id) {
-      setDriveQrPayload(buildDriveInvitationQrPayload({
-        drive: nextDrive,
-        registration: nextDrive.registration,
-      }));
-    } else {
-      setDriveQrPayload('');
-    }
     setRegistrationCount((current) => Math.max(
       current || 0,
       nextDrive?.registration?.registration_id ? 1 : 0
@@ -479,6 +502,12 @@ export default function DonorDriveDetailRoute() {
 
     const channel = supabase.channel(`donor-drive-live-${profile.user_id}-${numericDriveId}`);
     const onRealtimeEvent = () => scheduleDriveRealtimeRefresh();
+    const onCertificateRealtimeEvent = (payload = {}) => {
+      if (payload?.eventType !== 'INSERT') return;
+      setFeedbackMessage('Certificate is now available in Achievements.');
+      setFeedbackVariant('success');
+      scheduleDriveRealtimeRefresh();
+    };
     const onRegistrationRealtimeEvent = (payload = {}) => {
       const nextRow = payload.new || {};
       const oldRow = payload.old || {};
@@ -519,14 +548,14 @@ export default function DonorDriveDetailRoute() {
       .on('postgres_changes', {
         event: '*',
         schema: 'public',
-        table: 'Event_Applications',
-        filter: `Event_Application_ID=eq.${numericDriveId}`,
+        table: 'Event_Requests',
+        filter: `Event_Request_ID=eq.${numericDriveId}`,
       }, onRealtimeEvent)
       .on('postgres_changes', {
         event: '*',
         schema: 'public',
         table: 'Event_Attendees',
-        filter: `Event_Application_ID=eq.${numericDriveId}`,
+        filter: `Event_Request_ID=eq.${numericDriveId}`,
       }, onRegistrationRealtimeEvent)
       .on('postgres_changes', {
         event: '*',
@@ -534,6 +563,12 @@ export default function DonorDriveDetailRoute() {
         table: 'Event_Attendees',
         filter: `User_ID=eq.${profile.user_id}`,
       }, onRegistrationRealtimeEvent)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'Donation_Certificates',
+        filter: `User_ID=eq.${profile.user_id}`,
+      }, onCertificateRealtimeEvent)
       .subscribe();
 
     return () => {
@@ -551,56 +586,6 @@ export default function DonorDriveDetailRoute() {
     return null;
   }, [drive?.donation_drive_id, profile?.user_id]);
 
-  const handleJoinOrganization = React.useCallback(async () => {
-    if (!drive?.organization_id || !profile?.user_id) {
-      setFeedbackMessage('Your donor account is required before joining an organization.');
-      setFeedbackVariant('info');
-      return;
-    }
-
-    setIsJoiningOrganization(true);
-    const result = await joinOrganizationMembership({
-      organizationId: drive.organization_id,
-      databaseUserId: profile.user_id,
-    });
-    setIsJoiningOrganization(false);
-
-    if (result.error) {
-      setFeedbackMessage('Organization membership could not be saved right now.');
-      setFeedbackVariant('error');
-      return;
-    }
-
-    const refreshed = await fetchDonationDrivePreview(drive.donation_drive_id, profile.user_id);
-    if (refreshed.data) setDrive(refreshed.data);
-    if (result.alreadyPending || result.data?.is_pending || result.requestSubmitted) {
-      setFeedbackMessage('Join request submitted. Waiting for organization approval.');
-      setFeedbackVariant('info');
-      return;
-    }
-    setFeedbackMessage(result.alreadyMember ? 'You are already a member of this organization.' : 'Organization joined. You can now register for this private event.');
-    setFeedbackVariant('success');
-  }, [drive, profile?.user_id]);
-
-  const handleRequestJoinOrganization = React.useCallback(() => {
-    if (!drive?.organization_id || !profile?.user_id) {
-      setFeedbackMessage('Your donor account is required before joining an organization.');
-      setFeedbackVariant('info');
-      return;
-    }
-    if (drive?.membership?.is_active) {
-      setFeedbackMessage('You are already a member of this organization.');
-      setFeedbackVariant('info');
-      return;
-    }
-    if (drive?.membership?.is_pending) {
-      setFeedbackMessage('Your membership request is still pending approval.');
-      setFeedbackVariant('info');
-      return;
-    }
-    setIsJoinOrganizationConfirmOpen(true);
-  }, [drive?.membership?.is_active, drive?.membership?.is_pending, drive?.organization_id, profile?.user_id]);
-
   const handleDriveRsvp = React.useCallback(async () => {
     if (!drive?.donation_drive_id || ended) return;
 
@@ -611,16 +596,6 @@ export default function DonorDriveDetailRoute() {
       return;
     }
 
-    if (requiresMembership && !drive.membership?.is_active) {
-      if (drive.membership?.is_pending) {
-        setFeedbackMessage('Your membership request is still pending approval.');
-        setFeedbackVariant('info');
-        return;
-      }
-      handleRequestJoinOrganization();
-      return;
-    }
-
     if (hasOngoingDonation && !drive.registration?.registration_id) {
       setFeedbackMessage(ongoingDonationMessage);
       setFeedbackVariant('info');
@@ -628,26 +603,16 @@ export default function DonorDriveDetailRoute() {
     }
 
     if (hasOngoingDonation && drive.registration?.registration_id && hasSubmittedDonationForDrive) {
-      setDriveQrPayload(buildDriveInvitationQrPayload({
-        drive,
-        registration: drive.registration,
-      }));
       router.navigate(`/donor/status?driveId=${drive.donation_drive_id}`);
       return;
     }
 
     if (drive.registration?.registration_id) {
       const isPresent = isPresentRegistration(drive.registration);
-      setDriveQrPayload(buildDriveInvitationQrPayload({
-        drive,
-        registration: drive.registration,
-      }));
       if (isPresent) {
         router.navigate(`/donor/status?driveId=${drive.donation_drive_id}`);
         return;
       }
-      setFeedbackMessage('Show this RSVP QR at event check-in. You can submit your donation only after staff marks you as Present.');
-      setFeedbackVariant('info');
       return;
     }
 
@@ -680,22 +645,13 @@ export default function DonorDriveDetailRoute() {
     }
 
     await loadRegistrationCount();
-    const refreshedDrive = await refreshDriveRegistration();
-    const registeredDrive = refreshedDrive || {
-      ...drive,
-      registration: result.data,
-    };
-    setDriveQrPayload(buildDriveInvitationQrPayload({
-      drive: registeredDrive,
-      registration: registeredDrive.registration || result.data,
-    }));
+    await refreshDriveRegistration();
     setRegistrationCount((current) => Math.max(current || 0, 1));
-    setFeedbackMessage(result.alreadyRegistered ? 'You are already registered for this drive.' : 'Registration saved. Show this RSVP QR at event check-in.');
+    setFeedbackMessage(result.alreadyRegistered ? 'You are already registered for this event.' : 'Registration saved.');
     setFeedbackVariant('success');
   }, [
     drive,
     ended,
-    handleRequestJoinOrganization,
     hairEligibilityMessage,
     hasOngoingDonation,
     hasHairScanLog,
@@ -704,7 +660,6 @@ export default function DonorDriveDetailRoute() {
     ongoingDonationMessage,
     profile?.user_id,
     refreshDriveRegistration,
-    requiresMembership,
     router,
   ]);
 
@@ -712,22 +667,22 @@ export default function DonorDriveDetailRoute() {
     ? 'Event ended'
     : !hasHairScanLog && !drive?.registration?.registration_id
       ? 'Scan hair first'
-    : requiresMembership && isMembershipPending
-      ? 'Membership Pending'
-    : requiresMembership && !drive?.membership?.is_active
-      ? isJoiningOrganization ? 'Joining...' : 'Join Organization'
     : hasOngoingDonation && hasSubmittedDonationForDrive && drive?.registration?.registration_id
           ? 'View My Donation'
         : drive?.registration?.registration_id
           ? isPresentRegistration(drive.registration)
             ? 'Submit hair donation'
-            : driveQrPayload ? 'RSVP QR Ready' : 'Show RSVP QR'
+            : 'Registered'
           : 'Register to Attend';
 
-  const actionDisabled = isLoading || ended || isMembershipPending || (hasOngoingDonation && hasSubmittedDonationForDrive && !drive?.registration?.registration_id);
+  const actionDisabled = isLoading || ended || (hasOngoingDonation && hasSubmittedDonationForDrive && !drive?.registration?.registration_id);
   const isRegisteredForDrive = Boolean(drive?.registration?.registration_id);
-  const isOrganizationMember = Boolean(drive?.membership?.is_active);
   const shownRegistrationCount = Math.max(registrationCount, isRegisteredForDrive ? 1 : 0);
+  const shouldHideBottomCta = actionTitle === 'Registered';
+  const rsvpQrPayloadText = isRegisteredForDrive
+    ? buildDriveInvitationQrPayload({ drive, registration: drive?.registration || null })
+    : '';
+  const rsvpQrImageUrl = rsvpQrPayloadText ? buildQrImageUrl(rsvpQrPayloadText, 280) : '';
 
   return (
     <ScreenContainer
@@ -766,12 +721,10 @@ export default function DonorDriveDetailRoute() {
         ) : null}
 
         {isLoading ? (
-          <AppCard variant="default" radius="xl" padding="lg">
-            <View style={styles.loadingState}>
-              <ActivityIndicator color={resolvedTheme?.primaryColor || theme.colors.brandPrimary} />
-              <Text style={[styles.loadingText, { color: roles.bodyText }]}>Loading event details</Text>
-            </View>
-          </AppCard>
+          <View style={styles.loadingState}>
+            <ActivityIndicator color={resolvedTheme?.primaryColor || theme.colors.brandPrimary} />
+            <Text style={[styles.loadingText, { color: roles.bodyText }]}>Loading event details</Text>
+          </View>
         ) : drive ? (
           <>
             <View style={[styles.hero, { backgroundColor: roles.iconPrimarySurface }]}>
@@ -785,7 +738,7 @@ export default function DonorDriveDetailRoute() {
                 <View style={styles.heroContent}>
                   <View style={[styles.featuredPill, { backgroundColor: roles.primaryActionBackground }]}>
                     <Text style={[styles.featuredPillText, { color: roles.primaryActionText }]}>
-                      {drive.is_public ? 'Public' : 'Members'}
+                      {drive.is_public ? 'Public' : 'Private'}
                     </Text>
                   </View>
                   <Text numberOfLines={3} style={styles.heroTitle}>
@@ -797,7 +750,7 @@ export default function DonorDriveDetailRoute() {
               <View style={styles.heroFallback}>
                 <View style={[styles.featuredPill, { backgroundColor: roles.primaryActionBackground }]}>
                   <Text style={[styles.featuredPillText, { color: roles.primaryActionText }]}>
-                    {drive.is_public ? 'Public' : 'Members'}
+                    {drive.is_public ? 'Public' : 'Private'}
                   </Text>
                 </View>
                 <MaterialCommunityIcons name="calendar-heart" size={52} color={roles.primaryActionBackground} />
@@ -808,71 +761,45 @@ export default function DonorDriveDetailRoute() {
             )}
           </View>
 
-          <AppCard variant="default" radius="xl" padding="lg" style={styles.sectionGap}>
-            <InfoRow
-              icon="calendar-today"
-              title="Date & Time"
-              primary={formatDriveDate(drive.start_date, drive.end_date)}
-              secondary={formatDriveTime(drive.start_date, drive.end_date)}
-            />
-            <View style={[styles.infoDivider, { backgroundColor: roles.defaultCardBorder }]} />
-            <InfoRow
-              icon="map-marker-outline"
-              title="Location"
-              primary={drive.address_label || drive.location_label || 'Location to follow'}
-              action={buildDirectionsUrl(drive) ? 'View directions' : ''}
-              onActionPress={() => {
-                const url = buildDirectionsUrl(drive);
-                if (url) void Linking.openURL(url);
-              }}
-            />
-            <EventMapPreview drive={drive} />
-          </AppCard>
-
-          <AppCard variant="default" radius="xl" padding="lg" style={styles.sectionGap}>
-            <Text style={[styles.sectionTitle, { color: roles.headingText }]}>About the Mission</Text>
-            <Text style={[styles.overviewText, { color: roles.bodyText }]}>
-              {drive.event_overview || 'Join this Donivra hair donation drive and help provide meaningful support to people who need wigs and care. Event details are managed by the partner organization.'}
-            </Text>
-          </AppCard>
-
-          <DonorCommunityCard
-            count={shownRegistrationCount}
-            isRegistered={isRegisteredForDrive}
-            isOrganizationMember={isOrganizationMember}
+          <EventDetailsPanel
+            drive={drive}
+            shownRegistrationCount={shownRegistrationCount}
+            isRegisteredForDrive={isRegisteredForDrive}
           />
-          <HostCard drive={drive} />
 
-          {driveQrPayload ? (
+          {drive?.registration?.registration_id ? (
             <AppCard variant="default" radius="xl" padding="lg" style={styles.sectionGap}>
-              <Text style={[styles.sectionTitle, { color: roles.headingText }]}>RSVP Attendance QR</Text>
-              <View style={styles.qrWrap}>
-                {driveQrImageUrl ? (
+              <Text style={[styles.sectionTitle, { color: roles.headingText }]}>RSVP QR</Text>
+              <Text style={[styles.qrHelper, { color: roles.bodyText }]}>
+                Show this QR to staff for attendance scan.
+              </Text>
+              {rsvpQrImageUrl ? (
+                <View style={styles.qrWrap}>
                   <Image
-                    source={{ uri: driveQrImageUrl }}
+                    source={{ uri: rsvpQrImageUrl }}
                     style={styles.qrImage}
                     resizeMode="contain"
-                    accessibilityLabel="Donation drive RSVP QR code"
                   />
-                ) : null}
-                <Text style={[styles.qrHelper, { color: roles.bodyText }]}>
-                  Show this QR at the event check-in desk. This QR is for attendance only; hair donation QR codes are generated after submitting hair details.
-                </Text>
-                {!isPresentRegistration(drive.registration) ? (
-                  <StatusBanner
-                    variant="info"
-                    message="Waiting for staff to mark your attendance as Present. Donation submission unlocks after that status is saved."
-                    style={styles.qrStatusBanner}
-                  />
-                ) : (
-                  <StatusBanner
-                    variant="success"
-                    message="Your attendance is marked Present. You can now submit your hair donation."
-                    style={styles.qrStatusBanner}
-                  />
-                )}
-              </View>
+                </View>
+              ) : (
+                <Text style={[styles.qrHelper, { color: roles.metaText }]}>QR unavailable. Please refresh this page.</Text>
+              )}
             </AppCard>
+          ) : null}
+
+          {drive?.registration?.registration_id ? (
+            <View style={[styles.registrationStateRow, { borderColor: roles.defaultCardBorder }]}>
+              <MaterialCommunityIcons
+                name={isPresentRegistration(drive.registration) ? 'check-decagram-outline' : 'clock-time-four-outline'}
+                size={18}
+                color={isPresentRegistration(drive.registration) ? '#2f8f57' : roles.metaText}
+              />
+              <Text style={[styles.registrationStateText, { color: roles.bodyText }]}>
+                {isPresentRegistration(drive.registration)
+                  ? 'Attendance marked Present. You can now submit your hair donation.'
+                  : 'Registered. Wait for staff to mark your attendance as Present.'}
+              </Text>
+            </View>
           ) : null}
         </>
       ) : (
@@ -881,7 +808,7 @@ export default function DonorDriveDetailRoute() {
 
       </ScrollView>
 
-      {drive ? (
+      {drive && !shouldHideBottomCta ? (
         <View
           style={[
             styles.fixedBottomCta,
@@ -895,45 +822,11 @@ export default function DonorDriveDetailRoute() {
           <AppButton
             title={actionTitle}
             onPress={handleDriveRsvp}
-            loading={isSubmittingRsvp || isJoiningOrganization}
+            loading={isSubmittingRsvp}
             disabled={actionDisabled}
           />
         </View>
       ) : null}
-
-      <Modal
-        transparent
-        visible={isJoinOrganizationConfirmOpen}
-        animationType="fade"
-        onRequestClose={() => setIsJoinOrganizationConfirmOpen(false)}
-      >
-        <View style={styles.joinModalOverlay}>
-          <Pressable style={styles.joinModalBackdrop} onPress={() => setIsJoinOrganizationConfirmOpen(false)} />
-          <AppCard variant="elevated" radius="xl" padding="lg" style={styles.joinModalCard}>
-            <Text style={styles.joinModalTitle}>Send Join Request?</Text>
-            <Text style={styles.joinModalBody}>
-              Your organization membership will be pending until approved.
-            </Text>
-            <View style={styles.joinModalActions}>
-              <AppButton
-                title="Cancel"
-                variant="outline"
-                fullWidth={false}
-                onPress={() => setIsJoinOrganizationConfirmOpen(false)}
-              />
-              <AppButton
-                title="Confirm"
-                fullWidth={false}
-                loading={isJoiningOrganization}
-                onPress={async () => {
-                  setIsJoinOrganizationConfirmOpen(false);
-                  await handleJoinOrganization();
-                }}
-              />
-            </View>
-          </AppCard>
-        </View>
-      </Modal>
     </ScreenContainer>
   );
 }
@@ -1044,57 +937,104 @@ const styles = StyleSheet.create({
   sectionGap: {
     marginBottom: theme.spacing.lg,
   },
-  sideCard: {
-    marginBottom: theme.spacing.lg,
-  },
-  infoRow: {
+  eventPanelHeader: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     gap: theme.spacing.md,
+    marginBottom: theme.spacing.md,
   },
-  infoIcon: {
-    width: 48,
-    height: 48,
+  eventPanelTitle: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    fontWeight: theme.typography.weights.bold,
+  },
+  detailIconList: {
+    gap: theme.spacing.sm,
+  },
+  detailIconRow: {
+    minHeight: 58,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  detailIcon: {
+    width: 42,
+    height: 42,
     borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
+    flexShrink: 0,
   },
-  infoCopy: {
+  detailIconCopy: {
     flex: 1,
-    gap: 3,
+    minWidth: 0,
   },
-  infoTitle: {
+  detailIconLabel: {
     fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.compact.body,
-    fontWeight: theme.typography.weights.bold,
+    fontSize: theme.typography.compact.caption,
+    fontWeight: theme.typography.weights.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
   },
-  infoPrimary: {
+  detailIconValue: {
+    marginTop: 2,
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.bodySm,
-    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+    fontWeight: theme.typography.weights.bold,
+    lineHeight: theme.typography.compact.bodySm * 1.35,
   },
-  infoSecondary: {
+  detailIconMeta: {
+    marginTop: 2,
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.caption,
+    lineHeight: theme.typography.compact.caption * 1.4,
   },
-  infoAction: {
+  detailBadge: {
+    borderRadius: theme.radius.full,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: 6,
+    flexShrink: 0,
+  },
+  detailBadgeText: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.caption,
     fontWeight: theme.typography.weights.bold,
-    marginTop: 3,
   },
-  infoDivider: {
+  compactDivider: {
     height: 1,
     marginVertical: theme.spacing.md,
   },
+  missionRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.spacing.sm,
+  },
+  missionText: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * 1.55,
+  },
   mapPreview: {
     marginTop: theme.spacing.md,
-    minHeight: 148,
+    minHeight: 190,
     borderRadius: 18,
     borderWidth: 1,
     overflow: 'hidden',
     padding: theme.spacing.md,
     justifyContent: 'space-between',
+  },
+  mapWebViewContainer: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  mapWebView: {
+    flex: 1,
+    backgroundColor: 'transparent',
+  },
+  mapOverlay: {
+    ...StyleSheet.absoluteFillObject,
   },
   mapGrid: {
     ...StyleSheet.absoluteFillObject,
@@ -1126,8 +1066,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     ...theme.shadows.soft,
   },
+  mapFallbackTapTarget: {
+    ...StyleSheet.absoluteFillObject,
+  },
   mapCopy: {
     paddingRight: 120,
+    zIndex: 2,
   },
   mapTitle: {
     fontFamily: theme.typography.fontFamily,
@@ -1148,6 +1092,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
+    zIndex: 2,
   },
   mapDirectionsText: {
     fontFamily: theme.typography.fontFamily,
@@ -1164,98 +1109,15 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.compact.bodySm,
     lineHeight: theme.typography.compact.bodySm * 1.7,
   },
-  cardTitle: {
+  accessCodeInput: {
+    minHeight: 48,
+    borderWidth: 1,
+    borderRadius: theme.radius.md,
+    paddingHorizontal: theme.spacing.md,
+    marginTop: theme.spacing.md,
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.body,
-    fontWeight: theme.typography.weights.bold,
-    marginBottom: theme.spacing.md,
-  },
-  hostRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.spacing.md,
-  },
-  hostLogo: {
-    width: 62,
-    height: 62,
-    borderRadius: theme.radius.full,
-    borderWidth: 2,
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden',
-  },
-  hostLogoImage: {
-    width: '100%',
-    height: '100%',
-  },
-  hostInitials: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodyLg,
-    fontWeight: theme.typography.weights.bold,
-  },
-  hostCopy: {
-    flex: 1,
-  },
-  hostName: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.compact.body,
-    fontWeight: theme.typography.weights.bold,
-  },
-  hostMeta: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.compact.caption,
-    marginTop: 3,
-  },
-  communityHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: theme.spacing.sm,
-    marginBottom: theme.spacing.md,
-  },
-  communityTitleCopy: {
-    flex: 1,
-  },
-  communityCardTitle: {
-    marginBottom: 3,
-  },
-  communitySubtitle: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.compact.caption,
-  },
-  joinedPill: {
-    borderRadius: theme.radius.full,
-    paddingHorizontal: theme.spacing.sm,
-    paddingVertical: 6,
-  },
-  joinedCount: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.compact.caption,
-    fontWeight: theme.typography.weights.bold,
-  },
-  avatarStack: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: theme.spacing.md,
-  },
-  communityAvatar: {
-    width: 48,
-    height: 48,
-    borderRadius: theme.radius.full,
-    borderWidth: 2,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  communityMore: {},
-  communityAvatarText: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: 11,
-    fontWeight: theme.typography.weights.bold,
-  },
-  communityHint: {
-    textAlign: 'center',
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.compact.caption,
+    letterSpacing: 0,
   },
   fixedBottomCta: {
     position: 'absolute',
@@ -1268,10 +1130,11 @@ const styles = StyleSheet.create({
     ...theme.shadows.soft,
   },
   loadingState: {
-    minHeight: 220,
+    minHeight: 88,
     alignItems: 'center',
     justifyContent: 'center',
     gap: theme.spacing.sm,
+    marginTop: theme.spacing.sm,
   },
   loadingText: {
     fontFamily: theme.typography.fontFamily,
@@ -1295,6 +1158,23 @@ const styles = StyleSheet.create({
   qrStatusBanner: {
     width: '100%',
     marginTop: theme.spacing.md,
+  },
+  registrationStateRow: {
+    marginBottom: theme.spacing.lg,
+    borderWidth: 1,
+    borderRadius: theme.radius.lg,
+    minHeight: 44,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  registrationStateText: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * 1.45,
   },
   joinModalOverlay: {
     flex: 1,

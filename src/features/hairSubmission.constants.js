@@ -18,7 +18,7 @@ export const hairAnalysisRequiredViews = [
   {
     key: hairSubmissionImageTypes.frontView,
     label: 'Front View Photo',
-    helperText: 'Face the camera directly. Keep your full hair, hairline, and face visible with no glasses, masks, clips, headbands, caps, or accessories covering the face or hair.',
+    helperText: 'Face the camera directly. Keep your full hair, face, lower cheek/neck area, and ends visible with no glasses, masks, clips, headbands, caps, or accessories covering the face or hair.',
   },
   {
     key: hairSubmissionImageTypes.sideProfile,
@@ -39,8 +39,7 @@ export const hairAnalyzerConcernTypes = {
 
 export const hairAnalyzerQuestionChoices = {
   correctionLengthUnit: [
-    { label: 'cm', value: 'cm' },
-    { label: 'in', value: 'in' },
+    { label: 'Inches', value: 'in' },
   ],
   hairTexture: [
     { label: 'Straight', value: 'Straight' },

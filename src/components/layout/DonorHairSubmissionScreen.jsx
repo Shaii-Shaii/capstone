@@ -96,9 +96,9 @@ try {
 const PHOTO_GUIDELINE_ITEMS = [
   'Use bright, even lighting so color, shine, dryness, and frizz are visible.',
   'Keep only one person in the frame with a plain background.',
-  'Keep hair centered and fully visible from the hairline to the ends.',
+  'Keep hair centered and fully visible from the lower cheek or neck area to the ends.',
   'Capture the required front view, one side profile, and a close-up of the hair ends.',
-  'Keep hair loose, centered, and visible from root or hairline to the lowest visible ends.',
+  'Keep hair loose, centered, and visible from the lower cheek or neck area to the lowest visible ends.',
 ];
 
 const QUESTION_INFO_FADE_MS = 260;
@@ -126,7 +126,7 @@ const formatLengthLabel = (value) => {
   const numericValue = Number(value);
   if (!Number.isFinite(numericValue) || numericValue <= 0) return 'Not detected';
   const inches = numericValue / 2.54;
-  return `${numericValue.toFixed(1)} cm / ${inches.toFixed(1)} in`;
+  return `${inches.toFixed(1)} inches`;
 };
 
 const cmToInches = (value) => {
@@ -915,7 +915,7 @@ function PreAnalysisPhotoReview({
   const validationPassed = Boolean(validation?.ok);
   const checklistItems = [
     {
-      text: 'Hair is loose and visible from root or hairline to the ends.',
+      text: 'Hair is loose and visible from the lower cheek or neck area to the ends.',
       state: validationFailed ? 'unknown' : validationPassed ? 'success' : 'pending',
     },
     {
@@ -2548,7 +2548,7 @@ export function DonorHairSubmissionScreen() {
           ...baseStatus,
           valid: false,
           tone: 'warning',
-          message: 'Lighting is too low for a reliable scan. Move near bright indirect light and keep hair visible from root to ends.',
+          message: 'Lighting is too low for a reliable scan. Move near bright indirect light and keep hair visible from the lower cheek or neck area to the ends.',
         }
       : baseStatus;
     const nextKey = `${nextStatus.valid}:${nextStatus.faceCount}:${nextStatus.message}`;
@@ -3048,13 +3048,7 @@ export function DonorHairSubmissionScreen() {
     if (weeklyScanLimit.isLocked) {
       return (
         <View style={styles.analysisResultPanel}>
-          <View style={styles.analysisResultTopBar}>
-            <Pressable onPress={closeAnalyzerToHome} style={styles.resultHeaderButton}>
-              <AppIcon name="arrow-left" size="md" state="default" />
-            </Pressable>
-            <Text style={styles.analysisResultScreenTitle}>Weekly AI Scan</Text>
-            <View style={styles.resultHeaderButtonPlaceholder} />
-          </View>
+          <Text style={styles.weeklyLimitScreenTitle}>Weekly AI Scan</Text>
 
           <View style={[styles.resultSectionCard, styles.weeklyLimitCard]}>
             <View style={styles.weeklyLimitIconWrap}>
@@ -3074,26 +3068,6 @@ export function DonorHairSubmissionScreen() {
                 <Text style={styles.weeklyLimitTipText}>{weeklyScanLimit.tip}</Text>
               </View>
             ) : null}
-
-            <View style={styles.resultActions}>
-              <AppButton
-                title="Back to hair log"
-                onPress={closeAnalyzerToHome}
-                fullWidth
-              />
-              {savedHistory.latestEntry ? (
-                <AppButton
-                  title="View latest result"
-                  variant="outline"
-                  onPress={() => {
-                    const latestDateKey = toLocalDateKey(savedHistory.latestEntry.screening.created_at);
-                    openHistoryDate(latestDateKey, [savedHistory.latestEntry]);
-                    setIsAnalyzerActive(false);
-                  }}
-                  fullWidth
-                />
-              ) : null}
-            </View>
           </View>
         </View>
       );
@@ -5603,6 +5577,13 @@ const styles = StyleSheet.create({
   },
   analysisResultScreenTitle: {
     flex: 1,
+    textAlign: 'center',
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodyLg,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textPrimary,
+  },
+  weeklyLimitScreenTitle: {
     textAlign: 'center',
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.bodyLg,

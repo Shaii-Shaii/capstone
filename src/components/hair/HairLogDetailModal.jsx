@@ -155,7 +155,7 @@ const formatLengthLabel = (value) => {
   const numericValue = Number(value);
   if (!Number.isFinite(numericValue) || numericValue <= 0) return 'Not detected';
   const inches = numericValue / 2.54;
-  return `${numericValue.toFixed(1)} cm / ${inches.toFixed(1)} in`;
+  return `${inches.toFixed(1)} inches`;
 };
 
 const toCompactSummary = (value = '') => {

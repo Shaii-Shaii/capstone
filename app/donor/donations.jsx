@@ -115,6 +115,8 @@ const formatRecentLogDate = (value) => {
   }).format(new Date(value));
 };
 
+const WEEKLY_SCAN_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
+
 const getScreeningRecommendations = (entry = null) => (
   Array.isArray(entry?.submission?.donor_recommendations)
     ? entry.submission.donor_recommendations
@@ -342,6 +344,10 @@ function HairAnalysisHomeModule() {
   const brandName = resolvedTheme?.brandName || 'Donivra';
   const isProfileComplete = profileCompletionMeta.isComplete;
   const isFirstHairCheck = screenings.length === 0;
+  const latestScreeningAtMs = latestScreening?.created_at ? new Date(latestScreening.created_at).getTime() : NaN;
+  const isWeeklyScanLocked = Number.isFinite(latestScreeningAtMs)
+    ? Date.now() < (latestScreeningAtMs + WEEKLY_SCAN_INTERVAL_MS)
+    : false;
 
   const todayCondition = latestScreening?.detected_condition || 'No result yet';
   const healthScore = getScoreFromScreening(latestScreening);
@@ -359,7 +365,10 @@ function HairAnalysisHomeModule() {
       router.navigate('/profile');
       return;
     }
-
+    if (isWeeklyScanLocked && latestScreening) {
+      router.push('/donor/donations?mode=scan');
+      return;
+    }
     handleStartAnalysis();
   };
 
@@ -390,8 +399,14 @@ function HairAnalysisHomeModule() {
     ? 'Complete Profile First'
     : isFirstHairCheck
       ? 'Start First Hair Check'
-      : 'Start Hair Analysis';
-  const primaryActionIcon = !isProfileComplete ? 'profile' : 'camera';
+      : isWeeklyScanLocked
+        ? 'View Recent Log'
+        : 'Start Hair Analysis';
+  const resolvedPrimaryActionIcon = !isProfileComplete
+    ? 'profile'
+    : isWeeklyScanLocked && !isFirstHairCheck
+      ? 'history'
+      : 'camera';
   const overlayTitle = !isProfileComplete
     ? 'Complete your account first'
     : 'Ready for your first check?';
@@ -696,7 +711,7 @@ function HairAnalysisHomeModule() {
         <AppButton
           title={primaryActionTitle}
           onPress={handlePrimaryAction}
-          leading={<AppIcon name={primaryActionIcon} state="inverse" />}
+          leading={<AppIcon name={resolvedPrimaryActionIcon} state="inverse" />}
           style={styles.ctaButton}
           fullWidth
         />
@@ -720,7 +735,7 @@ function HairAnalysisHomeModule() {
               <AppButton
                 title={primaryActionTitle}
                 onPress={handlePrimaryAction}
-                leading={<AppIcon name={primaryActionIcon} state="inverse" />}
+                leading={<AppIcon name={resolvedPrimaryActionIcon} state="inverse" />}
                 fullWidth
               />
             </View>
