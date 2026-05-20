@@ -1413,11 +1413,33 @@ function CaptureModal({
 
   const primaryTryOnImageUrl = getPrimaryTryOnImageUrl(selectedWig);
   const calibrationPanResponder = useMemo(() => PanResponder.create({
-    onStartShouldSetPanResponder: () => Boolean(selectedWig && primaryTryOnImageUrl),
-    onMoveShouldSetPanResponder: (_, gestureState) => Boolean(
+    onStartShouldSetPanResponder: (event) => Boolean(
       selectedWig
       && primaryTryOnImageUrl
-      && (Math.abs(gestureState.dx) > 2 || Math.abs(gestureState.dy) > 2)
+      && (event.nativeEvent.touches || []).length >= 2
+    ),
+    onStartShouldSetPanResponderCapture: (event) => Boolean(
+      selectedWig
+      && primaryTryOnImageUrl
+      && (event.nativeEvent.touches || []).length >= 2
+    ),
+    onMoveShouldSetPanResponder: (event, gestureState) => Boolean(
+      selectedWig
+      && primaryTryOnImageUrl
+      && (
+        (event.nativeEvent.touches || []).length >= 2
+        || Math.abs(gestureState.dx) > 2
+        || Math.abs(gestureState.dy) > 2
+      )
+    ),
+    onMoveShouldSetPanResponderCapture: (event, gestureState) => Boolean(
+      selectedWig
+      && primaryTryOnImageUrl
+      && (
+        (event.nativeEvent.touches || []).length >= 2
+        || Math.abs(gestureState.dx) > 2
+        || Math.abs(gestureState.dy) > 2
+      )
     ),
     onPanResponderGrant: (event) => {
       gestureStartRef.current = {
@@ -1430,9 +1452,14 @@ function CaptureModal({
       const start = gestureStartRef.current || DEFAULT_WIG_CALIBRATION;
       if (touches.length >= 2) {
         const currentDistance = getTouchDistance(touches);
-        const nextScale = start.distance
-          ? Math.min(1.35, Math.max(0.65, start.scale * (currentDistance / start.distance)))
-          : start.scale;
+        if (!start.distance) {
+          gestureStartRef.current = {
+            ...wigCalibration,
+            distance: currentDistance,
+          };
+          return;
+        }
+        const nextScale = Math.min(1.35, Math.max(0.65, start.scale * (currentDistance / start.distance)));
         setWigCalibration((current) => ({
           ...current,
           scale: Math.round(nextScale * 100) / 100,
