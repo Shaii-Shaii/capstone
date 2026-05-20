@@ -1669,6 +1669,7 @@ function DonationEventDetailsScreen({
   onSubmit,
   onGenerateRsvp,
   isGeneratingRsvp = false,
+  hasOngoingDonation = false,
   hasHairScanLog = false,
   hairEligibilityMessage = '',
   onCheckHair,
@@ -1736,7 +1737,13 @@ function DonationEventDetailsScreen({
           </View>
         ) : null}
 
-        {!hasHairScanLog ? (
+        {hasOngoingDonation ? (
+          <StatusBanner
+            variant="info"
+            message="You already have a donation in progress. You can view this event, but you cannot register or submit until the current donation is finished or cancelled."
+            style={styles.eventRsvpBanner}
+          />
+        ) : !hasHairScanLog ? (
           <StatusBanner
             variant="info"
             message={hairEligibilityMessage || 'Scan your hair first so the system can confirm if you are eligible to join this donation event.'}
@@ -1760,7 +1767,9 @@ function DonationEventDetailsScreen({
 
         <AppButton
           title={
-            !hasHairScanLog
+            hasOngoingDonation
+              ? 'Donation in progress'
+              : !hasHairScanLog
               ? 'Scan hair first'
               : !hasRsvp
               ? (isGeneratingRsvp ? 'Generating RSVP QR...' : 'Generate RSVP QR')
@@ -1768,8 +1777,8 @@ function DonationEventDetailsScreen({
                 ? 'Submit my hair donation'
                 : 'Waiting for RSVP check-in'
           }
-          onPress={!hasHairScanLog ? onCheckHair : !hasRsvp ? onGenerateRsvp : onSubmit}
-          disabled={isGeneratingRsvp || (hasHairScanLog && hasRsvp && !canSubmit)}
+          onPress={hasOngoingDonation ? undefined : !hasHairScanLog ? onCheckHair : !hasRsvp ? onGenerateRsvp : onSubmit}
+          disabled={isGeneratingRsvp || hasOngoingDonation || (hasHairScanLog && hasRsvp && !canSubmit)}
           loading={isGeneratingRsvp}
         />
       </View>
@@ -2048,8 +2057,9 @@ function MyJoinedDonationsScreen({
   const getDonationActionTitle = React.useCallback((item) => {
     if (item?.submission) return 'View';
     if (item?.drive?.registration?.registration_id) return 'View';
+    if (hasOngoingDonation) return 'View';
     return 'Register';
-  }, []);
+  }, [hasOngoingDonation]);
 
   const handleDonationActionPress = React.useCallback((item) => {
     if (item?.submission) {
@@ -2069,12 +2079,11 @@ function MyJoinedDonationsScreen({
         );
       })
       .filter((item) => {
-      if (hasOngoingDonation && !item.submission) return false;
       if (activeFilter === 'all') return true;
       if (activeFilter === 'active') return item.statusCategory === 'active';
       return item.statusCategory === activeFilter;
     })
-  ), [activeFilter, donationItems, hasOngoingDonation]);
+  ), [activeFilter, donationItems]);
 
   return (
     <View style={styles.flowScreen}>
@@ -3957,6 +3966,13 @@ export function DonorDonationStatusScreen() {
 
   const handleEnsureEventRsvp = React.useCallback(async () => {
     if (!selectedDriveForDonation?.donation_drive_id) return;
+    if (hasOngoingDonation) {
+      setModuleFeedback({
+        message: 'You already have a donation in progress. You can view this event, but you cannot register until the current donation is finished or cancelled.',
+        variant: 'info',
+      });
+      return;
+    }
     if (!hasHairScanLog) {
       setModuleFeedback({
         message: hairEligibilityMessage,
@@ -3993,7 +4009,7 @@ export function DonorDonationStatusScreen() {
         : 'RSVP generated. Show your RSVP QR at check-in. Donation submission unlocks after staff marks you Present.',
       variant: 'success',
     });
-  }, [hairEligibilityMessage, hasHairScanLog, profile?.user_id, refreshDriveRegistrationFromTable, selectedDriveForDonation]);
+  }, [hairEligibilityMessage, hasHairScanLog, hasOngoingDonation, profile?.user_id, refreshDriveRegistrationFromTable, selectedDriveForDonation]);
 
   React.useEffect(() => {
     if (donationModuleScreen !== DONATION_MODULE_SCREEN.EVENT_DETAILS) return;
@@ -4440,6 +4456,7 @@ export function DonorDonationStatusScreen() {
           onBack={() => setDonationModuleScreen(DONATION_MODULE_SCREEN.EVENTS)}
           onGenerateRsvp={handleEnsureEventRsvp}
           isGeneratingRsvp={isGeneratingEventRsvp}
+          hasOngoingDonation={hasOngoingDonation}
           hasHairScanLog={hasHairScanLog}
           hairEligibilityMessage={hairEligibilityMessage}
           onCheckHair={() => router.navigate('/donor/donations')}
