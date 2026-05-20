@@ -1532,7 +1532,11 @@ function CaptureModal({
             })}
           >
             {referenceImage?.uri ? (
-              <Image source={{ uri: referenceImage.uri }} style={styles.captureStageImage} />
+              <Image
+                source={{ uri: referenceImage.uri }}
+                resizeMode="contain"
+                style={styles.captureStagePhotoPreview}
+              />
             ) : cameraRuntimeError ? (
               <CameraUnavailablePlaceholder message={cameraRuntimeMessage} />
             ) : hasCameraPermission ? (
@@ -4026,6 +4030,13 @@ const styles = StyleSheet.create({
     zIndex: 1,
     width: '100%',
     height: 320,
+  },
+  captureStagePhotoPreview: {
+    position: 'relative',
+    zIndex: 1,
+    width: '100%',
+    height: 320,
+    backgroundColor: '#090909',
   },
   tryOnLayerWrap: {
     ...StyleSheet.absoluteFillObject,
