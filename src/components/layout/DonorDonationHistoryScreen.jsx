@@ -37,7 +37,7 @@ function DonationHistoryRow({ item, roles }) {
 
       <View style={styles.rowCopy}>
         <Text numberOfLines={1} style={[styles.rowTitle, { color: roles.headingText }]}>
-          {item?.submission_code || 'Donation record'}
+          {item?.donation_reference || 'Donation record'}
         </Text>
         <Text numberOfLines={1} style={[styles.rowMeta, { color: roles.metaText }]}>
           {item?.date_label || 'Date unavailable'}

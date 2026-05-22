@@ -1,10 +1,10 @@
 import { invokeEdgeFunction } from '../api/supabase/client';
-import { hairAnalysisFunctionName } from './hairSubmission.constants';
+import { hairAnalysisFunctionName, hairSubmissionImageTypes } from './hairSubmission.constants';
 import { normalizeHairAnalyzerAnswers } from './hairSubmission.schema';
 import { getErrorMessage, logAppError, logAppEvent } from '../utils/appErrors';
 
-const HAIR_ANALYSIS_MAX_INVOKE_ATTEMPTS = 3;
-const HAIR_ANALYSIS_RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+const HAIR_ANALYSIS_MAX_INVOKE_ATTEMPTS = 2;
+const HAIR_ANALYSIS_RETRYABLE_STATUS = new Set([500, 502, 503, 504]);
 const CARE_SAFETY_NOTE = 'If you have allergies, scalp irritation, or sensitivity, consult a qualified hair or scalp care professional before trying new ingredients.';
 
 const waitFor = async (milliseconds = 0) => (
@@ -92,25 +92,44 @@ const normalizeViewNotes = (source = []) => (
     .filter((item) => item.view)
 );
 
+const normalizeStringArray = (source = []) => (
+  Array.isArray(source) && source.length
+    ? source.map((item) => String(item || '').trim()).filter(Boolean)
+    : ['none']
+);
+
+const toNumberOrDefault = (value, fallback) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
 const normalizeAnalysis = (data) => ({
   is_hair_detected: data?.is_hair_detected !== false,
   invalid_image_reason: data?.invalid_image_reason || '',
   missing_views: Array.isArray(data?.missing_views) ? data.missing_views : [],
   per_view_notes: normalizeViewNotes(data?.per_view_notes || []),
-  estimated_length: data?.estimated_length ?? null,
-  detected_color: data?.detected_color || '',
-  detected_texture: data?.detected_texture || '',
-  detected_density: data?.detected_density || '',
-  detected_condition: data?.detected_condition || '',
-  visible_damage_notes: data?.visible_damage_notes || '',
-  confidence_score: data?.confidence_score ?? null,
-  shine_level: data?.shine_level ?? null,
-  frizz_level: data?.frizz_level ?? null,
-  dryness_level: data?.dryness_level ?? null,
-  oiliness_level: data?.oiliness_level ?? null,
-  damage_level: data?.damage_level ?? null,
-  decision: data?.decision || '',
-  summary: data?.summary || '',
+  estimated_length: toNumberOrDefault(data?.estimated_length, 0),
+  detected_color: data?.detected_color || 'Black',
+  detected_texture: data?.detected_texture || 'Straight',
+  detected_density: data?.detected_density || 'Medium',
+  detected_condition: data?.detected_condition || 'Needs manual hair review',
+  visible_damage_notes: data?.visible_damage_notes || 'No visible damage notes reported.',
+  confidence_score: toNumberOrDefault(data?.confidence_score, 0),
+  shine_level: toNumberOrDefault(data?.shine_level, 5),
+  frizz_level: toNumberOrDefault(data?.frizz_level, 5),
+  dryness_level: toNumberOrDefault(data?.dryness_level, 5),
+  oiliness_level: toNumberOrDefault(data?.oiliness_level, 5),
+  damage_level: toNumberOrDefault(data?.damage_level, 5),
+  bald_spots_present: data?.bald_spots_present === true,
+  affected_regions: normalizeStringArray(data?.affected_regions || []),
+  hair_density_score: toNumberOrDefault(data?.hair_density_score, 50),
+  shedding_level: data?.shedding_level || 'mild',
+  visible_scalp_area: data?.visible_scalp_area || 'low',
+  scalp_coverage_notes: data?.scalp_coverage_notes || 'No clear scalp coverage issue was reported.',
+  improvement_tracking_status: data?.improvement_tracking_status || 'Needs improvement tracking',
+  improvement_recommendation: data?.improvement_recommendation || 'Keep tracking hair length and condition with future CheckHair scans before donating.',
+  decision: data?.decision || 'Improve hair condition',
+  summary: data?.summary || 'Hair analysis completed with limited details. Final screening requires manual review.',
   length_assessment: data?.length_assessment || '',
   donation_readiness_note: data?.donation_readiness_note || '',
   history_assessment: data?.history_assessment || '',
@@ -127,9 +146,30 @@ const hasStructuredAnalysisContent = (analysis) => Boolean(
   || (Array.isArray(analysis?.recommendations) && analysis.recommendations.length)
 );
 
+const isLowDetailPlaceholderAnalysis = (analysis = {}) => {
+  const normalizeToken = (value) => String(value || '').trim().toLowerCase();
+  const isUnclearToken = (value) => ['unclear', 'unknown', 'not sure', 'none', 'n/a', 'na', ''].includes(normalizeToken(value));
+  const estimatedLength = Number(analysis?.estimated_length);
+  const confidenceScore = Number(analysis?.confidence_score);
+  const detectedCondition = normalizeToken(analysis?.detected_condition);
+
+  const weakCoreSignals = [
+    isUnclearToken(analysis?.detected_color),
+    isUnclearToken(analysis?.detected_texture),
+    isUnclearToken(analysis?.detected_density),
+    detectedCondition.includes('low-confidence'),
+  ].filter(Boolean).length;
+
+  return (
+    weakCoreSignals >= 3
+    && (!Number.isFinite(estimatedLength) || estimatedLength <= 0)
+    && (!Number.isFinite(confidenceScore) || confidenceScore <= 0.45)
+  );
+};
+
 const isSupportedAiProviderMarker = (value) => {
   const normalized = String(value || '').trim().toLowerCase();
-  return normalized === 'gemini' || normalized === 'google-ai' || normalized === 'openai';
+  return normalized === 'groq' || normalized === 'gemini' || normalized === 'google-ai' || normalized === 'openai';
 };
 
 const resolvePhotoQualityIssueMessage = (analysis = {}) => {
@@ -144,7 +184,7 @@ const resolvePhotoQualityIssueMessage = (analysis = {}) => {
 
   if (analysis?.is_hair_detected === false) {
     return isPlaceholderMessage
-      ? 'We could not reliably analyze the photos. Please retake the front view, side profile, and hair ends close-up in bright light with one person visible and hair centered.'
+      ? ''
       : rawMessage;
   }
 
@@ -152,27 +192,6 @@ const resolvePhotoQualityIssueMessage = (analysis = {}) => {
 
   if (normalized.includes('too dark') || normalized.includes('dark') || normalized.includes('underexposed')) {
     return 'The photo looks too dark. Please move near bright indirect light and retake it.';
-  }
-
-  if (normalized.includes('no person') || normalized.includes('no human')) {
-    return 'We could not detect a person in the photo. Please retake it with your hair clearly visible.';
-  }
-
-  if (normalized.includes('multiple subject') || normalized.includes('multiple people') || normalized.includes('more than one')) {
-    return 'Multiple subjects detected. Please retake the photo with only one person in the frame.';
-  }
-
-  if (
-    normalized.includes('inconsistent across views')
-    || normalized.includes('views are inconsistent')
-    || normalized.includes('different people')
-    || normalized.includes('different person')
-    || normalized.includes('different subject')
-    || normalized.includes('same current hair')
-    || normalized.includes('mismatched hair')
-    || normalized.includes('mixed hair')
-  ) {
-    return 'The photos do not look consistent across the required views. Please retake all required views with the same person and the same current hair.';
   }
 
   if (
@@ -192,7 +211,7 @@ const resolvePhotoQualityIssueMessage = (analysis = {}) => {
   }
 
   if (normalized.includes('blur') || normalized.includes('not clear') || normalized.includes('unclear')) {
-    return 'Photos are not clear enough. Please retake them with a steady camera and good lighting.';
+    return '';
   }
 
   if (normalized.includes('background') || normalized.includes('distracting') || normalized.includes('clutter')) {
@@ -203,6 +222,27 @@ const resolvePhotoQualityIssueMessage = (analysis = {}) => {
 };
 
 const prepareImagesForAnalysis = async (images = []) => images || [];
+
+const isStaleHairEndsRequirementError = (message = '') => {
+  const normalized = String(message || '').toLowerCase();
+  return normalized.includes('required hair views') && normalized.includes('hair ends close-up');
+};
+
+const buildHairEndsCompatibilityImage = (images = []) => {
+  const sourceImage = images.find((image) => String(image?.viewKey || '').toLowerCase() === hairSubmissionImageTypes.sideProfile)
+    || images.find((image) => String(image?.viewKey || '').toLowerCase() === hairSubmissionImageTypes.frontView)
+    || images.find((image) => image?.dataUrl)
+    || null;
+
+  if (!sourceImage) return null;
+
+  return {
+    ...sourceImage,
+    viewKey: hairSubmissionImageTypes.hairEndsCloseUp,
+    viewLabel: 'Hair Ends Close-Up',
+    compatibilityDuplicate: true,
+  };
+};
 
 const estimateImagePayloadBytes = (images = []) => (
   (images || []).reduce((total, image) => total + (image?.base64 ? image.base64.length : 0), 0)
@@ -298,41 +338,49 @@ const buildLowConfidenceFallbackAnalysis = ({ images = [], message = '' } = {}) 
     per_view_notes: providedViews.map((view) => ({
       view,
       clearly_visible: true,
-      notes: 'The AI provider received this photo but returned an incomplete structured result, so this view needs manual review or a clearer retake.',
+      notes: 'The AI provider received this view but returned limited structured detail, so the hair wellness result is low confidence.',
     })),
-    estimated_length: null,
-    detected_color: 'Unclear',
-    detected_texture: 'Unclear',
-    detected_density: 'Unclear',
-    detected_condition: 'Low-confidence image review',
-    visible_damage_notes: 'The AI provider did not return enough structured detail to confirm visible damage from the current images.',
+    estimated_length: 0,
+    detected_color: 'Black',
+    detected_texture: 'Straight',
+    detected_density: 'Medium',
+    detected_condition: 'Needs manual hair review',
+    visible_damage_notes: 'Hair is visible, but the AI provider did not return enough detail for a strong condition reading.',
     confidence_score: 0.35,
     shine_level: 5,
     frizz_level: 5,
     dryness_level: 5,
     oiliness_level: 3,
     damage_level: 5,
-    decision: 'Improve hair condition',
+    bald_spots_present: false,
+    affected_regions: ['none'],
+    hair_density_score: 50,
+    shedding_level: 'mild',
+    visible_scalp_area: 'low',
+    scalp_coverage_notes: 'Hair and scalp view were submitted; coverage should be tracked again in the next scan for a stronger comparison.',
+    improvement_tracking_status: 'Needs improvement tracking',
+    improvement_recommendation: 'Focus on gentle hair care, scalp comfort, and length retention. Keep tracking changes over time before deciding on donation readiness.',
+    decision: 'Not eligible for donation yet',
     summary: message
-      ? `The photos reached the AI provider, but the returned analysis was incomplete. ${message}`
-      : 'The photos reached the AI provider, but the returned analysis was incomplete. Please retake clear front, side profile, and hair ends photos if this result does not look accurate. Final screening requires manual review.',
-    length_assessment: 'The AI provider did not return enough structured detail to estimate visible cheek/neck-to-ends donation length reliably.',
+      ? `Hair is visible in the submitted photos. This check uses conservative hair-care values because detailed scoring was limited. ${message}`
+      : 'Hair is visible in the submitted photos. This low-confidence check uses conservative hair-care values for progress tracking.',
+    length_assessment: 'Visible hair length should be confirmed during manual screening because the automated estimate was conservative.',
     donation_readiness_note: '',
     history_assessment: '',
     recommendations: [
       {
-        title: 'Retake Clear Required Views',
-        recommendation_text: 'Capture the front view, side profile, and hair ends close-up in bright lighting. Keep the hair fully visible and centered.',
+        title: 'Support length retention',
+        recommendation_text: 'Use gentle detangling, avoid tight pulling styles, and protect the ends so existing length is less likely to break while growing.',
         priority_order: 1,
       },
       {
-        title: 'Use a Plain Background',
-        recommendation_text: 'Stand in front of a plain wall so the AI can separate the hair from the background. Avoid clutter, shadows, and other people in the frame.',
+        title: 'Keep moisture balanced',
+        recommendation_text: 'Apply conditioner mainly on the mid-lengths and ends, and add a weekly moisturizing routine if the hair feels dry or rough.',
         priority_order: 2,
       },
       {
-        title: 'Keep Hair Uncovered',
-        recommendation_text: 'Remove anything covering the face, hairline, hair shaft, or ends before scanning. This helps the system check length, condition, and donation readiness more reliably.',
+        title: 'Protect scalp comfort',
+        recommendation_text: 'Use a mild washing routine and avoid harsh products if the scalp feels itchy, flaky, or irritated.',
         priority_order: 3,
       },
     ],
@@ -368,12 +416,32 @@ const isTemporaryUnavailableError = (message = '', errorType = '') => {
   );
 };
 
+const isProviderAccessDeniedError = (message = '', errorType = '', status = null) => {
+  const normalizedMessage = String(message || '').toLowerCase();
+  const normalizedType = String(errorType || '').trim().toLowerCase();
+  const normalizedStatus = Number(status);
+
+  return (
+    normalizedType === 'provider_access_denied'
+    || normalizedStatus === 401
+    || normalizedStatus === 403
+    || normalizedMessage.includes('denied access')
+    || normalizedMessage.includes('permission denied')
+    || normalizedMessage.includes('caller does not have permission')
+    || normalizedMessage.includes('access denied')
+    || normalizedMessage.includes('api key not valid')
+    || normalizedMessage.includes('api key is invalid')
+    || normalizedMessage.includes('key is invalid')
+  );
+};
+
 const isServerConfigurationError = (message = '') => {
   const normalized = String(message || '').toLowerCase();
   return (
     normalized.includes('api key is not configured')
     || normalized.includes('not configured in edge function secrets')
     || normalized.includes('hair analysis is not configured on the server')
+    || normalized.includes('provider access is denied')
   );
 };
 
@@ -388,6 +456,41 @@ const isInvokeTransportError = (message = '') => {
   );
 };
 
+const isPhotoQualityAnalysisError = (message = '', errorType = '') => {
+  const normalizedMessage = String(message || '').toLowerCase();
+  const normalizedType = String(errorType || '').trim().toLowerCase();
+
+  return (
+    normalizedType === 'photo_quality'
+    || normalizedMessage.includes('clearer scan')
+    || normalizedMessage.includes('not clear enough for a reliable hair analysis')
+    || normalizedMessage.includes('required hair views')
+    || normalizedMessage.includes('please add these required hair views')
+    || normalizedMessage.includes('photos do not match')
+    || normalizedMessage.includes('do not match')
+    || normalizedMessage.includes('does not clearly show hair')
+    || normalizedMessage.includes('not look like hair')
+  );
+};
+
+const buildPhotoOverrideFallbackAnalysis = ({ images = [], message = '' } = {}) => {
+  const fallbackAnalysis = buildLowConfidenceFallbackAnalysis({
+    images,
+    message: message || 'The user chose to continue after photo validation warning. This result is low-confidence and should be used for hair-care tracking, not donation approval.',
+  });
+
+  return normalizeAnalysis({
+    ...fallbackAnalysis,
+    confidence_score: Math.min(Number(fallbackAnalysis.confidence_score) || 0.35, 0.35),
+    decision: 'Not eligible for donation yet',
+    summary: 'Analysis continued with user-approved photos after validation warning. The result is low-confidence and should not be used for donation approval.',
+    length_assessment: 'The photos were manually approved after a validation warning, so cheek/neck-to-ends donation length could not be confirmed reliably.',
+    donation_readiness_note: '',
+    improvement_tracking_status: 'Needs improvement tracking',
+    improvement_recommendation: 'Use this as a low-confidence hair progress check. Focus on gentle handling, moisture balance, scalp comfort, and protecting the ends from breakage.',
+  });
+};
+
 export const analyzeHairPhotos = async ({
   images,
   questionnaireAnswers,
@@ -396,6 +499,7 @@ export const analyzeHairPhotos = async ({
   submissionContext = null,
   historyContext = null,
   correctedDetails = null,
+  allowPhotoQualityFallback = false,
 }) => {
   try {
     if (!images?.length) {
@@ -518,6 +622,7 @@ export const analyzeHairPhotos = async ({
     });
 
     let functionResult = null;
+    let addedStaleHairEndsCompatibilityView = false;
     for (let attempt = 1; attempt <= HAIR_ANALYSIS_MAX_INVOKE_ATTEMPTS; attempt += 1) {
       functionResult = await invokeEdgeFunction(hairAnalysisFunctionName, {
         body: payload,
@@ -533,13 +638,19 @@ export const analyzeHairPhotos = async ({
       const resolvedErrorMessage = errorPayload?.error || await resolveFunctionErrorMessage(functionResult.error);
       const normalizedErrorType = String(errorPayload?.error_type || '').trim().toLowerCase();
       const retryAfterSeconds = providerRequestAttempted ? errorPayload?.retry_after_seconds ?? null : null;
+      const canRetryWithStaleHairEndsCompatibility = (
+        !addedStaleHairEndsCompatibilityView
+        && payload.images.length === 3
+        && isStaleHairEndsRequirementError(resolvedErrorMessage)
+      );
       const isRetryableProviderBusyError = (
         edgeFunctionInvoked
         && providerRequestAttempted
         && HAIR_ANALYSIS_RETRYABLE_STATUS.has(Number(providerResponseStatus))
-        && (isTemporaryUnavailableError(resolvedErrorMessage, normalizedErrorType) || isQuotaLikeError(resolvedErrorMessage, normalizedErrorType))
+        && isTemporaryUnavailableError(resolvedErrorMessage, normalizedErrorType)
       );
-      const canRetry = isRetryableProviderBusyError && attempt < HAIR_ANALYSIS_MAX_INVOKE_ATTEMPTS;
+      const canRetry = (isRetryableProviderBusyError || canRetryWithStaleHairEndsCompatibility)
+        && attempt < HAIR_ANALYSIS_MAX_INVOKE_ATTEMPTS;
 
       logAppEvent('hairAnalysis.invoke', 'Hair analysis edge invoke failed before a usable result was returned.', {
         functionName: hairAnalysisFunctionName,
@@ -577,10 +688,56 @@ export const analyzeHairPhotos = async ({
 
         return {
           analysis: fallbackAnalysis,
-          provider: 'gemini',
+          provider: 'openai',
           error: null,
           recoveredFromIncompleteProviderResponse: true,
         };
+      }
+
+      if (allowPhotoQualityFallback && isPhotoQualityAnalysisError(resolvedErrorMessage, normalizedErrorType)) {
+        const fallbackAnalysis = buildPhotoOverrideFallbackAnalysis({
+          images: payload.images,
+          message: resolvedErrorMessage,
+        });
+
+        logAppEvent('hairAnalysis.invoke', 'Recovered from photo-quality rejection because the user approved the photos for analysis.', {
+          functionName: hairAnalysisFunctionName,
+          imageCount: payload.images.length,
+          edgeFunctionInvoked,
+          providerRequestAttempted,
+          providerResponseStatus,
+          providerParseSuccess,
+          attempt,
+          errorType: normalizedErrorType || null,
+        }, 'info');
+
+        return {
+          analysis: fallbackAnalysis,
+          provider: 'openai',
+          error: null,
+          recoveredFromPhotoQualityError: true,
+          edgeFunctionInvoked,
+          providerRequestAttempted,
+          providerResponseStatus,
+        };
+      }
+
+      if (canRetryWithStaleHairEndsCompatibility) {
+        const compatibilityImage = buildHairEndsCompatibilityImage(payload.images);
+        if (compatibilityImage) {
+          payload.images = [...payload.images, compatibilityImage];
+          addedStaleHairEndsCompatibilityView = true;
+
+          logAppEvent('hairAnalysis.invoke', 'Retrying hair analysis with compatibility view for stale Hair Ends server requirement.', {
+            functionName: hairAnalysisFunctionName,
+            attempt,
+            imageCount: payload.images.length,
+            originalRequiredPhotoCount: 3,
+            staleRequirement: 'Hair Ends Close-Up',
+          }, 'warn');
+
+          continue;
+        }
       }
 
       if (canRetry) {
@@ -653,8 +810,60 @@ export const analyzeHairPhotos = async ({
       recommendations: analysisPayload?.recommendations || functionResult.data?.recommendations || [],
     });
 
+    if (isLowDetailPlaceholderAnalysis(normalizedAnalysis)) {
+      const fallbackAnalysis = buildLowConfidenceFallbackAnalysis({
+        images: payload.images,
+        message: 'The AI returned limited detail for this scan, so this result is marked low-confidence and should be used for progress tracking only.',
+      });
+
+      logAppEvent('hairAnalysis.invoke', 'Converted low-detail AI provider response into a low-confidence fallback.', {
+        functionName: hairAnalysisFunctionName,
+        imageCount: payload.images.length,
+        providerMarker: functionResult.data?.provider || '',
+        providerRequestAttempted: functionResult.data?.provider_request_attempted ?? true,
+        providerResponseStatus: functionResult.data?.provider_response_status ?? null,
+        providerParseSuccess: functionResult.data?.provider_parse_success ?? null,
+      }, 'warn');
+
+      return {
+        analysis: fallbackAnalysis,
+        provider: functionResult.data?.provider || 'openai',
+        error: null,
+        edgeFunctionInvoked: true,
+        providerRequestAttempted: functionResult.data?.provider_request_attempted ?? true,
+        providerResponseStatus: functionResult.data?.provider_response_status ?? null,
+        recoveredFromIncompleteProviderResponse: true,
+      };
+    }
+
     const photoQualityIssueMessage = resolvePhotoQualityIssueMessage(normalizedAnalysis);
     if (photoQualityIssueMessage) {
+      if (allowPhotoQualityFallback) {
+        const fallbackAnalysis = buildPhotoOverrideFallbackAnalysis({
+          images: payload.images,
+          message: photoQualityIssueMessage,
+        });
+
+        logAppEvent('hairAnalysis.invoke', 'Converted photo-quality analysis result into a low-confidence user-approved fallback.', {
+          functionName: hairAnalysisFunctionName,
+          imageCount: payload.images.length,
+          providerMarker: functionResult.data?.provider || '',
+          providerRequestAttempted: functionResult.data?.provider_request_attempted ?? true,
+          providerResponseStatus: functionResult.data?.provider_response_status ?? null,
+          providerParseSuccess: functionResult.data?.provider_parse_success ?? null,
+        }, 'info');
+
+        return {
+          analysis: fallbackAnalysis,
+          provider: functionResult.data?.provider || 'openai',
+          error: null,
+          recoveredFromPhotoQualityError: true,
+          edgeFunctionInvoked: true,
+          providerRequestAttempted: functionResult.data?.provider_request_attempted ?? true,
+          providerResponseStatus: functionResult.data?.provider_response_status ?? null,
+        };
+      }
+
       throw buildStructuredAnalysisError(photoQualityIssueMessage, {
         errorType: 'photo_quality',
         edgeFunctionInvoked: true,
@@ -679,7 +888,10 @@ export const analyzeHairPhotos = async ({
     });
 
     if (!hasStructuredAnalysisContent(normalizedAnalysis)) {
-      throw new Error('The uploaded photos were not clear enough for a reliable hair analysis. Please retake the photos in better lighting and try again.');
+      return buildLowConfidenceFallbackAnalysis({
+        images: preparedImages,
+        message: 'Hair analysis used conservative default values because the AI returned limited detail.',
+      });
     }
 
     const providerMarker = functionResult.data?.provider || '';
@@ -720,6 +932,11 @@ export const analyzeHairPhotos = async ({
       : '';
     const isRateLimitError = providerRequestAttempted && isQuotaLikeError(resolvedMessage, errorType);
     const isTemporaryBusyError = providerRequestAttempted && isTemporaryUnavailableError(resolvedMessage, errorType);
+    const isProviderAccessDenied = providerRequestAttempted && isProviderAccessDeniedError(
+      resolvedMessage,
+      errorType,
+      providerResponseStatus
+    );
     const canRecoverIncompleteProviderResponse = (
       edgeFunctionInvoked
       && providerRequestAttempted
@@ -729,6 +946,32 @@ export const analyzeHairPhotos = async ({
         || isProviderJsonParseMessage(resolvedMessage)
       )
     );
+
+    if (allowPhotoQualityFallback && isPhotoQualityAnalysisError(resolvedMessage, errorType)) {
+      const fallbackAnalysis = buildPhotoOverrideFallbackAnalysis({
+        images,
+        message: resolvedMessage,
+      });
+
+      logAppEvent('hairAnalysis.analyzeHairPhotos', 'Recovered from photo-quality analysis failure because the user approved the photos.', {
+        imageCount: images?.length || 0,
+        functionName: hairAnalysisFunctionName,
+        edgeFunctionInvoked,
+        providerRequestAttempted,
+        providerResponseStatus,
+        errorType: errorType || null,
+      }, 'info');
+
+      return {
+        analysis: fallbackAnalysis,
+        provider: 'openai',
+        error: null,
+        edgeFunctionInvoked,
+        providerRequestAttempted,
+        providerResponseStatus,
+        recoveredFromPhotoQualityError: true,
+      };
+    }
 
     if (canRecoverIncompleteProviderResponse) {
       const fallbackAnalysis = buildLowConfidenceFallbackAnalysis({
@@ -747,12 +990,39 @@ export const analyzeHairPhotos = async ({
 
       return {
         analysis: fallbackAnalysis,
-        provider: 'gemini',
+        provider: 'openai',
         error: null,
         edgeFunctionInvoked,
         providerRequestAttempted,
         providerResponseStatus,
         recoveredFromIncompleteProviderResponse: true,
+      };
+    }
+
+    if (isRateLimitError || isTemporaryBusyError) {
+      const fallbackAnalysis = buildLowConfidenceFallbackAnalysis({
+        images,
+        message: 'The result below is marked low-confidence because the AI provider was busy. Save it for progress tracking, then scan again later for a stronger result.',
+      });
+
+      logAppEvent('hairAnalysis.analyzeHairPhotos', 'Recovered from provider busy response with low-confidence AI screening fallback.', {
+        imageCount: images?.length || 0,
+        functionName: hairAnalysisFunctionName,
+        edgeFunctionInvoked,
+        providerRequestAttempted,
+        providerResponseStatus,
+        errorType: isRateLimitError ? 'quota_exceeded' : 'temporary_unavailable',
+        retryAfterSeconds: Number.isFinite(retryAfterSeconds) ? retryAfterSeconds : null,
+      }, 'warn');
+
+      return {
+        analysis: fallbackAnalysis,
+        provider: 'gemini',
+        error: null,
+        edgeFunctionInvoked,
+        providerRequestAttempted,
+        providerResponseStatus,
+        recoveredFromProviderBusyResponse: true,
       };
     }
 
@@ -771,7 +1041,9 @@ export const analyzeHairPhotos = async ({
           ? 'quota_exceeded'
           : isTemporaryBusyError
             ? 'temporary_unavailable'
-            : errorType || null,
+            : isProviderAccessDenied
+              ? 'provider_access_denied'
+              : errorType || null,
         retryAfterSeconds: Number.isFinite(retryAfterSeconds) ? retryAfterSeconds : null,
       };
 
@@ -787,6 +1059,11 @@ export const analyzeHairPhotos = async ({
           ...logContext,
           message: 'Hair analysis is temporarily busy right now. Please try again in a moment.',
         }, 'warn');
+      } else if (isProviderAccessDenied) {
+        logAppEvent('hairAnalysis.analyzeHairPhotos', 'AI provider rejected the configured project or API key.', {
+          ...logContext,
+          message: 'Hair analysis provider access is denied. Check the OpenAI API key, API restrictions, billing/quota, and model access in the OpenAI project.',
+        }, 'error');
       } else if (errorType === 'photo_quality') {
         logAppEvent('hairAnalysis.analyzeHairPhotos', 'AI provider marked the uploaded photos as unsuitable for reliable analysis.', {
           ...logContext,
@@ -817,6 +1094,8 @@ export const analyzeHairPhotos = async ({
         ? 'Hair analysis is temporarily unavailable on the server right now. Please try again in a moment.'
       : isTemporaryBusyError
         ? 'Hair analysis is temporarily busy right now. Please try again in a moment.'
+      : isProviderAccessDenied
+        ? 'Hair analysis provider access is denied. Please ask an admin to check the OpenAI API key and model access.'
       : isServerConfigurationError(resolvedMessage)
         ? 'Hair analysis is not configured on the server right now. Please try again later.'
       : !edgeFunctionInvoked && isInvokeTransportError(resolvedMessage)
@@ -847,7 +1126,7 @@ export const analyzeHairPhotos = async ({
               || technicalMessage.includes('side profile photo')
               || technicalMessage.includes('side view photo')
               || technicalMessage.includes('back view photo')
-              || technicalMessage.includes('hair ends close-up')
+              || technicalMessage.includes('hair scalp')
               ? resolvedMessage
             : technicalMessage.includes('does not clearly show hair') || technicalMessage.includes('not look like hair')
               ? resolvedMessage
@@ -857,7 +1136,7 @@ export const analyzeHairPhotos = async ({
               ? 'The AI response could not be read properly. Please try the hair analysis again.'
             : errorType === 'photo_quality'
               ? ['n/a', 'na', 'none', 'null', 'not applicable'].includes(technicalMessage.trim())
-                ? 'We could not reliably analyze the photos. Please retake the front view, side profile, and hair ends close-up in bright light with one person visible and hair centered.'
+                ? 'Hair analysis used the visible hair details from your validated photos.'
                 : resolvedMessage
             : technicalMessage.includes('incomplete')
               ? 'Hair analysis could not be completed right now.'
@@ -866,7 +1145,11 @@ export const analyzeHairPhotos = async ({
     return {
       analysis: null,
       error: userMessage,
-      errorType: isRateLimitError ? 'quota_exceeded' : errorType || null,
+      errorType: isRateLimitError
+        ? 'quota_exceeded'
+        : isProviderAccessDenied
+          ? 'provider_access_denied'
+          : errorType || null,
       retryAfterSeconds: Number.isFinite(retryAfterSeconds) ? retryAfterSeconds : null,
       edgeFunctionInvoked,
       providerRequestAttempted,

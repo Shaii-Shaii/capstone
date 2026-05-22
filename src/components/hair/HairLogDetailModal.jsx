@@ -158,6 +158,17 @@ const formatLengthLabel = (value) => {
   return `${inches.toFixed(1)} inches`;
 };
 
+const formatAffectedRegions = (regions = []) => (
+  Array.isArray(regions) && regions.length
+    ? regions.join(', ')
+    : 'No clear patchy area detected'
+);
+
+const formatDensityScore = (value) => {
+  const score = Number(value);
+  return Number.isFinite(score) ? `${Math.round(score)} / 100` : 'Not enough data';
+};
+
 const toCompactSummary = (value = '') => {
   const normalized = String(value || '').replace(/\s+/g, ' ').trim();
   if (!normalized) return '';
@@ -300,6 +311,11 @@ export function HairLogDetailModal({ visible, dateKey = '', entries = [], onClos
     || screening?.detected_color
     || screening?.detected_texture
     || screening?.detected_density
+    || screening?.bald_spots_present === true
+    || screening?.hair_density_score != null
+    || screening?.visible_scalp_area
+    || screening?.shedding_level
+    || screening?.scalp_coverage_notes
     || screening?.summary
     || screening?.visible_damage_notes
   );
@@ -330,6 +346,7 @@ export function HairLogDetailModal({ visible, dateKey = '', entries = [], onClos
             showsVerticalScrollIndicator={false}
             style={styles.scroll}
             contentContainerStyle={styles.scrollContent}
+            nestedScrollEnabled
           >
             <View style={[styles.statusCard, { backgroundColor: tone.dotColor + '14', borderColor: tone.dotColor + '44' }]}>
               <View style={styles.statusRow}>
@@ -431,8 +448,42 @@ export function HairLogDetailModal({ visible, dateKey = '', entries = [], onClos
                         {formatLengthLabel(screening.estimated_length)}
                       </Text>
                     </View>
+                    <View style={styles.metaItem}>
+                      <Text style={[styles.metaKey, { color: roles.metaText }]}>Scalp area</Text>
+                      <Text style={[styles.metaValue, { color: roles.headingText }]}>
+                        {screening.visible_scalp_area || 'Not detected'}
+                      </Text>
+                    </View>
+                    <View style={styles.metaItem}>
+                      <Text style={[styles.metaKey, { color: roles.metaText }]}>Coverage score</Text>
+                      <Text style={[styles.metaValue, { color: roles.headingText }]}>
+                        {formatDensityScore(screening.hair_density_score)}
+                      </Text>
+                    </View>
+                    <View style={styles.metaItem}>
+                      <Text style={[styles.metaKey, { color: roles.metaText }]}>Affected area</Text>
+                      <Text style={[styles.metaValue, { color: roles.headingText }]}>
+                        {formatAffectedRegions(screening.affected_regions)}
+                      </Text>
+                    </View>
+                    <View style={styles.metaItem}>
+                      <Text style={[styles.metaKey, { color: roles.metaText }]}>Shedding</Text>
+                      <Text style={[styles.metaValue, { color: roles.headingText }]}>
+                        {screening.shedding_level || 'Not sure'}
+                      </Text>
+                    </View>
                   </View>
 
+                  {screening.scalp_coverage_notes ? (
+                    <Text style={[styles.damageNote, { color: roles.metaText }]}>
+                      {screening.scalp_coverage_notes}
+                    </Text>
+                  ) : null}
+                  {screening.improvement_recommendation ? (
+                    <Text style={[styles.damageNote, { color: roles.metaText }]}>
+                      {screening.improvement_recommendation}
+                    </Text>
+                  ) : null}
                   {screening.visible_damage_notes ? (
                     <Text style={[styles.damageNote, { color: roles.metaText }]}>
                       {screening.visible_damage_notes}
@@ -483,8 +534,10 @@ export function HairLogDetailModal({ visible, dateKey = '', entries = [], onClos
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,
-    justifyContent: 'center',
-    padding: theme.spacing.lg,
+    justifyContent: 'flex-end',
+    paddingHorizontal: theme.spacing.lg,
+    paddingTop: theme.spacing.xxl,
+    paddingBottom: theme.spacing.lg,
     backgroundColor: theme.colors.overlay,
   },
   backdrop: {
@@ -493,8 +546,9 @@ const styles = StyleSheet.create({
   card: {
     width: '100%',
     maxWidth: 440,
-    maxHeight: '74%',
+    maxHeight: '88%',
     alignSelf: 'center',
+    overflow: 'hidden',
   },
   header: {
     flexDirection: 'row',
@@ -525,11 +579,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   scroll: {
-    flexGrow: 0,
+    flexShrink: 1,
   },
   scrollContent: {
     gap: theme.spacing.xs,
-    paddingBottom: theme.spacing.xs,
+    paddingBottom: theme.spacing.xxxl,
   },
   statusCard: {
     borderRadius: 16,

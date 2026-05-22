@@ -36,7 +36,7 @@ export function DonorCertificatePreview({
         </Text>
 
         <View style={styles.detailsCard}>
-          <CertificateDetailRow label="Submission code" value={certificate.submissionCode} />
+          <CertificateDetailRow label="Donation reference" value={certificate.donationReference} />
           <CertificateDetailRow label="Donation date" value={certificate.donationDateLabel} />
           <CertificateDetailRow label="Result" value={certificate.decision || 'Qualified'} />
           <CertificateDetailRow label="Bundles" value={String(certificate.bundleQuantity || 0)} />

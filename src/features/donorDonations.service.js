@@ -193,6 +193,8 @@ const buildAiConditionReasons = (screening = null) => {
     screening?.detected_condition,
     screening?.visible_damage_notes,
     screening?.summary,
+    screening?.scalp_coverage_notes,
+    screening?.improvement_recommendation,
   ].filter(Boolean).join(' ').toLowerCase();
   const screeningLogMessage = getScreeningLogMessage(screening, { preferSummary: true });
   const detectedConditionText = String(screening?.detected_condition || '').toLowerCase();
@@ -200,12 +202,34 @@ const buildAiConditionReasons = (screening = null) => {
   const drynessLevel = Number(screening?.dryness_level);
   const frizzLevel = Number(screening?.frizz_level);
   const oilinessLevel = Number(screening?.oiliness_level);
+  const hairDensityScore = Number(screening?.hair_density_score);
+  const visibleScalpArea = String(screening?.visible_scalp_area || '').trim().toLowerCase();
+  const sheddingLevel = String(screening?.shedding_level || '').trim().toLowerCase();
   const hasPositiveMention = (patterns = [], negatedPatterns = []) => (
     patterns.some((pattern) => pattern.test(sourceText))
     && !negatedPatterns.some((pattern) => pattern.test(sourceText))
   );
 
   const conditionReasons = [];
+  const coverageTrackingMessage = screening?.improvement_recommendation
+    || screening?.scalp_coverage_notes
+    || 'Not enough donatable hair yet. This result can still be used for hair wellness and improvement tracking.';
+
+  if (screening?.bald_spots_present === true) {
+    pushUniqueReason(conditionReasons, coverageTrackingMessage);
+  }
+
+  if (['moderate', 'high'].includes(visibleScalpArea)) {
+    pushUniqueReason(conditionReasons, coverageTrackingMessage);
+  }
+
+  if (['moderate', 'severe'].includes(sheddingLevel)) {
+    pushUniqueReason(conditionReasons, coverageTrackingMessage);
+  }
+
+  if (Number.isFinite(hairDensityScore) && hairDensityScore < 45) {
+    pushUniqueReason(conditionReasons, coverageTrackingMessage);
+  }
 
   const hasDrynessConcern = hasPositiveMention(
     [/\bdry(?:ness)?\b/, /\bdehydrat(?:ed|ion)\b/],
@@ -290,9 +314,16 @@ const screeningLooksDonationReady = ({
   const mergedText = `${conditionText} ${summaryText} ${visibleDamageText}`;
   const confidenceScore = Number(screening?.confidence_score);
   const damageLevel = Number(screening?.damage_level);
+  const hairDensityScore = Number(screening?.hair_density_score);
+  const visibleScalpArea = String(screening?.visible_scalp_area || '').trim().toLowerCase();
+  const sheddingLevel = String(screening?.shedding_level || '').trim().toLowerCase();
 
   if (Number.isFinite(confidenceScore) && confidenceScore < 0.55) return false;
   if (Number.isFinite(damageLevel) && damageLevel >= 3) return false;
+  if (screening?.bald_spots_present === true) return false;
+  if (['moderate', 'high'].includes(visibleScalpArea)) return false;
+  if (['moderate', 'severe'].includes(sheddingLevel)) return false;
+  if (Number.isFinite(hairDensityScore) && hairDensityScore < 45) return false;
 
   const hasHealthySignal = /\b(healthy|good|excellent|balanced|suitable|donatable)\b/.test(mergedText)
     || /\bno\s+(?:visible\s+|structural\s+|hair\s+)?damage\b/.test(mergedText)
@@ -394,7 +425,7 @@ const evaluateAiDonationEligibility = ({ screening = null, detail = null, donati
   };
 };
 
-const createDonationSubmissionCode = (prefix = 'DON') => (
+const createDonationReference = (prefix = 'DON') => (
   `${prefix}-${Date.now().toString(36).toUpperCase()}`
 );
 
@@ -480,7 +511,7 @@ const buildDonationNotification = ({
 });
 
 const createDonationCertificateNumber = (submission = null) => {
-  const submissionPart = String(submission?.submission_code || submission?.submission_id || Date.now())
+  const submissionPart = String(submission?.donation_reference || submission?.submission_id || Date.now())
     .replace(/[^a-z0-9]+/gi, '')
     .slice(-10)
     .toUpperCase();
@@ -583,8 +614,13 @@ const ensureDonationCertificateForApprovedSubmission = async ({
     return existingResult.data;
   }
 
+  const isEventSubmission = Boolean(submission?.event_request_id || submission?.donation_drive_id);
+  if (isEventSubmission && !isCutAndShipCompletedStatus(submission?.status)) {
+    return currentCertificate || null;
+  }
+
   const approvalEvidence = findDonationApprovalEvidence({ trackingEntries, logistics });
-  if (!approvalEvidence) {
+  if (!approvalEvidence && !isEventSubmission) {
     return currentCertificate || null;
   }
 
@@ -593,9 +629,9 @@ const ensureDonationCertificateForApprovedSubmission = async ({
     submission_id: submission.submission_id,
     certificate_number: createDonationCertificateNumber(submission),
     certificate_type: 'Certificate of Donation',
-    issued_by: approvalEvidence.issuedBy,
-    issued_at: approvalEvidence.issuedAt || new Date().toISOString(),
-    remarks: 'Issued after staff scanned the Cut & Ship stage.',
+    issued_by: approvalEvidence?.issuedBy || submission?.cut_by_user_id || null,
+    issued_at: approvalEvidence?.issuedAt || submission?.cut_at || submission?.updated_at || new Date().toISOString(),
+    remarks: 'Issued after staff approved the hair quality review.',
   });
 
   if (certificateResult.error || !certificateResult.data?.certificate_id) {
@@ -609,7 +645,7 @@ const ensureDonationCertificateForApprovedSubmission = async ({
         dedupeKey: `${notificationTypes.certificateAvailable}:${certificateResult.data.certificate_id}`,
         type: notificationTypes.certificateAvailable,
         title: 'Certificate available',
-        message: 'Your Cut & Ship was scanned. Your certificate is ready in Achievements.',
+        message: 'Your hair donation was approved. Your certificate is ready in Achievements.',
         createdAt: certificateResult.data.issued_at || new Date().toISOString(),
         referenceType: 'route',
         referenceId: '/donor/achievements',
@@ -625,7 +661,7 @@ const getIndependentQrMetadata = (submission = null) => {
   const normalizedQrStatus = normalizeStatus(qrStatus);
   const hasDbQr = Boolean(
     submission?.submission_id
-    && submission?.submission_code
+    && submission?.donation_reference
     && !['', 'not generated'].includes(normalizedQrStatus)
   );
 
@@ -635,7 +671,7 @@ const getIndependentQrMetadata = (submission = null) => {
 
   const isActivated = ['active', 'activated', 'scanned', 'qr active', 'received', 'shipped'].includes(normalizedQrStatus);
   return {
-    reference: submission.submission_code,
+    reference: submission.donation_reference,
     generated_at: submission?.qr_generated_at || submission?.updated_at || submission?.created_at || '',
     expires_at: '',
     activated_at: isActivated ? (submission?.updated_at || submission?.qr_generated_at || '') : '',
@@ -1202,7 +1238,7 @@ const buildDonationHistory = ({ submissions = [], activeSubmission = null }) => 
     .filter((submission) => isTerminalDonationStatus(submission?.status))
     .map((submission) => ({
       submission_id: submission.submission_id,
-      submission_code: submission.submission_code || '',
+      donation_reference: submission.donation_reference || '',
       status: submission.status || '',
       donation_source: submission.donation_source || '',
       created_at: submission.created_at || '',
@@ -1313,12 +1349,8 @@ const resolveTimelineStages = ({
 }) => {
   const isEventFlow = flowType === 'drive' || Boolean(submission?.donation_drive_id);
   const donationSubmittedEvidenceAt = submission?.submitted_at || submission?.updated_at || submission?.created_at || null;
-  const hasPresentAttendance = isPresentAttendanceStatus(registration?.attendance_status);
   const hasCutStatus = isCutAndShipCompletedStatus(submission?.status);
-  const cutAndShipScannedAt = registration?.rsvp_scanned_at
-    || registration?.attendance_marked_at
-    || (hasPresentAttendance ? registration?.updated_at || registration?.registered_at || null : null)
-    || submission?.cut_at
+  const cutAndShipApprovedAt = submission?.cut_at
     || (hasCutStatus ? submission?.updated_at || submission?.created_at || null : null);
   const waybillEvidenceAt = submission?.qr_generated_at || submission?.submitted_at || submission?.updated_at || submission?.created_at || null;
   const readyEntry = findTimelineMatch(trackingEntries, (entry) => (
@@ -1403,9 +1435,9 @@ const resolveTimelineStages = ({
     {
       key: 'cut_and_ship',
       label: 'Cut & Ship',
-      statusLabel: transitEntry?.status || (cutAndShipScannedAt ? 'Complete' : ''),
-      savedNote: transitEntry?.description || 'Staff scanned your Cut & Ship QR. Your donor certificate is issued after this scan.',
-      evidenceAt: transitEvidenceAt || cutAndShipScannedAt,
+      statusLabel: transitEntry?.status || (cutAndShipApprovedAt ? 'Complete' : ''),
+      savedNote: transitEntry?.description || 'Staff approves the hair quality review before this donation can continue to bundling.',
+      evidenceAt: transitEvidenceAt || cutAndShipApprovedAt,
       entry: transitEntry || registration,
       parcelImages,
     },
@@ -1659,25 +1691,17 @@ const getParcelImagesWithUrls = async (detail) => {
 
 export const buildDriveInvitationQrPayload = ({ drive, registration }) => (
   JSON.stringify({
+    type: 'event_rsvp',
     Payload_Type: 'Donation_Drive_Registration',
     Registration_ID: registration?.registration_id || null,
+    Event_Attendee_ID: registration?.registration_id || null,
     Event_Request_ID: registration?.donation_drive_id || drive?.event_request_id || drive?.donation_drive_id || null,
     User_ID: registration?.user_id || null,
+    Waybill_Code: registration?.waybill_code || '',
+    Submission_ID: registration?.submission_id || null,
+    Submission_Detail_ID: registration?.submission_detail_id || null,
     Registration_Status: registration?.registration_status || '',
     Attendance_Status: registration?.attendance_status || '',
-    Registered_At: registration?.registered_at || '',
-    Updated_At: registration?.updated_at || '',
-    Attendance_Marked_At: registration?.attendance_marked_at || '',
-    Event_Title: drive?.event_title || '',
-    Start_Date: drive?.start_date || '',
-    End_Date: drive?.end_date || '',
-    Street: drive?.street || '',
-    Barangay: drive?.barangay || '',
-    City: drive?.city || '',
-    Province: drive?.province || '',
-    Country: drive?.country || '',
-    Organization_ID: drive?.organization_id || null,
-    Organization_Name: drive?.organization_name || '',
   })
 );
 
@@ -1688,7 +1712,7 @@ export const buildIndependentDonationQrPayload = ({
   JSON.stringify({
     type: 'hair_submission',
     submission_id: submission?.submission_id || null,
-    submission_code: submission?.submission_code || '',
+    donation_reference: submission?.donation_reference || '',
     submission_detail_id: detail?.submission_detail_id || null,
     user_id: submission?.user_id || null,
     donation_source: submission?.donation_source || '',
@@ -1711,7 +1735,7 @@ export const buildDonationTrackingQrPayload = ({
   return JSON.stringify({
     type: 'hair_submission',
     submission_id: submission?.submission_id || null,
-    submission_code: submission?.submission_code || '',
+    donation_reference: submission?.donation_reference || '',
     submission_detail_id: detail?.submission_detail_id || null,
     user_id: submission?.user_id || null,
     donation_source: submission?.donation_source || '',
@@ -1736,7 +1760,7 @@ const parseDonationTrackingQrPayload = (payloadText = '') => {
     return {
       qr_token: decodeURIComponent(tokenUrlMatch[1]),
       submission_id: '',
-      submission_code: '',
+      donation_reference: '',
       submission_detail_id: '',
       user_id: '',
       donation_source: '',
@@ -1754,7 +1778,7 @@ const parseDonationTrackingQrPayload = (payloadText = '') => {
         return {
           submission_id: parsed?.submission_id != null ? String(parsed.submission_id) : '',
           qr_token: parsed?.qr_token || '',
-          submission_code: parsed?.submission_code || '',
+          donation_reference: parsed?.donation_reference || '',
           submission_detail_id: parsed?.submission_detail_id != null ? String(parsed.submission_detail_id) : '',
           user_id: parsed?.user_id != null ? String(parsed.user_id) : '',
           donation_source: parsed?.donation_source || '',
@@ -1773,8 +1797,7 @@ const parseDonationTrackingQrPayload = (payloadText = '') => {
     submission_id: getDonationQrPayloadValue(payloadText, 'Hair_Submissions.Submission_ID')
       || getDonationQrPayloadValue(payloadText, 'Submission_ID'),
     qr_token: getDonationQrPayloadValue(payloadText, 'QR_Token'),
-    submission_code: getDonationQrPayloadValue(payloadText, 'Hair_Submissions.Submission_Code')
-      || getDonationQrPayloadValue(payloadText, 'Submission_Code'),
+    donation_reference: '',
     submission_detail_id: getDonationQrPayloadValue(payloadText, 'Hair_Submission_Details.Submission_Detail_ID')
       || getDonationQrPayloadValue(payloadText, 'Submission_Detail_ID'),
     user_id: getDonationQrPayloadValue(payloadText, 'Hair_Submissions.User_ID')
@@ -1900,7 +1923,7 @@ const buildDonationQrHtmlDocument = ({
 };
 
 export const buildQrImageUrl = (payloadText = '', size = 320) => (
-  `${QR_IMAGE_BASE_URL}?size=${size}x${size}&data=${encodeURIComponent(payloadText)}`
+  `${QR_IMAGE_BASE_URL}?size=${size}x${size}&margin=12&ecc=M&data=${encodeURIComponent(payloadText)}`
 );
 
 export const isQrSharingSupported = async () => (
@@ -2181,7 +2204,7 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
           || activeDrive?.registration?.updated_at
           || activeSubmission?.updated_at
           || new Date().toISOString(),
-        remarks: 'Issued after staff marked Cut & Ship complete.',
+        remarks: 'Issued after staff marked RSVP attendance complete.',
       });
       if (certificateResultFromAttendance?.data?.certificate_id) {
         certificate = certificateResultFromAttendance.data;
@@ -2697,7 +2720,7 @@ export const generateIndependentDonationQrFast = async ({
   }
 
   const currentQr = getIndependentDonationQrState({ submission });
-  const reference = currentQr?.reference || submission?.submission_code || `SUB-${submission.submission_id}`;
+  const reference = currentQr?.reference || submission?.donation_reference || `DON-${submission.submission_id}`;
   const qrPayload = buildDonationTrackingQrPayload({
     submission,
     detail: getLatestSubmissionDetailSnapshot(submission),
@@ -2897,7 +2920,7 @@ export const ensureIndependentDonationQr = async ({
     return {
       success: true,
       qrState: {
-        reference: submissionResult.data?.submission_code || submission?.submission_code || `SUB-${submission.submission_id}`,
+        reference: submissionResult.data?.donation_reference || submission?.donation_reference || `DON-${submission.submission_id}`,
         generated_at: submittedAt,
         status: 'Generated',
         is_valid: true,
@@ -2943,7 +2966,7 @@ export const ensureIndependentDonationQr = async ({
   }
 
   const generatedAt = new Date().toISOString();
-  const reference = submission?.submission_code || `SUB-${submission.submission_id}`;
+  const reference = submission?.donation_reference || `DON-${submission.submission_id}`;
 
   const syncedResult = await syncIndependentDonationSubmission({
     userId,
@@ -3070,7 +3093,7 @@ export const startIndependentDonationDraft = async ({
       user_id: userId,
       database_user_id: databaseUserId,
       donation_drive_id: null,
-      submission_code: createDonationSubmissionCode('DON'),
+      donation_reference: createDonationReference('DON'),
       donation_source: 'Independent',
       donor_notes: '',
       recipient_type: 'Organization',
@@ -3193,12 +3216,12 @@ export const activateIndependentDonationQrByScan = async ({
   }
 
   const scannedQr = parseDonationTrackingQrPayload(scannedPayload);
-  if (!scannedQr.submission_code) {
+  if (!scannedQr.donation_reference) {
     return { success: false, error: 'The scanned code is not a valid Donivra donation QR.' };
   }
 
   if (
-    scannedQr.submission_code !== submission.submission_code
+    scannedQr.donation_reference !== submission.donation_reference
     || (scannedQr.submission_id && Number(scannedQr.submission_id) !== Number(submission.submission_id))
   ) {
     return { success: false, error: 'The scanned QR does not match your current donation.' };
@@ -3743,7 +3766,7 @@ export const saveManualDonationQualification = async ({
     user_id: userId,
     database_user_id: databaseUserId,
     donation_drive_id: donationDriveId || null,
-    submission_code: createDonationSubmissionCode('MAN'),
+    donation_reference: createDonationReference('MAN'),
     donation_source: donationDriveId ? MANUAL_DONATION_SOURCE : 'Independent',
     donor_notes: submissionNotes,
     guardian_consent_id: permission.guardianConsentId || null,
@@ -4243,7 +4266,7 @@ export const buildCertificatePreviewModel = ({ certificateRow, submissionEntry, 
     certificateNumber: certificateRow.certificate_number || 'Pending certificate number',
     donorName,
     submissionId: certificateRow.submission_id || submissionEntry?.submission?.submission_id || null,
-    submissionCode: submissionEntry?.submission?.submission_code || 'Pending submission code',
+    donationReference: submissionEntry?.submission?.donation_reference || 'Pending donation reference',
     donationDate: submissionEntry?.submission?.created_at || certificateRow.issued_at || '',
     donationDateLabel: formatDateShort(submissionEntry?.submission?.created_at || certificateRow.issued_at || ''),
     bundleQuantity: Array.isArray(submissionEntry?.submission?.submission_details)

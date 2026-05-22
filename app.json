@@ -11,14 +11,20 @@
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSCameraUsageDescription": "Allow Donivra to use the camera for guided hair donation photo capture and AI hair screening."
+        "NSCameraUsageDescription": "Donivra needs camera access to scan your face and hair for donation screening.",
+        "NSSpeechRecognitionUsageDescription": "Allow Donivra to use speech recognition so Donivra AI can understand your spoken question.",
+        "NSMicrophoneUsageDescription": "Allow Donivra to use the microphone so Donivra AI can listen to your login or signup question."
       }
     },
     "android": {
-      "minSdkVersion": 26,
       "softwareKeyboardLayoutMode": "resize",
       "permissions": [
-        "android.permission.CAMERA"
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.DOWNLOAD_WITHOUT_NOTIFICATION",
+        "android.permission.ACCESS_NETWORK_STATE"
       ],
       "adaptiveIcon": {
         "backgroundColor": "#f4f1f1",
@@ -72,14 +78,24 @@
         {
           "microphonePermission": "Allow Donivra to use the microphone so Donivra AI can listen to your login or signup question.",
           "speechRecognitionPermission": "Allow Donivra to use speech recognition so Donivra AI can understand your spoken question.",
-          "androidSpeechServicePackages": ["com.google.android.googlequicksearchbox"]
+          "androidSpeechServicePackages": [
+            "com.google.android.googlequicksearchbox"
+          ]
         }
       ],
+      "@config-plugins/react-native-blob-util",
+      "@config-plugins/react-native-pdf",
       "@react-native-community/datetimepicker"
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "c7f749dc-f184-40cc-b85b-0c77fae5defa"
+      }
     }
   }
 }

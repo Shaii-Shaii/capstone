@@ -8,7 +8,7 @@ import { AuthProvider, useAuth } from '../src/providers/AuthProvider';
 import { useRoleRedirect } from '../src/hooks/useRoleRedirect';
 import { normalizeResolvedTheme, resolveBrandLogoSource, theme } from '../src/design-system/theme';
 
-const SPLASH_DURATION_MS = 2000;
+const SPLASH_DURATION_MS = 650;
 
 function LaunchSplash({ resolvedTheme }) {
   const [imageFailed, setImageFailed] = useState(false);

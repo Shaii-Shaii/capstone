@@ -125,9 +125,7 @@ export const writeAuditLog = async ({
         user_email: userEmail || null,
         resource: resource || null,
         status: status || 'success',
-      }])
-      .select('log_id')
-      .maybeSingle();
+      }]);
 
     if (result.error) {
       throw result.error;
@@ -135,7 +133,7 @@ export const writeAuditLog = async ({
 
     return {
       success: true,
-      logId: result.data?.log_id || null,
+      logId: null,
       error: null,
     };
   } catch (error) {

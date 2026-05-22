@@ -60,6 +60,24 @@ const isOngoingWigRequest = (request) => {
   return !COMPLETED_REQUEST_TOKENS.some((token) => status.includes(token));
 };
 
+const isCancellableWigRequest = (request) => {
+  if (!request?.req_id) return false;
+  const status = String(request.status || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  if (!status) return true;
+  return ![
+    'accepted',
+    'approved',
+    'in production',
+    'to be release',
+    'releasing',
+    'released',
+    'cancelled',
+    'canceled',
+    'rejected',
+    'closed',
+  ].some((token) => status.includes(token));
+};
+
 const ensurePatientDetails = async (userId) => {
   const { data: existingPatientDetails, error: patientDetailsError } = await fetchPatientDetailsByUserId(userId);
   if (patientDetailsError) {
@@ -130,11 +148,44 @@ export const getPatientWigRequestContext = async (userId) => {
       throw new Error(wigSpecificationError.message || 'Unable to load the latest wig specification.');
     }
 
+    const hospitalId = latestWigRequest?.hospital_id || patientDetails.hospital_id || null;
+    const selectedWigId = latestWigRequest?.allocated_wig_id
+      || latestAllocation?.wig_id
+      || latestWigRequest?.requested_wig_id
+      || null;
+
+    const [
+      { data: requestHospital, error: hospitalError },
+      { data: requestWig, error: requestWigError },
+      { data: latestReleaseSchedule, error: releaseScheduleError },
+    ] = await Promise.all([
+      hospitalId ? WigRequestAPI.fetchHospitalById(hospitalId) : { data: null, error: null },
+      selectedWigId ? WigRequestAPI.fetchWigDetailsById(selectedWigId) : { data: null, error: null },
+      latestWigRequest?.req_id
+        ? WigRequestAPI.fetchLatestReleaseScheduleByRequestId(latestWigRequest.req_id)
+        : { data: null, error: null },
+    ]);
+
+    if (hospitalError) {
+      throw new Error(hospitalError.message || 'Unable to load the request hospital.');
+    }
+
+    if (requestWigError) {
+      throw new Error(requestWigError.message || 'Unable to load the request wig specification.');
+    }
+
+    if (releaseScheduleError) {
+      throw new Error(releaseScheduleError.message || 'Unable to load the release schedule.');
+    }
+
     return {
       patientDetails,
       latestWigRequest,
       latestWigSpecification,
       latestAllocation,
+      requestHospital,
+      requestWig,
+      latestReleaseSchedule,
       error: null,
     };
   } catch (error) {
@@ -143,6 +194,9 @@ export const getPatientWigRequestContext = async (userId) => {
       latestWigRequest: null,
       latestWigSpecification: null,
       latestAllocation: null,
+      requestHospital: null,
+      requestWig: null,
+      latestReleaseSchedule: null,
       error: error.message || 'Unable to load the patient wig request context.',
     };
   }
@@ -150,14 +204,37 @@ export const getPatientWigRequestContext = async (userId) => {
 
 export const getActiveWigTryOnFilters = async () => {
   try {
-    const { data, error } = await WigRequestAPI.fetchActiveWigAiFilters();
+    const [{ data, error }, { data: physicalSpecs, error: physicalSpecError }] = await Promise.all([
+      WigRequestAPI.fetchActiveWigAiFilters(),
+      WigRequestAPI.fetchWigPhysicalSpecifications(),
+    ]);
 
     if (error) {
       throw new Error(error.message || 'Unable to load available wigs.');
     }
 
+    if (physicalSpecError) {
+      throw new Error(physicalSpecError.message || 'Unable to load wig specifications.');
+    }
+
+    const physicalSpecsByWigId = new Map(
+      (physicalSpecs || []).map((specification) => [String(specification.wig_id), specification])
+    );
+    const wigs = (data || []).map((wig) => ({
+      ...wig,
+      physical_specification: physicalSpecsByWigId.get(String(wig.wig_id)) || {
+        wig_id: wig.wig_id || null,
+        length: wig.pending_hair_length ?? null,
+        color: wig.pending_hair_color || '',
+        hair_texture: wig.pending_hair_texture || '',
+        hair_density: wig.pending_hair_density || '',
+        cap_size: wig.pending_cap_size || '',
+        style: wig.pending_style || '',
+      },
+    }));
+
     return {
-      wigs: data || [],
+      wigs,
       error: null,
     };
   } catch (error) {
@@ -165,6 +242,67 @@ export const getActiveWigTryOnFilters = async () => {
     return {
       wigs: [],
       error: error.message || 'Unable to load available wigs.',
+    };
+  }
+};
+
+const normalizePreferenceText = (value) => String(value ?? '').trim();
+
+const formatLengthPreference = (value) => {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue) || numericValue <= 0) return '';
+  return Number.isInteger(numericValue) ? String(numericValue) : String(Number(numericValue.toFixed(2)));
+};
+
+const collectUnique = (items, mapper) => {
+  const values = [];
+  const seen = new Set();
+
+  items.forEach((item) => {
+    const value = normalizePreferenceText(mapper(item));
+    if (!value) return;
+    const key = value.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    values.push(value);
+  });
+
+  return values;
+};
+
+export const getWigPreferenceOptions = async () => {
+  try {
+    const { data, error } = await WigRequestAPI.fetchWigPhysicalSpecifications();
+
+    if (error) {
+      throw new Error(error.message || 'Unable to load wig preference options.');
+    }
+
+    const specifications = data || [];
+
+    return {
+      options: {
+        lengths: collectUnique(specifications, (item) => formatLengthPreference(item.length)),
+        colors: collectUnique(specifications, (item) => item.color),
+        textures: collectUnique(specifications, (item) => item.hair_texture),
+        densities: collectUnique(specifications, (item) => item.hair_density),
+        capSizes: collectUnique(specifications, (item) => item.cap_size),
+        styles: collectUnique(specifications, (item) => item.style),
+      },
+      error: null,
+    };
+  } catch (error) {
+    logAppError('wig_request.preference_options', error);
+    return {
+      options: {
+        lengths: [],
+        colors: [],
+        textures: [],
+        densities: [],
+        capSizes: [],
+        styles: [],
+      },
+      error: error.message || 'Unable to load wig preference options.',
     };
   }
 };
@@ -198,7 +336,18 @@ export const savePatientWigRequestFlow = async ({
     }
 
     if (isOngoingWigRequest(existingWigRequest)) {
-      throw new Error('You already have an ongoing wig request.');
+      logAppEvent('wig_request.save', 'Existing ongoing wig request found; skipping duplicate create.', {
+        userId,
+        reqId: existingWigRequest.req_id || null,
+      }, 'info');
+
+      return {
+        wigRequest: existingWigRequest,
+        wigSpecification: null,
+        alreadyExists: true,
+        warning: null,
+        error: null,
+      };
     }
 
     const { data: systemUser, error: systemUserError } = await resolveSystemUser(userId);
@@ -259,6 +408,13 @@ export const savePatientWigRequestFlow = async ({
       patientId: patientDetails.patient_id,
     });
 
+    const preferenceNotes = [
+      preferences.hairDensity ? `Hair density preference: ${preferences.hairDensity}` : '',
+      preferences.specialNotes,
+      preview?.style_notes,
+      preview?.summary,
+    ].filter(Boolean).join('\n\n') || null;
+
     const { data: wigSpecification, error: wigSpecificationError } = await WigRequestAPI.createWigSpecification({
       wig_request_id: wigRequest.req_id,
       preferred_color: preferences.preferredColor,
@@ -266,7 +422,7 @@ export const savePatientWigRequestFlow = async ({
       hair_texture: preferences.hairTexture || null,
       cap_size: preferences.capSize || null,
       style_preference: preferences.stylePreference || preview?.recommended_style_name || null,
-      notes: [preferences.specialNotes, preview?.style_notes, preview?.summary].filter(Boolean).join('\n\n') || null,
+      notes: preferenceNotes,
       ai_wig_preview_url: preview?.preview_url || preview?.generated_image_data_url || null,
     });
 
@@ -368,6 +524,84 @@ export const savePatientWigRequestFlow = async ({
       wigRequest: null,
       wigSpecification: null,
       error: error.message || 'Unable to save the wig request.',
+    };
+  }
+};
+
+export const cancelPatientWigRequest = async ({ userId, wigRequestId }) => {
+  try {
+    if (!userId) throw new Error('Your session is not ready.');
+    if (!wigRequestId) throw new Error('No request selected.');
+
+    const patientDetails = await ensurePatientDetails(userId);
+    const { data: latestWigRequest, error: latestWigRequestError } =
+      await WigRequestAPI.fetchLatestWigRequestByPatientDetailsId(patientDetails.patient_id);
+
+    if (latestWigRequestError) {
+      throw new Error(latestWigRequestError.message || 'Unable to check this request.');
+    }
+
+    if (!latestWigRequest?.req_id || String(latestWigRequest.req_id) !== String(wigRequestId)) {
+      throw new Error('This request is no longer active.');
+    }
+
+    if (!isCancellableWigRequest(latestWigRequest)) {
+      throw new Error('This request can no longer be cancelled.');
+    }
+
+    const { data: cancelledRequest, error: cancelError } = await WigRequestAPI.cancelPendingWigRequest({
+      reqId: latestWigRequest.req_id,
+      patientId: patientDetails.patient_id,
+    });
+
+    if (cancelError) {
+      throw new Error(cancelError.message || 'Unable to cancel this request.');
+    }
+
+    if (!cancelledRequest?.req_id) {
+      const { data: refreshedWigRequest } =
+        await WigRequestAPI.fetchLatestWigRequestByPatientDetailsId(patientDetails.patient_id);
+
+      if (String(refreshedWigRequest?.status || '').trim().toLowerCase() === 'cancelled') {
+        return {
+          wigRequest: refreshedWigRequest,
+          error: null,
+        };
+      }
+
+      throw new Error('Unable to cancel this request. Please apply the patient cancel policy in Supabase.');
+    }
+
+    try {
+      const { data: systemUser } = await resolveSystemUser(userId);
+      await writeAuditLog({
+        authUserId: userId,
+        databaseUserId: systemUser?.user_id || null,
+        action: 'wig_request.cancel',
+        description: `Cancelled wig request ${latestWigRequest.req_id}.`,
+        resource: 'wig_requests',
+        status: 'success',
+      });
+    } catch (auditError) {
+      logAppError('wig_request.cancel.audit', auditError, {
+        userId,
+        reqId: latestWigRequest.req_id,
+      });
+    }
+
+    return {
+      wigRequest: cancelledRequest,
+      error: null,
+    };
+  } catch (error) {
+    logAppError('wig_request.cancel', error, {
+      userId,
+      wigRequestId,
+    });
+
+    return {
+      wigRequest: null,
+      error: error.message || 'Unable to cancel this request.',
     };
   }
 };

@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
   Image,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   PanResponder,
   Platform,
@@ -16,10 +18,7 @@ import { Controller, useForm, useWatch } from 'react-hook-form';
 import { useRouter } from 'expo-router';
 import Constants from 'expo-constants';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import * as FileSystem from 'expo-file-system/legacy';
-import * as MediaLibrary from 'expo-media-library';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import * as Sharing from 'expo-sharing';
 import { DashboardLayout } from './DashboardLayout';
 import { DashboardHeader } from '../ui/DashboardHeader';
 import { AppCard } from '../ui/AppCard';
@@ -121,27 +120,8 @@ const CAPTURE_FACE_GUIDE_RADIUS = 72;
 const DEFAULT_WIG_CALIBRATION = {
   offsetX: 0,
   offsetY: 0,
-  scale: 1,
+  scale: 1.08,
 };
-
-const buildRecommendationTitle = ({ preview, specification, draftValues }) => (
-  preview?.recommended_style_name
-  || [
-    specification?.preferred_length || draftValues?.preferredLength || '',
-    specification?.preferred_color || draftValues?.preferredColor || '',
-    'Wig',
-  ]
-    .filter(Boolean)
-    .join(' ')
-  || 'Suggested Wig Style'
-);
-
-const buildRecommendationFamily = ({ preview, specification, draftValues }) => (
-  preview?.recommended_style_family
-  || specification?.preferred_length
-  || draftValues?.preferredLength
-  || 'Patient wig recommendation'
-);
 
 const formatRequestStatus = (value) => {
   const raw = String(value || 'Pending').trim();
@@ -151,6 +131,53 @@ const formatRequestStatus = (value) => {
     .filter(Boolean)
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
     .join(' ');
+};
+
+const canCancelWigRequest = (request) => {
+  if (!request?.req_id) return false;
+  const status = String(request.status || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  if (!status) return true;
+  return ![
+    'accepted',
+    'approved',
+    'in production',
+    'to be release',
+    'releasing',
+    'released',
+    'cancelled',
+    'canceled',
+    'rejected',
+    'closed',
+  ].some((token) => status.includes(token));
+};
+
+const formatPatientFieldValue = (value, fallback = 'Not provided') => {
+  const normalized = String(value ?? '').trim();
+  return normalized || fallback;
+};
+
+const formatPatientDateValue = (value) => {
+  if (!value) return 'Not provided';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleDateString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  });
+};
+
+const getFileNameFromUrl = (value) => {
+  const normalized = String(value || '').trim();
+  if (!normalized) return '';
+
+  try {
+    const url = new URL(normalized);
+    const pathname = decodeURIComponent(url.pathname || '');
+    return pathname.split('/').filter(Boolean).pop() || normalized;
+  } catch {
+    return normalized.split('/').filter(Boolean).pop() || normalized;
+  }
 };
 
 const buildRecommendationOptions = ({ preview, specification, draftValues }) => {
@@ -186,7 +213,7 @@ const buildRecommendationOptions = ({ preview, specification, draftValues }) => 
           name: specification?.preferred_color || draftValues?.preferredColor,
           note: 'Suggested color direction',
           family: '',
-          matchLabel: 'Recommended',
+          matchLabel: 'Selected',
           generatedImageUri: '',
         }
       : null,
@@ -196,73 +223,13 @@ const buildRecommendationOptions = ({ preview, specification, draftValues }) => 
           name: 'Fit Notes',
           note: preview.style_notes,
           family: '',
-          matchLabel: 'AI Note',
+          matchLabel: 'Note',
           generatedImageUri: '',
         }
       : null,
   ].filter(Boolean);
 
   return fallbackOptions.slice(0, 3);
-};
-
-const normalizeMatchText = (value) => String(value || '').trim().toLowerCase();
-
-const collectWigSearchText = (wig) => normalizeMatchText([
-  wig?.wig_name,
-  wig?.fit_settings?.label,
-  wig?.fit_settings?.style,
-  wig?.fit_settings?.color,
-  wig?.fit_settings?.length,
-  wig?.fit_settings?.texture,
-  wig?.fit_settings?.tags,
-  wig?.fit_settings?.recommended_for,
-  wig?.fit_settings?.recommendation_tags,
-  wig?.pending_wig_name,
-  wig?.pending_hair_color,
-  wig?.pending_hair_texture,
-  wig?.pending_hair_density,
-  wig?.pending_cap_size,
-  wig?.pending_style,
-].flat().filter(Boolean).join(' '));
-
-const getRecommendedWigIds = ({ wigs, preferredColor, preferredLength, hairTexture, recommendationTitle, recommendationFamily }) => {
-  const preferenceTerms = [
-    preferredColor,
-    preferredLength,
-    hairTexture,
-    recommendationTitle,
-    recommendationFamily,
-  ]
-    .map(normalizeMatchText)
-    .filter(Boolean);
-
-  if (!Array.isArray(wigs) || !wigs.length || !preferenceTerms.length) return new Set();
-
-  const scored = wigs
-    .map((wig) => {
-      const searchText = collectWigSearchText(wig);
-      const score = preferenceTerms.reduce((total, term) => {
-        if (!term) return total;
-        if (searchText.includes(term)) return total + 2;
-
-        return total + term
-          .split(/\s+/)
-          .filter((part) => part.length > 2 && searchText.includes(part))
-          .length;
-      }, 0);
-
-      return { wig, score };
-    })
-    .filter((item) => item.score > 0)
-    .sort((a, b) => b.score - a.score);
-
-  const topScore = scored[0]?.score || 0;
-  return new Set(
-    scored
-      .filter((item) => item.score === topScore || item.score >= 2)
-      .slice(0, 3)
-      .map((item) => item.wig.id)
-  );
 };
 
 const LAYER_SETTING_KEYS = {
@@ -496,19 +463,19 @@ const resolveTryOnConfig = (fitSettings = {}, layerKey = 'fullWig') => {
   const source = { ...globalConfig, ...layerConfig };
   const faceHoleSource = source?.faceHole || source?.face_hole || source?.faceOpening || source?.face_opening || {};
   const defaultFaceHole = layerKey === 'frontBangs'
-    ? { x: 0.18, y: 0.24, width: 0.64, height: 0.62 }
-    : { x: 0.2, y: 0.18, width: 0.6, height: 0.72 };
+    ? { x: 0.18, y: 0.28, width: 0.64, height: 0.58 }
+    : { x: 0.2, y: 0.25, width: 0.6, height: 0.62 };
 
   return {
     scaleMultiplier: getNumericFitValue(
       source,
       ['scaleMultiplier', 'scale_multiplier', 'widthMultiplier', 'width_multiplier'],
-      layerKey === 'frontBangs' ? 0.92 : 1
+      layerKey === 'frontBangs' ? 1 : 1.08
     ),
     scaleY: getNumericFitValue(
       source,
       ['scaleY', 'scale_y', 'heightScale', 'height_scale'],
-      layerKey === 'frontBangs' ? 0.92 : 1
+      layerKey === 'frontBangs' ? 0.94 : 1
     ),
     heightMultiplier: getNumericFitValue(
       source,
@@ -518,7 +485,7 @@ const resolveTryOnConfig = (fitSettings = {}, layerKey = 'fullWig') => {
     verticalOffset: getNumericFitValue(
       source,
       ['verticalOffset', 'vertical_offset', 'offsetYRatio', 'offset_y_ratio'],
-      layerKey === 'frontBangs' ? -0.06 : 0.03
+      layerKey === 'frontBangs' ? -0.08 : -0.1
     ),
     horizontalOffset: getNumericFitValue(
       source,
@@ -720,18 +687,25 @@ const resolveLandmarkHeadBox = ({
   const faceCenterX = centerPoint?.x || fallbackFaceBox.x + (fallbackFaceBox.width / 2);
   const templeDistance = distanceBetweenPoints(leftTemple, rightTemple);
   const eyeDistance = distanceBetweenPoints(leftEye, rightEye);
-  const landmarkWidth = Math.max(templeDistance || 0, eyeDistance ? eyeDistance * 2.18 : 0);
+  const landmarkWidth = Math.max(
+    templeDistance ? templeDistance * 1.16 : 0,
+    eyeDistance ? eyeDistance * 2.62 : 0,
+    fallbackFaceBox.width * 1.06
+  );
   const faceWidth = landmarkWidth || fallbackFaceBox.width;
-  const faceTop = forehead?.y ?? fallbackFaceBox.y;
+  const faceTop = Math.min(
+    forehead?.y ?? fallbackFaceBox.y,
+    eyeCenter ? eyeCenter.y - (faceWidth * 0.34) : fallbackFaceBox.y
+  );
   const faceBottom = chin?.y ?? fallbackFaceBox.y + fallbackFaceBox.height;
   const landmarkHeight = Math.max(faceBottom - faceTop, fallbackFaceBox.height * 0.72);
   const faceHeight = landmarkHeight || fallbackFaceBox.height;
 
   return {
     x: faceCenterX - (faceWidth / 2),
-    y: faceTop - (faceHeight * 0.08),
+    y: faceTop - (faceHeight * 0.04),
     width: faceWidth,
-    height: faceHeight * 1.08,
+    height: faceHeight * 1.04,
   };
 };
 
@@ -748,49 +722,46 @@ const resolveGuideHeadBox = (stageLayout) => {
   };
 };
 
-const resolveGuideAnchoredHeadBox = (detectedHeadBox, guideHeadBox) => {
-  if (!guideHeadBox) return detectedHeadBox;
-  if (!detectedHeadBox) return guideHeadBox;
-
-  const detectedCenterX = detectedHeadBox.x + (detectedHeadBox.width / 2);
-  const detectedCenterY = detectedHeadBox.y + (detectedHeadBox.height / 2);
-  const guideCenterX = guideHeadBox.x + (guideHeadBox.width / 2);
-  const guideCenterY = guideHeadBox.y + (guideHeadBox.height / 2);
-  const followX = lerp(guideCenterX, detectedCenterX, 0.9);
-  const followY = lerp(guideCenterY, detectedCenterY, 0.78);
-  const stableWidth = lerp(guideHeadBox.width, detectedHeadBox.width, 0.22);
-  const stableHeight = lerp(guideHeadBox.height, detectedHeadBox.height, 0.18);
+const buildGuideFaceFrame = (stageLayout) => {
+  const guideHeadBox = resolveGuideHeadBox(stageLayout);
+  if (!guideHeadBox) return null;
 
   return {
-    x: followX - (stableWidth / 2),
-    y: followY - (stableHeight / 2),
-    width: stableWidth,
-    height: stableHeight,
+    autoMode: true,
+    frameWidth: stageLayout.width,
+    frameHeight: stageLayout.height,
+    bounds: guideHeadBox,
+    landmarks: {
+      FOREHEAD: {
+        x: guideHeadBox.x + (guideHeadBox.width / 2),
+        y: guideHeadBox.y + (guideHeadBox.height * 0.04),
+      },
+      CHIN: {
+        x: guideHeadBox.x + (guideHeadBox.width / 2),
+        y: guideHeadBox.y + (guideHeadBox.height * 0.96),
+      },
+      NOSE: {
+        x: guideHeadBox.x + (guideHeadBox.width / 2),
+        y: guideHeadBox.y + (guideHeadBox.height * 0.5),
+      },
+      LEFT_EYE: {
+        x: guideHeadBox.x + (guideHeadBox.width * 0.36),
+        y: guideHeadBox.y + (guideHeadBox.height * 0.38),
+      },
+      RIGHT_EYE: {
+        x: guideHeadBox.x + (guideHeadBox.width * 0.64),
+        y: guideHeadBox.y + (guideHeadBox.height * 0.38),
+      },
+      LEFT_TEMPLE: {
+        x: guideHeadBox.x + (guideHeadBox.width * 0.16),
+        y: guideHeadBox.y + (guideHeadBox.height * 0.42),
+      },
+      RIGHT_TEMPLE: {
+        x: guideHeadBox.x + (guideHeadBox.width * 0.84),
+        y: guideHeadBox.y + (guideHeadBox.height * 0.42),
+      },
+    },
   };
-};
-
-const isFaceAlignedToGuide = (faceFrame, stageLayout) => {
-  const faceBox = resolveFaceBoxInStage(faceFrame, stageLayout);
-  const guideBox = resolveGuideHeadBox(stageLayout);
-  if (!faceBox || !guideBox) return false;
-
-  const faceCenterX = faceBox.x + (faceBox.width / 2);
-  const faceCenterY = faceBox.y + (faceBox.height / 2);
-  const guideCenterX = guideBox.x + (guideBox.width / 2);
-  const guideCenterY = guideBox.y + (guideBox.height / 2);
-  const centerDeltaX = Math.abs(faceCenterX - guideCenterX);
-  const centerDeltaY = Math.abs(faceCenterY - guideCenterY);
-  const widthRatio = faceBox.width / guideBox.width;
-  const heightRatio = faceBox.height / guideBox.height;
-
-  return (
-    centerDeltaX <= guideBox.width * 0.32
-    && centerDeltaY <= guideBox.height * 0.3
-    && widthRatio >= 0.62
-    && widthRatio <= 1.55
-    && heightRatio >= 0.62
-    && heightRatio <= 1.65
-  );
 };
 
 const buildFaceAnchoredTryOnLayerStyle = (faceFrame, stageLayout, layerKey, zIndex, fitSettings = {}, userCalibration = DEFAULT_WIG_CALIBRATION) => {
@@ -801,6 +772,9 @@ const buildFaceAnchoredTryOnLayerStyle = (faceFrame, stageLayout, layerKey, zInd
   const fit = resolveLayerFit(fitSettings, layerKey);
   const anchor = resolveLayerAnchor(fitSettings, layerKey);
   const tryOnConfig = resolveTryOnConfig(fitSettings, layerKey);
+  const calibrationScale = Math.min(1.6, Math.max(0.75, Number(userCalibration?.scale || 1)));
+  const calibrationOffsetX = Number(userCalibration?.offsetX || 0);
+  const calibrationOffsetY = Number(userCalibration?.offsetY || 0);
 
   const leftEye = getFacePoint(faceFrame, 'LEFT_EYE');
   const rightEye = getFacePoint(faceFrame, 'RIGHT_EYE');
@@ -843,12 +817,10 @@ const buildFaceAnchoredTryOnLayerStyle = (faceFrame, stageLayout, layerKey, zInd
       leftTemple,
       rightTemple,
     }) || faceBox;
-    const guideHeadBox = resolveGuideHeadBox(stageLayout);
-    const headBox = resolveGuideAnchoredHeadBox(detectedHeadBox, guideHeadBox) || detectedHeadBox;
+    const headBox = detectedHeadBox;
     const layerScale = normalizeLayerScale(fit.scale);
-    const calibrationScale = Math.min(1.25, Math.max(0.75, Number(userCalibration?.scale || 1)));
-    const offsetX = normalizeLayerOffset(anchor.userOffsetX, stageLayout) + Number(userCalibration?.offsetX || 0);
-    const offsetY = normalizeLayerOffset(anchor.userOffsetY, stageLayout) + Number(userCalibration?.offsetY || 0);
+    const offsetX = normalizeLayerOffset(anchor.userOffsetX, stageLayout) + calibrationOffsetX;
+    const offsetY = normalizeLayerOffset(anchor.userOffsetY, stageLayout) + calibrationOffsetY;
     const targetFaceWidth = headBox.width * tryOnConfig.scaleMultiplier;
     const targetFaceHeight = headBox.height * tryOnConfig.scaleY;
     const faceHole = tryOnConfig.faceHole;
@@ -857,7 +829,10 @@ const buildFaceAnchoredTryOnLayerStyle = (faceFrame, stageLayout, layerKey, zInd
     const faceHoleCenterX = faceHole.x + (faceHole.width / 2);
     const rotation = Number(fit.rotation || 0) + rollAngle + tryOnConfig.rotationOffset;
     const rawLeft = headBox.x + (headBox.width / 2) - (layerWidth * faceHoleCenterX) + (headBox.width * tryOnConfig.horizontalOffset) + offsetX;
-    const rawTop = headBox.y - (layerHeight * faceHole.y) + (headBox.height * tryOnConfig.verticalOffset) + offsetY;
+    const eyeLift = eyeCenter && forehead
+      ? Math.max(0, (eyeCenter.y - forehead.y) * 0.18)
+      : headBox.height * 0.04;
+    const rawTop = headBox.y - (layerHeight * faceHole.y) + (headBox.height * tryOnConfig.verticalOffset) - eyeLift + offsetY;
 
     return {
       position: 'absolute',
@@ -874,17 +849,17 @@ const buildFaceAnchoredTryOnLayerStyle = (faceFrame, stageLayout, layerKey, zInd
 
   const layerSize = layerKey === 'frontBangs'
     ? {
-        width: anchorWidth * 1.08 * yawScale * fit.scale,
-        height: faceBox.height * 0.44 * fit.scale,
-        top: eyeLineY - (faceBox.height * 0.5 * fit.scale),
+        width: anchorWidth * 1.08 * yawScale * fit.scale * calibrationScale,
+        height: faceBox.height * 0.44 * fit.scale * calibrationScale,
+        top: eyeLineY - (faceBox.height * 0.5 * fit.scale * calibrationScale),
       }
     : {
-        width: anchorWidth * 1.62 * yawScale * fit.scale,
-        height: faceBox.height * 1.26 * fit.scale,
-        top: eyeLineY - (faceBox.height * 0.78 * fit.scale),
+        width: anchorWidth * 1.82 * yawScale * fit.scale * calibrationScale,
+        height: faceBox.height * 1.42 * fit.scale * calibrationScale,
+        top: eyeLineY - (faceBox.height * 0.88 * fit.scale * calibrationScale),
       };
-  const left = faceCenterX - (layerSize.width / 2) + fit.offsetX;
-  const top = layerSize.top + fit.offsetY;
+  const left = faceCenterX - (layerSize.width / 2) + fit.offsetX + calibrationOffsetX;
+  const top = layerSize.top + fit.offsetY + calibrationOffsetY;
   const rotation = Number(fit.rotation || 0) + rollAngle;
 
   if (faceFrame?.autoMode) {
@@ -906,14 +881,14 @@ const buildFaceAnchoredTryOnLayerStyle = (faceFrame, stageLayout, layerKey, zInd
   const faceWidth = faceBox.width;
   const faceHeight = faceBox.height;
 
-  const widthMultiplier = (layerKey === 'frontBangs' ? 1.12 : 1.62) * fit.scale;
-  const heightMultiplier = (layerKey === 'frontBangs' ? 0.48 : 1.26) * fit.scale;
-  const topOffset = (layerKey === 'frontBangs' ? 0.28 : 0.66) * fit.scale;
+  const widthMultiplier = (layerKey === 'frontBangs' ? 1.16 : 1.82) * fit.scale * calibrationScale;
+  const heightMultiplier = (layerKey === 'frontBangs' ? 0.5 : 1.42) * fit.scale * calibrationScale;
+  const topOffset = (layerKey === 'frontBangs' ? 0.3 : 0.78) * fit.scale * calibrationScale;
 
   return {
     position: 'absolute',
-    left: Math.max(-stageLayout.width * 0.25, faceX + (faceWidth / 2) - ((faceWidth * widthMultiplier) / 2) + fit.offsetX),
-    top: Math.max(-stageLayout.height * 0.35, faceY - (faceHeight * topOffset) + fit.offsetY),
+    left: Math.max(-stageLayout.width * 0.25, faceX + (faceWidth / 2) - ((faceWidth * widthMultiplier) / 2) + fit.offsetX + calibrationOffsetX),
+    top: Math.max(-stageLayout.height * 0.35, faceY - (faceHeight * topOffset) + fit.offsetY + calibrationOffsetY),
     width: faceWidth * widthMultiplier,
     height: faceHeight * heightMultiplier,
     opacity: fit.opacity,
@@ -1103,30 +1078,112 @@ function NativeTryOnFaceCamera({ cameraRef, stageLayout, onFaceBoundsChange, onC
   );
 }
 
-function PreferenceChipGroup({ control, name, title, options, roles }) {
+const toFriendlyPreferenceLabel = (value, name) => {
+  const rawValue = String(value ?? '').trim();
+  if (!rawValue) return '';
+
+  if (name === 'preferredLength') {
+    const numericValue = Number(rawValue);
+    if (Number.isFinite(numericValue) && numericValue > 0) {
+      return `${Number.isInteger(numericValue) ? numericValue : numericValue.toFixed(1)} inches`;
+    }
+  }
+
+  return rawValue
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+};
+
+const normalizeRecommendationKey = (value) => String(value ?? '')
+  .trim()
+  .toLowerCase()
+  .replace(/\s+/g, ' ');
+
+const normalizeLengthRecommendation = (value) => {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue) || numericValue <= 0) {
+    return normalizeRecommendationKey(value);
+  }
+
+  return normalizeRecommendationKey(Number.isInteger(numericValue) ? numericValue : Number(numericValue.toFixed(2)));
+};
+
+const normalizePreferenceMatchValue = (value, name) => (
+  name === 'preferredLength'
+    ? normalizeLengthRecommendation(value)
+    : normalizeRecommendationKey(value)
+);
+
+const getWigPreferenceValue = (wig, name) => {
+  const specification = wig?.physical_specification || {};
+
+  if (name === 'preferredLength') return specification.length;
+  if (name === 'preferredColor') return specification.color;
+  if (name === 'hairTexture') return specification.hair_texture;
+  if (name === 'hairDensity') return specification.hair_density;
+  if (name === 'capSize') return specification.cap_size;
+  if (name === 'stylePreference') return specification.style;
+
+  return '';
+};
+
+const scoreWigRecommendation = (wig, values = {}) => {
+  const fields = ['preferredLength', 'preferredColor', 'hairTexture', 'hairDensity', 'capSize', 'stylePreference'];
+  const selectedFields = fields.filter((fieldName) => normalizePreferenceMatchValue(values?.[fieldName], fieldName));
+  const stockScore = Number(wig?.stock_count || 0) > 0 ? 0.1 : 0;
+
+  if (!selectedFields.length) return stockScore;
+
+  return selectedFields.reduce((score, fieldName) => {
+    const selectedValue = normalizePreferenceMatchValue(values?.[fieldName], fieldName);
+    const wigValue = normalizePreferenceMatchValue(getWigPreferenceValue(wig, fieldName), fieldName);
+    return score + (selectedValue && selectedValue === wigValue ? 1 : 0);
+  }, stockScore);
+};
+
+function PreferenceChipGroup({ control, name, title, helperText, options, recommendedOptions, roles }) {
+  if (!Array.isArray(options) || !options.length) return null;
+  const recommendedOptionKeys = new Set(
+    (recommendedOptions || []).map((option) => normalizePreferenceMatchValue(option, name)).filter(Boolean)
+  );
+
   return (
     <Controller
       control={control}
       name={name}
       render={({ field }) => (
         <View style={styles.preferenceSection}>
-          <Text style={[styles.preferenceSectionTitle, { color: roles.headingText }]}>{title}</Text>
+          <View style={styles.preferenceSectionHeader}>
+            <Text style={[styles.preferenceSectionTitle, { color: roles.headingText }]}>{title}</Text>
+            {helperText ? (
+              <Text style={[styles.preferenceSectionHint, { color: roles.bodyText }]}>{helperText}</Text>
+            ) : null}
+          </View>
           <View style={styles.preferenceChipWrap}>
             {options.map((option) => {
               const isSelected = field.value === option;
+              const isAiRecommended = recommendedOptionKeys.has(normalizePreferenceMatchValue(option, name));
+              const label = toFriendlyPreferenceLabel(option, name);
               return (
                 <Pressable
                   key={`${name}-${option}`}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected: isSelected }}
+                  accessibilityLabel={`${title}: ${label}`}
                   onPress={() => field.onChange(option)}
                   style={({ pressed }) => [
                     styles.preferenceChip,
                     {
-                      borderColor: isSelected ? roles.primaryActionBackground : roles.defaultCardBorder,
+                      borderColor: isSelected || isAiRecommended ? roles.primaryActionBackground : roles.defaultCardBorder,
                       backgroundColor: isSelected ? roles.iconPrimarySurface : roles.pageBackground,
                     },
+                    isAiRecommended && !isSelected ? styles.preferenceChipRecommended : null,
                     pressed ? styles.preferencePressed : null,
                   ]}
                 >
+                  {isSelected ? <AppIcon name="success" size="sm" color={roles.iconPrimaryColor} /> : null}
                   <Text
                     style={[
                       styles.preferenceChipText,
@@ -1134,88 +1191,64 @@ function PreferenceChipGroup({ control, name, title, options, roles }) {
                       isSelected ? styles.preferenceChipTextSelected : null,
                     ]}
                   >
-                    {option}
+                    {label}
                   </Text>
+                  {isAiRecommended ? (
+                    <View style={styles.aiChipBadge}>
+                      <AppIcon name="sparkle" size="sm" color={roles.iconPrimaryColor} />
+                      <Text style={[styles.aiChipBadgeText, { color: roles.iconPrimaryColor }]}>AI</Text>
+                    </View>
+                  ) : null}
                 </Pressable>
               );
             })}
           </View>
+          {field.value ? (
+            <Text style={[styles.preferenceSelectedText, { color: roles.metaText }]}>
+              Selected: {toFriendlyPreferenceLabel(field.value, name)}
+            </Text>
+          ) : null}
         </View>
       )}
     />
   );
 }
 
-function StyleSelectionGroup({ control, roles }) {
-  const options = [
-    { value: 'Straight', icon: 'minus' },
-    { value: 'Wavy', icon: 'waves' },
-    { value: 'Curly', icon: 'gesture' },
-  ];
+const resolveHairColorSwatch = (value) => {
+  const normalized = String(value || '').toLowerCase();
+  if (normalized.includes('black')) return '#1F1712';
+  if (normalized.includes('brown')) return normalized.includes('light') ? '#B98255' : '#4B3621';
+  if (normalized.includes('blonde') || normalized.includes('gold')) return '#C99A4A';
+  if (normalized.includes('gray') || normalized.includes('grey') || normalized.includes('silver')) return '#A8A8A8';
+  if (normalized.includes('red') || normalized.includes('auburn')) return '#8F3D2D';
+  return theme.colors.borderStrong;
+};
 
-  return (
-    <Controller
-      control={control}
-      name="hairTexture"
-      render={({ field }) => (
-        <View style={styles.preferenceSection}>
-          <Text style={[styles.preferenceSectionTitle, { color: roles.headingText }]}>Style Selection</Text>
-          <View style={styles.styleSelectionGrid}>
-            {options.map((option) => {
-              const isSelected = field.value === option.value;
-              return (
-                <Pressable
-                  key={option.value}
-                  onPress={() => field.onChange(option.value)}
-                  style={({ pressed }) => [
-                    styles.styleOption,
-                    {
-                      borderColor: isSelected ? roles.primaryActionBackground : roles.defaultCardBorder,
-                      backgroundColor: isSelected ? roles.iconPrimarySurface : roles.defaultCardBackground,
-                    },
-                    pressed ? styles.preferencePressed : null,
-                  ]}
-                >
-                  <AppIcon name={option.icon} size="xl" color={roles.iconPrimaryColor} />
-                  <Text
-                    numberOfLines={1}
-                    style={[
-                      styles.styleOptionText,
-                      { color: isSelected ? roles.iconPrimaryColor : roles.headingText },
-                      isSelected ? styles.preferenceChipTextSelected : null,
-                    ]}
-                  >
-                    {option.value}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
-        </View>
-      )}
-    />
+function ColorPaletteGroup({ control, roles, options, recommendedOptions }) {
+  const colors = Array.isArray(options)
+    ? options.filter(Boolean).map((value) => ({ value, color: resolveHairColorSwatch(value) }))
+    : [];
+  const recommendedOptionKeys = new Set(
+    (recommendedOptions || []).map((option) => normalizePreferenceMatchValue(option, 'preferredColor')).filter(Boolean)
   );
-}
 
-function ColorPaletteGroup({ control, roles }) {
-  const colors = [
-    { value: 'Natural black', color: '#1F1712' },
-    { value: 'Dark brown', color: '#4B3621' },
-    { value: 'Warm brown', color: '#8B4513' },
-    { value: 'Light brown', color: '#B98255' },
-    { value: 'Other', color: '#E9DDCF' },
-  ];
+  if (!colors.length) return null;
 
   return (
     <Controller
       control={control}
       name="preferredColor"
       render={({ field }) => {
-        const selected = colors.find((item) => item.value === field.value) || colors[0];
+        const selected = colors.find((item) => item.value === field.value);
 
         return (
           <View style={styles.preferenceSection}>
-            <Text style={[styles.preferenceSectionTitle, { color: roles.headingText }]}>Color Palette</Text>
+            <View style={styles.preferenceSectionHeader}>
+              <Text style={[styles.preferenceSectionTitle, { color: roles.headingText }]}>Hair Color</Text>
+              <Text style={[styles.preferenceSectionHint, { color: roles.bodyText }]}>
+                Pick the closest available color.
+              </Text>
+            </View>
             <View
               style={[
                 styles.colorPaletteCard,
@@ -1227,30 +1260,41 @@ function ColorPaletteGroup({ control, roles }) {
             >
               <View style={styles.colorSwatchGrid}>
                 {colors.map((item) => {
-                  const isSelected = field.value === item.value || (!field.value && item.value === colors[0].value);
+                  const isSelected = field.value === item.value;
+                  const isAiRecommended = recommendedOptionKeys.has(normalizePreferenceMatchValue(item.value, 'preferredColor'));
+                  const label = toFriendlyPreferenceLabel(item.value, 'preferredColor');
                   return (
                     <Pressable
                       key={item.value}
                       accessibilityRole="button"
-                      accessibilityLabel={item.value}
+                      accessibilityLabel={`Hair color: ${label}`}
                       onPress={() => field.onChange(item.value)}
                       style={({ pressed }) => [
                         styles.colorSwatchButton,
                         {
-                          borderColor: isSelected ? roles.primaryActionBackground : 'transparent',
+                          borderColor: isSelected || isAiRecommended ? roles.primaryActionBackground : 'transparent',
                         },
+                        isAiRecommended && !isSelected ? styles.preferenceChipRecommended : null,
                         pressed ? styles.preferencePressed : null,
                       ]}
                     >
                       <View style={[styles.colorSwatch, { backgroundColor: item.color }]}>
                         {isSelected ? <AppIcon name="checkmark" size="sm" color={theme.colors.textInverse} /> : null}
                       </View>
+                      {isAiRecommended ? (
+                        <View style={styles.colorAiBadge}>
+                          <AppIcon name="sparkle" size="sm" color={roles.iconPrimaryColor} />
+                        </View>
+                      ) : null}
+                      <Text numberOfLines={1} style={[styles.colorSwatchLabel, { color: roles.bodyText }]}>
+                        {label}
+                      </Text>
                     </Pressable>
                   );
                 })}
               </View>
               <Text style={[styles.colorSelectedText, { color: roles.bodyText }]}>
-                Selected: {field.value || selected.value}
+                Selected: {selected ? toFriendlyPreferenceLabel(selected.value, 'preferredColor') : 'None'}
               </Text>
             </View>
           </View>
@@ -1294,39 +1338,54 @@ function IconCircleButton({
   );
 }
 
-function CalibrationControl({
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+
+function CalibrationSlider({
   label,
   value,
-  onDecrease,
-  onIncrease,
+  min,
+  max,
+  step,
+  formatValue,
+  onChange,
 }) {
+  const [trackWidth, setTrackWidth] = useState(0);
+  const percent = max > min ? ((value - min) / (max - min)) * 100 : 0;
+  const normalizedPercent = clamp(percent, 0, 100);
+  const commitFromLocation = React.useCallback((locationX) => {
+    if (!trackWidth) return;
+    const raw = min + (clamp(locationX, 0, trackWidth) / trackWidth) * (max - min);
+    const stepped = Math.round(raw / step) * step;
+    onChange(Math.round(clamp(stepped, min, max) * 100) / 100);
+  }, [max, min, onChange, step, trackWidth]);
+  const sliderPanResponder = useMemo(() => PanResponder.create({
+    onStartShouldSetPanResponder: () => true,
+    onMoveShouldSetPanResponder: () => true,
+    onPanResponderGrant: (event) => {
+      commitFromLocation(Number(event.nativeEvent.locationX || 0));
+    },
+    onPanResponderMove: (event) => {
+      commitFromLocation(Number(event.nativeEvent.locationX || 0));
+    },
+  }), [commitFromLocation]);
+
   return (
-    <View style={styles.calibrationControlRow}>
-      <Text style={styles.calibrationControlLabel}>{label}</Text>
-      <View style={styles.calibrationStepper}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`Decrease ${label}`}
-          onPress={onDecrease}
-          style={({ pressed }) => [
-            styles.calibrationStepButton,
-            pressed ? styles.iconCircleButtonPressed : null,
-          ]}
-        >
-          <Text style={styles.calibrationStepButtonText}>-</Text>
-        </Pressable>
-        <Text style={styles.calibrationValue}>{value}</Text>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`Increase ${label}`}
-          onPress={onIncrease}
-          style={({ pressed }) => [
-            styles.calibrationStepButton,
-            pressed ? styles.iconCircleButtonPressed : null,
-          ]}
-        >
-          <Text style={styles.calibrationStepButtonText}>+</Text>
-        </Pressable>
+    <View style={styles.calibrationControl}>
+      <View style={styles.calibrationControlHeader}>
+        <Text style={styles.calibrationControlLabel}>{label}</Text>
+        <Text style={styles.calibrationValue}>{formatValue(value)}</Text>
+      </View>
+      <View
+        accessibilityRole="adjustable"
+        accessibilityLabel={label}
+        style={styles.calibrationSliderTouchArea}
+        onLayout={(event) => setTrackWidth(event.nativeEvent.layout.width)}
+        {...sliderPanResponder.panHandlers}
+      >
+        <View style={styles.calibrationSliderTrack}>
+          <View style={[styles.calibrationSliderFill, { width: `${normalizedPercent}%` }]} />
+          <View style={[styles.calibrationSliderThumb, { left: `${normalizedPercent}%` }]} />
+        </View>
       </View>
     </View>
   );
@@ -1338,8 +1397,7 @@ function WigInfoRow({ label, value, roles }) {
       style={[
         styles.referralInfoRow,
         {
-          backgroundColor: roles.supportCardBackground,
-          borderColor: roles.supportCardBorder,
+          borderColor: roles.defaultCardBorder,
         },
       ]}
     >
@@ -1355,7 +1413,7 @@ function CaptureModal({
   availableWigs,
   selectedWig,
   selectedWigId,
-  recommendedWigIds,
+  recommendedWigId,
   isLoadingAvailableWigs,
   hasCameraPermission,
   cameraRef,
@@ -1381,19 +1439,17 @@ function CaptureModal({
   const handleFaceFrameChange = React.useCallback((nextFaceFrame) => {
     setFaceFrame((previousFaceFrame) => smoothFaceFrame(previousFaceFrame, nextFaceFrame));
   }, []);
-  const adjustCalibration = React.useCallback((key, delta, min, max) => {
+  const setCalibrationValue = React.useCallback((key, value) => {
     setWigCalibration((current) => {
-      const nextValue = Math.min(max, Math.max(min, Number(current?.[key] || 0) + delta));
       return {
         ...current,
-        [key]: Math.round(nextValue * 100) / 100,
+        [key]: Math.round(Number(value || 0) * 100) / 100,
       };
     });
   }, []);
   const resetCalibration = React.useCallback(() => {
     setWigCalibration(DEFAULT_WIG_CALIBRATION);
   }, []);
-
   useEffect(() => {
     if (visible && hasCameraPermission && (!canUseFaceTrackingTryOnCamera || cameraRuntimeError)) {
       onCameraReady?.();
@@ -1459,7 +1515,7 @@ function CaptureModal({
           };
           return;
         }
-        const nextScale = Math.min(1.35, Math.max(0.65, start.scale * (currentDistance / start.distance)));
+        const nextScale = Math.min(1.6, Math.max(0.75, start.scale * (currentDistance / start.distance)));
         setWigCalibration((current) => ({
           ...current,
           scale: Math.round(nextScale * 100) / 100,
@@ -1469,14 +1525,15 @@ function CaptureModal({
 
       setWigCalibration((current) => ({
         ...current,
-        offsetX: Math.round(Math.min(120, Math.max(-120, start.offsetX + gestureState.dx))),
-        offsetY: Math.round(Math.min(120, Math.max(-120, start.offsetY + gestureState.dy))),
+        offsetX: Math.round(Math.min(140, Math.max(-140, start.offsetX + gestureState.dx))),
+        offsetY: Math.round(Math.min(140, Math.max(-140, start.offsetY + gestureState.dy))),
       }));
     },
   }), [primaryTryOnImageUrl, selectedWig, wigCalibration]);
 
   if (!visible) return null;
 
+  const shouldShowReferencePhoto = Boolean(referenceImage?.uri);
   const shouldRenderFullWigLayer = Boolean(selectedWig?.layer_full_wig_url);
   const shouldRenderFrontWigLayer = false;
   const shouldUseSingleTryOnImage = Boolean(
@@ -1487,16 +1544,15 @@ function CaptureModal({
     && !selectedWig.layer_back_hair_url
   );
   const selectedWigNeedsLayer = Boolean(selectedWig && !primaryTryOnImageUrl);
-  const isLiveCameraTryOn = Boolean(!referenceImage?.uri && hasCameraPermission && canUseFaceTrackingTryOnCamera && !cameraRuntimeError);
+  const isLiveCameraTryOn = Boolean(!shouldShowReferencePhoto && hasCameraPermission && canUseFaceTrackingTryOnCamera && !cameraRuntimeError);
+  const activeFaceFrame = faceFrame || buildGuideFaceFrame(stageLayout);
   const shouldRenderBackWigLayer = false;
-  const isWaitingForFace = Boolean(isLiveCameraTryOn && selectedWig && primaryTryOnImageUrl && !faceFrame);
-  const isFaceGuideAligned = Boolean(faceFrame && isFaceAlignedToGuide(faceFrame, stageLayout));
-  const isWaitingForGuideAlignment = Boolean(isLiveCameraTryOn && selectedWig && primaryTryOnImageUrl && faceFrame && !isFaceGuideAligned);
-  const canCaptureLivePhoto = Boolean(!isLiveCameraTryOn || isFaceGuideAligned);
-  const canUseSelectedPhoto = Boolean(referenceImage?.uri && (!canUseFaceTrackingTryOnCamera || faceFrame || !hasCameraPermission || cameraRuntimeError));
+  const canCaptureLivePhoto = true;
+  const canUseSelectedPhoto = Boolean(referenceImage?.uri);
+  const shouldShowWigLayer = Boolean(selectedWig && primaryTryOnImageUrl);
   const cameraRuntimeMessage = getCameraRuntimeMessage(cameraRuntimeError);
   const getLayerStyle = (layerKey, zIndex) => {
-    const faceAnchoredStyle = buildFaceAnchoredTryOnLayerStyle(faceFrame, stageLayout, layerKey, zIndex, selectedWig?.fit_settings, wigCalibration);
+    const faceAnchoredStyle = buildFaceAnchoredTryOnLayerStyle(activeFaceFrame, stageLayout, layerKey, zIndex, selectedWig?.fit_settings, wigCalibration);
     if (faceAnchoredStyle) return faceAnchoredStyle;
     if (isLiveCameraTryOn) return styles.tryOnLayerHidden;
     return buildTryOnLayerStyle(selectedWig?.fit_settings, layerKey, zIndex);
@@ -1531,7 +1587,7 @@ function CaptureModal({
               height: event.nativeEvent.layout.height,
             })}
           >
-            {referenceImage?.uri ? (
+            {shouldShowReferencePhoto ? (
               <Image
                 source={{ uri: referenceImage.uri }}
                 resizeMode="contain"
@@ -1588,7 +1644,7 @@ function CaptureModal({
               </View>
             </View>
 
-            {selectedWig && primaryTryOnImageUrl ? (
+            {shouldShowWigLayer ? (
               <View
                 key={selectedWig.id || primaryTryOnImageUrl}
                 pointerEvents="auto"
@@ -1632,20 +1688,6 @@ function CaptureModal({
                 </Text>
               </View>
             ) : null}
-            {isWaitingForFace ? (
-              <View pointerEvents="none" style={styles.tryOnLayerMissingBanner}>
-                <Text style={styles.tryOnLayerMissingText}>
-                  Align your face to try this wig live
-                </Text>
-              </View>
-            ) : null}
-            {isWaitingForGuideAlignment ? (
-              <View pointerEvents="none" style={styles.tryOnLayerMissingBanner}>
-                <Text style={styles.tryOnLayerMissingText}>
-                  Fit your face inside the guide
-                </Text>
-              </View>
-            ) : null}
           </View>
 
           <View style={styles.availableWigsSection}>
@@ -1666,13 +1708,13 @@ function CaptureModal({
               >
                 {availableWigs.map((wig) => {
                   const isSelected = selectedWigId === wig.id;
-                  const isRecommended = recommendedWigIds.has(wig.id);
+                  const isAiRecommended = recommendedWigId === wig.id;
 
                   return (
                     <Pressable
                       key={wig.id || `${wig.wig_id}-${wig.wig_name}`}
                       accessibilityRole="button"
-                      accessibilityLabel={`${wig.wig_name}${isRecommended ? ', AI recommended' : ''}`}
+                      accessibilityLabel={wig.wig_name}
                       onPress={() => onSelectWig(wig.id)}
                       style={({ pressed }) => [
                         styles.tryOnWigCard,
@@ -1681,6 +1723,12 @@ function CaptureModal({
                       ]}
                     >
                       <View style={styles.tryOnWigImageWrap}>
+                        {isAiRecommended ? (
+                          <View style={styles.tryOnWigAiBadge}>
+                            <AppIcon name="sparkle" size="sm" color={theme.colors.textInverse} />
+                            <Text style={styles.tryOnWigAiBadgeText}>AI</Text>
+                          </View>
+                        ) : null}
                         {wig.thumbnail_url ? (
                           <Image source={{ uri: wig.thumbnail_url }} resizeMode="cover" style={styles.tryOnWigImage} />
                         ) : (
@@ -1688,11 +1736,6 @@ function CaptureModal({
                             <AppIcon name="image" size="lg" color={theme.colors.brandPrimary} />
                           </View>
                         )}
-                        {isRecommended ? (
-                          <View style={styles.tryOnRecommendedBadge}>
-                            <AppIcon name="sparkle" size="sm" color={theme.colors.textInverse} />
-                          </View>
-                        ) : null}
                       </View>
                       <Text numberOfLines={1} style={styles.tryOnWigName}>{wig.wig_name}</Text>
                     </Pressable>
@@ -1713,7 +1756,9 @@ function CaptureModal({
               icon="image"
               accessibilityLabel="Upload front photo"
               loading={isPickingReference}
-              onPress={onUpload}
+              onPress={() => {
+                onUpload?.();
+              }}
             />
             <IconCircleButton
               icon="camera"
@@ -1721,7 +1766,13 @@ function CaptureModal({
               variant="primary"
               loading={isCapturingPhoto}
               disabled={!canCaptureLivePhoto}
-              onPress={hasCameraPermission ? onCapture : onRequestPermission}
+              onPress={hasCameraPermission
+                ? () => onCapture?.({
+                  faceFrame: activeFaceFrame,
+                  stageLayout,
+                  wigCalibration,
+                })
+                : onRequestPermission}
               style={styles.captureButtonPrimary}
             />
             <View style={styles.captureControlsSpacer} />
@@ -1732,16 +1783,18 @@ function CaptureModal({
               {referenceImage?.uri
                 ? 'Photo ready.'
                 : selectedWig
-                  ? 'Drag wig to move. Pinch to resize.'
+                  ? 'Wig is placed automatically.'
                   : 'Add a front photo.'}
             </Text>
 
-            <AppButton
-              title="Use Photo"
-              disabled={!canUseSelectedPhoto}
-              onPress={onGeneratePreview}
-              leading={<AppIcon name="success" state="inverse" />}
-            />
+            {referenceImage?.uri ? (
+              <AppButton
+                title="Use Photo"
+                disabled={!canUseSelectedPhoto}
+                onPress={onGeneratePreview}
+                leading={<AppIcon name="success" state="inverse" />}
+              />
+            ) : null}
           </View>
       </View>
       <Modal
@@ -1764,23 +1817,32 @@ function CaptureModal({
                 <AppIcon name="close" state="muted" />
               </Pressable>
             </View>
-            <CalibrationControl
+            <CalibrationSlider
               label="Horizontal"
-              value={`${wigCalibration.offsetX}px`}
-              onDecrease={() => adjustCalibration('offsetX', -4, -120, 120)}
-              onIncrease={() => adjustCalibration('offsetX', 4, -120, 120)}
+              value={wigCalibration.offsetX}
+              min={-140}
+              max={140}
+              step={2}
+              formatValue={(value) => `${Math.round(value)}px`}
+              onChange={(value) => setCalibrationValue('offsetX', value)}
             />
-            <CalibrationControl
+            <CalibrationSlider
               label="Vertical"
-              value={`${wigCalibration.offsetY}px`}
-              onDecrease={() => adjustCalibration('offsetY', -4, -120, 120)}
-              onIncrease={() => adjustCalibration('offsetY', 4, -120, 120)}
+              value={wigCalibration.offsetY}
+              min={-140}
+              max={140}
+              step={2}
+              formatValue={(value) => `${Math.round(value)}px`}
+              onChange={(value) => setCalibrationValue('offsetY', value)}
             />
-            <CalibrationControl
+            <CalibrationSlider
               label="Scale"
-              value={`${Math.round(wigCalibration.scale * 100)}%`}
-              onDecrease={() => adjustCalibration('scale', -0.04, 0.65, 1.35)}
-              onIncrease={() => adjustCalibration('scale', 0.04, 0.65, 1.35)}
+              value={wigCalibration.scale}
+              min={0.75}
+              max={1.6}
+              step={0.01}
+              formatValue={(value) => `${Math.round(value * 100)}%`}
+              onChange={(value) => setCalibrationValue('scale', value)}
             />
             <View style={styles.calibrationActions}>
               <AppButton title="Reset" variant="secondary" fullWidth={false} onPress={resetCalibration} />
@@ -1832,9 +1894,24 @@ function MatcherRecommendationCard({
   option,
   isActive,
   imageUri,
+  selectedWig,
   onPress,
   roles,
 }) {
+  const [previewLayout, setPreviewLayout] = useState({ width: 0, height: 0 });
+  const selectedWigLayerUrl = getPrimaryTryOnImageUrl(selectedWig);
+  const placement = option?.placement || null;
+  const selectedWigLayerStyle = placement?.faceFrame && previewLayout.width && previewLayout.height
+    ? buildFaceAnchoredTryOnLayerStyle(
+      placement.faceFrame,
+      previewLayout,
+      'fullWig',
+      3,
+      selectedWig?.fit_settings,
+      placement.wigCalibration || DEFAULT_WIG_CALIBRATION
+    )
+    : buildTryOnLayerStyle(selectedWig?.fit_settings, 'fullWig', 3);
+
   return (
     <Pressable
       accessibilityRole="button"
@@ -1848,14 +1925,25 @@ function MatcherRecommendationCard({
         pressed ? styles.preferencePressed : null,
       ]}
     >
-      <View style={styles.matcherBadge}>
-        <AppIcon name="sparkle" size="sm" color={roles.primaryActionText} />
-        <Text style={[styles.matcherBadgeText, { color: roles.primaryActionText }]}>AI Match</Text>
-      </View>
-
-      <View style={[styles.matcherImageWrap, { backgroundColor: roles.supportCardBackground }]}>
+      <View
+        style={[styles.matcherImageWrap, { backgroundColor: roles.supportCardBackground }]}
+        onLayout={(event) => setPreviewLayout({
+          width: event.nativeEvent.layout.width,
+          height: event.nativeEvent.layout.height,
+        })}
+      >
         {imageUri ? (
-          <Image source={{ uri: imageUri }} style={styles.matcherImage} />
+          <>
+            <Image source={{ uri: imageUri }} style={styles.matcherImage} />
+            {selectedWigLayerUrl ? (
+              <Image
+                source={{ uri: selectedWigLayerUrl }}
+                resizeMode="contain"
+                fadeDuration={0}
+                style={[selectedWigLayerStyle, styles.matcherWigOverlay]}
+              />
+            ) : null}
+          </>
         ) : (
           <View style={styles.matcherImagePlaceholder}>
             <AppIcon name="image" size="xl" color={roles.iconPrimaryColor} />
@@ -1872,7 +1960,7 @@ function MatcherRecommendationCard({
         </Text>
         <View style={styles.matcherCardFooter}>
           <Text style={[styles.matcherCardPrice, { color: roles.iconPrimaryColor }]}>
-            {option.matchLabel || 'Recommended'}
+            {option.matchLabel || 'Selected'}
           </Text>
           <View style={[styles.matcherFavoriteButton, { backgroundColor: roles.supportCardBackground }]}>
             <AppIcon name={isActive ? 'checkmarkCircle' : 'favorite'} size="md" color={roles.iconPrimaryColor} />
@@ -1886,38 +1974,56 @@ function MatcherRecommendationCard({
 function RequestFlowModal({
   visible,
   step,
+  flowSource,
   control,
   errors,
   patientName,
+  patientDetails,
   patientCode,
   hospitalName,
   medicalCondition,
   preferenceChoice,
   referenceImage,
+  selectedWig,
+  recommendedPreferenceOptions,
   recommendationOptions,
   selectedOptionId,
   onSelectOption,
-  recommendationTitle,
-  recommendationFamily,
-  recommendationSummary,
-  preferredColor,
-  preferredLength,
+  wigPreferenceOptions,
+  isLoadingWigPreferenceOptions,
   generatedImageUri,
   hasGeneratedPreview,
   isGeneratingPreview,
   isSavingRequest,
   onClose,
-  onBackToPatient,
   onContinueToDetails,
   onPreferenceChoiceChange,
   onOpenCamera,
-  onRegenerate,
-  onDownloadSelected,
   onSubmitRequest,
   onViewTimeline,
+  onEditPatientDetails,
+  onOpenPatientPhoto,
+  onOpenMedicalDocument,
   roles,
 }) {
   const insets = useSafeAreaInsets();
+  const hasPreferenceOptions = Boolean(
+    wigPreferenceOptions?.lengths?.length
+    || wigPreferenceOptions?.colors?.length
+    || wigPreferenceOptions?.textures?.length
+    || wigPreferenceOptions?.densities?.length
+    || wigPreferenceOptions?.capSizes?.length
+    || wigPreferenceOptions?.styles?.length
+  );
+  const hasCapSizeOptions = Boolean(wigPreferenceOptions?.capSizes?.length);
+  const patientPicture = patientDetails?.patient_picture || '';
+  const medicalDocument = patientDetails?.medical_document || '';
+  const patientRows = [
+    { key: 'hospital', label: 'Hospital', value: hospitalName },
+    { key: 'medical_condition', label: 'Medical condition', value: medicalCondition || patientDetails?.medical_condition },
+    { key: 'date_of_diagnosis', label: 'Date of diagnosis', value: formatPatientDateValue(patientDetails?.date_of_diagnosis) },
+    { key: 'guardian', label: 'Guardian', value: patientDetails?.guardian },
+  ];
 
   if (!visible) return null;
 
@@ -1931,7 +2037,7 @@ function RequestFlowModal({
         <View style={styles.flowFullScreen}>
           <View style={styles.flowTopBar}>
             <Text style={[styles.flowTopTitle, { color: roles.headingText }]}>
-              {step === 'summary' ? 'Wig Preview' : step === 'basicFit' ? 'Fitting Basics' : 'Wig Request'}
+              {step === 'summary' || flowSource === 'preview' ? 'Preview' : step === 'basicFit' ? 'Fit' : 'Request'}
             </Text>
               <Pressable onPress={onClose} style={styles.headerIconButton}>
                 <AppIcon name="close" state="muted" />
@@ -1950,7 +2056,17 @@ function RequestFlowModal({
             >
               {step === 'patient' ? (
                 <View style={styles.flowSection}>
-                  <Text style={styles.flowTitle}>Patient details</Text>
+                  <View style={styles.patientReviewHeader}>
+                    <Text style={styles.flowTitle}>Confirm Details</Text>
+                    <AppButton
+                      title="Edit"
+                      variant="secondary"
+                      fullWidth={false}
+                      onPress={onEditPatientDetails}
+                      leading={<AppIcon name="editProfile" state="active" />}
+                      style={styles.patientEditButton}
+                    />
+                  </View>
 
                   <View style={styles.previewGrid}>
                     <View style={styles.previewRow}>
@@ -1961,16 +2077,58 @@ function RequestFlowModal({
                       <Text style={styles.previewLabel}>Patient code</Text>
                       <Text style={styles.previewValue}>{patientCode || 'Not assigned'}</Text>
                     </View>
-                    <View style={styles.previewRow}>
-                      <Text style={styles.previewLabel}>Hospital</Text>
-                      <Text style={styles.previewValue}>{hospitalName || 'Not linked'}</Text>
-                    </View>
-                    {medicalCondition ? (
-                      <View style={styles.previewRow}>
-                        <Text style={styles.previewLabel}>Medical condition</Text>
-                        <Text style={styles.previewValue}>{medicalCondition}</Text>
+                    {patientRows.map((row) => (
+                      <View key={row.key} style={styles.previewRow}>
+                        <Text style={styles.previewLabel}>{row.label}</Text>
+                        <Text style={styles.previewValue}>
+                          {formatPatientFieldValue(row.value, row.key === 'patient_code' ? 'Not assigned' : row.key === 'hospital' ? 'Not linked' : 'Not provided')}
+                        </Text>
                       </View>
-                    ) : null}
+                    ))}
+                  </View>
+
+                  <View style={styles.patientMediaGrid}>
+                    <AppCard variant="soft" radius="lg" padding="md" style={styles.patientMediaCard}>
+                      <View style={styles.patientMediaHeader}>
+                        <Text style={[styles.patientMediaTitle, { color: roles.headingText }]}>Photo</Text>
+                        <AppIcon name="image" size="sm" color={roles.iconPrimaryColor} />
+                      </View>
+                      {patientPicture ? (
+                        <>
+                          <Image source={{ uri: patientPicture }} style={styles.patientPhotoPreview} resizeMode="cover" />
+                          <AppButton
+                            title="View"
+                            variant="secondary"
+                            fullWidth={false}
+                            onPress={onOpenPatientPhoto}
+                            leading={<AppIcon name="eye" state="active" />}
+                          />
+                        </>
+                      ) : (
+                        <View style={styles.patientMediaEmpty}>
+                          <AppIcon name="image" size="lg" color={roles.metaText} />
+                          <Text style={[styles.patientMediaEmptyText, { color: roles.metaText }]}>No photo</Text>
+                        </View>
+                      )}
+                    </AppCard>
+
+                    <AppCard variant="soft" radius="lg" padding="md" style={styles.patientMediaCard}>
+                      <View style={styles.patientMediaHeader}>
+                        <Text style={[styles.patientMediaTitle, { color: roles.headingText }]}>Document</Text>
+                        <AppIcon name="requests" size="sm" color={roles.iconPrimaryColor} />
+                      </View>
+                      <Text numberOfLines={2} style={[styles.patientDocumentName, { color: roles.bodyText }]}>
+                        {medicalDocument ? getFileNameFromUrl(medicalDocument) : 'No document'}
+                      </Text>
+                      <AppButton
+                        title="View"
+                        variant="secondary"
+                        fullWidth={false}
+                        disabled={!medicalDocument}
+                        onPress={onOpenMedicalDocument}
+                        leading={<AppIcon name="eye" state="active" />}
+                      />
+                    </AppCard>
                   </View>
 
                   <Controller
@@ -1990,7 +2148,7 @@ function RequestFlowModal({
                           {field.value ? <AppIcon name="success" state="inverse" size="sm" /> : null}
                         </View>
                         <Text style={styles.agreementText}>
-                          I agree to use my patient details and photo for this request.
+                          I confirm these details.
                         </Text>
                       </Pressable>
                     )}
@@ -2001,12 +2159,12 @@ function RequestFlowModal({
 
                   <View style={styles.preferenceSection}>
                     <Text style={[styles.preferenceSectionTitle, { color: roles.headingText }]}>
-                      Add wig preferences?
+                      Preferences
                     </Text>
                     <View style={styles.preferenceChoiceGrid}>
                       {[
-                        { key: 'preferences', title: 'Yes', body: 'Choose style, color, and AI match.' },
-                        { key: 'fitOnly', title: 'No', body: 'Only basic fitting details.' },
+                        { key: 'preferences', title: 'Choose style', body: '' },
+                        { key: 'fitOnly', title: 'Fit only', body: '' },
                       ].map((item) => {
                         const isSelected = preferenceChoice === item.key;
                         return (
@@ -2024,36 +2182,33 @@ function RequestFlowModal({
                               pressed ? styles.preferencePressed : null,
                             ]}
                           >
-                            <Text
-                              style={[
-                                styles.preferenceChoiceTitle,
-                                { color: isSelected ? roles.iconPrimaryColor : roles.headingText },
-                              ]}
-                            >
-                              {item.title}
-                            </Text>
-                            <Text style={[styles.preferenceChoiceBody, { color: roles.bodyText }]}>
-                              {item.body}
-                            </Text>
+                            <View style={styles.preferenceChoiceHeader}>
+                              <Text
+                                style={[
+                                  styles.preferenceChoiceTitle,
+                                  { color: isSelected ? roles.iconPrimaryColor : roles.headingText },
+                                ]}
+                              >
+                                {item.title}
+                              </Text>
+                              {isSelected ? <AppIcon name="success" size="sm" color={roles.iconPrimaryColor} /> : null}
+                            </View>
+                            {item.body ? (
+                              <Text style={[styles.preferenceChoiceBody, { color: roles.bodyText }]}>
+                                {item.body}
+                              </Text>
+                            ) : null}
                           </Pressable>
                         );
                       })}
                     </View>
                   </View>
 
-                  <View style={styles.actionRow}>
+                  <View style={styles.singleActionRow}>
                     <AppButton
-                      title="Back"
-                      variant="secondary"
-                      onPress={onClose}
-                      fullWidth={false}
-                      style={styles.actionButton}
-                    />
-                    <AppButton
-                      title="Continue"
+                      title="Next"
                       onPress={onContinueToDetails}
-                      fullWidth={false}
-                      style={styles.actionButton}
+                      fullWidth={true}
                     />
                   </View>
                 </View>
@@ -2061,35 +2216,39 @@ function RequestFlowModal({
 
               {step === 'basicFit' ? (
                 <View style={styles.preferencesFlow}>
-                  <View style={styles.preferencesHeaderBlock}>
-                    <Text style={[styles.preferencesTitle, { color: roles.headingText }]}>Fitting Basics</Text>
-                    <Text style={[styles.preferencesBody, { color: roles.bodyText }]}>
-                      Pick the closest cap size.
-                    </Text>
+                  <View style={styles.fitPanel}>
+                    <View style={[styles.fitNoticeIcon, { backgroundColor: roles.iconPrimarySurface }]}>
+                      <AppIcon name="information-outline" size="md" color={roles.iconPrimaryColor} />
+                    </View>
+                    <View style={styles.fitNoticeCopy}>
+                      <Text style={[styles.fitNoticeTitle, { color: roles.headingText }]}>Standard size</Text>
+                      <Text style={[styles.fitNoticeBody, { color: roles.bodyText }]}>21.5-22.5 in (54-57 cm)</Text>
+                      {!hasCapSizeOptions ? (
+                        <View style={styles.fitInlineNotice}>
+                          <AppIcon name="information-outline" size="sm" color={roles.iconPrimaryColor} />
+                          <Text style={[styles.fitInlineNoticeText, { color: roles.bodyText }]}>No size options yet.</Text>
+                        </View>
+                      ) : null}
+                    </View>
                   </View>
 
-                  <PreferenceChipGroup
-                    control={control}
-                    name="capSize"
-                    title="Cap Size"
-                    options={['Small', 'Medium', 'Large', 'Not sure']}
-                    roles={roles}
-                  />
-
-                  <View style={styles.actionRow}>
-                    <AppButton
-                      title="Back"
-                      variant="secondary"
-                      onPress={onBackToPatient}
-                      fullWidth={false}
-                      style={styles.actionButton}
+                  {hasCapSizeOptions ? (
+                    <PreferenceChipGroup
+                      control={control}
+                      name="capSize"
+                      title="Cap Size"
+                      options={wigPreferenceOptions?.capSizes || []}
+                      recommendedOptions={recommendedPreferenceOptions?.capSize || []}
+                      roles={roles}
                     />
+                  ) : null}
+
+                  <View style={styles.singleActionRow}>
                     <AppButton
-                      title="Submit Request"
+                      title="Submit"
                       loading={isSavingRequest}
                       onPress={onSubmitRequest}
-                      fullWidth={false}
-                      style={styles.actionButton}
+                      fullWidth={true}
                       leading={<AppIcon name="requests" state="inverse" />}
                     />
                   </View>
@@ -2099,35 +2258,76 @@ function RequestFlowModal({
               {step === 'details' ? (
                 <View style={styles.preferencesFlow}>
                   <View style={styles.preferencesHeaderBlock}>
-                    <Text style={[styles.preferencesTitle, { color: roles.headingText }]}>Your Preferences</Text>
-                    <Text style={[styles.preferencesBody, { color: roles.bodyText }]}>
-                      Choose the look you want.
-                    </Text>
+                    <Text style={[styles.preferencesTitle, { color: roles.headingText }]}>Style</Text>
                   </View>
+
+                  {isLoadingWigPreferenceOptions ? (
+                    <Text style={[styles.preferenceHelperText, { color: roles.metaText }]}>
+                      Loading options.
+                    </Text>
+                  ) : null}
+
+                  {!isLoadingWigPreferenceOptions && !hasPreferenceOptions ? (
+                    <Text style={[styles.preferenceHelperText, { color: roles.metaText }]}>
+                      No options yet.
+                    </Text>
+                  ) : null}
 
                   <PreferenceChipGroup
                     control={control}
                     name="preferredLength"
-                    title="Preferred Length"
-                    options={['Short', 'Medium', 'Long']}
+                    title="Length"
+                    options={wigPreferenceOptions?.lengths || []}
+                    recommendedOptions={recommendedPreferenceOptions?.preferredLength || []}
                     roles={roles}
                   />
 
-                  <StyleSelectionGroup control={control} roles={roles} />
+                  <PreferenceChipGroup
+                    control={control}
+                    name="hairTexture"
+                    title="Texture"
+                    options={wigPreferenceOptions?.textures || []}
+                    recommendedOptions={recommendedPreferenceOptions?.hairTexture || []}
+                    roles={roles}
+                  />
 
-                  <ColorPaletteGroup control={control} roles={roles} />
+                  <PreferenceChipGroup
+                    control={control}
+                    name="hairDensity"
+                    title="Fullness"
+                    options={wigPreferenceOptions?.densities || []}
+                    recommendedOptions={recommendedPreferenceOptions?.hairDensity || []}
+                    roles={roles}
+                  />
+
+                  <PreferenceChipGroup
+                    control={control}
+                    name="stylePreference"
+                    title="Style"
+                    options={wigPreferenceOptions?.styles || []}
+                    recommendedOptions={recommendedPreferenceOptions?.stylePreference || []}
+                    roles={roles}
+                  />
+
+                  <ColorPaletteGroup
+                    control={control}
+                    roles={roles}
+                    options={wigPreferenceOptions?.colors || []}
+                    recommendedOptions={recommendedPreferenceOptions?.preferredColor || []}
+                  />
 
                   <PreferenceChipGroup
                     control={control}
                     name="capSize"
-                    title="Comfort Fit"
-                    options={['Small', 'Medium', 'Large', 'Not sure']}
+                    title="Cap Size"
+                    options={wigPreferenceOptions?.capSizes || []}
+                    recommendedOptions={recommendedPreferenceOptions?.capSize || []}
                     roles={roles}
                   />
 
                   <View style={styles.preferenceSection}>
                     <View style={styles.preferenceLabelRow}>
-                      <Text style={[styles.preferenceSectionTitle, { color: roles.headingText }]}>Comfort Notes</Text>
+                      <Text style={[styles.preferenceSectionTitle, { color: roles.headingText }]}>Notes</Text>
                       <AppIcon name="information-outline" size="sm" color={roles.iconPrimaryColor} />
                     </View>
                     <Controller
@@ -2135,7 +2335,7 @@ function RequestFlowModal({
                       name="specialNotes"
                       render={({ field }) => (
                         <AppInput
-                          placeholder="Sensitive scalp, lightweight fit, lace preference..."
+                          placeholder="Optional notes"
                           variant="filled"
                           multiline={true}
                           numberOfLines={4}
@@ -2147,24 +2347,13 @@ function RequestFlowModal({
                         />
                       )}
                     />
-                    <Text style={[styles.preferenceHelperText, { color: roles.metaText }]}>
-                      Shared with your wig specialist.
-                    </Text>
                   </View>
 
-                  <View style={styles.actionRow}>
+                  <View style={styles.singleActionRow}>
                     <AppButton
-                      title="Save Draft"
-                      variant="secondary"
-                      onPress={onBackToPatient}
-                      fullWidth={false}
-                      style={styles.actionButton}
-                    />
-                    <AppButton
-                      title="Continue"
+                      title="Preview"
                       onPress={onOpenCamera}
-                      fullWidth={false}
-                      style={styles.actionButton}
+                      fullWidth={true}
                       leading={<AppIcon name="arrow-right" state="inverse" />}
                     />
                   </View>
@@ -2174,10 +2363,7 @@ function RequestFlowModal({
               {step === 'summary' ? (
                 <View style={styles.matcherFlow}>
                   <View style={styles.matcherHeroHeader}>
-                    <Text style={[styles.matcherHeroTitle, { color: roles.headingText }]}>Finding Your Perfect Match</Text>
-                    <Text style={[styles.matcherHeroBody, { color: roles.bodyText }]}>
-                      AI recommendations based on your photo and preferences.
-                    </Text>
+                    <Text style={[styles.matcherHeroTitle, { color: roles.headingText }]}>Selected Wig</Text>
                   </View>
 
                   {isGeneratingPreview ? (
@@ -2186,14 +2372,8 @@ function RequestFlowModal({
                     <>
                       {hasGeneratedPreview ? (
                         <View style={styles.matcherRecommendationsSection}>
-                          <View style={styles.matcherSectionHeader}>
-                            <Text style={[styles.matcherSectionTitle, { color: roles.headingText }]}>
-                              Recommended for you
-                            </Text>
-                          </View>
-
                           <View style={styles.matcherCardsGrid}>
-                            {recommendationOptions.map((option, index) => {
+                            {recommendationOptions.slice(0, 1).map((option, index) => {
                               const optionImageUri = option.generatedImageUri || generatedImageUri || referenceImage?.uri || '';
                               const active = selectedOptionId === option.id || (!selectedOptionId && index === 0);
                               return (
@@ -2202,6 +2382,7 @@ function RequestFlowModal({
                                   option={option}
                                   isActive={active}
                                   imageUri={optionImageUri}
+                                  selectedWig={selectedWig}
                                   onPress={() => onSelectOption(option.id)}
                                   roles={roles}
                                 />
@@ -2209,37 +2390,12 @@ function RequestFlowModal({
                             })}
                           </View>
 
-                          <AppCard variant="soft" radius="xl" padding="lg" style={styles.matcherSelectedCard}>
-                            <Text style={[styles.matcherSelectedTitle, { color: roles.headingText }]}>
-                              {recommendationTitle}
-                            </Text>
-                            <Text style={[styles.matcherSelectedMeta, { color: roles.iconPrimaryColor }]}>
-                              {recommendationFamily}
-                            </Text>
-                            <Text style={[styles.matcherSelectedSummary, { color: roles.bodyText }]}>
-                              {recommendationSummary}
-                            </Text>
-                            <View style={styles.resultMetaRow}>
-                              {preferredLength ? (
-                                <View style={[styles.metaPill, { backgroundColor: roles.defaultCardBackground }]}>
-                                  <Text style={styles.metaLabel}>Length</Text>
-                                  <Text style={styles.metaValue}>{preferredLength}</Text>
-                                </View>
-                              ) : null}
-                              {preferredColor ? (
-                                <View style={[styles.metaPill, { backgroundColor: roles.defaultCardBackground }]}>
-                                  <Text style={styles.metaLabel}>Color</Text>
-                                  <Text style={styles.metaValue}>{preferredColor}</Text>
-                                </View>
-                              ) : null}
-                            </View>
-                          </AppCard>
                         </View>
                       ) : (
                         <AppCard variant="soft" radius="xl" padding="lg" style={styles.summaryNoteCard}>
-                          <Text style={[styles.summaryNoteTitle, { color: roles.headingText }]}>AI preview skipped</Text>
+                          <Text style={[styles.summaryNoteTitle, { color: roles.headingText }]}>No wig selected</Text>
                           <Text style={[styles.flowBody, { color: roles.bodyText }]}>
-                            Your photo and preferences will be used.
+                            Choose one wig first.
                           </Text>
                         </AppCard>
                       )}
@@ -2247,36 +2403,19 @@ function RequestFlowModal({
                   )}
 
                   <AppButton
-                    title="Submit Wig Request"
+                    title="Submit"
                     loading={isSavingRequest}
                     onPress={onSubmitRequest}
                     leading={<AppIcon name="requests" state="inverse" />}
                   />
 
-                  {hasGeneratedPreview && generatedImageUri ? (
-                    <AppButton
-                      title="Save Selected Image"
-                      variant="secondary"
-                      onPress={onDownloadSelected}
-                      leading={<AppIcon name="save" state="active" />}
-                    />
-                  ) : null}
-
-                  <AppButton
-                    title={hasGeneratedPreview ? 'Browse More Matches' : 'Generate AI Preview'}
-                    variant="secondary"
-                    loading={isGeneratingPreview}
-                    onPress={onRegenerate}
-                    leading={<AppIcon name="sparkle" state="active" />}
-                  />
                 </View>
               ) : null}
 
               {step === 'waiting' ? (
                 <View style={styles.waitingState}>
                   <AppIcon name="success" state="active" size="xl" />
-                  <Text style={styles.flowTitle}>Request submitted</Text>
-                  <Text style={styles.flowBody}>Waiting for review.</Text>
+                  <Text style={styles.flowTitle}>Submitted</Text>
                   <AppButton
                     title="View Timeline"
                     onPress={onViewTimeline}
@@ -2300,6 +2439,7 @@ export function PatientWigRequestScreen() {
   const [selectedOptionId, setSelectedOptionId] = useState('');
   const [selectedWigFilterId, setSelectedWigFilterId] = useState('');
   const [isFlowOpen, setIsFlowOpen] = useState(false);
+  const [flowSource, setFlowSource] = useState('request');
   const [isTimelineOpen, setIsTimelineOpen] = useState(false);
   const [flowStep, setFlowStep] = useState('patient');
   const [activeWigTab, setActiveWigTab] = useState('request');
@@ -2315,8 +2455,10 @@ export function PatientWigRequestScreen() {
     refreshTracking,
   } = useProcessTracking({ role: 'patient', userId: user?.id, databaseUserId: profile?.user_id });
   const {
+    patientDetails,
     latestWigRequest,
     latestWigSpecification,
+    requestHospital,
     hasSubmittedRequest,
     referenceImage,
     preview,
@@ -2326,12 +2468,16 @@ export function PatientWigRequestScreen() {
     isPickingReference,
     isGeneratingPreview,
     isSavingRequest,
+    isCancellingRequest,
     availableWigs,
     isLoadingAvailableWigs,
+    wigPreferenceOptions,
+    isLoadingWigPreferenceOptions,
     pickReferenceImage,
     saveCapturedReferenceImage,
     generatePreview,
     saveRequest,
+    cancelRequest,
   } = usePatientWigRequest({ userId: user?.id });
 
   const {
@@ -2354,10 +2500,13 @@ export function PatientWigRequestScreen() {
     .filter(Boolean)
     .join(' ')
     .trim();
-  const patientCode = patientProfile?.patient_code || '';
-  const hospitalName = patientProfile?.hospital_name || patientProfile?.hospital?.hospital_name || '';
-  const medicalCondition = patientProfile?.medical_condition || '';
+  const requestPatientDetails = patientDetails || patientProfile || {};
+  const patientCode = requestPatientDetails?.patient_code || '';
+  const hospitalName = requestHospital?.hospital_name || patientProfile?.hospital_name || patientProfile?.hospital?.hospital_name || '';
+  const medicalCondition = requestPatientDetails?.medical_condition || '';
   const requestStatus = formatRequestStatus(latestWigRequest?.status || 'Pending');
+  const requestCode = latestWigRequest?.request_code || '';
+  const canCancelLatestRequest = canCancelWigRequest(latestWigRequest);
   const hasCameraPermission = Boolean(cameraPermission?.granted);
   const recommendationOptions = useMemo(() => buildRecommendationOptions({
     preview,
@@ -2368,38 +2517,37 @@ export function PatientWigRequestScreen() {
     () => recommendationOptions.find((option) => option.id === selectedOptionId) || recommendationOptions[0] || null,
     [recommendationOptions, selectedOptionId]
   );
-  const recommendationTitle = selectedOption?.name || buildRecommendationTitle({
-    preview,
-    specification: latestWigSpecification,
-    draftValues,
-  });
-  const recommendationFamily = selectedOption?.family || buildRecommendationFamily({
-    preview,
-    specification: latestWigSpecification,
-    draftValues,
-  });
-  const recommendationSummary = selectedOption?.summary
-    || selectedOption?.note
-    || preview?.summary
-    || latestWigRequest?.notes
-    || 'Your suggested wig recommendation will appear here after the front photo is processed.';
-  const preferredColor = latestWigSpecification?.preferred_color || draftValues?.preferredColor || '';
-  const preferredLength = latestWigSpecification?.preferred_length || draftValues?.preferredLength || '';
-  const hairTexture = latestWigSpecification?.hair_texture || draftValues?.hairTexture || '';
   const generatedImageUri = selectedOption?.generatedImageUri || preview?.generated_image_data_url || latestWigSpecification?.ai_wig_preview_url || '';
   const hasGeneratedPreview = Boolean(preview);
-  const recommendedWigIds = useMemo(() => getRecommendedWigIds({
-    wigs: availableWigs,
-    preferredColor,
-    preferredLength,
-    hairTexture,
-    recommendationTitle,
-    recommendationFamily,
-  }), [availableWigs, hairTexture, preferredColor, preferredLength, recommendationFamily, recommendationTitle]);
+  const aiRecommendedWig = useMemo(() => {
+    if (!availableWigs.length) return null;
+
+    return availableWigs.reduce((best, wig) => {
+      const score = scoreWigRecommendation(wig, draftValues);
+      if (!best) return { wig, score };
+      if (score > best.score) return { wig, score };
+
+      const bestStock = Number(best.wig?.stock_count || 0);
+      const wigStock = Number(wig?.stock_count || 0);
+      if (score === best.score && wigStock > bestStock) return { wig, score };
+
+      return best;
+    }, null)?.wig || availableWigs[0] || null;
+  }, [availableWigs, draftValues]);
+  const aiRecommendedWigId = aiRecommendedWig?.id || '';
+  const recommendedPreferenceOptions = useMemo(() => ({
+    preferredLength: [getWigPreferenceValue(aiRecommendedWig, 'preferredLength')].filter(Boolean),
+    preferredColor: [getWigPreferenceValue(aiRecommendedWig, 'preferredColor')].filter(Boolean),
+    hairTexture: [getWigPreferenceValue(aiRecommendedWig, 'hairTexture')].filter(Boolean),
+    hairDensity: [getWigPreferenceValue(aiRecommendedWig, 'hairDensity')].filter(Boolean),
+    capSize: [getWigPreferenceValue(aiRecommendedWig, 'capSize')].filter(Boolean),
+    stylePreference: [getWigPreferenceValue(aiRecommendedWig, 'stylePreference')].filter(Boolean),
+  }), [aiRecommendedWig]);
   const selectedWig = useMemo(
-    () => availableWigs.find((wig) => wig.id === selectedWigFilterId) || availableWigs[0] || null,
-    [availableWigs, selectedWigFilterId]
+    () => availableWigs.find((wig) => wig.id === selectedWigFilterId) || aiRecommendedWig || availableWigs[0] || null,
+    [aiRecommendedWig, availableWigs, selectedWigFilterId]
   );
+  const activeSelectedWigId = selectedWigFilterId || selectedWig?.id || aiRecommendedWigId || '';
 
   useEffect(() => {
     setSelectedOptionId(recommendationOptions[0]?.id || '');
@@ -2413,10 +2561,9 @@ export function PatientWigRequestScreen() {
 
     setSelectedWigFilterId((current) => {
       if (current && availableWigs.some((wig) => wig.id === current)) return current;
-      const recommended = availableWigs.find((wig) => recommendedWigIds.has(wig.id));
-      return recommended?.id || availableWigs[0]?.id || '';
+      return '';
     });
-  }, [availableWigs, recommendedWigIds]);
+  }, [availableWigs]);
 
   const handleNavPress = (item) => {
     if (!item.route || item.route === '/patient/requests') return;
@@ -2435,7 +2582,7 @@ export function PatientWigRequestScreen() {
     setIsCaptureOpen(false);
   };
 
-  const handleCapturePhoto = async () => {
+  const handleCapturePhoto = async (placement = null) => {
     if (!cameraPermission?.granted) {
       await requestCameraPermission();
       return;
@@ -2456,7 +2603,7 @@ export function PatientWigRequestScreen() {
             base64: true,
           });
 
-      await saveCapturedReferenceImage(photo);
+      await saveCapturedReferenceImage(photo, placement);
     } catch {
       await saveCapturedReferenceImage(null);
     } finally {
@@ -2465,7 +2612,7 @@ export function PatientWigRequestScreen() {
   };
 
   const handleGeneratePreviewFromModal = handleSubmit(async (values) => {
-    const result = await generatePreview(values);
+    const result = await generatePreview(values, selectedWig);
 
     if (result?.success) {
       closeCaptureFlow();
@@ -2499,7 +2646,29 @@ export function PatientWigRequestScreen() {
     return result;
   });
 
+  const handleCancelLatestRequest = () => {
+    Alert.alert(
+      'Cancel request?',
+      'This will close your pending wig request.',
+      [
+        { text: 'Keep', style: 'cancel' },
+        {
+          text: 'Cancel request',
+          style: 'destructive',
+          onPress: async () => {
+            const result = await cancelRequest();
+            if (result?.success) {
+              await refreshTracking();
+              setIsTimelineOpen(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const openRequestFlow = () => {
+    setFlowSource('request');
     setRequestPreferenceChoice('preferences');
     setFlowStep('patient');
     setIsFlowOpen(true);
@@ -2507,6 +2676,7 @@ export function PatientWigRequestScreen() {
   };
 
   const openAiPreviewFlow = () => {
+    setFlowSource('preview');
     setRequestPreferenceChoice('preferences');
     setFlowStep('details');
     setIsFlowOpen(true);
@@ -2515,6 +2685,7 @@ export function PatientWigRequestScreen() {
 
   const closeRequestFlow = () => {
     setIsFlowOpen(false);
+    setFlowSource('request');
     setFlowStep('patient');
   };
 
@@ -2531,58 +2702,35 @@ export function PatientWigRequestScreen() {
     return { success: true };
   });
 
-  const handleDownloadSelectedImage = async () => {
-    if (!generatedImageUri) return;
+  const handleStartPreview = async () => {
+    await openCaptureFlow();
+  };
+
+  const handleEditPatientDetails = () => {
+    setIsFlowOpen(false);
+    router.navigate('/profile');
+  };
+
+  const handleOpenMedicalDocument = async () => {
+    await openPatientFileUrl(requestPatientDetails?.medical_document, 'patientWigRequest.openMedicalDocument');
+  };
+
+  const openPatientFileUrl = async (url, source) => {
+    const targetUrl = String(url || '').trim();
+    if (!targetUrl) return;
 
     try {
-      let shareUri = generatedImageUri;
-      if (generatedImageUri.startsWith('data:image/')) {
-        const extension = generatedImageUri.includes('image/png') ? 'png' : 'jpg';
-        const base64 = generatedImageUri.split(',')[1] || '';
-        shareUri = `${FileSystem.cacheDirectory}wig-preview-${Date.now()}.${extension}`;
-        await FileSystem.writeAsStringAsync(shareUri, base64, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
-      } else if (/^https?:\/\//i.test(generatedImageUri)) {
-        const extension = generatedImageUri.toLowerCase().includes('.png') ? 'png' : 'jpg';
-        const downloadResult = await FileSystem.downloadAsync(
-          generatedImageUri,
-          `${FileSystem.cacheDirectory}wig-preview-${Date.now()}.${extension}`
-        );
-        shareUri = downloadResult.uri;
+      const canOpen = await Linking.canOpenURL(targetUrl);
+      if (canOpen) {
+        await Linking.openURL(targetUrl);
       }
-
-      // Try to save to gallery, but don't block if it fails
-      // (Android Expo media library may request AUDIO permission which isn't needed for images)
-      try {
-        const permission = await MediaLibrary.requestPermissionsAsync();
-        if (permission.granted) {
-          await MediaLibrary.createAssetAsync(shareUri);
-          return;
-        }
-      } catch (mediaLibraryError) {
-        // MediaLibrary may fail on some Android versions due to permission issues
-        // This is not critical - fall through to sharing instead
-        logAppError('patientWigRequest.downloadSelectedImage.gallery', mediaLibraryError, {
-          userId: user?.id,
-          note: 'Gallery save failed, attempting share instead',
-        });
-      }
-
-      // Fallback to sharing (works on all platforms)
-      if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(shareUri, {
-          mimeType: generatedImageUri.includes('image/png') ? 'image/png' : 'image/jpeg',
-          dialogTitle: 'Save wig preview',
-        });
-      }
-    } catch (downloadError) {
-      logAppError('patientWigRequest.downloadSelectedImage', downloadError, { userId: user?.id });
+    } catch (openError) {
+      logAppError(source, openError, { userId: user?.id });
     }
   };
 
-  const handleStartPreview = async () => {
-    await openCaptureFlow();
+  const handleOpenPatientPhoto = async () => {
+    await openPatientFileUrl(requestPatientDetails?.patient_picture, 'patientWigRequest.openPatientPhoto');
   };
 
   return (
@@ -2686,34 +2834,54 @@ export function PatientWigRequestScreen() {
 
       {activeWigTab === 'request' ? (
         hasSubmittedRequest ? (
-          <AppCard variant="patientTint" radius="xl" padding="lg" style={styles.currentRequestCard}>
-            <View style={styles.currentRequestBody}>
-              <View style={styles.currentRequestIcon}>
-                <AppIcon name="requests" state="active" size="xl" />
+          <>
+            <AppCard variant="patientTint" radius="xl" padding="lg" style={styles.currentRequestCard}>
+              <View style={styles.currentRequestBody}>
+                <View style={styles.currentRequestIcon}>
+                  <AppIcon name="requests" state="active" size="xl" />
+                </View>
+                <View style={styles.currentRequestCopy}>
+                  <Text style={[styles.currentRequestLabel, { color: roles.bodyText }]}>
+                    {requestCode || 'Current status'}
+                  </Text>
+                  <Text style={[styles.currentRequestTitle, { color: roles.headingText }]}>{requestStatus}</Text>
+                </View>
+                <Pressable
+                  onPress={() => setIsTimelineOpen((current) => !current)}
+                  hitSlop={10}
+                  accessibilityRole="button"
+                  accessibilityLabel={isTimelineOpen ? 'Hide timeline' : 'Show timeline'}
+                  style={({ pressed }) => [
+                    styles.timelineIconButton,
+                    { backgroundColor: roles.defaultCardBackground },
+                    pressed ? styles.preferencePressed : null,
+                  ]}
+                >
+                  <AppIcon
+                    name={isTimelineOpen ? 'chevron-up' : 'timeline-clock-outline'}
+                    color={roles.primaryActionBackground}
+                    size="md"
+                  />
+                </Pressable>
               </View>
-              <View style={styles.currentRequestCopy}>
-                <Text style={[styles.currentRequestLabel, { color: roles.bodyText }]}>Current status</Text>
-                <Text style={[styles.currentRequestTitle, { color: roles.headingText }]}>{requestStatus}</Text>
-              </View>
-              <Pressable
-                onPress={() => setIsTimelineOpen((current) => !current)}
-                hitSlop={10}
-                accessibilityRole="button"
-                accessibilityLabel={isTimelineOpen ? 'Hide timeline' : 'Show timeline'}
-                style={({ pressed }) => [
-                  styles.timelineIconButton,
-                  { backgroundColor: roles.defaultCardBackground },
-                  pressed ? styles.preferencePressed : null,
-                ]}
-              >
-                <AppIcon
-                  name={isTimelineOpen ? 'chevron-up' : 'timeline-clock-outline'}
-                  color={roles.primaryActionBackground}
-                  size="md"
-                />
-              </Pressable>
-            </View>
-          </AppCard>
+
+              {canCancelLatestRequest ? (
+                <View style={styles.currentRequestActions}>
+                  <AppButton
+                    title={isCancellingRequest ? 'Cancelling...' : 'Cancel request'}
+                    variant="outline"
+                    size="sm"
+                    onPress={handleCancelLatestRequest}
+                    loading={isCancellingRequest}
+                    leading={<AppIcon name="closeCircle" state="danger" size="sm" />}
+                    textColorOverride={theme.colors.textError}
+                    borderColorOverride={theme.colors.borderSubtle}
+                    backgroundColorOverride={roles.defaultCardBackground}
+                  />
+                </View>
+              ) : null}
+            </AppCard>
+          </>
         ) : (
           <AppCard variant="elevated" radius="xl" padding="lg" style={styles.simpleWigCard}>
             <View style={styles.simpleRecordHeader}>
@@ -2774,38 +2942,39 @@ export function PatientWigRequestScreen() {
       <RequestFlowModal
         visible={isFlowOpen}
         step={flowStep}
+        flowSource={flowSource}
         control={control}
         errors={errors}
         patientName={patientFullName}
+        patientDetails={requestPatientDetails}
         patientCode={patientCode}
         hospitalName={hospitalName}
         medicalCondition={medicalCondition}
         preferenceChoice={requestPreferenceChoice}
         referenceImage={referenceImage}
+        selectedWig={selectedWig}
+        recommendedPreferenceOptions={recommendedPreferenceOptions}
         recommendationOptions={recommendationOptions}
         selectedOptionId={selectedOptionId}
         onSelectOption={setSelectedOptionId}
-        recommendationTitle={recommendationTitle}
-        recommendationFamily={recommendationFamily}
-        recommendationSummary={recommendationSummary}
-        preferredColor={preferredColor}
-        preferredLength={preferredLength}
+        wigPreferenceOptions={wigPreferenceOptions}
+        isLoadingWigPreferenceOptions={isLoadingWigPreferenceOptions}
         generatedImageUri={generatedImageUri}
         hasGeneratedPreview={hasGeneratedPreview}
         isGeneratingPreview={isGeneratingPreview}
         isSavingRequest={isSavingRequest}
         onClose={closeRequestFlow}
-        onBackToPatient={() => setFlowStep('patient')}
         onContinueToDetails={handleContinueToDetails}
         onPreferenceChoiceChange={setRequestPreferenceChoice}
         onOpenCamera={handleStartPreview}
-        onRegenerate={handleGeneratePreviewFromModal}
-        onDownloadSelected={handleDownloadSelectedImage}
         onSubmitRequest={handleSaveRequest}
         onViewTimeline={() => {
           setIsFlowOpen(false);
           setIsTimelineOpen(true);
         }}
+        onEditPatientDetails={handleEditPatientDetails}
+        onOpenPatientPhoto={handleOpenPatientPhoto}
+        onOpenMedicalDocument={handleOpenMedicalDocument}
         roles={roles}
       />
 
@@ -2814,8 +2983,8 @@ export function PatientWigRequestScreen() {
         referenceImage={referenceImage}
         availableWigs={availableWigs}
         selectedWig={selectedWig}
-        selectedWigId={selectedWigFilterId}
-        recommendedWigIds={recommendedWigIds}
+        selectedWigId={activeSelectedWigId}
+        recommendedWigId={aiRecommendedWigId}
         isLoadingAvailableWigs={isLoadingAvailableWigs}
         hasCameraPermission={hasCameraPermission}
         cameraRef={cameraRef}
@@ -2958,6 +3127,9 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.semantic.bodyLg,
     fontWeight: theme.typography.weights.bold,
   },
+  currentRequestActions: {
+    marginTop: theme.spacing.md,
+  },
   requestChoiceGrid: {
     gap: theme.spacing.lg,
   },
@@ -3014,14 +3186,13 @@ const styles = StyleSheet.create({
     paddingTop: theme.spacing.sm,
   },
   referralInfoRow: {
-    minHeight: 66,
+    minHeight: 44,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: theme.spacing.md,
-    borderRadius: theme.radius.lg,
-    borderWidth: 1,
-    paddingHorizontal: theme.spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    paddingVertical: theme.spacing.sm,
   },
   recordActionRow: {
     flexDirection: 'row',
@@ -3040,6 +3211,7 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.semantic.bodySm,
     fontWeight: theme.typography.weights.bold,
     textAlign: 'right',
+    maxWidth: '62%',
   },
   manualRequestCard: {
     gap: theme.spacing.md,
@@ -3116,6 +3288,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: theme.spacing.sm,
   },
+  singleActionRow: {
+    width: '100%',
+  },
   actionButton: {
     flex: 1,
   },
@@ -3137,13 +3312,64 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.semantic.body,
     lineHeight: theme.typography.semantic.body * theme.typography.lineHeights.relaxed,
   },
-  preferenceSection: {
+  fitPanel: {
+    minHeight: 84,
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.colors.borderMuted,
+  },
+  fitNoticeIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fitNoticeCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 3,
+  },
+  fitNoticeTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    fontWeight: theme.typography.weights.bold,
+  },
+  fitNoticeBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  fitInlineNotice: {
+    minHeight: 28,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.xs,
+    marginTop: theme.spacing.xs,
+  },
+  fitInlineNoticeText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  preferenceSection: {
+    gap: theme.spacing.sm,
+  },
+  preferenceSectionHeader: {
+    gap: 2,
   },
   preferenceSectionTitle: {
     fontFamily: theme.typography.fontFamilyDisplay,
     fontSize: theme.typography.semantic.bodyLg,
     fontWeight: theme.typography.weights.bold,
+  },
+  preferenceSectionHint: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
   },
   preferenceLabelRow: {
     flexDirection: 'row',
@@ -3157,11 +3383,31 @@ const styles = StyleSheet.create({
   },
   preferenceChip: {
     minHeight: 42,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.xs,
     justifyContent: 'center',
     borderRadius: theme.radius.pill,
     borderWidth: 2,
     paddingHorizontal: theme.spacing.lg,
     paddingVertical: theme.spacing.sm,
+  },
+  preferenceChipRecommended: {
+    backgroundColor: theme.colors.surfaceSoft,
+  },
+  aiChipBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.backgroundPrimary,
+  },
+  aiChipBadgeText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 10,
+    fontWeight: theme.typography.weights.bold,
   },
   preferencePressed: {
     opacity: 0.84,
@@ -3173,6 +3419,11 @@ const styles = StyleSheet.create({
   },
   preferenceChipTextSelected: {
     fontWeight: theme.typography.weights.bold,
+  },
+  preferenceSelectedText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.semibold,
   },
   styleSelectionGrid: {
     flexDirection: 'row',
@@ -3202,16 +3453,30 @@ const styles = StyleSheet.create({
   },
   colorSwatchGrid: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    flexWrap: 'wrap',
     gap: theme.spacing.sm,
   },
   colorSwatchButton: {
-    width: 48,
-    height: 48,
-    borderRadius: theme.radius.full,
+    position: 'relative',
+    width: 82,
+    minHeight: 82,
+    gap: theme.spacing.xs,
+    borderRadius: theme.radius.lg,
     borderWidth: 2,
     alignItems: 'center',
     justifyContent: 'center',
+    padding: theme.spacing.xs,
+  },
+  colorAiBadge: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    width: 22,
+    height: 22,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.backgroundPrimary,
   },
   colorSwatch: {
     width: 38,
@@ -3223,6 +3488,13 @@ const styles = StyleSheet.create({
   colorSelectedText: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  colorSwatchLabel: {
+    maxWidth: '100%',
+    textAlign: 'center',
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 11,
     fontWeight: theme.typography.weights.semibold,
   },
   preferenceHelperText: {
@@ -3240,6 +3512,13 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     paddingHorizontal: theme.spacing.md,
     paddingVertical: theme.spacing.md,
+  },
+  preferenceChoiceHeader: {
+    minHeight: 24,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
   },
   preferenceChoiceTitle: {
     fontFamily: theme.typography.fontFamily,
@@ -3369,12 +3648,16 @@ const styles = StyleSheet.create({
     fontWeight: theme.typography.weights.bold,
   },
   matcherImageWrap: {
+    position: 'relative',
     width: '100%',
     aspectRatio: 0.82,
   },
   matcherImage: {
     width: '100%',
     height: '100%',
+  },
+  matcherWigOverlay: {
+    position: 'absolute',
   },
   matcherImagePlaceholder: {
     flex: 1,
@@ -3727,8 +4010,12 @@ const styles = StyleSheet.create({
     fontWeight: theme.typography.weights.bold,
     color: theme.colors.textPrimary,
   },
-  calibrationControlRow: {
-    minHeight: 52,
+  calibrationControl: {
+    gap: theme.spacing.sm,
+    paddingVertical: theme.spacing.xs,
+  },
+  calibrationControlHeader: {
+    minHeight: 24,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -3741,34 +4028,40 @@ const styles = StyleSheet.create({
     fontWeight: theme.typography.weights.semibold,
     color: theme.colors.textPrimary,
   },
-  calibrationStepper: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.spacing.sm,
-  },
-  calibrationStepButton: {
-    width: 38,
-    height: 38,
-    borderRadius: theme.radius.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: theme.colors.borderMuted,
-    backgroundColor: theme.colors.surfaceSoft,
-  },
-  calibrationStepButtonText: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodyLg,
-    fontWeight: theme.typography.weights.bold,
-    color: theme.colors.brandPrimary,
-  },
   calibrationValue: {
-    width: 60,
-    textAlign: 'center',
+    minWidth: 58,
+    textAlign: 'right',
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.bodySm,
     fontWeight: theme.typography.weights.semibold,
     color: theme.colors.textSecondary,
+  },
+  calibrationSliderTouchArea: {
+    minHeight: 34,
+    justifyContent: 'center',
+  },
+  calibrationSliderTrack: {
+    position: 'relative',
+    height: 8,
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.surfaceDisabled,
+  },
+  calibrationSliderFill: {
+    height: '100%',
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.brandPrimary,
+  },
+  calibrationSliderThumb: {
+    position: 'absolute',
+    top: -8,
+    width: 24,
+    height: 24,
+    marginLeft: -12,
+    borderRadius: theme.radius.full,
+    borderWidth: 3,
+    borderColor: theme.colors.backgroundPrimary,
+    backgroundColor: theme.colors.brandPrimary,
+    ...theme.shadows.soft,
   },
   calibrationActions: {
     flexDirection: 'row',
@@ -3822,6 +4115,62 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamilyDisplay,
     fontSize: theme.typography.semantic.titleSm,
     color: theme.colors.textPrimary,
+  },
+  patientReviewHeader: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.md,
+  },
+  patientEditButton: {
+    minWidth: 92,
+  },
+  patientMediaGrid: {
+    gap: theme.spacing.md,
+  },
+  patientMediaCard: {
+    gap: theme.spacing.sm,
+  },
+  patientMediaHeader: {
+    minHeight: 26,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.md,
+  },
+  patientMediaTitle: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  patientPhotoPreview: {
+    width: '100%',
+    height: 210,
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.surfaceSoft,
+  },
+  patientMediaEmpty: {
+    minHeight: 148,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: theme.spacing.xs,
+    borderRadius: theme.radius.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.borderMuted,
+    backgroundColor: theme.colors.backgroundPrimary,
+  },
+  patientMediaEmptyText: {
+    textAlign: 'center',
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+  },
+  patientDocumentName: {
+    minHeight: 40,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
   },
   flowBody: {
     fontFamily: theme.typography.fontFamily,
@@ -4115,6 +4464,25 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.md,
     backgroundColor: theme.colors.surfaceSoft,
   },
+  tryOnWigAiBadge: {
+    position: 'absolute',
+    top: 6,
+    right: 6,
+    zIndex: 3,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    borderRadius: theme.radius.full,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    backgroundColor: theme.colors.brandPrimary,
+  },
+  tryOnWigAiBadgeText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 10,
+    fontWeight: theme.typography.weights.bold,
+    color: theme.colors.textInverse,
+  },
   tryOnWigImage: {
     width: '100%',
     height: '100%',
@@ -4123,17 +4491,6 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  tryOnRecommendedBadge: {
-    position: 'absolute',
-    top: 6,
-    right: 6,
-    width: 28,
-    height: 28,
-    borderRadius: theme.radius.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: theme.colors.brandPrimary,
   },
   tryOnWigName: {
     minHeight: 18,
@@ -4243,6 +4600,45 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.semantic.caption,
     fontWeight: theme.typography.weights.semibold,
     color: theme.colors.textInverse,
+  },
+  faceScanPanel: {
+    minHeight: 82,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+    borderRadius: theme.radius.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.borderMuted,
+    backgroundColor: theme.colors.backgroundPrimary,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    marginBottom: theme.spacing.md,
+  },
+  faceScanStatusDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: theme.colors.textWarning,
+  },
+  faceScanStatusDotComplete: {
+    backgroundColor: theme.colors.textSuccess,
+  },
+  faceScanCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  faceScanTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.bold,
+    color: theme.colors.textPrimary,
+  },
+  faceScanBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    lineHeight: theme.typography.semantic.caption * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textSecondary,
   },
   captureControls: {
     flexDirection: 'row',

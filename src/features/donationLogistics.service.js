@@ -103,7 +103,7 @@ export const submitDonation = async ({
     // Create hair submission record
     const submissionResult = await createHairSubmission({
       user_id: userId,
-      submission_code: null,
+      donation_reference: null,
       donation_source: sourceType,
       donor_notes: `Donation from logistics flow - ${donationDetails.hairLengthValue}${donationDetails.hairLengthUnit}`,
       status: 'Pending',
@@ -114,21 +114,21 @@ export const submitDonation = async ({
     }
 
     const createdSubmission = submissionResult.data;
-    const submissionCode = createdSubmission.submission_code || `SUB-${createdSubmission.submission_id}`;
-    const syncedSubmissionResult = createdSubmission.submission_code
+    const donationReference = createdSubmission.donation_reference || `DON-${createdSubmission.submission_id}`;
+    const syncedSubmissionResult = createdSubmission.donation_reference
       ? { data: createdSubmission, error: null }
       : await updateHairSubmissionById(createdSubmission.submission_id, {
-          submission_code: submissionCode,
+          donation_reference: donationReference,
           qr_status: 'Generated',
           qr_generated_at: new Date().toISOString(),
         });
     const qrSubmission = syncedSubmissionResult.data || {
       ...createdSubmission,
-      submission_code: submissionCode,
+      donation_reference: donationReference,
       qr_status: 'Generated',
     };
 
-    logAppEvent('donation_logistics', 'Hair submission created', { submissionCode, submissionId: createdSubmission.submission_id });
+    logAppEvent('donation_logistics', 'Hair submission created', { donationReference, submissionId: createdSubmission.submission_id });
 
     // Create submission detail
     const detailResult = await createHairSubmissionDetail({
@@ -199,7 +199,7 @@ export const submitDonation = async ({
     };
 
     const logisticsRecord = await createHairSubmissionLogistics(logisticsData);
-    logAppEvent('donation_logistics', 'Logistics record created', { submissionCode, logisticsId: logisticsRecord.data?.submission_logistics_id });
+    logAppEvent('donation_logistics', 'Logistics record created', { donationReference, logisticsId: logisticsRecord.data?.submission_logistics_id });
 
     // Create bundle tracking entry
     try {
@@ -222,7 +222,7 @@ export const submitDonation = async ({
     const staffNotification = buildDonationSubmittedNotification({
       donorId: userId,
       donorName: `${userProfile?.first_name || ''} ${userProfile?.last_name || ''}`.trim(),
-      submissionCode,
+      donationReference,
       donationDetails,
       qrCodeUrl,
     });
@@ -231,7 +231,7 @@ export const submitDonation = async ({
     try {
       await recordNotifications([
         buildDonationNotification({
-          dedupeKey: `donation_submitted_${submissionCode}`,
+          dedupeKey: `donation_submitted_${donationReference}`,
           type: notificationTypes.logisticsUpdated,
           title: staffNotification.title,
           message: staffNotification.message,
@@ -246,7 +246,7 @@ export const submitDonation = async ({
 
     return {
       success: true,
-      submissionCode,
+      donationReference,
       qrCodeUrl,
       logisticsRecord,
       staffNotification,
@@ -261,7 +261,7 @@ export const submitDonation = async ({
  * Generate printable QR code PDF
  */
 export const generateDonationQrPdf = async ({
-  submissionCode = '',
+  donationReference = '',
   qrCodeUrl = '',
   donorName = '',
   hairLength = 0,
@@ -296,7 +296,7 @@ export const generateDonationQrPdf = async ({
             
             <div class="details">
               <div class="detail-row">
-                <span class="label">Submission Code:</span> ${submissionCode}
+                <span class="label">Donation reference:</span> ${donationReference}
               </div>
               <div class="detail-row">
                 <span class="label">Donor Name:</span> ${donorName || 'Anonymous'}
@@ -318,7 +318,7 @@ export const generateDonationQrPdf = async ({
 
     const result = await Print.printToFileAsync({
       html: htmlContent,
-      fileName: `donation_qr_${submissionCode}`,
+      fileName: `donation_qr_${donationReference}`,
     });
 
     logAppEvent('donation_logistics', 'QR PDF generated');
@@ -378,7 +378,7 @@ export const processDonationQrScan = async ({
     const validation = validateQrCodeScan({
       qrPayload: {
         ...qrPayload,
-        submissionCode: qrPayload.submissionCode || qrPayload.submission_code,
+        donationReference: qrPayload.donationReference || qrPayload.donation_reference,
       },
     });
     if (!validation.isValid) {
@@ -411,7 +411,7 @@ export const processDonationQrScan = async ({
         });
       }
 
-      logAppEvent('donation_logistics', 'QR scan processed', { submissionCode: qrPayload.submissionCode });
+      logAppEvent('donation_logistics', 'QR scan processed', { donationReference: qrPayload.donationReference });
     } catch (updateErr) {
       logAppError('donation_logistics', updateErr);
     }
@@ -435,7 +435,7 @@ export const processDonationQrScan = async ({
  * Generate donation certificate after verification
  */
 export const generateDonationCertificate = async ({
-  submissionCode = '',
+  donationReference = '',
   donorId = '',
   donorName = '',
   donationDate = '',
@@ -547,7 +547,7 @@ export const generateDonationCertificate = async ({
                 <strong>Bundle Quantity:</strong> ${bundleQuantity}
               </div>
               <div class="detail-line">
-                <strong>Submission Code:</strong> ${submissionCode}
+                <strong>Donation reference:</strong> ${donationReference}
               </div>
             </div>
             
@@ -564,10 +564,10 @@ export const generateDonationCertificate = async ({
 
     const pdfResult = await Print.printToFileAsync({
       html: htmlContent,
-      fileName: `certificate_${submissionCode}`,
+      fileName: `certificate_${donationReference}`,
     });
 
-    logAppEvent('donation_logistics', 'Certificate generated', { submissionCode });
+    logAppEvent('donation_logistics', 'Certificate generated', { donationReference });
 
     return {
       certificateData,
@@ -603,15 +603,15 @@ export const shareDonationCertificate = async (pdfUri, certificateId = '') => {
 /**
  * Get donation summary for tracking
  */
-export const getDonationSummary = async (submissionCode = '') => {
+export const getDonationSummary = async (donationReference = '') => {
   try {
-    if (!submissionCode) throw new Error('Submission code required');
+    if (!donationReference) throw new Error('Donation reference required');
 
     // This would fetch from the database
-    // const summary = await fetchDonationSummary(submissionCode);
+    // const summary = await fetchDonationSummary(donationReference);
 
     return {
-      submissionCode,
+      donationReference,
       status: 'pending', // Would be actual status from DB
       createdAt: new Date().toISOString(),
       // Additional fields would come from DB

@@ -199,7 +199,7 @@ const buildNotification = ({
 });
 
 const createDonationCertificateNumber = (submission = null) => {
-  const submissionPart = String(submission?.submission_code || submission?.submission_id || Date.now())
+  const submissionPart = String(submission?.donation_reference || submission?.submission_id || Date.now())
     .replace(/[^a-z0-9]+/gi, '')
     .slice(-10)
     .toUpperCase();
@@ -211,6 +211,20 @@ const normalizeCertificateIssuerId = (value = null) => {
   const issuerId = Number(value);
   return Number.isFinite(issuerId) && issuerId > 0 ? issuerId : null;
 };
+
+const normalizeFlowStatusKey = (value = '') => String(value || '')
+  .trim()
+  .toLowerCase()
+  .replace(/[_\s-]+/g, '');
+
+const isApprovedEventSubmissionStatus = (value = '') => [
+  'cut',
+  'wiginproduction',
+  'inproduction',
+  'wigcreated',
+  'wigcompleted',
+  'completed',
+].includes(normalizeFlowStatusKey(value));
 
 const textIncludesAny = (source = '', tokens = []) => {
   const normalized = String(source || '').toLowerCase();
@@ -264,17 +278,22 @@ const ensureDonationCertificateForNotification = async ({
     return existingResult.data;
   }
 
+  const isEventSubmission = Boolean(submission?.event_request_id || submission?.donation_drive_id);
+  if (isEventSubmission && !isApprovedEventSubmissionStatus(submission?.status)) {
+    return null;
+  }
+
   const approvalEvidence = findDonationApprovalEvidence({ trackingEntries });
-  if (!approvalEvidence) return null;
+  if (!approvalEvidence && !isEventSubmission) return null;
 
   const certificateResult = await createDonationCertificate({
     user_id: submission.user_id,
     submission_id: submission.submission_id,
     certificate_number: createDonationCertificateNumber(submission),
     certificate_type: 'Certificate of Donation',
-    issued_by: approvalEvidence.issuedBy,
-    issued_at: approvalEvidence.issuedAt || new Date().toISOString(),
-    remarks: 'Issued after staff scanned the Cut & Ship stage.',
+    issued_by: approvalEvidence?.issuedBy || submission?.cut_by_user_id || null,
+    issued_at: approvalEvidence?.issuedAt || submission?.cut_at || submission?.updated_at || new Date().toISOString(),
+    remarks: 'Issued after staff approved the hair quality review.',
   });
 
   return certificateResult.data || null;
@@ -486,7 +505,7 @@ const buildDonorDerivedNotifications = async ({
       dedupeKey: `${notificationTypes.submissionReceived}:${submissionId}`,
       type: notificationTypes.submissionReceived,
       title: 'Donation submitted',
-      message: `Your donation ${submission.submission_code || ''} was submitted and is now being processed.`.trim(),
+      message: `Your donation ${submission.donation_reference || ''} was submitted and is now being processed.`.trim(),
       createdAt: submission.updated_at || submission.created_at,
       referenceType: 'hair_submission',
       referenceId: submissionId,
@@ -875,7 +894,7 @@ export const buildImmediateNotificationEvents = ({ role, payload }) => {
         dedupeKey: `${notificationTypes.submissionReceived}:${payload.submission.submission_id}`,
         type: notificationTypes.submissionReceived,
         title: 'Submission received',
-        message: `Your hair submission ${payload.submission.submission_code || ''} was saved successfully.`.trim(),
+        message: `Your hair submission ${payload.submission.donation_reference || ''} was saved successfully.`.trim(),
         createdAt: payload.submission.created_at || new Date().toISOString(),
         referenceType: 'hair_submission',
         referenceId: payload.submission.submission_id,

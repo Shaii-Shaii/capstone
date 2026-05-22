@@ -6,6 +6,7 @@ const donationDriveRequestsTable = 'Event_Requests';
 const donationDriveRegistrationsTable = 'Event_Attendees';
 const hairSubmissionsTable = 'Hair_Submissions';
 const hairSubmissionDetailsTable = 'Hair_Submission_Details';
+const aiScreeningsTable = 'AI_Screenings';
 
 const donationDriveSelect = `
   event_request_id:Event_Request_ID,
@@ -52,6 +53,13 @@ const donationDriveRegistrationSelect = `
   updated_at:Updated_At
 `;
 
+const eventHairSubmissionLinkSelect = `
+  submission_id:Submission_ID,
+  status:Status,
+  created_at:Created_At
+`;
+
+
 const normalizeRegistrationStatus = (value = '') => String(value || '').trim().toLowerCase();
 const normalizeDriveStatus = (value = '') => String(value || '').trim().toLowerCase();
 const normalizeVisibility = (value = '') => String(value || '').trim().toLowerCase();
@@ -91,6 +99,13 @@ const getDriveCompareDate = (drive) => drive?.end_date || drive?.start_date || n
 const isDrivePublic = (drive = null) => normalizeVisibility(drive?.event_visibility || 'Public') !== 'private';
 const doesDriveRequireMembership = (_drive = null) => false;
 
+const isDriveUnlockedForDonor = (drive = null, unlockedPrivateEventApplicationIds = new Set()) => {
+  if (isDrivePublic(drive)) return true;
+  if (drive?.registration?.registration_id) return true;
+  const eventApplicationId = Number(drive?.event_application_id || 0);
+  return eventApplicationId > 0 && unlockedPrivateEventApplicationIds.has(eventApplicationId);
+};
+
 const isUpcomingDrive = (drive) => {
   const compareDate = getDriveCompareDate(drive);
   if (!compareDate) return false;
@@ -116,6 +131,36 @@ const sortDrivesForHome = (rows = []) => (
     return rightTime - leftTime;
   })
 );
+
+const fetchUnlockedPrivateEventApplicationIds = async (databaseUserId = null) => {
+  const userId = Number(databaseUserId);
+  if (!Number.isFinite(userId) || userId <= 0) {
+    return { data: new Set(), error: null };
+  }
+
+  const result = await supabase
+    .from('Private_Event_Access')
+    .select('event_application_id:Event_Application_ID')
+    .eq('User_ID', userId);
+
+  if (result.error) {
+    logAppError('donor_home.private_event_access', result.error, {
+      table: 'Private_Event_Access',
+      databaseUserId: userId,
+    });
+
+    return { data: new Set(), error: result.error };
+  }
+
+  return {
+    data: new Set(
+      (result.data || [])
+        .map((row) => Number(row?.event_application_id))
+        .filter((value) => Number.isFinite(value) && value > 0)
+    ),
+    error: null,
+  };
+};
 
 const resolveDriveQrState = (row) => {
   const attendanceStatus = normalizeRegistrationStatus(row?.attendance_status);
@@ -204,6 +249,11 @@ const normalizeDonationDriveRegistration = (row) => ({
   donation_drive_id: row?.donation_drive_id || null,
   user_id: row?.user_id || null,
   waybill_code: row?.waybill_code || null,
+  submission_id: row?.submission_id || null,
+  donation_reference: row?.donation_reference || '',
+  submission_detail_id: row?.submission_detail_id || null,
+  submission_status: row?.submission_status || '',
+  submission_detail_status: row?.submission_detail_status || '',
   registration_status: row?.registration_status || '',
   attendance_status: row?.attendance_status || '',
   rsvp_scanned_at: row?.rsvp_scanned_at || null,
@@ -214,88 +264,28 @@ const normalizeDonationDriveRegistration = (row) => ({
   qr: resolveDriveQrState(row),
 });
 
-const RSVP_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-const generateRsvpCode = () => {
-  let suffix = '';
-  for (let i = 0; i < 6; i += 1) {
-    suffix += RSVP_CODE_CHARS[Math.floor(Math.random() * RSVP_CODE_CHARS.length)];
-  }
-  return `WV${suffix}`;
+const normalizeEventHairSubmissionLink = (row = null, detail = null) => {
+  if (!row?.submission_id) return null;
+
+  return {
+    submission_id: row.submission_id || null,
+    submission_status: row.status || '',
+    submission_detail_id: detail?.submission_detail_id || null,
+    submission_detail_status: detail?.status || '',
+  };
 };
 
-const createAttendanceCertificateNumber = (submission = null) => {
-  const submissionCode = String(submission?.submission_code || '')
-    .toUpperCase()
-    .replace(/[^A-Z0-9]/g, '')
-    .slice(-6);
-  const suffix = submissionCode || Math.random().toString(36).slice(2, 8).toUpperCase();
-  return `ATD-${suffix}`;
-};
-
-const ensureAttendanceCertificateForDrive = async ({
-  driveId,
-  databaseUserId,
-  attendanceStatus = '',
-}) => {
-  const normalizedAttendance = normalizeRegistrationStatus(attendanceStatus);
-  const isPresent = ['present', 'attended', 'checked in', 'checked-in', 'marked', 'scanned', 'verified']
-    .includes(normalizedAttendance);
-
-  if (!driveId || !databaseUserId || !isPresent) {
-    return { data: null, error: null };
-  }
-
-  const submissionResult = await supabase
-    .from(hairSubmissionsTable)
-    .select('Submission_ID,Submission_Code,User_ID,Created_At')
-    .eq('User_ID', databaseUserId)
-    .eq('Event_Request_ID', driveId)
-    .order('Created_At', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (submissionResult.error || !submissionResult.data?.Submission_ID) {
-    return { data: null, error: submissionResult.error || null };
-  }
-
-  const submissionId = submissionResult.data.Submission_ID;
-  const existingCertificateResult = await supabase
-    .from('Donation_Certificates')
-    .select('Certificate_ID,Certificate_Number,Certificate_Type,Issued_At,Submission_ID')
-    .eq('Submission_ID', submissionId)
-    .order('Issued_At', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (existingCertificateResult.error) {
-    return { data: null, error: existingCertificateResult.error };
-  }
-
-  if (existingCertificateResult.data?.Certificate_ID) {
-    return { data: existingCertificateResult.data, error: null };
-  }
-
-  const insertCertificateResult = await supabase
-    .from('Donation_Certificates')
-    .insert({
-      User_ID: databaseUserId,
-      Submission_ID: submissionId,
-      Certificate_Number: createAttendanceCertificateNumber({
-        submission_code: submissionResult.data.Submission_Code,
-      }),
-      Certificate_Type: 'Event Attendance Certificate',
-      Issued_At: new Date().toISOString(),
-      Remarks: 'Issued after staff scanned RSVP QR and marked attendance as Present.',
-    })
-    .select('Certificate_ID,Certificate_Number,Certificate_Type,Issued_At,Submission_ID')
-    .maybeSingle();
-
-  if (insertCertificateResult.error) {
-    return { data: null, error: insertCertificateResult.error };
-  }
-
-  return { data: insertCertificateResult.data || null, error: null };
-};
+const attachEventHairSubmissionLink = (registration = null, link = null) => (
+  registration && link
+    ? {
+        ...registration,
+        submission_id: link.submission_id || registration.submission_id || null,
+        submission_detail_id: link.submission_detail_id || registration.submission_detail_id || null,
+        submission_status: link.submission_status || registration.submission_status || '',
+        submission_detail_status: link.submission_detail_status || registration.submission_detail_status || '',
+      }
+    : registration
+);
 
 const normalizeDonationDrive = (row, organization = null, registration = null, membership = null) => ({
   id: row?.donation_drive_id || null,
@@ -357,14 +347,46 @@ const sortByNewestTimestamp = (rows = [], timestampFields = []) => (
   })
 );
 
-const makeSubmissionCode = () => `SUB-${Date.now().toString().slice(-8)}`;
+const ensureEventSubmissionHasLatestHairAnalysis = async ({ submissionId }) => {
+  const targetDetailResult = await supabase
+    .from(hairSubmissionDetailsTable)
+    .select('Submission_Detail_ID')
+    .eq('Submission_ID', submissionId)
+    .order('Created_At', { ascending: false })
+    .limit(1)
+    .maybeSingle();
 
-const ensureHairSubmissionForDrive = async ({ driveId, databaseUserId }) => {
+  if (targetDetailResult.error) {
+    return { error: targetDetailResult.error };
+  }
+
+  // Keep event registration singleton clean:
+  // do not copy/create AI screening from another submission during registration.
+  // The canonical analysis should come from the submission where the user saved results.
+  if (!targetDetailResult.data?.Submission_Detail_ID) {
+    const blankDetailResult = await supabase
+      .from(hairSubmissionDetailsTable)
+      .upsert({
+        Submission_ID: submissionId,
+        Status: 'Pending',
+      }, {
+        onConflict: 'Submission_ID',
+      });
+
+    if (blankDetailResult.error) {
+      return { error: blankDetailResult.error };
+    }
+  }
+
+  return { error: null };
+};
+
+const ensureHairSubmissionForDrive = async ({ driveId, databaseUserId, eventAttendeeId = null }) => {
   if (!driveId || !databaseUserId) return { data: null, error: null };
 
   const existingSubmissionResult = await supabase
     .from(hairSubmissionsTable)
-    .select('Submission_ID,Created_At,Status')
+    .select('Submission_ID,Created_At,Status,Event_Attendee_ID')
     .eq('User_ID', databaseUserId)
     .eq('Event_Request_ID', driveId)
     .not('Status', 'ilike', 'cancelled')
@@ -381,12 +403,14 @@ const ensureHairSubmissionForDrive = async ({ driveId, databaseUserId }) => {
   if (!submissionId) {
     const insertSubmissionResult = await supabase
       .from(hairSubmissionsTable)
-      .insert({
+      .upsert({
         User_ID: databaseUserId,
         Event_Request_ID: driveId,
+        Event_Attendee_ID: eventAttendeeId || null,
         From_Event: true,
-        Submission_Code: makeSubmissionCode(),
         Status: 'Pending',
+      }, {
+        onConflict: 'User_ID,Event_Request_ID',
       })
       .select('Submission_ID')
       .single();
@@ -394,7 +418,6 @@ const ensureHairSubmissionForDrive = async ({ driveId, databaseUserId }) => {
     if (insertSubmissionResult.error) {
       return { data: null, error: insertSubmissionResult.error };
     }
-
     submissionId = insertSubmissionResult.data?.Submission_ID || null;
   }
 
@@ -402,34 +425,53 @@ const ensureHairSubmissionForDrive = async ({ driveId, databaseUserId }) => {
     return { data: null, error: new Error('Unable to create hair submission.') };
   }
 
-  const existingDetailResult = await supabase
+  if (eventAttendeeId && Number(existingSubmissionResult.data?.Event_Attendee_ID || 0) !== Number(eventAttendeeId)) {
+    const linkAttendeeResult = await supabase
+      .from(hairSubmissionsTable)
+      .update({ Event_Attendee_ID: eventAttendeeId })
+      .eq('Submission_ID', submissionId);
+
+    if (linkAttendeeResult.error) {
+      return { data: { submission_id: submissionId }, error: linkAttendeeResult.error };
+    }
+  }
+
+  const analysisResult = await ensureEventSubmissionHasLatestHairAnalysis({
+    submissionId,
+    databaseUserId,
+    driveId,
+  });
+
+  if (analysisResult.error) {
+    return { data: { submission_id: submissionId }, error: analysisResult.error };
+  }
+
+  const linkedSubmissionResult = await supabase
+    .from(hairSubmissionsTable)
+    .select(eventHairSubmissionLinkSelect)
+    .eq('Submission_ID', submissionId)
+    .maybeSingle();
+
+  if (linkedSubmissionResult.error) {
+    return { data: { submission_id: submissionId }, error: linkedSubmissionResult.error };
+  }
+
+  const linkedDetailResult = await supabase
     .from(hairSubmissionDetailsTable)
-    .select('Submission_Detail_ID')
+    .select('submission_detail_id:Submission_Detail_ID,status:Status,created_at:Created_At')
     .eq('Submission_ID', submissionId)
     .order('Created_At', { ascending: false })
     .limit(1)
     .maybeSingle();
 
-  if (existingDetailResult.error) {
-    return { data: { submission_id: submissionId }, error: existingDetailResult.error };
+  if (linkedDetailResult.error) {
+    return { data: { submission_id: submissionId }, error: linkedDetailResult.error };
   }
 
-  if (!existingDetailResult.data?.Submission_Detail_ID) {
-    const insertDetailResult = await supabase
-      .from(hairSubmissionDetailsTable)
-      .insert({
-        Submission_ID: submissionId,
-        Status: 'Pending',
-      })
-      .select('Submission_Detail_ID')
-      .single();
-
-    if (insertDetailResult.error) {
-      return { data: { submission_id: submissionId }, error: insertDetailResult.error };
-    }
-  }
-
-  return { data: { submission_id: submissionId }, error: null };
+  return {
+    data: normalizeEventHairSubmissionLink(linkedSubmissionResult.data, linkedDetailResult.data) || { submission_id: submissionId },
+    error: null,
+  };
 };
 
 const findExistingDriveRegistration = async (driveId, databaseUserId) => {
@@ -653,6 +695,7 @@ export const createDonationDriveRegistration = async ({
     const ensured = await ensureHairSubmissionForDrive({
       driveId,
       databaseUserId: effectiveDatabaseUserId,
+      eventAttendeeId: existingResult.data.registration_id,
     });
     if (ensured.error) {
       return {
@@ -663,7 +706,7 @@ export const createDonationDriveRegistration = async ({
     }
 
     return {
-      data: existingResult.data,
+      data: attachEventHairSubmissionLink(existingResult.data, ensured.data),
       error: null,
       alreadyRegistered: true,
     };
@@ -671,17 +714,33 @@ export const createDonationDriveRegistration = async ({
 
   const insertResult = await supabase
     .from(donationDriveRegistrationsTable)
-    .insert({
+    .upsert({
       Event_Request_ID: driveId,
       User_ID: effectiveDatabaseUserId,
-      Waybill_Code: generateRsvpCode(),
       Registration_Status: 'Registered',
       Attendance_Status: 'Not Marked',
+    }, {
+      onConflict: 'User_ID,Event_Request_ID',
     })
     .select(donationDriveRegistrationSelect)
     .maybeSingle();
 
   if (insertResult.error) {
+    const duplicateLookupResult = await findExistingDriveRegistration(driveId, effectiveDatabaseUserId);
+    if (duplicateLookupResult.data?.registration_id) {
+      const ensured = await ensureHairSubmissionForDrive({
+        driveId,
+        databaseUserId: effectiveDatabaseUserId,
+        eventAttendeeId: duplicateLookupResult.data.registration_id,
+      });
+
+      return {
+        data: attachEventHairSubmissionLink(duplicateLookupResult.data, ensured.data),
+        error: ensured.error,
+        alreadyRegistered: true,
+      };
+    }
+
     logAppError('donor_home.drive_registration.create', insertResult.error, {
       table: donationDriveRegistrationsTable,
       driveId,
@@ -699,6 +758,7 @@ export const createDonationDriveRegistration = async ({
   const ensured = await ensureHairSubmissionForDrive({
     driveId,
     databaseUserId: effectiveDatabaseUserId,
+    eventAttendeeId: insertResult.data?.Event_Attendee_ID || insertResult.data?.registration_id || null,
   });
   if (ensured.error) {
     return {
@@ -709,7 +769,7 @@ export const createDonationDriveRegistration = async ({
   }
 
   return {
-    data: normalizeDonationDriveRegistration(insertResult.data),
+    data: attachEventHairSubmissionLink(normalizeDonationDriveRegistration(insertResult.data), ensured.data),
     error: null,
     alreadyRegistered: false,
   };
@@ -875,18 +935,20 @@ export const fetchUpcomingDonationDrives = async (limit = 6, databaseUserId = nu
   const organizationsResult = await fetchOrganizationsByIds(organizationIds);
   const driveIds = driveRows.map((row) => row?.donation_drive_id).filter(Boolean);
 
-  const [membershipsResult, registrationsResult] = databaseUserId
+  const [membershipsResult, registrationsResult, privateAccessResult] = databaseUserId
     ? await Promise.all([
         fetchOrganizationMembershipsByUserId(databaseUserId),
         findDriveRegistrationsByUserIdAndDriveIds(driveIds, databaseUserId),
+        fetchUnlockedPrivateEventApplicationIds(databaseUserId),
       ])
-    : [{ data: [], error: null }, { data: new Map(), error: null }];
+    : [{ data: [], error: null }, { data: new Map(), error: null }, { data: new Set(), error: null }];
   const membershipByOrganizationId = new Map(
     (membershipsResult.data || [])
       .filter((membership) => membership?.is_active)
       .map((membership) => [membership.organization_id, membership])
   );
   const registrationByDriveId = registrationsResult.data || new Map();
+  const unlockedPrivateEventApplicationIds = privateAccessResult.data || new Set();
 
   const normalizedRows = driveRows.map((row) => {
     const membership = membershipByOrganizationId.get(row?.organization_id) || null;
@@ -902,11 +964,12 @@ export const fetchUpcomingDonationDrives = async (limit = 6, databaseUserId = nu
   const visibleRows = normalizedRows.filter((drive) => (
     normalizeDriveStatus(drive.status) === 'approved'
     && isUpcomingDrive(drive)
+    && isDriveUnlockedForDonor(drive, unlockedPrivateEventApplicationIds)
   ));
 
   return {
     data: sortDrivesForHome(visibleRows).slice(0, normalizedLimit),
-    error: organizationsResult.error || membershipsResult.error || registrationsResult.error || null,
+    error: organizationsResult.error || membershipsResult.error || registrationsResult.error || privateAccessResult.error || null,
   };
 };
 
@@ -947,23 +1010,33 @@ export const fetchDonationDrivePreview = async (driveId, databaseUserId = null) 
     return { data: null, error: null };
   }
 
-  const [organizationsResult, registrationResult, membershipResult] = await Promise.all([
+  const [organizationsResult, registrationResult, membershipResult, privateAccessResult] = await Promise.all([
     fetchOrganizationsByIds(driveResult.data.organization_id ? [driveResult.data.organization_id] : []),
     findExistingDriveRegistration(driveId, databaseUserId),
     fetchOrganizationMembership({
       organizationId: driveResult.data.organization_id || null,
       databaseUserId,
     }),
+    fetchUnlockedPrivateEventApplicationIds(databaseUserId),
   ]);
 
+  const previewDrive = normalizeDonationDrive(
+    driveResult.data,
+    organizationsResult.data.get(driveResult.data.organization_id) || null,
+    registrationResult.data || null,
+    membershipResult.data || null
+  );
+
+  if (!isDriveUnlockedForDonor(previewDrive, privateAccessResult.data || new Set())) {
+    return {
+      data: null,
+      error: null,
+    };
+  }
+
   return {
-    data: normalizeDonationDrive(
-      driveResult.data,
-      organizationsResult.data.get(driveResult.data.organization_id) || null,
-      registrationResult.data || null,
-      membershipResult.data || null
-    ),
-    error: driveResult.error || organizationsResult.error || registrationResult.error || membershipResult.error,
+    data: previewDrive,
+    error: driveResult.error || organizationsResult.error || registrationResult.error || membershipResult.error || privateAccessResult.error,
   };
 };
 

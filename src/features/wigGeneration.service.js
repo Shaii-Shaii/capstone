@@ -42,10 +42,11 @@ const normalizePreview = (data) => {
 const buildFallbackPreview = ({ preferences, referenceImage }) => {
   const normalizedReferenceImage = normalizeReferenceImage(referenceImage);
   const visualReference = normalizedReferenceImage.dataUrl || normalizedReferenceImage.imageUrl;
-  const color = preferences?.preferredColor?.trim() || 'Natural';
-  const length = preferences?.preferredLength?.trim() || 'Medium';
-  const texture = preferences?.hairTexture?.trim() || 'Soft';
-  const capSize = preferences?.capSize?.trim() || 'Not sure';
+  const color = preferences?.preferredColor?.trim() || 'available';
+  const length = preferences?.preferredLength?.trim() || 'Available length';
+  const texture = preferences?.hairTexture?.trim() || 'available texture';
+  const density = preferences?.hairDensity?.trim() || '';
+  const capSize = preferences?.capSize?.trim() || 'available cap size';
   const baseOptions = [
     {
       id: 'fallback-soft-natural',
@@ -53,7 +54,7 @@ const buildFallbackPreview = ({ preferences, referenceImage }) => {
       name: `${length} ${texture}`,
       note: `${color} tone with a simple ${texture.toLowerCase()} finish.`,
       summary: `A ${length.toLowerCase()} ${texture.toLowerCase()} option based on your selected preferences.`,
-      style_notes: `Color: ${color}. Cap size: ${capSize}.`,
+      style_notes: `Color: ${color}. ${density ? `Density: ${density}. ` : ''}Cap size: ${capSize}.`,
       family: 'Natural daily style',
       match_label: 'Suggested',
     },
@@ -149,6 +150,7 @@ export const generatePatientWigPreview = async ({ preferences, referenceImage })
       preferred_color: preferences?.preferredColor?.trim() || '',
       preferred_length: preferences?.preferredLength?.trim() || '',
       hair_texture: preferences?.hairTexture?.trim() || '',
+      hair_density: preferences?.hairDensity?.trim() || '',
       cap_size: preferences?.capSize?.trim() || '',
       style_preference: preferences?.stylePreference?.trim() || '',
       notes: preferences?.specialNotes?.trim() || '',

@@ -47,7 +47,7 @@ const shouldDiscardPersistedAuthValue = (rawValue) => {
   }
 
   const expiresAt = Number(persistedSession?.expires_at);
-  if (expiresAt && expiresAt * 1000 <= Date.now() && !hasRefreshToken) {
+  if (expiresAt && expiresAt * 1000 <= Date.now()) {
     return true;
   }
 
@@ -301,6 +301,44 @@ const getPersistedAuthStorageKey = () => {
   }
 };
 
+const getPersistedAuthStorageKeyPrefix = () => {
+  if (!supabaseUrl) return '';
+
+  try {
+    const projectRef = new URL(supabaseUrl).hostname.split('.')[0];
+    return projectRef ? `sb-${projectRef}-auth-token` : '';
+  } catch (_error) {
+    return '';
+  }
+};
+
+const removePersistedAuthKeys = async () => {
+  const storage = getAuthStorage();
+  const exactKey = getPersistedAuthStorageKey();
+  const keyPrefix = getPersistedAuthStorageKeyPrefix();
+
+  if (!storage?.removeItem) return;
+
+  if (exactKey) {
+    try {
+      await storage.removeItem(exactKey);
+    } catch (_error) {
+      // Ignore cleanup errors and continue.
+    }
+  }
+
+  if (!storage?.getAllKeys || !keyPrefix) return;
+
+  try {
+    const allKeys = await storage.getAllKeys();
+    const matchingKeys = (allKeys || []).filter((key) => String(key || '').startsWith(keyPrefix));
+    if (!matchingKeys.length) return;
+    await Promise.all(matchingKeys.map((key) => storage.removeItem(key)));
+  } catch (_error) {
+    // Ignore cleanup errors and continue.
+  }
+};
+
 const sanitizePersistedAuthSession = async () => {
   const storage = getAuthStorage();
   const storageKey = getPersistedAuthStorageKey();
@@ -315,7 +353,7 @@ const sanitizePersistedAuthSession = async () => {
     try {
       parsedValue = JSON.parse(rawValue);
     } catch (_parseError) {
-      await storage.removeItem(storageKey);
+      await removePersistedAuthKeys();
       return;
     }
 
@@ -324,8 +362,12 @@ const sanitizePersistedAuthSession = async () => {
     const hasRefreshToken = Boolean(persistedSession?.refresh_token);
     const hasUser = Boolean(persistedSession?.user);
 
-    if ((hasAccessToken || hasUser) && !hasRefreshToken) {
-      await storage.removeItem(storageKey);
+    const expiresAt = Number(persistedSession?.expires_at);
+    if (
+      ((hasAccessToken || hasUser) && !hasRefreshToken)
+      || (expiresAt && expiresAt * 1000 <= Date.now())
+    ) {
+      await removePersistedAuthKeys();
     }
   } catch (_error) {
     // Ignore storage cleanup issues and continue without blocking the app.
@@ -369,8 +411,7 @@ const getSessionSafely = async () => {
 
 const clearPersistedAuthSession = async () => {
   const storage = getAuthStorage();
-  const storageKey = getPersistedAuthStorageKey();
-  if (!storage?.removeItem || !storageKey) {
+  if (!storage?.removeItem) {
     try {
       await supabase.auth.signOut({ scope: 'local' });
     } catch (_error) {
@@ -379,11 +420,7 @@ const clearPersistedAuthSession = async () => {
     return;
   }
 
-  try {
-    await storage.removeItem(storageKey);
-  } catch (_error) {
-    // Ignore cleanup errors and let the app proceed unauthenticated.
-  }
+  await removePersistedAuthKeys();
 
   try {
     await supabase.auth.signOut({ scope: 'local' });

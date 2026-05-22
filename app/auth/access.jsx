@@ -86,7 +86,7 @@ export default function AccessScreen() {
       contentStyle={[styles.screenContent, { backgroundColor: roles.pageBackground }]}
     >
       <View style={styles.loginCanvas}>
-        <View style={[styles.loginCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
+        <View style={styles.loginContent}>
           <View style={styles.brandHeader}>
             <View style={styles.brandRow}>
               <AccessBrandLogo resolvedTheme={resolvedTheme} />
@@ -113,7 +113,7 @@ export default function AccessScreen() {
                 },
               ]}
             >
-              Securely access your donation portal.
+              Continue your hair donation journey.
             </Text>
           </View>
 
@@ -170,21 +170,15 @@ const styles = StyleSheet.create({
     minHeight: 760,
     width: '100%',
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
     paddingHorizontal: theme.spacing.lg,
-    paddingVertical: theme.spacing.section,
+    paddingTop: theme.spacing.xxl,
+    paddingBottom: theme.spacing.section,
   },
-  loginCard: {
+  loginContent: {
     width: '100%',
     maxWidth: 440,
-    borderWidth: 1,
-    borderRadius: theme.radius.xxl,
-    padding: theme.spacing.xl,
-    shadowColor: theme.colors.shadow,
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.06,
-    shadowRadius: 28,
-    elevation: 6,
+    paddingHorizontal: theme.spacing.xs,
   },
   brandHeader: {
     alignItems: 'center',

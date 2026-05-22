@@ -173,7 +173,7 @@ export function ProcessStatusTracker({
         </View>
       ) : null}
 
-      {tracker?.summary?.referenceValue ? (
+      {!isPatient && tracker?.summary?.referenceValue ? (
         <View style={[styles.summaryCard, isPatient ? styles.summaryCardPatient : null]}>
           <Text style={styles.summaryRefLabel}>{tracker.summary.referenceLabel}</Text>
           <Text style={styles.summaryRefValue}>{tracker.summary.referenceValue}</Text>

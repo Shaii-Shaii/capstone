@@ -77,13 +77,6 @@ export const LoginForm = ({
 
         <View style={styles.passwordHeaderRow}>
           <Text style={[styles.fieldLabel, { color: roles.bodyText }]}>Password</Text>
-          <Pressable
-            onPress={onForgotPassword}
-            style={({ pressed }) => [styles.forgotPasswordPressable, pressed ? styles.pressed : null]}
-            accessibilityRole="button"
-          >
-            <Text style={[styles.forgotPasswordText, { color: roles.primaryActionBackground }]}>Forgot Password?</Text>
-          </Pressable>
         </View>
 
         <Controller
@@ -104,13 +97,23 @@ export const LoginForm = ({
               value={value}
               error={errors.password?.message}
               disabled={isLoading}
-              style={styles.field}
+              style={[styles.field, styles.passwordFieldCompact]}
               labelStyle={[styles.fieldLabel, { color: roles.headingText }]}
               shellStyle={[styles.fieldShell, { borderColor: roles.defaultCardBorder, backgroundColor: roles.defaultCardBackground }]}
               inputStyle={[styles.fieldInput, { color: roles.headingText }]}
             />
           )}
         />
+
+        <View style={styles.forgotPasswordRow}>
+          <Pressable
+            onPress={onForgotPassword}
+            style={({ pressed }) => [styles.forgotPasswordPressable, pressed ? styles.pressed : null]}
+            accessibilityRole="button"
+          >
+            <Text style={[styles.forgotPasswordText, { color: roles.primaryActionBackground }]}>Forgot Password?</Text>
+          </Pressable>
+        </View>
       </View>
 
       <AppButton
@@ -169,11 +172,20 @@ const styles = StyleSheet.create({
   },
   passwordHeaderRow: {
     marginTop: theme.spacing.xs,
-    marginBottom: -theme.spacing.xs,
+    marginBottom: 0,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-start',
     gap: theme.spacing.md,
+  },
+  forgotPasswordRow: {
+    marginTop: -4,
+    marginBottom: 4,
+    alignItems: 'flex-end',
+  },
+  passwordFieldCompact: {
+    minHeight: 56,
+    marginBottom: 0,
   },
   forgotPasswordPressable: {
     minHeight: 28,

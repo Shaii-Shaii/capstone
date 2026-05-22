@@ -1,6 +1,7 @@
 import React from 'react';
-import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
+import Pdf from 'react-native-pdf';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { AppInput } from '../ui/AppInput';
@@ -9,13 +10,22 @@ import { AppButton } from '../ui/AppButton';
 import { AppIcon } from '../ui/AppIcon';
 import { resolveThemeRoles, theme } from '../../design-system/theme';
 import { signupDefaultValues } from '../../features/auth/validators/auth.schema';
-import { fetchActiveLegalDocument } from '../../features/donorCompliance.service';
+import { fetchActiveLegalDocument, fetchActiveLegalDocuments } from '../../features/donorCompliance.service';
 
 const termsLabel = 'Terms of Service and Privacy Policy';
 
 function LegalDetailsModal({ visible, onClose, roles, document, error, isLoading, onOpenPdf }) {
   const title = document?.title || termsLabel;
   const pdfUrl = document?.pdf_url || '';
+  const hasPdfFile = Boolean(document?.file_path || pdfUrl);
+  const [pdfRenderState, setPdfRenderState] = React.useState('idle');
+  const [pdfRenderError, setPdfRenderError] = React.useState('');
+
+  React.useEffect(() => {
+    if (!visible) return;
+    setPdfRenderState(pdfUrl ? 'loading' : 'idle');
+    setPdfRenderError('');
+  }, [visible, pdfUrl, document?.legal_document_id]);
 
   return (
     <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
@@ -59,14 +69,61 @@ function LegalDetailsModal({ visible, onClose, roles, document, error, isLoading
                 <Text style={[styles.pdfStateText, { color: roles.bodyText }]}>{error}</Text>
               </View>
             ) : pdfUrl ? (
+              <>
+                <Pdf
+                  source={{ uri: pdfUrl, cache: true }}
+                  style={styles.pdfViewer}
+                  trustAllCerts={false}
+                  onLoadComplete={() => {
+                    setPdfRenderState('ready');
+                    setPdfRenderError('');
+                  }}
+                  onError={(pdfError) => {
+                    setPdfRenderState('error');
+                    setPdfRenderError(String(pdfError?.message || pdfError || 'PDF viewer failed to render this file.'));
+                  }}
+                  onLoadProgress={(percent) => {
+                    if (Number(percent) >= 0.05 && pdfRenderState === 'loading') {
+                      setPdfRenderState('rendering');
+                    }
+                  }}
+                />
+                {pdfRenderState !== 'ready' ? (
+                  <View style={styles.pdfOverlayState}>
+                    {pdfRenderState === 'error' ? (
+                      <>
+                        <AppIcon name="error" size="lg" color={theme.colors.textError} />
+                        <Text style={[styles.pdfStateTitle, { color: roles.headingText }]}>PDF file unavailable</Text>
+                        <Text style={[styles.pdfStateText, { color: roles.bodyText }]}>
+                          {pdfRenderError || 'The PDF could not be rendered inside the app viewer.'}
+                        </Text>
+                        <AppButton
+                          title="Open in browser"
+                          onPress={onOpenPdf}
+                          backgroundColorOverride={roles.primaryActionBackground}
+                          textColorOverride={roles.primaryActionText}
+                          borderColorOverride={roles.primaryActionBackground}
+                          style={styles.openPdfButton}
+                        />
+                      </>
+                    ) : (
+                      <>
+                        <ActivityIndicator color={roles.primaryActionBackground} />
+                        <Text style={[styles.pdfStateText, { color: roles.bodyText }]}>Opening PDF...</Text>
+                      </>
+                    )}
+                  </View>
+                ) : null}
+              </>
+            ) : hasPdfFile ? (
               <View style={styles.pdfState}>
-                <AppIcon name="shield" size="lg" color={roles.primaryActionBackground} />
-                <Text style={[styles.pdfStateTitle, { color: roles.headingText }]}>Terms PDF is ready</Text>
+                <AppIcon name="error" size="lg" color={theme.colors.textError} />
+                <Text style={[styles.pdfStateTitle, { color: roles.headingText }]}>PDF file unavailable</Text>
                 <Text style={[styles.pdfStateText, { color: roles.bodyText }]}>
-                  Open the PDF to review this document before signing up.
+                  The document record exists, but the uploaded PDF file could not be opened.
                 </Text>
                 <AppButton
-                  title="Open PDF"
+                  title="Open in browser"
                   onPress={onOpenPdf}
                   backgroundColorOverride={roles.primaryActionBackground}
                   textColorOverride={roles.primaryActionText}
@@ -75,22 +132,16 @@ function LegalDetailsModal({ visible, onClose, roles, document, error, isLoading
                 />
               </View>
             ) : (
-              <ScrollView contentContainerStyle={styles.modalScrollContent}>
-                <Text style={[styles.modalBody, { color: roles.bodyText }]}>
-                  {document?.content || document?.summary || 'Legal documents are not available yet.'}
+              <View style={styles.pdfState}>
+                <AppIcon name="error" size="lg" color={theme.colors.textError} />
+                <Text style={[styles.pdfStateTitle, { color: roles.headingText }]}>No PDF uploaded</Text>
+                <Text style={[styles.pdfStateText, { color: roles.bodyText }]}>
+                  Please upload a PDF file for this legal document.
                 </Text>
-              </ScrollView>
+              </View>
             )}
           </View>
 
-          <AppButton
-            title="Done"
-            onPress={onClose}
-            backgroundColorOverride={roles.primaryActionBackground}
-            textColorOverride={roles.primaryActionText}
-            borderColorOverride={roles.primaryActionBackground}
-            style={styles.modalDoneButton}
-          />
         </View>
       </View>
     </Modal>
@@ -141,44 +192,57 @@ export const SignupForm = ({
 
     setTermsError('');
     setIsLoadingTerms(true);
-    const documentTypes = ['Terms of Service', 'Privacy Policy'];
-    const documentResults = await Promise.all(
-      documentTypes.map((documentType) => fetchActiveLegalDocument(documentType))
-    );
+    const allDocumentsResult = await fetchActiveLegalDocuments();
+    const activeDocuments = (allDocumentsResult.data || []).filter(Boolean);
 
-    const loadedDocuments = documentResults
-      .map((result) => result.data)
-      .filter(Boolean);
-
-    if (!loadedDocuments.length) {
-      const fallbackResult = await fetchActiveLegalDocument('Terms and Conditions');
+    if (activeDocuments.length) {
+      const preferredDocument = (
+        activeDocuments.find((document) => document.pdf_url)
+        || activeDocuments.find((document) => document.file_path)
+        || activeDocuments[0]
+      );
       setIsLoadingTerms(false);
-      if (fallbackResult.error) {
-        setTermsError(fallbackResult.error.message || 'Legal documents could not be loaded.');
-        return;
-      }
-
-      setTermsDocument(fallbackResult.data);
+      setTermsDocument({
+        ...preferredDocument,
+        title: preferredDocument?.title || preferredDocument?.document_type || termsLabel,
+        content: activeDocuments
+          .map((document) => [
+            document.title || document.document_type,
+            document.content || document.summary || '',
+          ].filter(Boolean).join('\n\n'))
+          .join('\n\n'),
+      });
       return;
     }
 
+    const fallbackResult = await fetchActiveLegalDocument('Terms and Conditions');
     setIsLoadingTerms(false);
-    setTermsDocument({
-      title: termsLabel,
-      content: loadedDocuments
-        .map((document) => [
-          document.title || document.document_type,
-          document.content || document.summary || '',
-        ].filter(Boolean).join('\n\n'))
-        .join('\n\n'),
-    });
+    if (fallbackResult.error) {
+      setTermsError(fallbackResult.error.message || 'Legal documents could not be loaded.');
+      return;
+    }
+
+    setTermsDocument(fallbackResult.data);
   }, [isLoadingTerms, termsDocument]);
 
   const handleOpenPdf = React.useCallback(async () => {
-    const pdfUrl = termsDocument?.pdf_url;
-    if (!pdfUrl) return;
+    let pdfUrl = termsDocument?.pdf_url || '';
+
+    if (!pdfUrl && termsDocument?.document_type) {
+      const refreshed = await fetchActiveLegalDocument(termsDocument.document_type);
+      if (!refreshed.error && refreshed.data?.pdf_url) {
+        pdfUrl = refreshed.data.pdf_url;
+        setTermsDocument((previous) => ({ ...(previous || {}), ...refreshed.data }));
+      }
+    }
+
+    if (!pdfUrl) {
+      setTermsError('Unable to open document link. Please check legal document file_path and storage bucket path.');
+      return;
+    }
+
     await WebBrowser.openBrowserAsync(pdfUrl);
-  }, [termsDocument?.pdf_url]);
+  }, [termsDocument]);
 
   return (
     <View style={styles.container}>
@@ -318,7 +382,7 @@ export const SignupForm = ({
                 >
                   Privacy Policy
                 </Text>
-                . I understand how my donation data is handled.
+                .
               </Text>
             </View>
             {errors.acceptedLegal?.message ? (
@@ -502,12 +566,26 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E4D9DA',
   },
+  pdfViewer: {
+    flex: 1,
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#F8F4F2',
+  },
   pdfState: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     padding: theme.spacing.lg,
     gap: theme.spacing.sm,
+  },
+  pdfOverlayState: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: theme.spacing.lg,
+    gap: theme.spacing.sm,
+    backgroundColor: '#F8F4F2',
   },
   pdfStateTitle: {
     fontFamily: theme.typography.fontFamily,
@@ -520,14 +598,6 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.compact.bodySm,
     lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
     textAlign: 'center',
-  },
-  modalScrollContent: {
-    padding: theme.spacing.md,
-  },
-  modalBody: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
   },
   modalNoticeBox: {
     borderRadius: 18,
@@ -547,11 +617,6 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.bodySm,
     lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
-  },
-  modalDoneButton: {
-    minHeight: 48,
-    borderRadius: 18,
-    marginTop: theme.spacing.md,
   },
   openPdfButton: {
     minHeight: 46,

@@ -10,12 +10,18 @@ export const DONOR_PERMISSION_REASONS = {
 
 export const GUARDIAN_CONSENT_TEXT = 'I confirm that I am the parent or legal guardian of this minor donor. I allow the minor donor to participate in the hair donation process through Donivra. I understand that the system may collect and process the minor donor’s profile information, hair donation details, and submitted hair images for AI-assisted initial screening, donation tracking, and coordination with authorized personnel. I understand that final acceptance of donated hair will still be reviewed by authorized personnel.';
 
+const legalDocumentTypeAliases = {
+  'terms of service': ['Terms of Service', 'Terms and Conditions', 'Terms and Condition', 'Terms & Conditions', 'Terms'],
+  'privacy policy': ['Privacy Policy', 'Data Privacy Policy', 'Privacy Notice', 'Privacy'],
+  'terms and conditions': ['Terms and Conditions', 'Terms and Condition', 'Terms of Service', 'Terms & Conditions', 'Terms'],
+};
 const activeLegalDocumentTypes = ['Terms of Service', 'Privacy Policy'];
 const fallbackLegalDocumentTypes = ['Terms and Conditions'];
 const legalDocumentsTable = 'legal_documents';
 const userLegalAgreementsTable = 'user_legal_agreements';
 const guardianConsentsTable = 'guardian_consents';
 const legalDocumentsBucket = 'legal-documents';
+const legalDocumentBucketCandidates = ['legal-documents', 'legal_documents'];
 
 const normalizeStoragePath = (path = '', bucket = '') => {
   const normalizedPath = String(path || '').trim().replace(/^\/+/, '');
@@ -52,6 +58,203 @@ const isFilled = (value) => {
   if (value === null || value === undefined) return false;
   if (typeof value === 'string') return value.trim().length > 0;
   return Boolean(value);
+};
+
+const normalizeLegalDocumentTypeKey = (value = '') => (
+  String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/&/g, 'and')
+    .replace(/\s+/g, ' ')
+);
+
+const getLegalDocumentTypeCandidates = (documentType = 'Terms and Conditions') => {
+  const key = normalizeLegalDocumentTypeKey(documentType);
+  const aliases = legalDocumentTypeAliases[key] || [documentType];
+  return [...new Set([documentType, ...aliases].map((type) => String(type || '').trim()).filter(Boolean))];
+};
+
+const fetchActiveLegalDocumentRows = async (columns = '*') => {
+  const result = await supabase
+    .from(legalDocumentsTable)
+    .select(columns)
+    .eq('is_active', true)
+    .order('created_at', { ascending: false });
+
+  if (result.error) throw result.error;
+  return result.data || [];
+};
+
+const isMissingStorageObjectError = (error) => {
+  const errorMessage = String(error?.message || '').toLowerCase();
+  const errorCode = String(error?.code || '').toLowerCase();
+  return (
+    errorMessage.includes('object not found')
+    || errorCode === 'not_found'
+    || errorCode === '404'
+  );
+};
+
+const getLegalDocumentPathCandidates = (document) => {
+  const rawPath = String(document?.file_path || '').trim();
+  if (!rawPath) return [];
+
+  const candidates = new Set([rawPath]);
+  if (!rawPath.toLowerCase().endsWith('.pdf')) {
+    candidates.add(`${rawPath}.pdf`);
+  }
+
+  const content = String(document?.content || '');
+  const pdfNameMatch = content.match(/[A-Za-z0-9._-]+\.pdf/i);
+  if (pdfNameMatch?.[0]) {
+    candidates.add(pdfNameMatch[0]);
+  }
+
+  return [...candidates];
+};
+
+const extractPdfFileName = (document = null) => {
+  const content = String(document?.content || '');
+  const contentMatch = content.match(/[A-Za-z0-9._-]+\.pdf/i);
+  if (contentMatch?.[0]) return contentMatch[0];
+
+  const rawPath = String(document?.file_path || '').trim();
+  if (!rawPath) return '';
+  const baseName = rawPath.split('/').pop() || '';
+  return /\.pdf$/i.test(baseName) ? baseName : '';
+};
+
+const isUuid = (value = '') => (
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || '').trim())
+);
+
+const resolveStorageObjectFromId = async (objectId = '') => {
+  const normalizedId = String(objectId || '').trim();
+  if (!isUuid(normalizedId)) return null;
+
+  const lookupResult = await supabase
+    .from('storage.objects')
+    .select('id, bucket_id, name')
+    .eq('id', normalizedId)
+    .maybeSingle();
+
+  if (lookupResult.error || !lookupResult.data?.name) return null;
+
+  return {
+    bucket_id: lookupResult.data.bucket_id || '',
+    name: lookupResult.data.name || '',
+  };
+};
+
+const resolveStorageObjectFromFileName = async (fileName = '', bucketCandidates = []) => {
+  const normalizedName = String(fileName || '').trim();
+  if (!normalizedName) return null;
+
+  for (const bucketId of [...new Set(bucketCandidates.filter(Boolean))]) {
+    const lookupResult = await supabase
+      .from('storage.objects')
+      .select('bucket_id, name, created_at')
+      .eq('bucket_id', bucketId)
+      .ilike('name', `%${normalizedName}`)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (!lookupResult.error && lookupResult.data?.name) {
+      return {
+        bucket_id: lookupResult.data.bucket_id || bucketId,
+        name: lookupResult.data.name,
+      };
+    }
+  }
+
+  return null;
+};
+
+const listExistingBucketNames = async () => {
+  const bucketResult = await supabase.storage.listBuckets();
+  if (bucketResult.error) return [];
+  return (bucketResult.data || []).map((bucket) => String(bucket?.name || '').trim()).filter(Boolean);
+};
+
+const resolveLegalDocumentPdfUrl = async (document) => {
+  if (!document) return '';
+  if (document.file_url) return document.file_url;
+  if (!document.file_bucket || !document.file_path) return '';
+
+  const configuredCandidates = [document.file_bucket, ...legalDocumentBucketCandidates].filter(Boolean);
+  const existingBuckets = await listExistingBucketNames();
+  const bucketCandidates = [...new Set(
+    configuredCandidates.filter((bucket) => !existingBuckets.length || existingBuckets.includes(bucket))
+  )];
+  const pathCandidates = getLegalDocumentPathCandidates(document);
+  const objectFromId = await resolveStorageObjectFromId(document.file_path);
+  if (objectFromId?.name) {
+    pathCandidates.unshift(objectFromId.name);
+  }
+  if (objectFromId?.bucket_id) {
+    bucketCandidates.unshift(objectFromId.bucket_id);
+  }
+  const fileName = extractPdfFileName(document);
+  const objectFromFileName = await resolveStorageObjectFromFileName(fileName, bucketCandidates);
+  if (objectFromFileName?.name) {
+    pathCandidates.unshift(objectFromFileName.name);
+  }
+  if (objectFromFileName?.bucket_id) {
+    bucketCandidates.unshift(objectFromFileName.bucket_id);
+  }
+  let lastError = null;
+
+  for (const bucket of bucketCandidates) {
+    for (const path of pathCandidates) {
+      const signedResult = await supabase.storage
+        .from(bucket)
+        .createSignedUrl(path, 60 * 10);
+
+      if (!signedResult.error && signedResult.data?.signedUrl) {
+        return signedResult.data.signedUrl;
+      }
+
+      if (signedResult.error && !isMissingStorageObjectError(signedResult.error)) {
+        lastError = signedResult.error;
+      }
+    }
+  }
+
+  if (lastError) throw lastError;
+
+  return '';
+};
+
+export const fetchActiveLegalDocuments = async () => {
+  try {
+    const rows = await fetchActiveLegalDocumentRows('*');
+    const documents = rows
+      .map((row) => normalizeLegalDocument(row))
+      .filter((document) => document?.legal_document_id);
+    const documentsWithPdfUrls = await Promise.all(
+      documents.map(async (document) => ({
+        ...document,
+        pdf_url: await resolveLegalDocumentPdfUrl(document),
+      }))
+    );
+
+    return { data: documentsWithPdfUrls, error: null };
+  } catch (error) {
+    logAppError('legal_document.fetch_all_active', error, {});
+    return {
+      data: [],
+      error: new Error('Legal documents could not be loaded. Please try again.'),
+    };
+  }
+};
+
+const pickLegalDocumentByType = (rows = [], documentType = 'Terms and Conditions') => {
+  const candidateKeys = new Set(
+    getLegalDocumentTypeCandidates(documentType).map(normalizeLegalDocumentTypeKey)
+  );
+
+  return rows.find((row) => candidateKeys.has(normalizeLegalDocumentTypeKey(row?.document_type || row?.Document_Type))) || null;
 };
 
 const normalizeDatabaseUserId = async (userIdentifier) => {
@@ -231,37 +434,24 @@ export const recordAcceptedLegalAgreements = async ({ databaseUserId, authUserId
       throw new Error('User account is required.');
     }
 
-    let documentResult = await supabase
-      .from(legalDocumentsTable)
-      .select(`
+    const rows = await fetchActiveLegalDocumentRows(`
         legal_document_id,
         document_type,
         title,
         version,
         content
-      `)
-      .in('document_type', activeLegalDocumentTypes)
-      .eq('is_active', true);
+      `);
 
-    if (documentResult.error) throw documentResult.error;
-
-    let documents = documentResult.data || [];
+    let documents = activeLegalDocumentTypes
+      .map((documentType) => pickLegalDocumentByType(rows, documentType))
+      .filter(Boolean);
     if (documents.length < activeLegalDocumentTypes.length) {
-      documentResult = await supabase
-        .from(legalDocumentsTable)
-        .select(`
-          legal_document_id,
-          document_type,
-          title,
-          version,
-          content
-        `)
-        .in('document_type', fallbackLegalDocumentTypes)
-        .eq('is_active', true);
-
-      if (documentResult.error) throw documentResult.error;
-      documents = documentResult.data || [];
+      documents = fallbackLegalDocumentTypes
+        .map((documentType) => pickLegalDocumentByType(rows, documentType))
+        .filter(Boolean);
     }
+
+    if (!documents.length && rows.length) documents = rows.slice(0, 1);
 
     if (!documents.length) {
       throw new Error('Legal documents are not ready. Please contact support.');
@@ -277,7 +467,7 @@ export const recordAcceptedLegalAgreements = async ({ databaseUserId, authUserId
     if (agreementLookup.error) throw agreementLookup.error;
 
     const acceptedDocumentIds = new Set((agreementLookup.data || []).map((row) => row.legal_document_id));
-    const rows = documents
+    const agreementRows = documents
       .filter((document) => !acceptedDocumentIds.has(document.legal_document_id))
       .map((document) => ({
       user_id: databaseUserId,
@@ -287,13 +477,13 @@ export const recordAcceptedLegalAgreements = async ({ databaseUserId, authUserId
       user_agent: authUserId ? `auth_user_id:${authUserId}` : null,
     }));
 
-    if (!rows.length) {
+    if (!agreementRows.length) {
       return { success: true, error: null };
     }
 
     const insertResult = await supabase
       .from(userLegalAgreementsTable)
-      .insert(rows);
+      .insert(agreementRows);
 
     if (insertResult.error) throw insertResult.error;
 
@@ -309,30 +499,19 @@ export const recordAcceptedLegalAgreements = async ({ databaseUserId, authUserId
 
 export const fetchActiveLegalDocument = async (documentType = 'Terms and Conditions') => {
   try {
-    const result = await supabase
-      .from(legalDocumentsTable)
-      .select('*')
-      .eq('document_type', documentType)
-      .eq('is_active', true)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (result.error) throw result.error;
-
-    const document = normalizeLegalDocument(result.data);
+    const rows = await fetchActiveLegalDocumentRows('*');
+    const matchedRow = pickLegalDocumentByType(rows, documentType);
+    const document = normalizeLegalDocument(matchedRow || null);
     if (!document?.legal_document_id) {
-      throw new Error(`${documentType} document is not available yet.`);
+      return {
+        data: null,
+        error: new Error(`${documentType} document is not available yet.`),
+      };
     }
 
     let pdfUrl = document.file_url || '';
     if (!pdfUrl && document.file_bucket && document.file_path) {
-      const signedResult = await supabase.storage
-        .from(document.file_bucket)
-        .createSignedUrl(document.file_path, 60 * 10);
-
-      if (signedResult.error) throw signedResult.error;
-      pdfUrl = signedResult.data?.signedUrl || '';
+      pdfUrl = await resolveLegalDocumentPdfUrl(document);
     }
 
     return {

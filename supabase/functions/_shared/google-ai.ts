@@ -1,6 +1,14 @@
 const GOOGLE_AI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
-const GOOGLE_AI_MAX_ATTEMPTS = 3;
-const GOOGLE_AI_RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+const GOOGLE_AI_MAX_ATTEMPTS = 2;
+const GOOGLE_AI_RETRYABLE_STATUS = new Set([500, 502, 503, 504]);
+const GOOGLE_AI_DEFAULT_FALLBACK_MODELS = [
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-preview-05-20',
+  'gemini-2.5-flash-preview-04-17',
+  'gemini-2.0-flash',
+  'gemini-2.0-flash-lite',
+  'gemini-1.5-flash',
+];
 
 type GenerateStructuredContentParams = {
   model?: string;
@@ -133,7 +141,52 @@ const classifyProviderErrorType = ({
     return 'temporary_unavailable';
   }
 
+  if (
+    Number(status) === 404
+    || normalizedMessage.includes('model not found')
+    || normalizedMessage.includes('not found for api version')
+    || normalizedMessage.includes('not supported for generatecontent')
+    || normalizedMessage.includes('models/')
+  ) {
+    return 'model_unavailable';
+  }
+
+  if (
+    Number(status) === 401
+    || Number(status) === 403
+    || normalizedMessage.includes('denied access')
+    || normalizedMessage.includes('permission denied')
+    || normalizedMessage.includes('not have permission')
+    || normalizedMessage.includes('api key not valid')
+    || normalizedMessage.includes('api key is invalid')
+    || normalizedMessage.includes('key is invalid')
+    || normalizedMessage.includes('caller does not have permission')
+    || normalizedMessage.includes('access denied')
+  ) {
+    return 'provider_access_denied';
+  }
+
   return 'provider_error';
+};
+
+const parseModelList = (value: string | null) => (
+  String(value || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+);
+
+const resolveGoogleAiModelCandidates = (primaryModel: string) => {
+  const configuredFallbackModels = [
+    ...parseModelList(Deno.env.get('GOOGLE_AI_FALLBACK_MODELS')),
+    ...parseModelList(Deno.env.get('GOOGLE_AI_MODEL_FALLBACKS')),
+  ];
+
+  return Array.from(new Set([
+    primaryModel,
+    ...configuredFallbackModels,
+    ...GOOGLE_AI_DEFAULT_FALLBACK_MODELS,
+  ].filter(Boolean)));
 };
 
 const resolveRetryDelayMs = (attempt: number, retryAfterSeconds: number | null | undefined) => {
@@ -460,26 +513,25 @@ export const createStructuredResponse = async ({
   temperature = 0.45,
   includeDiagnostics = false,
 }: GenerateStructuredContentParams) => {
-  const apiKey = (
-    Deno.env.get('GOOGLE_AI_API_KEY')
-    || Deno.env.get('GEMINI_API_KEY')
-    || Deno.env.get('GOOGLE_API_KEY')
-    || ''
-  ).trim();
-  const endpoint = `${GOOGLE_AI_API_URL}/${model}:generateContent`;
+  const apiKeySource = Deno.env.get('GOOGLE_AI_API_KEY') ? 'GOOGLE_AI_API_KEY' : '';
+  const apiKey = (Deno.env.get('GOOGLE_AI_API_KEY') || '').trim();
+  const modelCandidates = resolveGoogleAiModelCandidates(model);
+  const initialEndpoint = `${GOOGLE_AI_API_URL}/${modelCandidates[0]}:generateContent`;
   const diagnostics: GoogleAiDiagnostics = {
     provider: 'gemini',
     provider_request_attempted: false,
     provider_response_status: null,
     provider_parse_success: false,
-    provider_endpoint: endpoint,
-    provider_model: model,
+    provider_endpoint: initialEndpoint,
+    provider_model: modelCandidates[0],
   };
 
   console.info('[google-ai] structured response requested', {
     model,
-    endpoint,
+    modelCandidates,
+    endpoint: initialEndpoint,
     hasApiKey: Boolean(apiKey),
+    apiKeySource,
     contentCount: Array.isArray(contents) ? contents.length : 0,
     hasSystemInstruction: Boolean(systemInstruction),
     maxOutputTokens,
@@ -490,86 +542,118 @@ export const createStructuredResponse = async ({
     throw createGoogleAiError('Google AI API key is not configured in Edge Function Secrets.', diagnostics);
   }
 
-  const requestUrl = `${endpoint}?key=${encodeURIComponent(apiKey)}`;
-
-  console.info('[google-ai] request started', {
-    model,
-    endpoint,
-  });
   diagnostics.provider_request_attempted = true;
 
   let response: Response | null = null;
-  for (let attempt = 1; attempt <= GOOGLE_AI_MAX_ATTEMPTS; attempt += 1) {
-    response = await fetch(requestUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        systemInstruction: systemInstruction
-          ? {
-              parts: [{ text: systemInstruction }],
-            }
-          : undefined,
-        contents,
-        generationConfig: {
-          temperature,
-          maxOutputTokens,
-          responseMimeType: 'application/json',
-          responseSchema: responseJsonSchema,
+  let successfulModel = modelCandidates[0];
+
+  for (let modelIndex = 0; modelIndex < modelCandidates.length; modelIndex += 1) {
+    const candidateModel = modelCandidates[modelIndex];
+    const endpoint = `${GOOGLE_AI_API_URL}/${candidateModel}:generateContent`;
+    const requestUrl = `${endpoint}?key=${encodeURIComponent(apiKey)}`;
+
+    diagnostics.provider_endpoint = endpoint;
+    diagnostics.provider_model = candidateModel;
+
+    console.info('[google-ai] request started', {
+      model: candidateModel,
+      endpoint,
+      fallbackIndex: modelIndex,
+      fallbackCount: modelCandidates.length,
+    });
+
+    for (let attempt = 1; attempt <= GOOGLE_AI_MAX_ATTEMPTS; attempt += 1) {
+      response = await fetch(requestUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
         },
-      }),
-    });
+        body: JSON.stringify({
+          systemInstruction: systemInstruction
+            ? {
+                parts: [{ text: systemInstruction }],
+              }
+            : undefined,
+          contents,
+          generationConfig: {
+            temperature,
+            maxOutputTokens,
+            responseMimeType: 'application/json',
+            responseSchema: responseJsonSchema,
+          },
+        }),
+      });
 
-    console.info('[google-ai] response received', {
-      model,
-      status: response.status,
-      ok: response.ok,
-      attempt,
-      maxAttempts: GOOGLE_AI_MAX_ATTEMPTS,
-    });
-    diagnostics.provider_response_status = response.status;
+      console.info('[google-ai] response received', {
+        model: candidateModel,
+        status: response.status,
+        ok: response.ok,
+        attempt,
+        maxAttempts: GOOGLE_AI_MAX_ATTEMPTS,
+      });
+      diagnostics.provider_response_status = response.status;
 
-    if (response.ok) break;
+      if (response.ok) {
+        successfulModel = candidateModel;
+        break;
+      }
 
-    const providerErrorMessage = await extractGoogleAiError(response);
-    const providerErrorType = classifyProviderErrorType({
-      status: response.status,
-      message: providerErrorMessage,
-    });
-    const retryAfterSeconds = await extractRetryAfterSecondsFromResponse(
-      response,
-      providerErrorMessage,
-    );
-    const canRetry = (
-      GOOGLE_AI_RETRYABLE_STATUS.has(response.status)
-      && (providerErrorType === 'temporary_unavailable' || providerErrorType === 'quota_exceeded')
-      && attempt < GOOGLE_AI_MAX_ATTEMPTS
-    );
+      const providerErrorMessage = await extractGoogleAiError(response);
+      const providerErrorType = classifyProviderErrorType({
+        status: response.status,
+        message: providerErrorMessage,
+      });
+      const retryAfterSeconds = await extractRetryAfterSecondsFromResponse(
+        response,
+        providerErrorMessage,
+      );
+      const canRetry = (
+        GOOGLE_AI_RETRYABLE_STATUS.has(response.status)
+        && providerErrorType === 'temporary_unavailable'
+        && attempt < GOOGLE_AI_MAX_ATTEMPTS
+      );
+      const canFallbackModel = (
+        !canRetry
+        && modelIndex < modelCandidates.length - 1
+        && (
+          providerErrorType === 'provider_access_denied'
+          || providerErrorType === 'model_unavailable'
+          || providerErrorType === 'quota_exceeded'
+        )
+      );
 
-    diagnostics.provider_error_type = providerErrorType;
-    diagnostics.retry_after_seconds = retryAfterSeconds;
+      diagnostics.provider_error_type = providerErrorType;
+      diagnostics.retry_after_seconds = retryAfterSeconds;
 
-    console.warn('[google-ai] provider error classified', {
-      model,
-      status: response.status,
-      providerErrorType,
-      retryAfterSeconds,
-      messagePreview: buildResponsePreview(providerErrorMessage),
-      attempt,
-      maxAttempts: GOOGLE_AI_MAX_ATTEMPTS,
-      willRetry: canRetry,
-    });
+      console.warn('[google-ai] provider error classified', {
+        model: candidateModel,
+        status: response.status,
+        providerErrorType,
+        retryAfterSeconds,
+        messagePreview: buildResponsePreview(providerErrorMessage),
+        attempt,
+        maxAttempts: GOOGLE_AI_MAX_ATTEMPTS,
+        willRetry: canRetry,
+        willTryFallbackModel: canFallbackModel,
+      });
 
-    if (!canRetry) {
+      if (canRetry) {
+        const retryDelayMs = resolveRetryDelayMs(attempt, retryAfterSeconds);
+        await waitFor(retryDelayMs);
+        continue;
+      }
+
+      if (canFallbackModel) {
+        break;
+      }
+
       throw createGoogleAiError(providerErrorMessage, diagnostics);
     }
 
-    const retryDelayMs = resolveRetryDelayMs(attempt, retryAfterSeconds);
-    await waitFor(retryDelayMs);
+    if (response?.ok) break;
   }
 
-  if (!response) {
+  if (!response || !response.ok) {
     throw createGoogleAiError('Google AI request failed.', diagnostics);
   }
 
@@ -578,7 +662,7 @@ export const createStructuredResponse = async ({
   const jsonCandidate = extractJsonCandidate(responseText);
 
   console.info('[google-ai] response parsed', {
-    model,
+    model: successfulModel,
     hasCandidates: Array.isArray(payload?.candidates) && payload.candidates.length > 0,
     hasResponseText: Boolean(responseText),
     responsePreview: buildResponsePreview(responseText),
@@ -589,7 +673,7 @@ export const createStructuredResponse = async ({
   }
 
   console.info('[google-ai] extracted text', {
-    model,
+    model: successfulModel,
     extractedPreview: buildResponsePreview(jsonCandidate),
     extractionChangedText: responseText.trim() !== jsonCandidate.trim(),
     jsonExtractionAttempted: true,
@@ -600,7 +684,7 @@ export const createStructuredResponse = async ({
     const parsed = parseResult.parsed;
     diagnostics.provider_parse_success = true;
     console.info('[google-ai] json parsed successfully', {
-      model,
+      model: successfulModel,
       topLevelKeys: parsed && typeof parsed === 'object' ? Object.keys(parsed) : [],
       parseAttempts: parseResult.attempts,
     });
@@ -616,8 +700,8 @@ export const createStructuredResponse = async ({
     try {
       const repairedText = await repairMalformedJsonResponse({
         apiKey,
-        endpoint,
-        model,
+        endpoint: diagnostics.provider_endpoint,
+        model: successfulModel,
         responseJsonSchema,
         malformedText: jsonCandidate || responseText,
       });
@@ -625,7 +709,7 @@ export const createStructuredResponse = async ({
       const repairedParsed = repairParseResult.parsed;
       diagnostics.provider_parse_success = true;
       console.info('[google-ai] repair json parsed successfully', {
-        model,
+        model: successfulModel,
         topLevelKeys: repairedParsed && typeof repairedParsed === 'object' ? Object.keys(repairedParsed) : [],
         parseAttempts: repairParseResult.attempts,
       });
@@ -634,13 +718,13 @@ export const createStructuredResponse = async ({
         : repairedParsed;
     } catch (repairError) {
       console.error('[google-ai] repair attempt failed', {
-        model,
+        model: successfulModel,
         error: repairError instanceof Error ? repairError.message : String(repairError),
       });
     }
 
     console.error('[google-ai] invalid json response', {
-      model,
+      model: successfulModel,
       error: error instanceof Error ? error.message : String(error),
       responsePreview: buildResponsePreview(responseText),
       extractedPreview: buildResponsePreview(jsonCandidate),

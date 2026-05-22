@@ -29,8 +29,6 @@ import {
   hairAnalyzerQuestionDefaultValues,
   hairAnalyzerQuestionSchema,
   buildHairReviewDefaultValues,
-  hairResultCorrectionSchema,
-  buildHairResultCorrectionDefaultValues,
 } from '../../features/hairSubmission.schema';
 import { hairAnalyzerQuestionChoices } from '../../features/hairSubmission.constants';
 import { buildProfileCompletionMeta } from '../../features/profile/services/profile.service';
@@ -97,9 +95,12 @@ const PHOTO_GUIDELINE_ITEMS = [
   'Use bright, even lighting so color, shine, dryness, and frizz are visible.',
   'Keep only one person in the frame with a plain background.',
   'Keep hair centered and fully visible from the lower cheek or neck area to the ends.',
-  'Capture the required front view, one side profile, and a close-up of the hair ends.',
+  'Capture the required front view, one side profile, and a clear hair scalp photo.',
   'Keep hair loose, centered, and visible from the lower cheek or neck area to the lowest visible ends.',
 ];
+
+const HAIR_TEXTURE_REVIEW_OPTIONS = ['Straight', 'Wavy', 'Curly', 'Coily', 'Mixed'];
+const HAIR_DENSITY_REVIEW_OPTIONS = ['Light', 'Medium', 'Thick', 'Dense'];
 
 const QUESTION_INFO_FADE_MS = 260;
 const QUESTION_INFO_READ_DELAY_MS = 1900;
@@ -124,7 +125,7 @@ const findFirstUnansweredQuestionIndex = (questions = [], answers = {}) => (
 
 const formatLengthLabel = (value) => {
   const numericValue = Number(value);
-  if (!Number.isFinite(numericValue) || numericValue <= 0) return 'Not detected';
+  if (!Number.isFinite(numericValue) || numericValue <= 0) return 'For review';
   const inches = numericValue / 2.54;
   return `${inches.toFixed(1)} inches`;
 };
@@ -153,13 +154,16 @@ const formatScheduleDateLabel = (dateValue, startTime = '', endTime = '') => {
 void formatScheduleDateLabel;
 
 const isSideProfileView = (view = {}) => String(view?.key || view?.label || '').toLowerCase().includes('side');
-const isHairEndsView = (view = {}) => String(view?.key || view?.label || '').toLowerCase().includes('ends');
+const isHairScalpView = (view = {}) => {
+  const value = String(view?.key || view?.label || '').toLowerCase();
+  return value.includes('scalp') || value.includes('crown');
+};
 
 const getInitialLiveFaceStatus = (view = null) => ({
-  valid: isHairEndsView(view),
+  valid: isHairScalpView(view),
   faceCount: 0,
-  message: isHairEndsView(view)
-    ? 'Frame the lowest hair ends closely with bright, even light.'
+  message: isHairScalpView(view)
+    ? 'Frame the scalp/crown area clearly with bright, even light.'
     : isSideProfileView(view)
       ? 'Turn to one side so your side profile and hair length are visible.'
       : 'Face the camera directly and keep your hair fully visible.',
@@ -169,14 +173,14 @@ const getInitialLiveFaceStatus = (view = null) => ({
 const resolveLiveFaceStatus = (faces = [], view = null) => {
   const faceList = Array.isArray(faces) ? faces : [];
   const expectsSideProfile = isSideProfileView(view);
-  const expectsHairEnds = isHairEndsView(view);
+  const expectsHairScalp = isHairScalpView(view);
 
   if (!faceList.length) {
-    if (expectsHairEnds) {
+    if (expectsHairScalp) {
       return {
         valid: true,
         faceCount: 0,
-        message: 'Hair ends close-up ready. Keep the ends sharp and well lit.',
+        message: 'Hair scalp photo ready. Keep the scalp/crown area sharp and well lit.',
         tone: 'success',
       };
     }
@@ -211,8 +215,8 @@ const resolveLiveFaceStatus = (faces = [], view = null) => {
     return {
       valid: false,
       faceCount: 1,
-      message: expectsHairEnds
-        ? 'Move closer to the hair ends so the strands are sharp and visible.'
+      message: expectsHairScalp
+        ? 'Move closer to the scalp/crown area so the part line and coverage are visible.'
         : expectsSideProfile
           ? 'Move closer so your side profile and hair length are clearly visible.'
           : 'Move closer so your face and hair are clearly visible.',
@@ -247,7 +251,7 @@ const resolveLiveFaceStatus = (faces = [], view = null) => {
     };
   }
 
-  if (!expectsHairEnds && yawAngle > 34) {
+  if (!expectsHairScalp && yawAngle > 34) {
     return {
       valid: false,
       faceCount: 1,
@@ -259,8 +263,8 @@ const resolveLiveFaceStatus = (faces = [], view = null) => {
   return {
     valid: true,
     faceCount: 1,
-    message: expectsHairEnds
-      ? 'Hair ends close-up ready. Keep the ends sharp, well lit, and uncovered.'
+    message: expectsHairScalp
+      ? 'Hair scalp photo ready. Keep the scalp/crown area sharp, well lit, and uncovered.'
       : 'Front view detected. Keep your face and hair centered.',
     tone: 'success',
   };
@@ -280,8 +284,8 @@ const buildLiveScanStatus = ({
 }) => {
   const viewLabel = isSideProfileView(currentView)
     ? 'Side view'
-    : isHairEndsView(currentView)
-      ? 'Hair ends'
+    : isHairScalpView(currentView)
+      ? 'Hair scalp'
       : 'Face front';
   const brightnessKnown = Number(brightness) >= 0;
   const brightnessReady = !brightnessKnown || Number(brightness) >= 82;
@@ -361,7 +365,14 @@ const hasHardDonationBlocker = (analysis = {}) => {
 
   if (analysis?.is_hair_detected === false) return true;
   if (Array.isArray(analysis?.missing_views) && analysis.missing_views.length) return true;
-  if (Number.isFinite(confidenceScore) && confidenceScore < 0.55) return true;
+  if (Number.isFinite(confidenceScore) && confidenceScore < 0.75) return true;
+  if (
+    /\b(shoulder|shoulder-length|collarbone|neck-length|chin-length|jaw-length)\b/i.test(combined)
+    && !/\b(armpit|underarm|mid-back|waist|lower back|chest)\b/i.test(combined)
+  ) return true;
+  if (analysis?.bald_spots_present === true) return true;
+  if (['moderate', 'high'].includes(String(analysis?.visible_scalp_area || '').toLowerCase())) return true;
+  if (['moderate', 'severe'].includes(String(analysis?.shedding_level || '').toLowerCase())) return true;
 
   return [
     'severe damage',
@@ -377,6 +388,68 @@ const hasHardDonationBlocker = (analysis = {}) => {
   ].some((keyword) => combined.includes(keyword));
 };
 
+const hasShortDonationEndpoint = (analysis = {}) => {
+  const notes = [
+    analysis?.length_assessment,
+    analysis?.visible_damage_notes,
+    analysis?.summary,
+    Array.isArray(analysis?.per_view_notes)
+      ? analysis.per_view_notes.map((item) => item?.notes || '').join(' ')
+      : '',
+  ].join(' ').toLowerCase();
+
+  if (!notes) return false;
+  if (/\b(armpit|underarm|mid-back|mid back|middle of the back|lower back|low back|waist)\b/i.test(notes)) {
+    return false;
+  }
+
+  return /\b(shoulder|shoulder-length|collarbone|clavicle|upper chest|chest length|reaches the chest|neck-length|chin-length|jaw-length)\b/i.test(notes);
+};
+
+const hasScalpCoverageTracking = (analysis = {}) => Boolean(
+  analysis?.bald_spots_present === true
+  || (Array.isArray(analysis?.affected_regions) && analysis.affected_regions.length)
+  || analysis?.hair_density_score != null
+  || analysis?.shedding_level
+  || analysis?.visible_scalp_area
+  || analysis?.scalp_coverage_notes
+  || analysis?.improvement_tracking_status
+  || analysis?.improvement_recommendation
+);
+
+const hasScalpCoverageConcern = (analysis = {}) => (
+  analysis?.bald_spots_present === true
+  || ['moderate', 'high'].includes(String(analysis?.visible_scalp_area || '').toLowerCase())
+  || ['moderate', 'severe'].includes(String(analysis?.shedding_level || '').toLowerCase())
+);
+
+const isPhotoRetakeErrorState = (errorState = null) => {
+  const title = String(errorState?.title || '').toLowerCase();
+  const message = String(errorState?.message || '').toLowerCase();
+  const combined = `${title} ${message}`;
+  return (
+    combined.includes('retake')
+    || combined.includes('photo')
+    || combined.includes('clearer')
+    || combined.includes('multiple subject')
+    || combined.includes('person not detected')
+    || combined.includes('photos do not match')
+    || combined.includes('more hair views needed')
+    || combined.includes('photos need better clarity')
+  );
+};
+
+const formatAffectedRegions = (regions = []) => (
+  Array.isArray(regions) && regions.length
+    ? regions.join(', ')
+    : 'none'
+);
+
+const formatDensityScore = (value) => {
+  const score = Number(value);
+  return Number.isFinite(score) ? `${Math.round(score)} / 100` : 'Not enough data';
+};
+
 const buildDonationAssessment = ({ analysis = {}, donationRequirement = null }) => {
   const totalLengthCm = Number(analysis?.estimated_length);
   const configuredMinimumCm = Number(donationRequirement?.minimum_hair_length);
@@ -387,22 +460,25 @@ const buildDonationAssessment = ({ analysis = {}, donationRequirement = null }) 
   const totalInches = cmToInches(totalLengthCm);
   const minimumInches = cmToInches(minimumLengthCm);
   const isLengthDetected = Number.isFinite(totalLengthCm) && totalLengthCm > 0;
-  const meetsLengthRequirement = isLengthDetected && totalLengthCm >= minimumLengthCm;
+  const shortEndpoint = hasShortDonationEndpoint(analysis);
+  const meetsLengthRequirement = isLengthDetected && totalLengthCm >= minimumLengthCm && !shortEndpoint;
   const hasHardBlocker = hasHardDonationBlocker(analysis);
   const isDonationReady = meetsLengthRequirement && !hasHardBlocker;
-  const donatableLengthCm = meetsLengthRequirement ? minimumLengthCm : 0;
+  const donatableLengthCm = meetsLengthRequirement && !hasHardBlocker ? totalLengthCm : 0;
   const neededLengthCm = isLengthDetected ? Math.max(0, minimumLengthCm - totalLengthCm) : null;
-  const cutLineBottomPercent = meetsLengthRequirement && totalLengthCm > 0
-    ? Math.max(24, Math.min(82, (donatableLengthCm / totalLengthCm) * 100))
+  const cutLineBottomPercent = isDonationReady && totalLengthCm > 0
+    ? Math.max(24, Math.min(82, (minimumLengthCm / totalLengthCm) * 100))
     : 18;
   const hairLengthLabel = isLengthDetected
     ? `${totalInches.toFixed(1)} inches`
-    : 'Not detected';
-  const donatableLengthLabel = meetsLengthRequirement
+    : 'For review';
+  const donatableLengthLabel = isDonationReady
     ? `${cmToInches(donatableLengthCm).toFixed(1)} inches`
     : isLengthDetected
-      ? `${cmToInches(neededLengthCm).toFixed(1)} inches more needed`
-      : 'Not detected';
+      ? shortEndpoint || hasHardBlocker
+        ? '0.0 inches'
+        : `${cmToInches(neededLengthCm).toFixed(1)} inches more needed`
+      : 'Manual check';
 
   return {
     cutLineBottomPercent,
@@ -413,8 +489,12 @@ const buildDonationAssessment = ({ analysis = {}, donationRequirement = null }) 
     minimumLengthLabel: `${minimumInches.toFixed(1)} inches`,
     summary: isDonationReady
       ? (analysis?.donation_readiness_note || 'Your hair appears long enough for donation. You can prepare for a haircut assessment and final partner review.')
-      : meetsLengthRequirement
-        ? 'Your hair length is enough, but the scan found a concern that needs review before donation.'
+      : hasScalpCoverageConcern(analysis)
+        ? 'Not eligible for donation yet. This check can still track visible scalp coverage, density, and hair wellness progress over time.'
+      : meetsLengthRequirement && !hasHardBlocker
+        ? 'Your hair length may be enough, but the scan found a concern that needs review before donation.'
+      : shortEndpoint
+        ? `Not eligible for donation yet. Donatable length is measured from the lower cheek or neck to the lowest visible ends, and the current endpoint appears above the required ${minimumInches.toFixed(1)} inches.`
         : (analysis?.donation_readiness_note || 'Your hair is not ready for donation yet. Continue hair care and check again after more growth.'),
   };
 };
@@ -558,6 +638,53 @@ const buildVisibleHairRecommendations = ({ analysis = {}, donationAssessment = {
     .slice(0, 3);
 };
 
+const getHairImprovementRecommendation = (analysis = {}) => {
+  const rawText = cleanHairRecommendationText(analysis?.improvement_recommendation || '');
+  const fallbackText = 'Focus on gentle handling, moisture balance, scalp comfort, and protecting the ends from breakage while you continue tracking hair progress.';
+
+  if (!rawText) return fallbackText;
+  if (isPhotoCaptureRecommendation({ recommendation_text: rawText })) return fallbackText;
+  return rawText;
+};
+
+const buildFinalAiResultNote = (values = {}) => {
+  const detailNote = String(values?.detailNotes || '').trim();
+  const caveat = 'Initial AI assessment only. Final donation eligibility should still be reviewed by a qualified staff member or professional.';
+  return detailNote ? `${detailNote} ${caveat}` : caveat;
+};
+
+const normalizeReviewOption = (value = '', options = []) => {
+  const normalized = String(value || '').trim().toLowerCase();
+  return options.find((option) => option.toLowerCase() === normalized) || '';
+};
+
+const buildHumanReviewValuesForSave = (values = {}, analysis = {}) => {
+  const fallback = buildHairReviewDefaultValues(analysis);
+  const lengthValue = String(values.declaredLength ?? fallback.declaredLength ?? '').trim();
+
+  return {
+    declaredLength: lengthValue || fallback.declaredLength,
+    declaredColor: String(values.declaredColor ?? fallback.declaredColor ?? '').trim(),
+    declaredTexture: String(values.declaredTexture ?? fallback.declaredTexture ?? '').trim(),
+    declaredDensity: String(values.declaredDensity ?? fallback.declaredDensity ?? '').trim(),
+    declaredCondition: String(fallback.declaredCondition ?? '').trim(),
+    detailNotes: String(fallback.detailNotes ?? '').trim(),
+  };
+};
+
+const getReviewDisplayValue = (value, fallback = 'For review') => {
+  const normalized = String(value ?? '').trim();
+  return normalized || fallback;
+};
+
+const buildReviewSummaryRows = (values = {}) => ([
+  ['Hair length', String(values.declaredLength ?? '').trim() && Number(values.declaredLength) > 0 ? `${values.declaredLength} inches` : 'For review'],
+  ['Color', getReviewDisplayValue(values.declaredColor)],
+  ['Texture', getReviewDisplayValue(values.declaredTexture)],
+  ['Density', getReviewDisplayValue(values.declaredDensity)],
+  ['AI condition', getReviewDisplayValue(values.declaredCondition)],
+]);
+
 function ChoiceList({ value, options, onChange, multi = false }) {
   const values = Array.isArray(value) ? value : [];
 
@@ -595,6 +722,26 @@ function ChoiceList({ value, options, onChange, multi = false }) {
               size={20}
               color={isActive ? theme.colors.brandPrimary : theme.colors.textMuted}
             />
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+function ReviewOptionChips({ value, options, onChange }) {
+  return (
+    <View style={styles.reviewChipGroup}>
+      {options.map((option) => {
+        const isActive = value === option;
+        return (
+          <Pressable
+            key={option}
+            onPress={() => onChange(option)}
+            style={[styles.reviewChip, isActive ? styles.reviewChipActive : null]}
+          >
+            {isActive ? <AppIcon name="checkmark" size="sm" state="inverse" /> : null}
+            <Text style={[styles.reviewChipText, isActive ? styles.reviewChipTextActive : null]}>{option}</Text>
           </Pressable>
         );
       })}
@@ -646,8 +793,8 @@ function LiveHairCameraPanel({
       : styles.liveStatusDotActive;
   const shortViewHint = isSideProfileView(currentView)
     ? 'Side view'
-    : isHairEndsView(currentView)
-      ? 'Hair ends'
+    : isHairScalpView(currentView)
+      ? 'Hair scalp'
       : 'Face front';
 
   useEffect(() => {
@@ -912,29 +1059,24 @@ function PreAnalysisPhotoReview({
     ? validation.message
     : validation?.message?.message || '';
   const validationFailed = Boolean(validation && validation.ok === false);
-  const validationPassed = Boolean(validation?.ok);
-  const checklistItems = [
-    {
-      text: 'Hair is loose and visible from the lower cheek or neck area to the ends.',
-      state: validationFailed ? 'unknown' : validationPassed ? 'success' : 'pending',
-    },
-    {
-      text: 'The required angle matches the label for each photo.',
-      state: validationFailed ? 'unknown' : validationPassed ? 'success' : 'pending',
-    },
-    {
-      text: 'All views show the same person and the same current hair.',
-      state: validationFailed ? 'error' : validationPassed ? 'success' : 'pending',
-    },
-    {
-      text: 'Lighting is bright enough and the background is not distracting.',
-      state: validationFailed ? 'unknown' : validationPassed ? 'success' : 'pending',
-    },
-    {
-      text: 'Only one person is in the frame and hair is not covered.',
-      state: validationFailed ? 'unknown' : validationPassed ? 'success' : 'pending',
-    },
-  ];
+  const validationDetails = Array.isArray(validation?.details) ? validation.details : [];
+  const uniqueValidationDetails = validationDetails.filter((detail, index, collection) => {
+    const viewLabel = String(detail?.viewLabel || '').trim().toLowerCase();
+    const errorText = String(detail?.error || '').trim().toLowerCase();
+    if (!errorText) return false;
+    return collection.findIndex((entry) => (
+      String(entry?.viewLabel || '').trim().toLowerCase() === viewLabel
+      && String(entry?.error || '').trim().toLowerCase() === errorText
+    )) === index;
+  });
+  const validationSummaryText = validationFailed && uniqueValidationDetails.length
+    ? uniqueValidationDetails.length === 1
+      ? 'Retake required for 1 photo.'
+      : `Retake required for ${uniqueValidationDetails.length} photos.`
+    : '';
+  const statusText = isValidating
+    ? 'Checking photos...'
+    : validationSummaryText || validationMessage || `${readyCount}/${requiredViews.length} photos ready`;
 
   return (
     <View style={styles.analysisResultPanel}>
@@ -946,34 +1088,47 @@ function PreAnalysisPhotoReview({
         <View style={styles.resultHeaderButtonPlaceholder} />
       </View>
 
-      <View style={styles.resultSectionCard}>
-        <View style={styles.resultSectionHeader}>
-          <Text style={styles.resultSectionTitle}>Preview before AI analysis</Text>
-          <View style={styles.conditionBadge}>
-            <View style={styles.conditionBadgeDot} />
-            <Text style={styles.conditionBadgeText}>{readyCount}/{requiredViews.length}</Text>
+      <View style={styles.preAnalysisReviewCard}>
+        <View style={styles.preAnalysisStatusRow}>
+          <View style={styles.preAnalysisStatusCopy}>
+            <AppIcon
+              name={isValidating ? 'magnify' : validation?.ok ? 'check-circle-outline' : validationFailed ? 'alert-circle-outline' : 'image-check-outline'}
+              size="sm"
+              state={!isValidating && validation?.ok ? 'success' : validationFailed ? 'danger' : 'active'}
+            />
+            <Text
+              style={[
+                styles.preAnalysisValidationText,
+                validationFailed ? styles.preAnalysisValidationTextError : null,
+              ]}
+              numberOfLines={2}
+            >
+              {statusText}
+            </Text>
+          </View>
+          <View style={[
+            styles.preAnalysisCountBadge,
+            validation?.ok ? styles.preAnalysisCountBadgeOk : null,
+          ]}>
+            <Text style={styles.preAnalysisCountText}>{readyCount}/{requiredViews.length}</Text>
           </View>
         </View>
-        <Text style={styles.resultErrorBody}>
-          Check each photo before sending it to AI. Retake unclear views here so hair-care recommendations are based on usable images.
-        </Text>
-        {isValidating || validationMessage ? (
-          <View style={[
-            styles.preAnalysisValidationBox,
-            validation?.ok ? styles.preAnalysisValidationBoxOk : styles.preAnalysisValidationBoxError,
-          ]}>
-            <AppIcon
-              name={isValidating ? 'magnify' : validation?.ok ? 'check-circle-outline' : 'alert-circle-outline'}
-              size="sm"
-              state={!isValidating && validation?.ok ? 'success' : 'active'}
-            />
-            <Text style={styles.preAnalysisValidationText}>
-              {isValidating ? 'Checking if all photos show the same person and same current hair...' : validationMessage}
-            </Text>
+        {validationFailed && uniqueValidationDetails.length ? (
+          <View style={styles.preAnalysisIssueList}>
+            {uniqueValidationDetails.slice(0, 2).map((detail, index) => (
+              <View key={`${detail?.viewLabel || 'photo'}-${index}`} style={styles.preAnalysisIssueRow}>
+                <AppIcon name="alert-circle-outline" size="sm" state="danger" />
+                <Text style={styles.preAnalysisIssueText} numberOfLines={2}>
+                  {String(detail?.error || '').toLowerCase().startsWith(String(detail?.viewLabel || '').toLowerCase())
+                    ? String(detail?.error || '')
+                    : [detail?.viewLabel, detail?.error].filter(Boolean).join(': ')}
+                </Text>
+              </View>
+            ))}
           </View>
         ) : null}
 
-        <View style={styles.preAnalysisGrid}>
+        <View style={styles.preAnalysisList}>
           {requiredViews.map((view, index) => {
             const photo = photos[index];
             return (
@@ -990,49 +1145,36 @@ function PreAnalysisPhotoReview({
                     <Image source={{ uri: photo.uri }} style={styles.preAnalysisPhoto} resizeMode="cover" />
                   ) : (
                     <View style={styles.preAnalysisPhotoEmpty}>
-                      <AppIcon name="image" size="lg" state="muted" />
+                      <AppIcon name="image" size="md" state="muted" />
                     </View>
                   )}
                 </Pressable>
                 <View style={styles.preAnalysisPhotoMeta}>
-                  <Text style={styles.preAnalysisPhotoTitle}>{view?.label || `Photo ${index + 1}`}</Text>
-                  <Pressable
-                    onPress={() => onRetake?.(index)}
-                    disabled={isAnalyzing || isSaving}
-                    style={styles.preAnalysisRetakeButton}
-                  >
-                    <AppIcon name="camera-retake-outline" size="sm" state="active" />
-                    <Text style={styles.preAnalysisRetakeText}>Retake</Text>
-                  </Pressable>
+                  <Text style={styles.preAnalysisPhotoTitle} numberOfLines={1}>
+                    {view?.label || `Photo ${index + 1}`}
+                  </Text>
+                  <Text style={styles.preAnalysisPhotoSubtitle}>
+                    {photo?.uri ? 'Tap to preview' : 'Photo needed'}
+                  </Text>
                 </View>
+                <Pressable
+                  onPress={() => onRetake?.(index)}
+                  disabled={isAnalyzing || isSaving}
+                  style={({ pressed }) => [
+                    styles.preAnalysisRetakeButton,
+                    pressed ? styles.preAnalysisPhotoPressed : null,
+                  ]}
+                >
+                  <AppIcon name="camera-retake-outline" size="sm" state="active" />
+                  <Text style={styles.preAnalysisRetakeText}>Retake</Text>
+                </Pressable>
               </View>
             );
           })}
         </View>
       </View>
 
-      <View style={styles.resultSectionCard}>
-        <Text style={styles.resultSectionTitle}>Photo checklist</Text>
-        <View style={styles.preAnalysisChecklist}>
-          {checklistItems.map((item) => (
-            <View key={item.text} style={styles.preAnalysisChecklistItem}>
-              <AppIcon
-                name={item.state === 'error' ? 'alert-circle-outline' : item.state === 'success' ? 'check-circle-outline' : 'clock-outline'}
-                size="sm"
-                state={item.state === 'error' ? 'active' : item.state === 'success' ? 'success' : 'muted'}
-              />
-              <Text style={[
-                styles.preAnalysisChecklistText,
-                item.state === 'error' ? styles.preAnalysisChecklistTextError : null,
-              ]}>
-                {item.text}
-              </Text>
-            </View>
-          ))}
-        </View>
-      </View>
-
-      <View style={styles.resultActions}>
+      <View style={styles.preAnalysisActions}>
         <AppButton
           title={isValidating
             ? 'Checking photos...'
@@ -1880,6 +2022,7 @@ export function DonorHairSubmissionScreen() {
   const autoCaptureActiveKeyRef = useRef('');
   const latestAutoCaptureRef = useRef(null);
   const photoPreflightKeyRef = useRef('');
+  const captureSessionIdRef = useRef(`cap_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
   const pendingQuestionAdvanceTimeoutRef = useRef(null);
   const questionInfoQuestionKeyRef = useRef('');
   const questionInfoOpacity = useRef(new Animated.Value(0)).current;
@@ -1895,6 +2038,9 @@ export function DonorHairSubmissionScreen() {
   const [transientErrorNotice, setTransientErrorNotice] = useState(null);
   const [photoPreflightState, setPhotoPreflightState] = useState(null);
   const [isPhotoPreflightRunning, setIsPhotoPreflightRunning] = useState(false);
+  const [isAnalysisLaunching, setIsAnalysisLaunching] = useState(false);
+  const [analysisReviewValues, setAnalysisReviewValues] = useState(() => buildHairReviewDefaultValues(null));
+  const [isEditingAnalysisReview, setIsEditingAnalysisReview] = useState(false);
   const { user, profile, resolvedTheme } = useAuth();
   const { logout, isLoading: isLoggingOut } = useAuthActions();
   const {
@@ -1939,11 +2085,6 @@ export function DonorHairSubmissionScreen() {
     resolver: zodResolver(hairAnalyzerComplianceSchema),
     mode: 'onChange',
     defaultValues: hairAnalyzerComplianceDefaultValues,
-  });
-  const correctionForm = useForm({
-    resolver: zodResolver(hairResultCorrectionSchema),
-    mode: 'onChange',
-    defaultValues: buildHairResultCorrectionDefaultValues(null),
   });
   const [questionnaireDraftAnswers, setQuestionnaireDraftAnswers] = useState(() => ({
     ...hairAnalyzerQuestionDefaultValues,
@@ -2169,6 +2310,7 @@ export function DonorHairSubmissionScreen() {
         complianceContext: { acknowledged: Boolean(complianceAcknowledged) },
         historyContext: buildAnalysisHistoryContext(analysisHistory),
         correctedDetails: options.correctedDetails || null,
+        allowPhotoQualityFallback: Boolean(options.allowPhotoQualityFallback),
       });
     } finally {
       analysisAttemptInFlightRef.current = false;
@@ -2217,9 +2359,24 @@ export function DonorHairSubmissionScreen() {
   }, [loadAnalysisHistory, successMessage]);
 
   useEffect(() => {
-    correctionForm.reset(buildHairResultCorrectionDefaultValues(analysis));
     setResultConfirmationMode('pending');
-  }, [analysis, correctionForm]);
+    if (!analysis) {
+      setAnalysisReviewValues(buildHairReviewDefaultValues(null));
+      setIsEditingAnalysisReview(false);
+      return;
+    }
+
+    const donationAssessment = buildDonationAssessment({ analysis, donationRequirement });
+    const analysisForReview = buildDonationReadyAnalysis(analysis, donationAssessment);
+    const defaults = buildHairReviewDefaultValues(analysisForReview);
+
+    setAnalysisReviewValues({
+      ...defaults,
+      declaredTexture: normalizeReviewOption(defaults.declaredTexture, HAIR_TEXTURE_REVIEW_OPTIONS) || defaults.declaredTexture,
+      declaredDensity: normalizeReviewOption(defaults.declaredDensity, HAIR_DENSITY_REVIEW_OPTIONS) || defaults.declaredDensity,
+    });
+    setIsEditingAnalysisReview(false);
+  }, [analysis, donationRequirement]);
 
   useEffect(() => {
     if (!error?.retryUntil) {
@@ -2389,10 +2546,12 @@ export function DonorHairSubmissionScreen() {
       userId: user?.id || null,
       analysisKeys: Object.keys(analysisForSave || {}),
       adjustedDecision: analysisForSave?.decision || null,
+      humanReviewedSpecs: true,
     });
 
     const currentAnswers = getCurrentQuestionnaireAnswers();
-    const result = await submitSubmission(buildHairReviewDefaultValues(analysisForSave, currentAnswers), {
+    const confirmedReviewValues = buildHumanReviewValuesForSave(analysisReviewValues, analysisForSave);
+    const result = await submitSubmission(confirmedReviewValues, {
       questionnaireAnswers: {
         ...currentAnswers,
       },
@@ -2410,7 +2569,8 @@ export function DonorHairSubmissionScreen() {
         questionnaireMode,
       });
       complianceForm.reset(hairAnalyzerComplianceDefaultValues);
-      correctionForm.reset(buildHairResultCorrectionDefaultValues(null));
+      setAnalysisReviewValues(buildHairReviewDefaultValues(null));
+      setIsEditingAnalysisReview(false);
       setQuestionIndex(0);
       setPhotoIndex(0);
       setStepIndex(0);
@@ -2682,7 +2842,7 @@ export function DonorHairSubmissionScreen() {
   const handleCapturePhoto = React.useCallback(async (slotIndex = photoIndex, captureSource = 'manual') => {
     if (slotIndex == null) return;
 
-    if (captureSource === 'auto' && canUseNativeLiveCamera && !liveFaceStatus.valid) {
+    if (canUseNativeLiveCamera && !liveFaceStatus.valid) {
       setCameraModalError(liveFaceStatus.message || 'Center your face and hair before scanning.');
       return;
     }
@@ -2746,7 +2906,18 @@ export function DonorHairSubmissionScreen() {
         captureSource,
       });
 
-      const saveResult = await savePhotoAssetForSlot(slotIndex, photo, 'capture');
+      const saveResult = await savePhotoAssetForSlot(slotIndex, photo, 'capture', {
+        capturedAt: new Date().toISOString(),
+        captureSessionId: captureSessionIdRef.current,
+        photoValidation: {
+          validationMode: 'live_face',
+          faceRequired: !isHairScalpView(requiredViews[slotIndex]),
+          valid: Boolean(liveFaceStatus.valid),
+          faceCount: Number(liveFaceStatus.faceCount || 0),
+          message: liveFaceStatus.message || '',
+          capturedAt: new Date().toISOString(),
+        },
+      });
       if (!saveResult?.success) {
         setCameraModalError(saveResult?.error || 'The captured photo could not be saved to this slot.');
         return;
@@ -2778,6 +2949,7 @@ export function DonorHairSubmissionScreen() {
     requestLiveCameraPermission,
     savePhotoAssetForSlot,
     user?.id,
+    liveFaceStatus.faceCount,
     liveFaceStatus.valid,
     liveFaceStatus.message,
   ]);
@@ -2974,10 +3146,51 @@ export function DonorHairSubmissionScreen() {
     validatePhotoReview,
   ]);
 
-  const runReviewedAnalysis = React.useCallback(async () => {
-    if (!photoPreflightState?.ok) return;
-    await runFreshAnalysisAttempt('pre_analysis_photo_review');
-  }, [photoPreflightState?.ok, runFreshAnalysisAttempt]);
+  const runReviewedAnalysis = React.useCallback(async ({ overridePhotoValidation = false } = {}) => {
+    if (!photoPreflightState?.ok && !overridePhotoValidation) return;
+
+    setIsAnalysisLaunching(true);
+
+    if (overridePhotoValidation) {
+      const validationDetails = Array.isArray(photoPreflightState?.details)
+        ? photoPreflightState.details.map((detail) => [
+            detail?.viewLabel,
+            detail?.error,
+          ].filter(Boolean).join(': ')).filter(Boolean)
+        : [];
+
+      logAppEvent('donor_hair_submission.photo_preflight', 'User chose to continue after photo validation warning.', {
+        userId: user?.id || null,
+        title: photoPreflightState?.title || null,
+        message: photoPreflightState?.message || null,
+        details: validationDetails,
+        overridePhotoValidation: true,
+      }, 'info');
+    }
+
+    try {
+      const result = await runFreshAnalysisAttempt('pre_analysis_photo_review', {
+        // Preflight already passed at this step. Keep analysis moving forward and
+        // avoid bouncing back to photo validation for the same photo set.
+        allowPhotoQualityFallback: true,
+      });
+
+      if (overridePhotoValidation && !result?.success && isPhotoRetakeErrorState(result?.mappedError)) {
+        setPhotoPreflightState((current) => ({
+          ok: false,
+          skipped: false,
+          hardBlock: true,
+          title: 'Retake required',
+          message: result?.mappedError?.message || current?.message || 'Retake required before analysis.',
+          details: Array.isArray(current?.details) ? current.details : [],
+          validationMode: 'analysis_bounced_to_preflight',
+        }));
+        clearAnalysisError();
+      }
+    } finally {
+      setIsAnalysisLaunching(false);
+    }
+  }, [clearAnalysisError, photoPreflightState, runFreshAnalysisAttempt, user?.id]);
 
   const handleNext = async () => {
     if (stepIndex === 0) {
@@ -3028,14 +3241,7 @@ export function DonorHairSubmissionScreen() {
   };
 
   const renderStepContent = () => {
-    const invalidPhotoMessage = [
-      analysis?.invalid_image_reason,
-      ...(Array.isArray(analysis?.missing_views) && analysis.missing_views.length
-        ? [`Missing or unclear views: ${analysis.missing_views.join(', ')}`]
-        : []),
-    ].filter(Boolean).join(' ');
-
-    if (isAnalyzing && stepIndex === 3 && !analysis) {
+    if ((isAnalysisLaunching || isAnalyzing) && stepIndex === 3 && !analysis) {
       return (
         <AnalysisLoadingSplash
           resolvedTheme={resolvedTheme}
@@ -3077,27 +3283,16 @@ export function DonorHairSubmissionScreen() {
       case 0:
         if (isLoadingHistory) {
           return (
-            <AppCard variant="elevated" radius="xl" padding="lg">
-              <View style={styles.loadingState}>
-                <ActivityIndicator color={resolvedTheme?.primaryColor || theme.colors.brandPrimary} />
-                <Text style={styles.loadingStateText}>Loading saved hair log before questions</Text>
-              </View>
-            </AppCard>
+            <View style={styles.inlineLoadingState}>
+              <ActivityIndicator size="small" color={resolvedTheme?.primaryColor || theme.colors.brandPrimary} />
+              <Text style={styles.inlineLoadingText}>Loading...</Text>
+            </View>
           );
         }
 
         return (
           <View style={styles.questionnaireStage}>
             <Animated.View style={[styles.questionTransitionWrap, questionContentAnimatedStyle]}>
-              <View style={styles.questionProgressBlock}>
-                <View style={styles.questionProgressLabels}>
-                  <Text style={styles.questionProgressText}>Step {questionIndex + 1} of {visibleQuestions.length}</Text>
-                </View>
-                <View style={styles.questionProgressTrack}>
-                  <View style={[styles.questionProgressFill, { width: `${((questionIndex + 1) / visibleQuestions.length) * 100}%` }]} />
-                </View>
-              </View>
-
               <View style={styles.questionPanel}>
                 {renderQuestionInput()}
               </View>
@@ -3140,16 +3335,6 @@ export function DonorHairSubmissionScreen() {
 
         return (
           <View style={styles.readinessStage}>
-            <View style={styles.questionProgressBlock}>
-              <View style={styles.questionProgressLabels}>
-                <Text style={styles.questionProgressText}>Step 3 of 3</Text>
-                <Text style={styles.questionProgressMeta}>Final Review</Text>
-              </View>
-              <View style={styles.questionProgressTrack}>
-                <View style={[styles.questionProgressFill, { width: '100%' }]} />
-              </View>
-            </View>
-
             <View style={styles.readinessHeader}>
               <Text style={styles.readinessTitle}>Ready to Scan</Text>
               <Text style={styles.readinessBody}>Review your answers, then open the camera.</Text>
@@ -3212,8 +3397,10 @@ export function DonorHairSubmissionScreen() {
                 }
 
                 complianceForm.setValue('acknowledged', true, { shouldDirty: true, shouldTouch: true, shouldValidate: true });
-                await requestLiveCameraPermission();
                 setStepIndex(2);
+                requestLiveCameraPermission().catch(() => {
+                  setCameraModalError('Camera permission could not be checked. Tap Allow Camera to continue.');
+                });
               }}
               leading={<AppIcon name="camera" state="inverse" />}
               fullWidth
@@ -3271,6 +3458,7 @@ export function DonorHairSubmissionScreen() {
       case 3:
         if (analysis) {
           const donationAssessment = buildDonationAssessment({ analysis, donationRequirement });
+          const displayAnalysis = buildDonationReadyAnalysis(analysis, donationAssessment);
           const sideProfileIndex = requiredViews.findIndex((view) => view?.key === 'side_profile');
           const frontViewIndex = requiredViews.findIndex((view) => view?.key === 'front_view');
           const scanPhoto = photos[sideProfileIndex]?.uri
@@ -3282,6 +3470,10 @@ export function DonorHairSubmissionScreen() {
             analysis,
             donationAssessment,
           });
+          const hairImprovementRecommendation = getHairImprovementRecommendation(displayAnalysis);
+          const questionnaireGuidanceNote = String(displayAnalysis?.history_assessment || '').trim();
+          const reviewSummaryRows = buildReviewSummaryRows(analysisReviewValues);
+          const finalAiResultNote = buildFinalAiResultNote(analysisReviewValues);
 
           return (
             <View style={styles.analysisResultPanel}>
@@ -3318,7 +3510,7 @@ export function DonorHairSubmissionScreen() {
                       <AppIcon name="image" size="xl" state="muted" />
                     </View>
                   )}
-                  {donationAssessment.meetsLengthRequirement ? (
+                  {donationAssessment.isDonationReady ? (
                     <>
                       <View style={styles.cutLineLabel} pointerEvents="none">
                         <Text style={styles.cutLineLabelText}>
@@ -3369,22 +3561,151 @@ export function DonorHairSubmissionScreen() {
                       size="md"
                       state="active"
                     />
-                    <Text style={styles.assessmentNoteText}>{donationAssessment.summary}</Text>
+                    <Text style={styles.assessmentNoteText} numberOfLines={2}>{donationAssessment.summary}</Text>
                   </View>
                 </View>
               </View>
 
-              {invalidPhotoMessage ? (
-                <StatusBanner
-                  title="Photo review note"
-                  message={invalidPhotoMessage}
-                  variant="info"
-                  style={styles.bannerGap}
-                />
+              <View style={styles.resultInlineSection}>
+                <View style={styles.resultSectionHeader}>
+                  <View>
+                    <Text style={styles.resultSectionTitle}>Review detected details</Text>
+                    <Text style={styles.resultSectionHint}>
+                      Edit only obvious measurement or classification mistakes.
+                    </Text>
+                  </View>
+                  <Pressable
+                    onPress={() => setIsEditingAnalysisReview((current) => !current)}
+                    style={({ pressed }) => [
+                      styles.reviewEditButton,
+                      isEditingAnalysisReview ? styles.reviewEditButtonActive : null,
+                      pressed ? styles.interactivePressed : null,
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityLabel={isEditingAnalysisReview ? 'Close result editing' : 'Edit detected result'}
+                  >
+                    <AppIcon
+                      name={isEditingAnalysisReview ? 'close' : 'pencil-outline'}
+                      size="md"
+                      state={isEditingAnalysisReview ? 'inverse' : 'active'}
+                    />
+                  </Pressable>
+                </View>
+
+                {!isEditingAnalysisReview ? (
+                  <View style={styles.reviewSummaryList}>
+                    {reviewSummaryRows.map(([label, value]) => (
+                      <View key={label} style={styles.reviewSummaryRow}>
+                        <Text style={styles.reviewSummaryLabel}>{label}</Text>
+                        <Text style={styles.reviewSummaryValue}>{value}</Text>
+                      </View>
+                    ))}
+                  </View>
+                ) : (
+                  <View style={styles.reviewEditPanel}>
+                    <View style={styles.reviewFieldsGrid}>
+                      <AppInput
+                        label="Hair length"
+                        value={analysisReviewValues.declaredLength}
+                        onChangeText={(nextValue) => setAnalysisReviewValues((current) => ({
+                          ...current,
+                          declaredLength: nextValue,
+                        }))}
+                        keyboardType="decimal-pad"
+                        variant="filled"
+                        helperText="inches"
+                      />
+                      <AppInput
+                        label="Color"
+                        value={analysisReviewValues.declaredColor}
+                        onChangeText={(nextValue) => setAnalysisReviewValues((current) => ({
+                          ...current,
+                          declaredColor: nextValue,
+                        }))}
+                        variant="filled"
+                        placeholder="Black, brown, dyed..."
+                      />
+                    </View>
+
+                    <View style={styles.correctionFieldGroup}>
+                      <Text style={styles.correctionFieldLabel}>Texture</Text>
+                      <ReviewOptionChips
+                        value={analysisReviewValues.declaredTexture}
+                        options={HAIR_TEXTURE_REVIEW_OPTIONS}
+                        onChange={(nextValue) => setAnalysisReviewValues((current) => ({
+                          ...current,
+                          declaredTexture: nextValue,
+                        }))}
+                      />
+                    </View>
+
+                    <View style={styles.correctionFieldGroup}>
+                      <Text style={styles.correctionFieldLabel}>Density</Text>
+                      <ReviewOptionChips
+                        value={analysisReviewValues.declaredDensity}
+                        options={HAIR_DENSITY_REVIEW_OPTIONS}
+                        onChange={(nextValue) => setAnalysisReviewValues((current) => ({
+                          ...current,
+                          declaredDensity: nextValue,
+                        }))}
+                      />
+                    </View>
+
+                    <View style={styles.aiReadOnlyBlock}>
+                      <Text style={styles.aiReadOnlyLabel}>AI condition assessment</Text>
+                      <Text style={styles.aiReadOnlyValue}>
+                        {getReviewDisplayValue(analysisReviewValues.declaredCondition)}
+                      </Text>
+                    </View>
+                    <AppButton
+                      title="Done editing"
+                      variant="outline"
+                      onPress={() => setIsEditingAnalysisReview(false)}
+                      disabled={isSaving || isAnalyzing}
+                      fullWidth
+                    />
+                  </View>
+                )}
+              </View>
+
+              {hasScalpCoverageTracking(displayAnalysis) ? (
+                <View style={styles.resultInlineSection}>
+                  <View style={styles.resultSectionHeader}>
+                    <Text style={styles.resultSectionTitle}>Scalp coverage tracking</Text>
+                    <View style={styles.conditionBadge}>
+                      <View style={styles.conditionBadgeDot} />
+                      <Text style={styles.conditionBadgeText}>WELLNESS</Text>
+                    </View>
+                  </View>
+                  <View style={styles.assessmentRows}>
+                    <View style={styles.assessmentRow}>
+                      <Text style={styles.assessmentLabel}>Visible scalp area</Text>
+                      <Text style={styles.assessmentValue}>{displayAnalysis.visible_scalp_area || 'low'}</Text>
+                    </View>
+                    <View style={styles.assessmentRow}>
+                      <Text style={styles.assessmentLabel}>Affected area</Text>
+                      <Text style={styles.assessmentValue}>{formatAffectedRegions(displayAnalysis.affected_regions)}</Text>
+                    </View>
+                    <View style={styles.assessmentRow}>
+                      <Text style={styles.assessmentLabel}>Density score</Text>
+                      <Text style={styles.assessmentValue}>{formatDensityScore(displayAnalysis.hair_density_score)}</Text>
+                    </View>
+                    <View style={styles.assessmentRow}>
+                      <Text style={styles.assessmentLabel}>Shedding level</Text>
+                      <Text style={styles.assessmentValue}>{displayAnalysis.shedding_level || 'mild'}</Text>
+                    </View>
+                  </View>
+                  <View style={styles.assessmentNote}>
+                    <AppIcon name="chart-line" size="md" state="active" />
+                    <Text style={styles.assessmentNoteText} numberOfLines={2}>
+                      {displayAnalysis.scalp_coverage_notes || 'This check tracks visible scalp coverage for progress monitoring only.'}
+                    </Text>
+                  </View>
+                </View>
               ) : null}
 
               {hairRecommendations.length ? (
-                <View style={styles.resultSectionCard}>
+                <View style={styles.resultInlineSection}>
                   <View style={styles.resultSectionHeader}>
                     <Text style={styles.resultSectionTitle}>Hair recommendations</Text>
                     <View style={styles.conditionBadge}>
@@ -3392,6 +3713,7 @@ export function DonorHairSubmissionScreen() {
                       <Text style={styles.conditionBadgeText}>HAIR CARE</Text>
                     </View>
                   </View>
+                  <Text style={styles.resultSectionHint}>{hairImprovementRecommendation}</Text>
                   <View style={styles.recommendationList}>
                     {hairRecommendations.map((recommendation, index) => (
                       <View
@@ -3407,6 +3729,19 @@ export function DonorHairSubmissionScreen() {
                       </View>
                     ))}
                   </View>
+                </View>
+              ) : null}
+
+              {questionnaireGuidanceNote ? (
+                <View style={styles.resultInlineSection}>
+                  <View style={styles.resultSectionHeader}>
+                    <Text style={styles.resultSectionTitle}>Based on your answers</Text>
+                    <View style={styles.conditionBadge}>
+                      <View style={styles.conditionBadgeDot} />
+                      <Text style={styles.conditionBadgeText}>GUIDE</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.resultSectionHint}>{questionnaireGuidanceNote}</Text>
                 </View>
               ) : null}
 
@@ -3430,7 +3765,8 @@ export function DonorHairSubmissionScreen() {
                 <Pressable
                   onPress={() => {
                     resetFlow();
-                    correctionForm.reset(buildHairResultCorrectionDefaultValues(null));
+                    setAnalysisReviewValues(buildHairReviewDefaultValues(null));
+                    setIsEditingAnalysisReview(false);
                     setResultConfirmationMode('pending');
                     setPhotoIndex(0);
                     setQuestionIndex(0);
@@ -3442,7 +3778,42 @@ export function DonorHairSubmissionScreen() {
                   <Text style={styles.scanAgainText}>Scan Again</Text>
                 </Pressable>
               </View>
+
+              <View style={styles.finalAiNote}>
+                <AppIcon name="information-outline" size="sm" state="muted" />
+                <Text style={styles.finalAiNoteText}>{finalAiResultNote}</Text>
+              </View>
             </View>
+          );
+        }
+
+        if (pageErrorState && isPhotoRetakeErrorState(pageErrorState)) {
+          return (
+            <PreAnalysisPhotoReview
+              photos={photos}
+              requiredViews={requiredViews}
+              isAnalyzing={isAnalyzing || isAnalysisLaunching}
+              isSaving={isSaving}
+              isValidating={isPhotoPreflightRunning}
+              validation={{
+                ok: false,
+                skipped: false,
+                hardBlock: true,
+                title: 'Retake required',
+                message: pageErrorState?.message || 'Retake required before analysis.',
+                details: Array.isArray(photoPreflightState?.details) ? photoPreflightState.details : [],
+                validationMode: 'analysis_error_to_preflight',
+              }}
+              onPreview={openScanImagePreview}
+              onRetake={(slotIndex = 0) => {
+                setPhotoPreflightState(null);
+                photoPreflightKeyRef.current = '';
+                clearAnalysisError();
+                setPhotoIndex(slotIndex);
+                setStepIndex(2);
+              }}
+              onRunAnalysis={runReviewedAnalysis}
+            />
           );
         }
 
@@ -3465,27 +3836,20 @@ export function DonorHairSubmissionScreen() {
 
             <View style={styles.resultSectionCard}>
               <View style={styles.resultSectionHeader}>
-                <Text style={styles.resultSectionTitle}>Analysis needs a clearer scan</Text>
+                <Text style={styles.resultSectionTitle}>
+                  {pageErrorState?.title || 'Analysis unavailable'}
+                </Text>
                 <View style={styles.conditionBadge}>
                   <View style={styles.conditionBadgeDotWarning} />
-                  <Text style={styles.conditionBadgeText}>RETAKE</Text>
+                  <Text style={styles.conditionBadgeText}>
+                    {isRetryCooldownActive ? 'WAIT' : 'TRY AGAIN'}
+                  </Text>
                 </View>
               </View>
               <Text style={styles.resultErrorBody}>
-                The AI could not complete a reliable hair result from the current photos. Retake the required views in bright light with your hair centered, then run the analysis again.
+                {pageErrorState?.message || 'Hair analysis could not finish right now. Please try again.'}
               </Text>
               <View style={styles.resultActions}>
-                <AppButton
-                  title="Retake photos"
-                  variant="outline"
-                  onPress={() => {
-                    setStepIndex(2);
-                    setPhotoIndex(0);
-                    clearAnalysisError();
-                  }}
-                  disabled={isAnalyzing || isSaving}
-                  fullWidth
-                />
                 <AppButton
                   title={isRetryCooldownActive
                     ? `Try again in ${retryCountdownSeconds}s`
@@ -3506,7 +3870,7 @@ export function DonorHairSubmissionScreen() {
           <PreAnalysisPhotoReview
             photos={photos}
             requiredViews={requiredViews}
-            isAnalyzing={isAnalyzing}
+            isAnalyzing={isAnalyzing || isAnalysisLaunching}
             isSaving={isSaving}
             isValidating={isPhotoPreflightRunning}
             validation={photoPreflightState}
@@ -4118,6 +4482,18 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.compact.bodySm,
     color: theme.colors.textSecondary,
   },
+  inlineLoadingState: {
+    minHeight: 520,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: theme.spacing.xs,
+    paddingBottom: 120,
+  },
+  inlineLoadingText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    color: theme.colors.textMuted,
+  },
   postAnalysisActions: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -4130,8 +4506,44 @@ const styles = StyleSheet.create({
   },
   correctionFieldLabel: {
     fontFamily: theme.typography.fontFamilyDisplay,
-    fontSize: theme.typography.semantic.bodyLg,
+    fontSize: theme.typography.semantic.body,
     color: theme.colors.textPrimary,
+  },
+  resultSectionHint: {
+    marginTop: 3,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    lineHeight: theme.typography.compact.caption * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textSecondary,
+  },
+  reviewFieldsGrid: {
+    gap: theme.spacing.sm,
+  },
+  aiReadOnlyBlock: {
+    gap: 5,
+    padding: theme.spacing.md,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+    backgroundColor: theme.colors.surfaceSoft,
+  },
+  aiReadOnlyLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textSecondary,
+  },
+  aiReadOnlyValue: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textPrimary,
+  },
+  aiReadOnlyNote: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    lineHeight: theme.typography.semantic.caption * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textSecondary,
   },
   correctionLengthRow: {
     gap: theme.spacing.sm,
@@ -5557,7 +5969,7 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 600,
     alignSelf: 'center',
-    gap: theme.spacing.lg,
+    gap: theme.spacing.md,
     paddingBottom: theme.spacing.xl,
   },
   analysisResultTopBar: {
@@ -5597,6 +6009,15 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.backgroundPrimary,
     ...theme.shadows.soft,
   },
+  resultInlineSection: {
+    gap: theme.spacing.md,
+    padding: theme.spacing.md,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderTopColor: theme.colors.borderSubtle,
+    borderColor: theme.colors.borderSubtle,
+    backgroundColor: theme.colors.backgroundPrimary,
+  },
   resultSectionHeader: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -5609,6 +6030,118 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.semantic.bodyLg,
     fontWeight: theme.typography.weights.semibold,
     color: theme.colors.textPrimary,
+  },
+  aiAssessmentNotice: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.spacing.sm,
+    padding: theme.spacing.md,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+    backgroundColor: theme.colors.surfaceSoft,
+  },
+  aiAssessmentNoticeText: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textSecondary,
+  },
+  finalAiNote: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.spacing.xs,
+    paddingHorizontal: theme.spacing.sm,
+    paddingBottom: theme.spacing.xs,
+  },
+  finalAiNoteText: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    lineHeight: theme.typography.semantic.caption * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textSecondary,
+  },
+  reviewEditButton: {
+    width: 42,
+    height: 42,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+    backgroundColor: theme.colors.surfaceSoft,
+  },
+  reviewEditButtonActive: {
+    borderColor: theme.colors.brandPrimary,
+    backgroundColor: theme.colors.brandPrimary,
+  },
+  reviewSummaryList: {
+    gap: theme.spacing.xs,
+  },
+  reviewSummaryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.md,
+    minHeight: 38,
+    paddingBottom: theme.spacing.xs,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.borderSubtle,
+  },
+  reviewSummaryLabel: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    color: theme.colors.textSecondary,
+  },
+  reviewSummaryValue: {
+    flex: 1,
+    textAlign: 'right',
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textPrimary,
+  },
+  reviewSummaryNote: {
+    marginTop: theme.spacing.xs,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textSecondary,
+  },
+  reviewEditPanel: {
+    gap: theme.spacing.md,
+  },
+  reviewChipGroup: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.spacing.sm,
+  },
+  reviewChip: {
+    minHeight: 38,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: 8,
+    borderRadius: theme.radius.full,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+    backgroundColor: theme.colors.backgroundPrimary,
+  },
+  reviewChipActive: {
+    borderColor: theme.colors.brandPrimary,
+    backgroundColor: theme.colors.brandPrimary,
+  },
+  reviewChipText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textPrimary,
+  },
+  reviewChipTextActive: {
+    color: theme.colors.textOnBrand,
   },
   conditionBadge: {
     flexDirection: 'row',
@@ -5721,9 +6254,10 @@ const styles = StyleSheet.create({
   },
   donationAssessmentCard: {
     overflow: 'hidden',
-    borderRadius: 16,
+    borderRadius: 12,
     backgroundColor: theme.colors.backgroundPrimary,
-    ...theme.shadows.soft,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
   },
   cutLineImageWrap: {
     height: 224,
@@ -5804,8 +6338,8 @@ const styles = StyleSheet.create({
     color: theme.colors.textOnBrand,
   },
   donationAssessmentBody: {
-    gap: theme.spacing.md,
-    padding: theme.spacing.lg,
+    gap: theme.spacing.sm,
+    padding: theme.spacing.md,
   },
   donationAssessmentHeader: {
     flexDirection: 'row',
@@ -5906,9 +6440,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: theme.spacing.sm,
-    padding: theme.spacing.md,
-    borderRadius: theme.radius.lg,
-    backgroundColor: theme.colors.brandPrimaryMuted,
+    paddingVertical: theme.spacing.sm,
+    paddingHorizontal: 0,
+    borderRadius: 0,
+    backgroundColor: 'transparent',
   },
   assessmentNoteText: {
     flex: 1,
@@ -5918,8 +6453,8 @@ const styles = StyleSheet.create({
     color: theme.colors.textPrimary,
   },
   resultActions: {
-    gap: theme.spacing.md,
-    marginTop: theme.spacing.xs,
+    gap: theme.spacing.sm,
+    marginTop: theme.spacing.sm,
   },
   resultErrorBody: {
     fontFamily: theme.typography.fontFamily,
@@ -5927,21 +6462,29 @@ const styles = StyleSheet.create({
     lineHeight: theme.typography.semantic.body * theme.typography.lineHeights.relaxed,
     color: theme.colors.textSecondary,
   },
-  preAnalysisGrid: {
+  preAnalysisReviewCard: {
     gap: theme.spacing.md,
-  },
-  preAnalysisValidationBox: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: theme.spacing.sm,
     padding: theme.spacing.md,
-    borderRadius: theme.radius.lg,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+    backgroundColor: theme.colors.backgroundPrimary,
+    ...theme.shadows.soft,
   },
-  preAnalysisValidationBoxOk: {
-    backgroundColor: '#E9F8EE',
+  preAnalysisList: {
+    gap: theme.spacing.sm,
   },
-  preAnalysisValidationBoxError: {
-    backgroundColor: theme.colors.surfaceCardMuted,
+  preAnalysisStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+  },
+  preAnalysisStatusCopy: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
   },
   preAnalysisValidationText: {
     flex: 1,
@@ -5950,14 +6493,63 @@ const styles = StyleSheet.create({
     lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
     color: theme.colors.textPrimary,
   },
+  preAnalysisValidationTextError: {
+    color: theme.colors.textError,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  preAnalysisCountBadge: {
+    minHeight: 34,
+    minWidth: 56,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: theme.spacing.sm,
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.surfaceCardMuted,
+  },
+  preAnalysisCountBadgeOk: {
+    backgroundColor: '#E9F8EE',
+  },
+  preAnalysisCountText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.bold,
+    color: theme.colors.brandPrimary,
+  },
+  preAnalysisIssueList: {
+    gap: 6,
+    padding: theme.spacing.sm,
+    borderRadius: 10,
+    backgroundColor: theme.colors.errorSurface,
+  },
+  preAnalysisIssueRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.spacing.xs,
+  },
+  preAnalysisIssueText: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    lineHeight: theme.typography.semantic.caption * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textError,
+  },
   preAnalysisPhotoCard: {
+    minHeight: 92,
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: theme.spacing.sm,
+    padding: theme.spacing.xs,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+    backgroundColor: theme.colors.surfaceSoft,
   },
   preAnalysisPhotoFrame: {
-    height: 190,
-    borderRadius: theme.radius.lg,
+    width: 86,
+    height: 86,
+    borderRadius: 10,
     overflow: 'hidden',
-    backgroundColor: theme.colors.surfaceSoft,
+    backgroundColor: theme.colors.backgroundPrimary,
   },
   preAnalysisPhotoPressed: {
     opacity: 0.9,
@@ -5972,20 +6564,23 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   preAnalysisPhotoMeta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: theme.spacing.sm,
+    flex: 1,
+    minWidth: 0,
+    gap: 3,
   },
   preAnalysisPhotoTitle: {
-    flex: 1,
     fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
+    fontSize: theme.typography.compact.bodySm,
     fontWeight: theme.typography.weights.semibold,
     color: theme.colors.textPrimary,
   },
+  preAnalysisPhotoSubtitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    color: theme.colors.textSecondary,
+  },
   preAnalysisRetakeButton: {
-    minHeight: 36,
+    minHeight: 34,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
@@ -5998,6 +6593,11 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.semantic.caption,
     fontWeight: theme.typography.weights.bold,
     color: theme.colors.brandPrimary,
+  },
+  preAnalysisActions: {
+    gap: theme.spacing.sm,
+    marginTop: theme.spacing.xs,
+    marginBottom: 112,
   },
   preAnalysisChecklist: {
     gap: theme.spacing.sm,

@@ -11,6 +11,7 @@ export const hairSubmissionImageTypes = {
   donorUpload: 'donor_upload',
   frontView: 'front_view',
   sideProfile: 'side_profile',
+  hairScalp: 'hair_scalp',
   hairEndsCloseUp: 'hair_ends_close_up',
 };
 
@@ -26,9 +27,9 @@ export const hairAnalysisRequiredViews = [
     helperText: 'Turn your head to one side. Keep the hair length and ends visible from the side profile with no glasses, masks, or accessories covering the face or hair.',
   },
   {
-    key: hairSubmissionImageTypes.hairEndsCloseUp,
-    label: 'Hair Ends Close-Up',
-    helperText: 'Move closer to the lowest hair ends. Keep the ends sharp and uncovered so dryness, fraying, and split ends can be checked.',
+    key: hairSubmissionImageTypes.hairScalp,
+    label: 'Hair Scalp',
+    helperText: 'Show the scalp/crown area clearly with the hair parted enough to check visible scalp coverage, density, flakes, oiliness, or buildup.',
   },
 ];
 

@@ -247,16 +247,21 @@ const hasDonationApprovalEvidence = ({
 
 const canCancelDonationSubmission = ({
   submission = null,
+  registration = null,
   certificate = null,
   timelineStages = [],
   timelineEvents = [],
   trackingEntries = [],
 } = {}) => {
   const normalizedStatus = String(submission?.status || '').trim().toLowerCase();
+  const normalizedStatusKey = normalizeTimelineKey(normalizedStatus);
   const isDraftLike = ['draft', 'pending', 'qr generated', 'not generated'].includes(normalizedStatus);
 
   return Boolean(submission?.submission_id)
     && !isClosedDonationStatus(submission?.status)
+    && !isRsvpCheckedIn(registration)
+    && !submission?.cut_at
+    && !['cut', 'wiginproduction', 'wigcreated'].includes(normalizedStatusKey)
     && (
       isDraftLike
       || !hasDonationApprovalEvidence({
@@ -292,7 +297,7 @@ const DONATION_WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'
 const hasDonationQrMetadata = (submission = null) => (
   Boolean(
     submission?.submission_id
-    && submission?.submission_code
+    && submission?.donation_reference
     && !['', 'not generated'].includes(String(submission?.qr_status || '').trim().toLowerCase())
   )
 );
@@ -396,6 +401,12 @@ const normalizeDriveRegistrationRow = (row = null) => {
     registration_id: row?.registration_id || null,
     donation_drive_id: row?.donation_drive_id || null,
     user_id: row?.user_id || null,
+    waybill_code: row?.waybill_code || '',
+    submission_id: row?.submission_id || null,
+    donation_reference: row?.donation_reference || '',
+    submission_detail_id: row?.submission_detail_id || null,
+    submission_status: row?.submission_status || '',
+    submission_detail_status: row?.submission_detail_status || '',
     registration_status: row?.registration_status || '',
     attendance_status: row?.attendance_status || '',
     rsvp_scanned_at: row?.rsvp_scanned_at || null,
@@ -1684,7 +1695,7 @@ function DonationEventDetailsScreen({
   const rsvpQrPayloadText = hasRsvp
     ? buildDriveInvitationQrPayload({ drive, registration })
     : '';
-  const rsvpQrImageUrl = rsvpQrPayloadText ? buildQrImageUrl(rsvpQrPayloadText, 240) : '';
+  const rsvpQrImageUrl = rsvpQrPayloadText ? buildQrImageUrl(rsvpQrPayloadText, 360) : '';
 
   return (
     <View style={styles.flowScreen}>
@@ -1725,16 +1736,23 @@ function DonationEventDetailsScreen({
 
         {hasRsvp ? (
           <View style={[styles.eventRsvpQrWrap, { backgroundColor: roles.supportCardBackground, borderColor: roles.defaultCardBorder }]}>
-            <Text style={[styles.eventRsvpQrTitle, { color: roles.headingText }]}>RSVP QR</Text>
-            <Text style={[styles.flowMetaText, { color: roles.bodyText }]}>
-              Show this QR to staff for event check-in scan.
-            </Text>
+            <View style={styles.eventRsvpQrHeader}>
+              <View>
+                <Text style={[styles.eventRsvpQrTitle, { color: roles.headingText }]}>RSVP QR</Text>
+                <Text style={[styles.eventRsvpQrSubtitle, { color: roles.bodyText }]}>
+                  Show this to staff for check-in.
+                </Text>
+              </View>
+              <MaterialCommunityIcons name="qrcode-scan" size={24} color={roles.iconPrimaryColor} />
+            </View>
             {rsvpQrImageUrl ? (
-              <Image
-                source={{ uri: rsvpQrImageUrl }}
-                style={styles.eventRsvpQrImage}
-                resizeMode="contain"
-              />
+              <View style={styles.eventRsvpQrImageFrame}>
+                <Image
+                  source={{ uri: rsvpQrImageUrl }}
+                  style={styles.eventRsvpQrImage}
+                  resizeMode="contain"
+                />
+              </View>
             ) : null}
           </View>
         ) : null}
@@ -2187,6 +2205,10 @@ const normalizeTimelineKey = (value = '') => String(value || '')
   .toLowerCase()
   .replace(/[^a-z0-9]+/g, '');
 
+const isCancelledDonationSubmission = (submission = null) => (
+  ['cancelled', 'canceled'].includes(normalizeTimelineKey(submission?.status || submission?.Status || ''))
+);
+
 const getTimelineEvidenceAt = (stage) => (
   stage?.displayEvidenceAt
   || stage?.completedAt
@@ -2221,24 +2243,13 @@ const isSubmissionCutAndShipComplete = (submission = null) => {
   ].includes(statusKey);
 };
 
-const isRegistrationPresentForCutAndShip = (registration = null) => {
-  const attendanceKey = normalizeTimelineKey(registration?.attendance_status || registration?.Attendance_Status || '');
-  return [
-    'present',
-    'attended',
-    'checkedin',
-    'marked',
-    'scanned',
-    'verified',
-  ].includes(attendanceKey);
-};
-
 const buildEventDonationTimelineStages = ({ item, fallbackStages = [], certificate }) => {
-  const registration = item?.drive?.registration || item?.registration || null;
   const submission = item?.submission || null;
+  const isSubmissionCancelled = isCancelledDonationSubmission(submission);
   const submissionId = Number(submission?.submission_id || submission?.Submission_ID || 0);
-  const certificateSubmissionId = Number(certificate?.submission_id || certificate?.Submission_ID || 0);
-  const certificateIssuedAt = submissionId && certificateSubmissionId === submissionId
+  const isSubmissionCutComplete = isSubmissionCutAndShipComplete(submission);
+  const certificateSubmissionId = isSubmissionCancelled ? 0 : Number(certificate?.submission_id || certificate?.Submission_ID || 0);
+  const certificateIssuedAt = !isSubmissionCancelled && isSubmissionCutComplete && submissionId && certificateSubmissionId === submissionId
     ? (certificate?.issued_at || certificate?.Issued_At || null)
     : null;
 
@@ -2266,19 +2277,30 @@ const buildEventDonationTimelineStages = ({ item, fallbackStages = [], certifica
   const cutFallbackEvidenceAt = normalizeTimelineKey(cutFallback?.key || '') === 'cutandship'
     ? getTimelineEvidenceAt(cutFallback)
     : null;
-  const cutEvidenceAt = registration?.rsvp_scanned_at
-    || registration?.attendance_marked_at
-    || (isRegistrationPresentForCutAndShip(registration) ? (registration?.updated_at || registration?.registered_at || null) : null)
-    || submission?.cut_at
-    || (isSubmissionCutAndShipComplete(submission) ? (submission?.updated_at || submission?.created_at) : null)
+  const cutEvidenceAt = !isSubmissionCancelled && (submission?.cut_at
+    || (isSubmissionCutComplete ? (submission?.updated_at || submission?.created_at) : null)
     || certificateIssuedAt
-    || cutFallbackEvidenceAt;
+    || cutFallbackEvidenceAt);
+
+  if (isSubmissionCancelled) {
+    const cancelledAt = submission?.updated_at || submission?.Updated_At || submission?.created_at || submission?.Created_At || null;
+    return [{
+      key: 'donation_cancelled',
+      label: 'Donation Cancelled',
+      savedNote: 'This donation was cancelled in the donation records. RSVP scan history is kept, but the latest submission status controls this timeline.',
+      evidenceAt: cancelledAt,
+      displayEvidenceAt: cancelledAt,
+      state: 'cancelled',
+      progressLabel: 'Cancelled',
+      statusLabel: 'Cancelled',
+    }];
+  }
 
   const eventStages = [
     {
       key: 'cut_and_ship',
       label: 'Cut & Ship',
-      savedNote: 'Staff scans the Cut & Ship QR. The donor certificate is issued after this scan.',
+      savedNote: 'Staff approves the hair quality review before this donation can continue to bundling.',
       evidenceAt: cutEvidenceAt,
       statusLabel: cutEvidenceAt ? 'Complete' : '',
     },
@@ -2340,6 +2362,7 @@ function DonationTimelineStatusScreen({
   const submittedAt = item?.submission?.created_at || item?.submission?.updated_at || '';
   const canCancel = canCancelDonationSubmission({
     submission: item?.submission || null,
+    registration: item?.drive?.registration || item?.registration || null,
     certificate,
     timelineStages,
     timelineEvents,
@@ -2409,7 +2432,9 @@ function DonationTimelineStatusScreen({
           {stages.length ? stages.map((stage, index) => {
             const isCompleted = stage.state === 'completed';
             const isCurrent = stage.state === 'current';
+            const isCancelled = stage.state === 'cancelled';
             const stageDisplayDate = stage.displayEvidenceAt || stage.completedAt || stage.evidenceAt || '';
+            const markerColor = isCancelled ? roles.errorText : roles.primaryActionBackground;
             const stageImages = index === 0
               ? (stage.parcelImages || parcelImages || []).filter((image) => image?.signed_url || image?.image_url)
               : [];
@@ -2420,11 +2445,13 @@ function DonationTimelineStatusScreen({
                     styles.timelineMarker,
                     {
                       backgroundColor: isCompleted ? roles.primaryActionBackground : roles.defaultCardBackground,
-                      borderColor: isCompleted || isCurrent ? roles.primaryActionBackground : roles.defaultCardBorder,
+                      borderColor: isCompleted || isCurrent || isCancelled ? markerColor : roles.defaultCardBorder,
                     },
                   ]}>
                     {isCompleted ? (
                       <MaterialCommunityIcons name="check" size={14} color={roles.primaryActionText} />
+                    ) : isCancelled ? (
+                      <MaterialCommunityIcons name="close" size={14} color={roles.errorText} />
                     ) : isCurrent ? (
                       <View style={[styles.timelineCurrentDot, { backgroundColor: roles.primaryActionBackground }]} />
                     ) : (
@@ -2439,11 +2466,11 @@ function DonationTimelineStatusScreen({
                   styles.timelineStageCard,
                   {
                     backgroundColor: isCurrent ? roles.iconPrimarySurface : roles.defaultCardBackground,
-                    borderColor: isCurrent ? roles.primaryActionBackground : roles.defaultCardBorder,
+                    borderColor: isCancelled ? roles.errorText : (isCurrent ? roles.primaryActionBackground : roles.defaultCardBorder),
                   },
                 ]}>
                   <View style={styles.timelineStageHeader}>
-                    <Text style={[styles.timelineStageTitle, { color: isCurrent ? roles.iconPrimaryColor : roles.headingText }]}>
+                    <Text style={[styles.timelineStageTitle, { color: isCancelled ? roles.errorText : (isCurrent ? roles.iconPrimaryColor : roles.headingText) }]}>
                       {stage.label || stage.title || 'Donation update'}
                     </Text>
                     <Text style={[styles.timelineStageDate, { color: roles.metaText }]}>
@@ -2475,7 +2502,7 @@ function DonationTimelineStatusScreen({
                     </ScrollView>
                   ) : null}
                   {stage.statusLabel ? (
-                    <Text style={[styles.timelineStageBadgeText, { color: roles.iconPrimaryColor }]}>{stage.statusLabel}</Text>
+                    <Text style={[styles.timelineStageBadgeText, { color: isCancelled ? roles.errorText : roles.iconPrimaryColor }]}>{stage.statusLabel}</Text>
                   ) : null}
                 </View>
               </View>
@@ -2582,7 +2609,7 @@ function buildHairSubmissionPreviewItems(submission = null, fallbackDetail = nul
         ? (detail?.relationship_to_submitter ? `Relationship: ${detail.relationship_to_submitter}` : '')
         : '',
       hairItemCode: detail?.hair_item_code || '',
-      donationCode: submission?.submission_code || '',
+      donationCode: submission?.donation_reference || '',
       currentStatus: detail?.current_tracking_status || detail?.status || '',
       lengthLabel,
       condition,
@@ -3257,6 +3284,7 @@ export function DonorDonationStatusScreen() {
       });
       const canCancel = canCancelDonationSubmission({
         submission: primarySubmission,
+        registration: drive?.registration || null,
         certificate,
         timelineStages: moduleData?.timelineStages || [],
         timelineEvents: moduleData?.timelineEvents || [],
@@ -4079,10 +4107,45 @@ export function DonorDonationStatusScreen() {
       .maybeSingle();
 
     const normalizedRegistration = normalizeDriveRegistrationRow(result.data || null);
+    let linkedRegistration = normalizedRegistration;
+
+    if (normalizedRegistration?.registration_id) {
+      const submissionResult = await supabase
+        .from('Hair_Submissions')
+        .select(`
+          submission_id:Submission_ID,
+          submission_status:Status,
+          created_at:Created_At
+        `)
+        .eq('Event_Request_ID', driveId)
+        .eq('User_ID', profile.user_id)
+        .not('Status', 'ilike', 'cancelled')
+        .order('Created_At', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (submissionResult.data?.submission_id) {
+        const detailResult = await supabase
+          .from('Hair_Submission_Details')
+          .select('submission_detail_id:Submission_Detail_ID,submission_detail_status:Status,created_at:Created_At')
+          .eq('Submission_ID', submissionResult.data.submission_id)
+          .order('Created_At', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        linkedRegistration = {
+          ...normalizedRegistration,
+          submission_id: submissionResult.data.submission_id || null,
+          submission_status: submissionResult.data.submission_status || '',
+          submission_detail_id: detailResult.data?.submission_detail_id || null,
+          submission_detail_status: detailResult.data?.submission_detail_status || '',
+        };
+      }
+    }
 
     setSelectedDriveForDonation((current) => (
       current && Number(current?.donation_drive_id) === Number(driveId)
-        ? { ...current, registration: normalizedRegistration }
+        ? { ...current, registration: linkedRegistration }
         : current
     ));
 
@@ -4092,13 +4155,13 @@ export function DonorDonationStatusScreen() {
       const nextDrives = Array.isArray(current.drives)
         ? current.drives.map((drive) => (
             Number(drive?.donation_drive_id) === Number(driveId)
-              ? { ...drive, registration: normalizedRegistration }
+              ? { ...drive, registration: linkedRegistration }
               : drive
           ))
         : current.drives;
 
       const nextActiveDrive = Number(current?.activeDrive?.donation_drive_id) === Number(driveId)
-        ? { ...current.activeDrive, registration: normalizedRegistration }
+        ? { ...current.activeDrive, registration: linkedRegistration }
         : current.activeDrive;
 
       return {
@@ -4108,11 +4171,12 @@ export function DonorDonationStatusScreen() {
       };
     });
 
-    return normalizedRegistration;
+    return linkedRegistration;
   }, [profile?.user_id]);
 
   const handleEnsureEventRsvp = React.useCallback(async () => {
     if (!selectedDriveForDonation?.donation_drive_id) return;
+    if (isGeneratingEventRsvp) return;
     if (hasOngoingDonation) {
       setModuleFeedback({
         message: 'You already have a donation in progress. You can view this event, but you cannot register until the current donation is finished or cancelled.',
@@ -4156,7 +4220,7 @@ export function DonorDonationStatusScreen() {
         : 'RSVP generated. Show your RSVP QR at check-in. Donation submission unlocks after staff marks you Present.',
       variant: 'success',
     });
-  }, [hairEligibilityMessage, hasHairScanLog, hasOngoingDonation, profile?.user_id, refreshDriveRegistrationFromTable, selectedDriveForDonation]);
+  }, [hairEligibilityMessage, hasHairScanLog, hasOngoingDonation, isGeneratingEventRsvp, profile?.user_id, refreshDriveRegistrationFromTable, selectedDriveForDonation]);
 
   React.useEffect(() => {
     if (donationModuleScreen !== DONATION_MODULE_SCREEN.EVENT_DETAILS) return;
@@ -4512,6 +4576,7 @@ export function DonorDonationStatusScreen() {
     const openCancelItems = cancelItems.filter((item) => (
       canCancelDonationSubmission({
         submission: item?.submission || null,
+        registration: selectedDonationStatusItem?.drive?.registration || selectedDonationStatusItem?.registration || null,
         certificate,
         timelineStages: moduleData?.timelineStages || [],
         timelineEvents: moduleData?.timelineEvents || [],
@@ -6046,18 +6111,39 @@ const styles = StyleSheet.create({
     marginTop: theme.spacing.sm,
     borderWidth: 1,
     borderRadius: theme.radius.lg,
-    padding: theme.spacing.md,
+    padding: theme.spacing.lg,
+    gap: theme.spacing.md,
+  },
+  eventRsvpQrHeader: {
+    width: '100%',
+    flexDirection: 'row',
     alignItems: 'center',
-    gap: theme.spacing.sm,
+    justifyContent: 'space-between',
+    gap: theme.spacing.md,
   },
   eventRsvpQrTitle: {
     fontFamily: theme.typography.fontFamilyDisplay,
-    fontSize: theme.typography.semantic.body,
+    fontSize: theme.typography.semantic.bodyLg,
     fontWeight: theme.typography.weights.semibold,
   },
+  eventRsvpQrSubtitle: {
+    marginTop: 3,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+  },
+  eventRsvpQrImageFrame: {
+    alignSelf: 'center',
+    width: '100%',
+    maxWidth: 330,
+    aspectRatio: 1,
+    padding: theme.spacing.sm,
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.white,
+  },
   eventRsvpQrImage: {
-    width: 220,
-    height: 220,
+    width: '100%',
+    height: '100%',
   },
   eventRsvpBanner: {
     marginTop: theme.spacing.sm,

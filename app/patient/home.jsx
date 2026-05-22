@@ -20,6 +20,7 @@ export default function PatientHomeScreen() {
   const { unreadCount } = useNotifications({ role: 'patient', userId: user?.id, databaseUserId: profile?.user_id });
   const {
     latestWigRequest,
+    hasSubmittedRequest,
     isLoadingContext,
     error,
   } = usePatientWigRequest({ userId: user?.id });
@@ -41,7 +42,7 @@ export default function PatientHomeScreen() {
     ? Math.min(100, Math.round(((completedStepCount + currentStepCount) / trackingSteps.length) * 100))
     : (latestWigRequest?.req_id ? 20 : 0);
   const requestLabel = tracker?.summary?.label || latestWigRequest?.status || 'No active request';
-  const hasRequest = Boolean(latestWigRequest?.req_id);
+  const hasActiveRequest = Boolean(hasSubmittedRequest);
 
   const handleNavPress = (item) => {
     if (!item.route || item.route === '/patient/home') return;
@@ -108,7 +109,7 @@ export default function PatientHomeScreen() {
           </Text>
         </View>
 
-        {hasRequest ? (
+        {hasActiveRequest ? (
           <AppCard variant="patientTint" radius="xl" padding="lg" style={styles.statusCard}>
             <View style={styles.statusTopRow}>
               <View style={styles.statusBadge}>
@@ -164,25 +165,27 @@ export default function PatientHomeScreen() {
         ) : null}
 
         <View style={styles.quickGrid}>
-          <Pressable
-            accessibilityRole="button"
-            onPress={() => router.navigate('/patient/requests')}
-            style={({ pressed }) => [
-              styles.quickTile,
-              styles.quickTilePrimary,
-              { backgroundColor: roles.primaryActionBackground, borderColor: roles.primaryActionBackground },
-              pressed ? styles.tilePressed : null,
-            ]}
-          >
-            <View style={styles.quickTileTop}>
-              <View style={styles.quickTileIconPrimary}>
-                <AppIcon name="requests" state="inverse" />
+          {!hasActiveRequest ? (
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => router.navigate('/patient/requests')}
+              style={({ pressed }) => [
+                styles.quickTile,
+                styles.quickTilePrimary,
+                { backgroundColor: roles.primaryActionBackground, borderColor: roles.primaryActionBackground },
+                pressed ? styles.tilePressed : null,
+              ]}
+            >
+              <View style={styles.quickTileTop}>
+                <View style={styles.quickTileIconPrimary}>
+                  <AppIcon name="requests" state="inverse" />
+                </View>
+                <AppIcon name="chevronRight" state="inverse" />
               </View>
-              <AppIcon name="chevronRight" state="inverse" />
-            </View>
-            <Text style={[styles.quickTileTitle, { color: roles.primaryActionText }]}>Start New Wig Request</Text>
-            <Text style={[styles.quickTileBody, { color: roles.primaryActionText }]}>Begin your wig support journey.</Text>
-          </Pressable>
+              <Text style={[styles.quickTileTitle, { color: roles.primaryActionText }]}>Start New Wig Request</Text>
+              <Text style={[styles.quickTileBody, { color: roles.primaryActionText }]}>Begin your wig support journey.</Text>
+            </Pressable>
+          ) : null}
 
           <Pressable
             accessibilityRole="button"

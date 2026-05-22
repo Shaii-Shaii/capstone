@@ -1,7 +1,10 @@
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { useAuthSession } from '../hooks/useAuthSession';
 import { getResolvedSystemTheme } from '../features/auth/services/auth.service';
 import { emptyResolvedTheme, normalizeResolvedTheme } from '../design-system/theme';
+
+let resolvedThemeCache = null;
+let resolvedThemeInflight = null;
 
 const AuthContext = createContext({
   user: null,
@@ -20,29 +23,48 @@ const AuthContext = createContext({
 
 export const AuthProvider = ({ children }) => {
   const authState = useAuthSession();
-  const [resolvedTheme, setResolvedTheme] = useState(emptyResolvedTheme);
+  const [resolvedTheme, setResolvedTheme] = useState(resolvedThemeCache || emptyResolvedTheme);
 
-  const refreshResolvedTheme = async () => {
-    const result = await getResolvedSystemTheme();
-    if (result?.data) {
-      const nextTheme = normalizeResolvedTheme(result.data);
-      setResolvedTheme(nextTheme);
-      return nextTheme;
+  const refreshResolvedTheme = useCallback(async ({ force = false } = {}) => {
+    if (!force && resolvedThemeCache) {
+      setResolvedTheme(resolvedThemeCache);
+      return resolvedThemeCache;
     }
 
-    setResolvedTheme(emptyResolvedTheme);
-    return emptyResolvedTheme;
-  };
+    if (!force && resolvedThemeInflight) {
+      const inflightTheme = await resolvedThemeInflight;
+      setResolvedTheme(inflightTheme);
+      return inflightTheme;
+    }
+
+    resolvedThemeInflight = getResolvedSystemTheme()
+      .then((result) => {
+        const nextTheme = result?.data ? normalizeResolvedTheme(result.data) : emptyResolvedTheme;
+        resolvedThemeCache = nextTheme;
+        return nextTheme;
+      })
+      .catch(() => {
+        resolvedThemeCache = emptyResolvedTheme;
+        return emptyResolvedTheme;
+      })
+      .finally(() => {
+        resolvedThemeInflight = null;
+      });
+
+    const nextTheme = await resolvedThemeInflight;
+    setResolvedTheme(nextTheme);
+    return nextTheme;
+  }, []);
 
   useEffect(() => {
     refreshResolvedTheme();
-  }, []);
+  }, [refreshResolvedTheme]);
 
   const contextValue = useMemo(() => ({
     ...authState,
     resolvedTheme,
     refreshResolvedTheme,
-  }), [authState, resolvedTheme]);
+  }), [authState, refreshResolvedTheme, resolvedTheme]);
 
   return (
     <AuthContext.Provider value={contextValue}>

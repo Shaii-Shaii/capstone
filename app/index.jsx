@@ -300,10 +300,10 @@ function PublicLanding() {
                   },
                 ]}
               >
-                Donate hair. Track every step.
+                Donate Hair
               </Text>
               <Text style={[styles.landingSubtitle, { color: roles.bodyText }]}>
-                Start a hair donation, check your eligibility, and follow your impact in one app.
+                Check eligibility and track your donation in one app.
               </Text>
               <View style={styles.landingActionStack}>
                 <AppButton
@@ -322,7 +322,7 @@ function PublicLanding() {
                   enableHaptics={true}
                 />
                 <AppButton
-                  title="I Already Have an Account"
+                  title="Log In"
                   variant="outline"
                   size="lg"
                   style={styles.landingButtonSecondary}
@@ -341,10 +341,6 @@ function PublicLanding() {
             </View>
 
           </View>
-        </View>
-
-        <View style={[styles.landingFooter, { backgroundColor: roles.supportCardBackground }]}>
-          <Text style={[styles.landingFooterText, { color: roles.bodyText }]}>Every strand counts.</Text>
         </View>
       </View>
     </ScreenContainer>
@@ -1353,9 +1349,9 @@ const styles = StyleSheet.create({
   },
   landingTopBar: {
     width: '100%',
-    minHeight: 58,
+    minHeight: 54,
     paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.xs,
+    paddingVertical: 6,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -1367,13 +1363,13 @@ const styles = StyleSheet.create({
     maxWidth: 430,
     alignSelf: 'center',
     paddingHorizontal: theme.spacing.md,
-    paddingTop: theme.spacing.lg,
+    paddingTop: theme.spacing.md,
     paddingBottom: theme.spacing.xl,
-    gap: theme.spacing.lg,
+    gap: theme.spacing.md,
   },
   landingHeroSection: {
     width: '100%',
-    gap: theme.spacing.lg,
+    gap: theme.spacing.md,
   },
   landingDecorRow: {
     flexDirection: 'row',
@@ -1398,8 +1394,8 @@ const styles = StyleSheet.create({
   },
   landingArtWrap: {
     width: '100%',
-    height: 238,
-    borderRadius: 28,
+    height: 220,
+    borderRadius: 24,
     overflow: 'hidden',
     borderWidth: 1,
     borderColor: theme.colors.borderSubtle,
@@ -1535,13 +1531,13 @@ const styles = StyleSheet.create({
   landingCopyBlock: {
     width: '100%',
     alignItems: 'center',
-    gap: theme.spacing.md,
+    gap: theme.spacing.sm,
   },
   landingTitle: {
     textAlign: 'center',
     fontFamily: theme.typography.fontFamilyDisplay,
-    fontSize: 30,
-    lineHeight: 36,
+    fontSize: 24,
+    lineHeight: 30,
     fontWeight: theme.typography.weights.bold,
     color: theme.colors.textPrimary,
   },
@@ -1551,7 +1547,7 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.semantic.bodySm,
     lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
     color: theme.colors.textSecondary,
-    maxWidth: 330,
+    maxWidth: 320,
   },
   landingAssistant: {
     marginBottom: theme.spacing.md,
@@ -1559,15 +1555,15 @@ const styles = StyleSheet.create({
   landingActionStack: {
     width: '100%',
     gap: theme.spacing.sm,
-    marginTop: theme.spacing.sm,
+    marginTop: theme.spacing.xs,
   },
   landingButtonPrimary: {
-    minHeight: 48,
-    borderRadius: theme.radius.lg,
+    minHeight: 46,
+    borderRadius: 20,
   },
   landingButtonSecondary: {
-    minHeight: 48,
-    borderRadius: theme.radius.lg,
+    minHeight: 46,
+    borderRadius: 20,
   },
   landingButtonText: {
     fontSize: theme.typography.semantic.caption,

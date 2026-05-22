@@ -1,8 +1,7 @@
 import React from 'react';
 import { View, StyleSheet, Text, Pressable } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
-import * as Linking from 'expo-linking';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -17,7 +16,7 @@ import { useAuth } from '../../src/providers/AuthProvider';
 
 export default function ResetPasswordScreen() {
   const router = useRouter();
-  const resetUrl = Linking.useURL();
+  const routeParams = useLocalSearchParams();
   const { updatePassword, getCurrentSessionStatus, recoverSessionFromAuthUrl, isLoading } = useAuthActions();
   const { resolvedTheme } = useAuth();
   const roles = resolveThemeRoles(resolvedTheme);
@@ -30,9 +29,19 @@ export default function ResetPasswordScreen() {
     let mounted = true;
 
     const checkSession = async () => {
-      const initialUrl = resetUrl || await Linking.getInitialURL();
-      if (initialUrl) {
-        await recoverSessionFromAuthUrl(initialUrl);
+      const authParams = Object.entries(routeParams || {})
+        .flatMap(([key, value]) => (
+          Array.isArray(value)
+            ? value.map((entry) => [key, entry])
+            : [[key, value]]
+        ))
+        .filter(([, value]) => value != null && String(value).trim());
+
+      if (authParams.length) {
+        const query = new URLSearchParams(
+          authParams.map(([key, value]) => [key, String(value)])
+        ).toString();
+        await recoverSessionFromAuthUrl(`donivra://auth/reset-password?${query}`);
       }
 
       const result = await getCurrentSessionStatus();
@@ -46,7 +55,7 @@ export default function ResetPasswordScreen() {
     return () => {
       mounted = false;
     };
-  }, [getCurrentSessionStatus, recoverSessionFromAuthUrl, resetUrl]);
+  }, [getCurrentSessionStatus, recoverSessionFromAuthUrl, routeParams]);
 
   const { control, handleSubmit, formState: { errors } } = useForm({
     resolver: zodResolver(resetPasswordSchema),

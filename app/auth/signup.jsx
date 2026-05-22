@@ -47,32 +47,26 @@ export default function SignupScreen() {
       variant="auth"
       contentStyle={[styles.screenContent, { backgroundColor: roles.pageBackground }]}
     >
-      <View style={[styles.topBar, { backgroundColor: roles.defaultCardBackground }]}>
-        <View style={styles.topBrand}>
-          <SignupBrandLogo resolvedTheme={resolvedTheme} />
-          <Text style={[styles.topBrandText, { color: roles.primaryActionBackground }]}>{brandName}</Text>
-        </View>
-      </View>
-
       <View style={styles.signupCanvas}>
-        <View style={[styles.signupCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
-          <View style={[styles.cardAccent, { backgroundColor: roles.primaryActionBackground }]} />
-
+        <View style={styles.signupContent}>
           <View style={styles.brandSection}>
-            <View style={[styles.logoContainer, { backgroundColor: roles.iconPrimarySurface, borderColor: roles.defaultCardBorder }]}>
-              <SignupBrandLogo resolvedTheme={resolvedTheme} size="lg" />
+            <View style={styles.brandRow}>
+              <View style={[styles.logoContainer, { backgroundColor: roles.iconPrimarySurface, borderColor: roles.defaultCardBorder }]}>
+                <SignupBrandLogo resolvedTheme={resolvedTheme} />
+              </View>
+              <Text style={[styles.brandWordmark, { color: roles.primaryActionBackground }]}>{brandName}</Text>
             </View>
 
             <Text
               style={[
-                styles.brandName,
+                styles.brandTitle,
                 {
                   color: roles.headingText,
                   fontFamily: resolvedTheme?.secondaryFontFamily || theme.typography.fontFamilyDisplay,
                 },
               ]}
             >
-              Join {brandName}
+              Create account
             </Text>
 
             <Text
@@ -84,7 +78,7 @@ export default function SignupScreen() {
                 },
               ]}
             >
-              {'Start your journey of making every strand count. We are glad you are here.'}
+              {'Start tracking your hair donation journey.'}
             </Text>
           </View>
 
@@ -111,11 +105,6 @@ export default function SignupScreen() {
           </View>
         </View>
       </View>
-
-      <View style={[styles.footer, { backgroundColor: roles.supportCardBackground }]}>
-        <Text style={[styles.footerBrand, { color: roles.primaryActionBackground }]}>{brandName}</Text>
-        <Text style={[styles.footerText, { color: roles.bodyText }]}>Every strand counts.</Text>
-      </View>
     </ScreenContainer>
   );
 }
@@ -127,67 +116,37 @@ const styles = StyleSheet.create({
     paddingTop: 0,
     paddingBottom: 0,
   },
-  topBar: {
-    width: '100%',
-    minHeight: 64,
-    paddingHorizontal: theme.spacing.lg,
-    justifyContent: 'center',
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.borderSubtle,
-  },
-  topBrand: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.spacing.sm,
-    flexShrink: 1,
-  },
-  topBrandText: {
-    fontFamily: theme.typography.fontFamilyDisplay,
-    fontSize: theme.typography.semantic.title,
-    fontWeight: theme.typography.weights.bold,
-  },
   signupCanvas: {
     flex: 1,
     width: '100%',
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
     paddingHorizontal: theme.spacing.lg,
-    paddingVertical: theme.spacing.section,
+    paddingTop: theme.spacing.xxl,
+    paddingBottom: theme.spacing.section,
   },
-  signupCard: {
+  signupContent: {
     width: '100%',
     maxWidth: 430,
-    borderWidth: 1,
-    borderRadius: theme.radius.xxl,
-    paddingHorizontal: theme.spacing.xl,
-    paddingTop: theme.spacing.xxxl,
-    paddingBottom: theme.spacing.xl,
-    overflow: 'hidden',
-    shadowColor: theme.colors.shadow,
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.08,
-    shadowRadius: 26,
-    elevation: 6,
-  },
-  cardAccent: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 8,
+    paddingHorizontal: theme.spacing.xs,
   },
   brandSection: {
     alignItems: 'center',
     marginBottom: theme.spacing.lg,
-    gap: theme.spacing.xs,
+    gap: theme.spacing.sm,
+  },
+  brandRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+    marginBottom: theme.spacing.xs,
   },
   logoContainer: {
-    width: 64,
-    height: 64,
+    width: 44,
+    height: 44,
     borderRadius: theme.radius.full,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: theme.spacing.md,
     borderWidth: 1,
     overflow: 'hidden',
   },
@@ -200,9 +159,14 @@ const styles = StyleSheet.create({
     width: 56,
     height: 56,
   },
-  brandName: {
-    fontSize: 32,
-    lineHeight: 40,
+  brandWordmark: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    fontWeight: theme.typography.weights.bold,
+  },
+  brandTitle: {
+    fontSize: 28,
+    lineHeight: 34,
     fontWeight: theme.typography.weights.bold,
     textAlign: 'center',
   },
@@ -228,21 +192,5 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.bodySm,
     fontWeight: theme.typography.weights.semibold,
-  },
-  footer: {
-    width: '100%',
-    alignItems: 'center',
-    gap: theme.spacing.xs,
-    paddingHorizontal: theme.spacing.lg,
-    paddingVertical: theme.spacing.lg,
-  },
-  footerBrand: {
-    fontFamily: theme.typography.fontFamilyDisplay,
-    fontSize: theme.typography.semantic.body,
-    fontWeight: theme.typography.weights.semibold,
-  },
-  footerText: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
   },
 });

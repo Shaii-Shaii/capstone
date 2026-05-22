@@ -581,39 +581,78 @@ export const getCurrentAccountBundle = async (userId) => {
       throw new Error(profileError);
     }
 
-    const [{ data: patientProfile, error: patientError }, { data: staffProfile, error: staffError }] = await Promise.all([
-      ProfileAPI.fetchPatientDetailsByUserId(userId),
-      ProfileAPI.fetchHospitalStaffByUserId(userId),
-    ]);
+    const roleKey = String(profile?.role || '').trim().toLowerCase();
+    const databaseUserId = profile?.user_id || null;
 
-    if (!staffError && !staffProfile) {
-      logAppEvent('profile.redirect.no_hospital_representative', 'No Hospital_Representative row found for the current user during redirect check.', {
-        authUserId: userId,
-        databaseUserId: profile?.user_id || null,
-      }, 'info');
+    if (roleKey === 'donor') {
+      return {
+        profile,
+        patientProfile: null,
+        staffProfile: null,
+        hospitalProfile: null,
+        databaseUserId,
+        onboardingCompleted: null,
+        error: null,
+      };
     }
 
-    const linkedHospitalId = patientError
-      ? (staffError ? null : staffProfile?.hospital_id || null)
-      : (patientProfile?.hospital_id || staffProfile?.hospital_id || null);
+    let patientProfile = null;
+    let staffProfile = null;
+    let hospitalProfile = null;
+    let patientError = null;
+    let staffError = null;
+    let hospitalError = null;
+    let onboardingAuditLog = null;
 
-    const { data: hospitalProfile, error: hospitalError } = linkedHospitalId
-      ? await ProfileAPI.fetchHospitalRepresentativeById(linkedHospitalId)
-      : { data: null, error: null };
-    const { data: onboardingAuditLog } = profile?.user_id
-      ? await ProfileAPI.fetchLatestAuditLogByAction({
-          databaseUserId: profile.user_id,
-          action: 'onboarding.complete',
-          status: 'success',
-        })
-      : { data: null };
+    if (roleKey === 'patient') {
+      const patientResult = await ProfileAPI.fetchPatientDetailsByUserId(userId);
+      patientProfile = patientResult.data || null;
+      patientError = patientResult.error || null;
+    } else if (['admin', 'staff', 'qa_stylist', 'organization', 'super_admin', 'hospital', 'hospital_representative'].includes(roleKey)) {
+      const staffResult = await ProfileAPI.fetchHospitalStaffByUserId(userId);
+      staffProfile = staffResult.data || null;
+      staffError = staffResult.error || null;
+
+      if (!staffError && !staffProfile) {
+        logAppEvent('profile.redirect.no_hospital_representative', 'No Hospital_Representative row found for the current user during redirect check.', {
+          authUserId: userId,
+          databaseUserId,
+        }, 'info');
+      }
+    } else {
+      const [patientResult, staffResult] = await Promise.all([
+        ProfileAPI.fetchPatientDetailsByUserId(userId),
+        ProfileAPI.fetchHospitalStaffByUserId(userId),
+      ]);
+      patientProfile = patientResult.data || null;
+      patientError = patientResult.error || null;
+      staffProfile = staffResult.data || null;
+      staffError = staffResult.error || null;
+    }
+
+    const linkedHospitalId = patientProfile?.hospital_id || staffProfile?.hospital_id || null;
+
+    if (linkedHospitalId) {
+      const hospitalResult = await ProfileAPI.fetchHospitalRepresentativeById(linkedHospitalId);
+      hospitalProfile = hospitalResult.data || null;
+      hospitalError = hospitalResult.error || null;
+    }
+
+    if (databaseUserId && (roleKey === 'tentative' || !roleKey)) {
+      const auditResult = await ProfileAPI.fetchLatestAuditLogByAction({
+        databaseUserId,
+        action: 'onboarding.complete',
+        status: 'success',
+      });
+      onboardingAuditLog = auditResult.data || null;
+    }
 
     return {
       profile,
       patientProfile: patientError ? null : patientProfile,
       staffProfile: staffError ? null : staffProfile,
       hospitalProfile: hospitalError ? null : hospitalProfile,
-      databaseUserId: profile?.user_id || null,
+      databaseUserId,
       onboardingCompleted: Boolean(onboardingAuditLog?.log_id),
       error: null,
     };

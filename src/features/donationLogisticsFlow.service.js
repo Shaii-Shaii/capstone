@@ -290,13 +290,13 @@ export const validateDonationDetails = (donationDetails = {}, donationRequiremen
  * Build QR code payload for donation tracking
  */
 export const buildDonationQrPayload = ({
-  submissionCode = '',
+  donationReference = '',
   donorId = '',
   donationDetails = {},
   timestamp = null,
 } = {}) => {
   return {
-    submissionCode,
+    donationReference,
     donorId,
     donationTimestamp: timestamp || new Date().toISOString(),
     hairLength: donationDetails.hairLengthValue,
@@ -313,17 +313,17 @@ export const buildDonationQrPayload = ({
 export const buildDonationSubmittedNotification = ({
   donorId = '',
   donorName = '',
-  submissionCode = '',
+  donationReference = '',
   donationDetails = {},
   qrCodeUrl = '',
 } = {}) => {
   return {
     type: 'donation_submitted',
     title: 'New Donation Received',
-    message: `Donation from ${donorName} (${submissionCode}) - ${donationDetails.bundleQuantity} bundle(s)`,
+    message: `Donation from ${donorName} (${donationReference}) - ${donationDetails.bundleQuantity} bundle(s)`,
     metadata: {
       donorId,
-      submissionCode,
+      donationReference,
       qrCodeUrl,
       hairLength: donationDetails.hairLengthValue,
       bundleQuantity: donationDetails.bundleQuantity,
@@ -342,8 +342,8 @@ export const validateQrCodeScan = ({
 } = {}) => {
   const errors = [];
 
-  if (!qrPayload?.submissionCode) {
-    errors.push('Invalid QR code: Missing submission code');
+  if (!qrPayload?.donationReference) {
+    errors.push('Invalid QR code: Missing Donation reference');
     return { isValid: false, errors };
   }
 

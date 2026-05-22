@@ -120,7 +120,7 @@ export const buildDonorCertificateModel = ({
     remarks: certificateRow?.remarks || '',
     organizationName: organizationName || '',
     submissionId: submission?.submission_id || certificateRow?.submission_id || null,
-    submissionCode: submission?.submission_code || certificateRow?.certificate_number || 'Pending submission code',
+    donationReference: submission?.donation_reference || certificateRow?.certificate_number || 'Pending donation reference',
     bundleId: submission?.bundle_id || null,
     recipientPatientId: submission?.recipient_patient_id || null,
     donationDate: submission?.created_at || certificateRow?.issued_at || null,
@@ -176,7 +176,7 @@ export const getLatestQualifiedDonationCertificate = async ({ userId, profile })
         certificateRow: certificateResult.data,
         submission: linkedSubmission || {
           submission_id: certificateResult.data.submission_id,
-          submission_code: certificateResult.data.certificate_number || 'Issued certificate',
+          donation_reference: certificateResult.data.certificate_number || 'Issued certificate',
           created_at: certificateResult.data.issued_at,
           bundle_quantity: 0,
           status: 'Certificate issued',

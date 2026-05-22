@@ -372,7 +372,7 @@ export const login = async (email, password, expectedRole) => {
     };
 
     if (isExpectedLoginFailure(error)) {
-      logAppEvent('auth.login.failed', error?.message || 'Login failed.', loginLogExtras, 'warn');
+      logAppEvent('auth.login.failed', error?.message || 'Login failed.', loginLogExtras, 'info');
     } else {
       logAppError('auth.login', error, loginLogExtras);
     }

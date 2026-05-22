@@ -88,7 +88,7 @@ const buildDonorTracker = ({ submission, detail, logistics, qaAssessment, histor
       key: 'submission',
       title: 'Submission received',
       label: normalizeStatusLabel(submission.status, 'Submitted'),
-      description: `Hair submission ${submission.submission_code || 'record'} was created on ${formatDateTime(submission.created_at)}.`,
+      description: `Hair submission ${submission.donation_reference || 'record'} was created on ${formatDateTime(submission.created_at)}.`,
       state: getStepState({ index: 0, currentIndex, hasData: Boolean(submission) }),
     },
     {
@@ -131,7 +131,7 @@ const buildDonorTracker = ({ submission, detail, logistics, qaAssessment, histor
     {
       key: `submission-${submission.submission_id}`,
       title: 'Hair submission created',
-      description: `Submission code ${submission.submission_code || 'not available'}`,
+      description: `Donation reference ${submission.donation_reference || 'not available'}`,
       timestamp: formatDateTime(submission.created_at),
       badge: normalizeStatusLabel(submission.status, 'Submitted'),
     },
@@ -181,8 +181,8 @@ const buildDonorTracker = ({ submission, detail, logistics, qaAssessment, histor
       summary: {
         label: normalizeStatusLabel(latestStatus, 'Submitted'),
         tone: getToneFromStatus(latestStatus || ''),
-        referenceLabel: 'Submission code',
-        referenceValue: submission.submission_code || 'Not available',
+        referenceLabel: 'Donation reference',
+        referenceValue: submission.donation_reference || 'Not available',
         helperText: `Last updated ${formatDateTime(
           latestHistory?.updated_at
           || qaAssessment?.assessed_at
@@ -303,6 +303,53 @@ const buildPatientTracker = ({ patientDetails, wigRequest, latestAllocation }) =
     },
   ];
 
+  const patientCurrentIndex = isReadyForClaiming
+    ? 3
+    : isSentToHospital
+      ? 2
+      : isApproved || hasAllocation || hasWig
+        ? 1
+        : 0;
+  const patientSteps = steps.length ? [
+    {
+      key: 'approval',
+      title: 'Waiting for approval',
+      label: isApproved ? 'Approved' : normalizeStatusLabel(wigRequest?.status, 'Pending'),
+      description: isApproved
+        ? `Approved ${formatDateTime(wigRequest?.approved_at || wigRequest?.updated_at)}`
+        : 'Reviewing your request.',
+      state: getStepState({ index: 0, currentIndex: patientCurrentIndex, hasData: Boolean(wigRequest) }),
+    },
+    {
+      key: 'preparing',
+      title: 'Preparing wig',
+      label: hasAllocation || hasWig ? 'In progress' : 'Waiting',
+      description: latestAllocation?.notes
+        || (latestAllocation?.allocated_at
+          ? `Allocated ${formatDateTime(latestAllocation.allocated_at)}`
+          : wig?.wig_name || 'Preparing your wig.'),
+      state: getStepState({ index: 1, currentIndex: patientCurrentIndex, hasData: Boolean(isApproved || hasAllocation || hasWig) }),
+    },
+    {
+      key: 'dropoff',
+      title: 'Distributing to dropoff point',
+      label: normalizeStatusLabel(releaseStatus, 'Waiting'),
+      description: latestAllocation?.released_at
+        ? `Sent ${formatDateTime(latestAllocation.released_at)}`
+        : 'Delivery update will appear here.',
+      state: getStepState({ index: 2, currentIndex: patientCurrentIndex, hasData: isSentToHospital }),
+    },
+    {
+      key: 'received',
+      title: 'Received by patient',
+      label: isReadyForClaiming ? 'Received' : 'Not yet',
+      description: isReadyForClaiming
+        ? 'Wig received.'
+        : 'Marked once you receive it.',
+      state: getStepState({ index: 3, currentIndex: patientCurrentIndex, hasData: isReadyForClaiming }),
+    },
+  ] : [];
+
   const events = [
     wigRequest
       ? {
@@ -350,7 +397,7 @@ const buildPatientTracker = ({ patientDetails, wigRequest, latestAllocation }) =
             ? `Request date ${formatDateTime(wigRequest.request_date)}`
             : 'Waiting for the first wig request.',
       },
-      steps,
+      steps: patientSteps,
       events,
       watch: {
         patientId: patientDetails.patient_id,

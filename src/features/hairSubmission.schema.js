@@ -199,7 +199,7 @@ export const hairReviewSchema = z.object({
 });
 
 export const buildHairReviewDefaultValues = (analysis, answers = {}) => ({
-  declaredLength: analysis?.estimated_length != null
+  declaredLength: analysis?.estimated_length != null && Number(analysis.estimated_length) > 0
     ? String((Number(analysis.estimated_length) / 2.54).toFixed(1))
     : '',
   declaredColor: analysis?.detected_color || '',
@@ -222,7 +222,7 @@ export const hairResultCorrectionSchema = z.object({
 });
 
 export const buildHairResultCorrectionDefaultValues = (analysis) => ({
-  correctedLengthValue: analysis?.estimated_length != null
+  correctedLengthValue: analysis?.estimated_length != null && Number(analysis.estimated_length) > 0
     ? String((Number(analysis.estimated_length) / 2.54).toFixed(1))
     : '',
   correctedLengthUnit: 'in',

@@ -13,7 +13,7 @@ import { normalizeHairAnalyzerAnswers } from './hairSubmission.schema';
 import { logAppEvent, writeAuditLog } from '../utils/appErrors';
 import { canSubmitHairDonation, mapDonationPermissionError } from './donorCompliance.service';
 
-const buildSubmissionCode = () => `HS-${Date.now().toString(36).toUpperCase()}`;
+const buildDonationReference = () => `HS-${Date.now().toString(36).toUpperCase()}`;
 
 const buildStorageBucketMissingMessage = (bucketName = hairSubmissionStorageBucket) => (
   `Hair photo storage is not ready yet. Storage bucket "${bucketName}" was not found.`
@@ -79,6 +79,7 @@ const resolveAnalysisImageType = (viewKey = '') => {
   return [
     hairSubmissionImageTypes.frontView,
     hairSubmissionImageTypes.sideProfile,
+    hairSubmissionImageTypes.hairScalp,
     hairSubmissionImageTypes.hairEndsCloseUp,
   ].includes(normalizedViewKey)
     ? normalizedViewKey
@@ -294,6 +295,50 @@ const buildRecommendationRows = ({ submissionId, recommendations = [] }) => (
     }))
 );
 
+const normalizeFlowKey = (value = '') => (
+  String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, '')
+);
+
+const isUnclearScreeningValue = (value = '') => {
+  const key = normalizeFlowKey(value);
+  return (
+    !key
+    || key === 'unclear'
+    || key === 'unknown'
+    || key === 'notsure'
+    || key === 'notdetected'
+    || key === 'notapplicable'
+    || key === 'na'
+    || key === 'none'
+  );
+};
+
+const resolveAiScreeningConfidenceForDb = ({
+  confidenceScore,
+  estimatedLength,
+  detectedColor,
+  detectedTexture,
+  detectedDensity,
+}) => {
+  const parsedConfidence = Number(confidenceScore);
+  const normalizedConfidence = Number.isFinite(parsedConfidence) ? parsedConfidence : 0;
+  const parsedLength = Number(estimatedLength);
+  const violatesConfidentScreeningRule = (
+    isUnclearScreeningValue(detectedColor)
+    || isUnclearScreeningValue(detectedTexture)
+    || isUnclearScreeningValue(detectedDensity)
+    || !Number.isFinite(parsedLength)
+    || parsedLength <= 0
+  );
+
+  return violatesConfidentScreeningRule
+    ? Math.min(normalizedConfidence, 0.59)
+    : normalizedConfidence;
+};
+
 const stringifyCheckHairNotes = (notes = {}) => (
   JSON.stringify({
     source: 'CheckHair',
@@ -369,6 +414,13 @@ export const saveHairSubmissionFlow = async ({
     const normalizedEstimatedLength = aiAnalysis?.estimated_length != null
       ? Number(aiAnalysis.estimated_length)
       : null;
+    const pickNonEmpty = (...values) => {
+      for (const value of values) {
+        const text = String(value ?? '').trim();
+        if (text) return text;
+      }
+      return null;
+    };
     const normalizedConfidenceScore = aiAnalysis?.confidence_score != null
       ? Number(aiAnalysis.confidence_score)
       : null;
@@ -388,7 +440,7 @@ export const saveHairSubmissionFlow = async ({
     const submissionPayload = {
       user_id: userId,
       database_user_id: databaseUserId,
-      submission_code: buildSubmissionCode(),
+      donation_reference: buildDonationReference(),
       donation_source: 'CheckHair',
       donor_notes: stringifyCheckHairNotes({
         questionnaire_answers: normalizedQuestionnaire,
@@ -459,26 +511,109 @@ export const saveHairSubmissionFlow = async ({
       detailId: detail?.submission_detail_id || null,
     });
 
-    const imageRows = await uploadSelectedImages({
-      userId,
-      submissionId: submission.submission_id,
-      detailId: detail.submission_detail_id,
-      photos,
+    const { data: screening, error: screeningError } = await HairSubmissionAPI.createAiScreening({
+      submission_id: submission.submission_id,
+      estimated_length: declaredLength ?? (Number.isFinite(normalizedEstimatedLength) ? normalizedEstimatedLength : null),
+      detected_color: pickNonEmpty(confirmedValues.declaredColor, aiAnalysis.detected_color),
+      detected_texture: pickNonEmpty(confirmedValues.declaredTexture, aiAnalysis.detected_texture),
+      detected_density: pickNonEmpty(confirmedValues.declaredDensity, aiAnalysis.detected_density),
+      detected_condition: pickNonEmpty(confirmedValues.declaredCondition, aiAnalysis.detected_condition),
+      visible_damage_notes: aiAnalysis.visible_damage_notes || null,
+      confidence_score: resolveAiScreeningConfidenceForDb({
+        confidenceScore: normalizedConfidenceScore,
+        estimatedLength: declaredLength ?? (Number.isFinite(normalizedEstimatedLength) ? normalizedEstimatedLength : null),
+        detectedColor: pickNonEmpty(confirmedValues.declaredColor, aiAnalysis.detected_color),
+        detectedTexture: pickNonEmpty(confirmedValues.declaredTexture, aiAnalysis.detected_texture),
+        detectedDensity: pickNonEmpty(confirmedValues.declaredDensity, aiAnalysis.detected_density),
+      }),
+      shine_level: aiAnalysis.shine_level ?? null,
+      frizz_level: aiAnalysis.frizz_level ?? null,
+      dryness_level: aiAnalysis.dryness_level ?? null,
+      oiliness_level: aiAnalysis.oiliness_level ?? null,
+      damage_level: aiAnalysis.damage_level ?? null,
+      bald_spots_present: aiAnalysis.bald_spots_present === true,
+      affected_regions: Array.isArray(aiAnalysis.affected_regions) ? aiAnalysis.affected_regions : [],
+      hair_density_score: aiAnalysis.hair_density_score ?? null,
+      shedding_level: aiAnalysis.shedding_level || null,
+      visible_scalp_area: aiAnalysis.visible_scalp_area || null,
+      scalp_coverage_notes: aiAnalysis.scalp_coverage_notes || null,
+      improvement_tracking_status: aiAnalysis.improvement_tracking_status || null,
+      improvement_recommendation: aiAnalysis.improvement_recommendation || null,
+      decision: aiAnalysis.decision || null,
+      summary: aiAnalysis.summary || null,
     });
-    uploadedImageRows = imageRows;
 
-    const { error: imageInsertError } = await HairSubmissionAPI.createHairSubmissionImages(imageRows);
-    if (imageInsertError) {
-      throw new Error(imageInsertError.message || 'Unable to save the uploaded image references.');
-    }
-    hasImageReferences = true;
-
-    logAppEvent('hair_submission.save', 'Hair submission image references saved.', {
+    logAppEvent('hair_submission.save', 'AI screening payload prepared.', {
       userId,
       submissionId: submission?.submission_id || null,
-      detailId: detail?.submission_detail_id || null,
-      imageRowCount: imageRows.length,
+      analysisKeys: aiAnalysis ? Object.keys(aiAnalysis) : [],
+      dbPayloadKeys: [
+        'estimated_length',
+        'detected_color',
+        'detected_texture',
+        'detected_density',
+        'detected_condition',
+        'visible_damage_notes',
+        'confidence_score',
+        'shine_level',
+        'frizz_level',
+        'dryness_level',
+        'oiliness_level',
+        'damage_level',
+        'bald_spots_present',
+        'affected_regions',
+        'hair_density_score',
+        'shedding_level',
+        'visible_scalp_area',
+        'scalp_coverage_notes',
+        'improvement_tracking_status',
+        'improvement_recommendation',
+        'decision',
+        'summary',
+      ],
+      recommendationCount: Array.isArray(aiAnalysis?.recommendations) ? aiAnalysis.recommendations.length : 0,
     });
+
+    if (screeningError) {
+      throw new Error(screeningError.message || 'Unable to save the AI screening result.');
+    }
+    hasScreening = true;
+
+    logAppEvent('hair_submission.save', 'AI screening row created.', {
+      userId,
+      submissionId: submission?.submission_id || null,
+      screeningId: screening?.ai_screening_id || null,
+    });
+
+    try {
+      const imageRows = await uploadSelectedImages({
+        userId,
+        submissionId: submission.submission_id,
+        detailId: detail.submission_detail_id,
+        photos,
+      });
+      uploadedImageRows = imageRows;
+
+      const { error: imageInsertError } = await HairSubmissionAPI.createHairSubmissionImages(imageRows);
+      if (imageInsertError) {
+        throw new Error(imageInsertError.message || 'Unable to save the uploaded image references.');
+      }
+      hasImageReferences = true;
+
+      logAppEvent('hair_submission.save', 'Hair submission image references saved.', {
+        userId,
+        submissionId: submission?.submission_id || null,
+        detailId: detail?.submission_detail_id || null,
+        imageRowCount: imageRows.length,
+      });
+    } catch (imageSaveError) {
+      logAppEvent('hair_submission.save', 'Hair photo attachment failed; continuing to save AI screening.', {
+        userId,
+        submissionId: submission?.submission_id || null,
+        detailId: detail?.submission_detail_id || null,
+        message: imageSaveError?.message || 'Unable to attach hair photos.',
+      }, 'warn');
+    }
 
     const logisticsPayload = buildLogisticsRowPayload({
       submissionId: submission.submission_id,
@@ -508,76 +643,18 @@ export const saveHairSubmissionFlow = async ({
       });
     }
 
-    const { data: screening, error: screeningError } = await HairSubmissionAPI.createAiScreening({
-      submission_id: submission.submission_id,
-      estimated_length: Number.isFinite(normalizedEstimatedLength) ? normalizedEstimatedLength : null,
-      detected_color: aiAnalysis.detected_color || null,
-      detected_texture: aiAnalysis.detected_texture || null,
-      detected_density: aiAnalysis.detected_density || null,
-      detected_condition: aiAnalysis.detected_condition || null,
-      visible_damage_notes: aiAnalysis.visible_damage_notes || null,
-      confidence_score: Number.isFinite(normalizedConfidenceScore) ? normalizedConfidenceScore : null,
-      shine_level: aiAnalysis.shine_level ?? null,
-      frizz_level: aiAnalysis.frizz_level ?? null,
-      dryness_level: aiAnalysis.dryness_level ?? null,
-      oiliness_level: aiAnalysis.oiliness_level ?? null,
-      damage_level: aiAnalysis.damage_level ?? null,
-      decision: aiAnalysis.decision || null,
-      summary: aiAnalysis.summary || null,
-    });
-
-    logAppEvent('hair_submission.save', 'AI screening payload prepared.', {
-      userId,
-      submissionId: submission?.submission_id || null,
-      analysisKeys: aiAnalysis ? Object.keys(aiAnalysis) : [],
-      dbPayloadKeys: [
-        'estimated_length',
-        'detected_color',
-        'detected_texture',
-        'detected_density',
-        'detected_condition',
-        'visible_damage_notes',
-        'confidence_score',
-        'shine_level',
-        'frizz_level',
-        'dryness_level',
-        'oiliness_level',
-        'damage_level',
-        'decision',
-        'summary',
-      ],
-      recommendationCount: Array.isArray(aiAnalysis?.recommendations) ? aiAnalysis.recommendations.length : 0,
-    });
-
-    if (screeningError) {
-      throw new Error(screeningError.message || 'Unable to save the AI screening result.');
-    }
-    hasScreening = true;
-
-    logAppEvent('hair_submission.save', 'AI screening row created.', {
-      userId,
-      submissionId: submission?.submission_id || null,
-      screeningId: screening?.ai_screening_id || null,
-    });
-
-    const recommendationRows = buildRecommendationRows({
+    const recommendationRows = [];
+    const displayRecommendationRows = buildRecommendationRows({
       submissionId: submission.submission_id,
       recommendations: aiAnalysis.recommendations,
     });
 
-    if (recommendationRows.length) {
-      const { error: recommendationError } = await HairSubmissionAPI.createDonorRecommendations(recommendationRows);
-
-      if (recommendationError) {
-        throw new Error(recommendationError.message || 'Unable to save the donor guidance recommendations.');
-      }
-      hasRecommendations = true;
-
-      logAppEvent('hair_submission.save', 'Donor recommendations saved.', {
+    if (displayRecommendationRows.length) {
+      logAppEvent('hair_submission.save', 'AI recommendations kept as display-only; AI result is stored in AI_Screenings.', {
         userId,
         submissionId: submission?.submission_id || null,
-        recommendationCount: recommendationRows.length,
-      });
+        recommendationCount: displayRecommendationRows.length,
+      }, 'info');
     }
 
     const notificationEvents = buildImmediateNotificationEvents({
@@ -605,10 +682,10 @@ export const saveHairSubmissionFlow = async ({
       }
     }
 
-    await writeAuditLog({
+    void writeAuditLog({
       authUserId: userId,
       action: 'hair_submission.create',
-      description: `Created hair submission ${submission.submission_code || submission.submission_id}.`,
+      description: `Created hair submission ${submission.donation_reference || submission.submission_id}.`,
       resource: 'hair_submissions',
       status: 'success',
     });

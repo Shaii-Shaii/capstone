@@ -217,6 +217,8 @@ function HairAnalysisHomeModule() {
   const [submissions, setSubmissions] = React.useState(cachedHome?.submissions || []);
   const [logDetailDateKey, setLogDetailDateKey] = React.useState('');
   const [logDetailEntries, setLogDetailEntries] = React.useState([]);
+  const [isFirstCheckPromptVisible, setIsFirstCheckPromptVisible] = React.useState(false);
+  const [firstCheckPromptDismissed, setFirstCheckPromptDismissed] = React.useState(false);
   const [calendarMonth, setCalendarMonth] = React.useState(() => {
     const now = new Date();
     return new Date(now.getFullYear(), now.getMonth(), 1);
@@ -277,7 +279,7 @@ function HairAnalysisHomeModule() {
         setIsLoading(true);
       }
       setError('');
-      const result = await fetchHairSubmissionsByUserId(user.id, 120);
+      const result = await fetchHairSubmissionsByUserId(user.id, 30);
 
       if (!mounted) return;
 
@@ -414,6 +416,20 @@ function HairAnalysisHomeModule() {
     ? 'Finish your donor profile before starting your first hair check.'
     : "Start your hair health journey with a quick analysis of your hair's current condition.";
   const overlayIcon = !isProfileComplete ? 'account-alert-outline' : 'chart-line';
+
+  React.useEffect(() => {
+    const shouldShowPrompt = isProfileComplete
+      && isFirstHairCheck
+      && !isLoading
+      && !firstCheckPromptDismissed;
+
+    setIsFirstCheckPromptVisible(shouldShowPrompt);
+  }, [firstCheckPromptDismissed, isFirstHairCheck, isLoading, isProfileComplete]);
+
+  const dismissFirstCheckPrompt = () => {
+    setFirstCheckPromptDismissed(true);
+    setIsFirstCheckPromptVisible(false);
+  };
 
   return (
     <DashboardLayout
@@ -717,10 +733,24 @@ function HairAnalysisHomeModule() {
         />
       </View>
 
-      {isFirstHairCheck && !isLoading ? (
-        <Modal transparent animationType="fade" visible>
+      {isFirstCheckPromptVisible ? (
+        <Modal
+          transparent
+          animationType="fade"
+          visible={isFirstCheckPromptVisible}
+          onRequestClose={dismissFirstCheckPrompt}
+        >
           <View style={styles.firstTimeOverlay}>
-            <View style={[styles.firstTimeCard, { backgroundColor: roles.defaultCardBackground }]}>
+            <Pressable
+              style={styles.firstTimeBackdrop}
+              onPress={dismissFirstCheckPrompt}
+              accessibilityRole="button"
+              accessibilityLabel="Dismiss first hair check prompt"
+            />
+            <Pressable
+              style={[styles.firstTimeCard, { backgroundColor: roles.defaultCardBackground }]}
+              onPress={() => {}}
+            >
               <View style={[styles.firstTimeIconWrap, { backgroundColor: roles.pageBackground }]}>
                 <AppIcon name={overlayIcon} color={roles.primaryActionBackground} size="xl" />
               </View>
@@ -738,7 +768,7 @@ function HairAnalysisHomeModule() {
                 leading={<AppIcon name={resolvedPrimaryActionIcon} state="inverse" />}
                 fullWidth
               />
-            </View>
+            </Pressable>
           </View>
         </Modal>
       ) : null}
@@ -1181,6 +1211,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     padding: theme.spacing.lg,
+  },
+  firstTimeBackdrop: {
+    ...StyleSheet.absoluteFillObject,
   },
   firstTimeCard: {
     width: '100%',

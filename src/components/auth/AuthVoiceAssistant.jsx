@@ -112,7 +112,7 @@ const resolveAssistantReply = (spokenText, screen, brandName) => {
   if (wantsOtp) return 'OTP happens after signup. Register first, then enter the six digit code sent to your email.';
   if (wantsPatient) return 'For wig support, log in first. The app will ask what you need and request your patient code only if you have one.';
   if (wantsDonor) return 'For hair donation, log in first and choose the donation path when asked what you need.';
-  if (wantsHair) return 'For hair analysis, log in and open CheckHair. Capture front view, side profile, and hair ends with no face or hair accessories.';
+  if (wantsHair) return 'For hair analysis, log in and open CheckHair. Capture front view, side profile, and hair scalp with no face or hair accessories.';
 
   return `I can help with login, signup, OTP, donor setup, patient setup, or hair analysis. What would you like to do in ${brandName}?`;
 };

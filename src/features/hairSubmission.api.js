@@ -36,7 +36,7 @@ const hairSubmissionSelect = `
   submission_id:Submission_ID,
   user_id:User_ID,
   event_request_id:Event_Request_ID,
-  submission_code:Submission_Code,
+  event_attendee_id:Event_Attendee_ID,
   from_event:From_Event,
   donor_notes:Donor_Notes,
   status:Status,
@@ -90,6 +90,14 @@ const aiScreeningSelect = `
   dryness_level:Dryness_Level,
   oiliness_level:Oiliness_Level,
   damage_level:Damage_Level,
+  bald_spots_present:Bald_Spots_Present,
+  affected_regions:Affected_Regions,
+  hair_density_score:Hair_Density_Score,
+  shedding_level:Shedding_Level,
+  visible_scalp_area:Visible_Scalp_Area,
+  scalp_coverage_notes:Scalp_Coverage_Notes,
+  improvement_tracking_status:Improvement_Tracking_Status,
+  improvement_recommendation:Improvement_Recommendation,
   decision:Decision,
   summary:Summary,
   created_at:Created_At
@@ -229,6 +237,86 @@ const normalizeHairSubmissionStatusForDb = (status, fallback = 'Pending') => {
   return fallback;
 };
 
+const nonEmptyString = (value, fallback) => {
+  const normalized = String(value ?? '').trim();
+  return normalized || fallback;
+};
+
+const numberOrDefault = (value, fallback) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const isUnclearScreeningValue = (value = '') => {
+  const key = normalizeFlowKey(value);
+  return (
+    !key
+    || key === 'unclear'
+    || key === 'unknown'
+    || key === 'notsure'
+    || key === 'notdetected'
+    || key === 'notapplicable'
+    || key === 'na'
+    || key === 'none'
+  );
+};
+
+const screeningStringOrDefault = (value, fallback) => (
+  isUnclearScreeningValue(value) ? fallback : nonEmptyString(value, fallback)
+);
+
+const normalizeAiScreeningInsertPayload = (payload = {}) => {
+  const estimatedLength = numberOrDefault(payload?.estimated_length, 0);
+  const normalizedPayload = {
+    ...payload,
+    estimated_length: estimatedLength,
+    detected_color: screeningStringOrDefault(payload?.detected_color, 'Black'),
+    detected_texture: screeningStringOrDefault(payload?.detected_texture, 'Straight'),
+    detected_density: screeningStringOrDefault(payload?.detected_density, 'Medium'),
+    detected_condition: screeningStringOrDefault(payload?.detected_condition, 'Needs manual hair review'),
+    shedding_level: screeningStringOrDefault(payload?.shedding_level, 'mild'),
+    visible_scalp_area: screeningStringOrDefault(payload?.visible_scalp_area, 'low'),
+  };
+
+  return {
+    ...normalizedPayload,
+    confidence_score: confidenceForAiScreening(normalizedPayload),
+  };
+};
+
+const confidenceForAiScreening = (payload = {}) => {
+  const confidence = numberOrDefault(payload?.confidence_score, 0);
+  const estimatedLength = numberOrDefault(payload?.estimated_length, 0);
+  const violatesConfidentScreeningRule = (
+    isUnclearScreeningValue(payload?.detected_color)
+    || isUnclearScreeningValue(payload?.detected_texture)
+    || isUnclearScreeningValue(payload?.detected_density)
+    || estimatedLength <= 0
+  );
+
+  return violatesConfidentScreeningRule
+    ? Math.min(confidence, 0.59)
+    : confidence;
+};
+
+const levelOrDefault = (value, fallback) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(10, Math.max(1, Math.round(parsed)));
+};
+
+const densityScoreOrDefault = (value) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 50;
+  return Math.min(100, Math.max(0, parsed));
+};
+
+const stringArrayOrDefault = (value, fallback = ['none']) => (
+  Array.isArray(value) && value.length
+    ? value.map((item) => String(item || '').trim()).filter(Boolean)
+    : fallback
+);
+
 const resolveSubmissionUserId = async (userId, databaseUserId = null) => {
   const explicitDatabaseUserId = normalizeSubmissionUserId(databaseUserId);
   if (explicitDatabaseUserId) {
@@ -261,7 +349,7 @@ const resolveSubmissionUserId = async (userId, databaseUserId = null) => {
 };
 
 const createDonationCertificateNumber = (submission = null) => {
-  const submissionPart = String(submission?.submission_code || submission?.submission_id || Date.now())
+  const submissionPart = String(submission?.donation_reference || submission?.submission_id || Date.now())
     .replace(/[^a-z0-9]+/gi, '')
     .slice(-10)
     .toUpperCase();
@@ -298,6 +386,14 @@ const normalizeAiScreening = (row) => ({
   dryness_level: row?.dryness_level ?? null,
   oiliness_level: row?.oiliness_level ?? null,
   damage_level: row?.damage_level ?? null,
+  bald_spots_present: row?.bald_spots_present === true,
+  affected_regions: Array.isArray(row?.affected_regions) ? row.affected_regions : [],
+  hair_density_score: row?.hair_density_score ?? null,
+  shedding_level: row?.shedding_level || '',
+  visible_scalp_area: row?.visible_scalp_area || '',
+  scalp_coverage_notes: row?.scalp_coverage_notes || '',
+  improvement_tracking_status: row?.improvement_tracking_status || '',
+  improvement_recommendation: row?.improvement_recommendation || '',
   decision: row?.decision || '',
   summary: row?.summary || '',
   created_at: row?.created_at || null,
@@ -319,7 +415,8 @@ const normalizeHairSubmission = (row) => ({
   user_id: row?.user_id || null,
   event_request_id: row?.event_request_id || null,
   donation_drive_id: row?.event_request_id || row?.donation_drive_id || null,
-  submission_code: row?.submission_code || '',
+  event_attendee_id: row?.event_attendee_id || null,
+  donation_reference: row?.submission_id ? `DON-${row.submission_id}` : '',
   from_event: row?.from_event ?? null,
   donation_source: row?.donation_source || (row?.from_event ? 'Event RSVP' : 'Independent'),
   donor_notes: row?.donor_notes || '',
@@ -478,14 +575,30 @@ export const createHairSubmission = async (payload) => {
     table: hairSubmissionsTable,
     phase: 'create',
     userId,
-    columns: ['User_ID', 'Event_Request_ID', 'Submission_Code', 'From_Event', 'Donor_Notes', 'Status', 'Cut_At', 'Cut_By_User_ID'],
+    columns: ['User_ID', 'Event_Request_ID', 'Event_Attendee_ID', 'From_Event', 'Donor_Notes', 'Status', 'Cut_At', 'Cut_By_User_ID'],
   });
+
+  let eventRequestId = payload?.event_request_id || payload?.donation_drive_id || null;
+  const eventAttendeeId = payload?.event_attendee_id || payload?.registration_id || null;
+
+  // If caller only passes Event_Attendee_ID, resolve Event_Request_ID first so
+  // event-linked submissions always target the same singleton row.
+  if (!eventRequestId && eventAttendeeId) {
+    const attendeeLookup = await supabase
+      .from('Event_Attendees')
+      .select('Event_Request_ID')
+      .eq('Event_Attendee_ID', eventAttendeeId)
+      .maybeSingle();
+
+    if (!attendeeLookup.error && attendeeLookup.data?.Event_Request_ID) {
+      eventRequestId = attendeeLookup.data.Event_Request_ID;
+    }
+  }
 
   const insertPayload = {
     User_ID: userId,
-    Event_Request_ID: payload?.event_request_id || payload?.donation_drive_id || null,
-    Submission_Code: payload?.submission_code || null,
-    From_Event: payload?.from_event ?? Boolean(payload?.event_request_id || payload?.donation_drive_id),
+    Event_Request_ID: eventRequestId,
+    From_Event: payload?.from_event ?? Boolean(eventRequestId || eventAttendeeId),
     Donor_Notes: payload?.donor_notes || null,
     Status: normalizeHairSubmissionStatusForDb(payload?.status, 'Pending'),
     Cut_At: payload?.cut_at || payload?.submitted_at || null,
@@ -494,9 +607,23 @@ export const createHairSubmission = async (payload) => {
     Updated_At: getPhilippineDatabaseTimestamp(),
   };
 
-  const result = await supabase
-    .from(hairSubmissionsTable)
-    .insert([insertPayload])
+  if (eventAttendeeId) {
+    insertPayload.Event_Attendee_ID = eventAttendeeId;
+  }
+
+  const query = eventAttendeeId
+    ? supabase
+      .from(hairSubmissionsTable)
+      .upsert([insertPayload], { onConflict: 'Event_Attendee_ID' })
+    : eventRequestId
+      ? supabase
+        .from(hairSubmissionsTable)
+        .upsert([insertPayload], { onConflict: 'User_ID,Event_Request_ID' })
+      : supabase
+        .from(hairSubmissionsTable)
+        .insert([insertPayload]);
+
+  const result = await query
     .select(hairSubmissionSelect)
     .single();
 
@@ -516,7 +643,7 @@ export const createHairSubmissionDetail = async (payload) => {
 
   const result = await supabase
     .from(hairSubmissionDetailsTable)
-    .insert([{
+    .upsert([{
       Submission_ID: payload?.submission_id || null,
       Declared_Length: payload?.declared_length ?? null,
       Declared_Color: payload?.declared_color || null,
@@ -533,7 +660,7 @@ export const createHairSubmissionDetail = async (payload) => {
       Updated_By: payload?.updated_by || null,
       Created_At: getPhilippineDatabaseTimestamp(),
       Updated_At: getPhilippineDatabaseTimestamp(),
-    }])
+    }], { onConflict: 'Submission_ID' })
     .select(hairSubmissionDetailSelect)
     .single();
 
@@ -605,33 +732,43 @@ export const createHairSubmissionImages = async (rows) => {
 };
 
 export const createAiScreening = async (payload) => {
+  const screeningPayload = normalizeAiScreeningInsertPayload(payload);
+
   logHairQuery('createAiScreening', {
     table: aiScreeningsTable,
     phase: 'create',
     filters: { Submission_ID: payload?.submission_id },
-    columns: ['Submission_ID', 'Estimated_Length', 'Detected_Color', 'Detected_Texture', 'Detected_Density', 'Detected_Condition', 'Visible_Damage_Notes', 'Confidence_Score', 'Shine_Level', 'Frizz_Level', 'Dryness_Level', 'Oiliness_Level', 'Damage_Level', 'Decision', 'Summary'],
+    columns: ['Submission_ID', 'Estimated_Length', 'Detected_Color', 'Detected_Texture', 'Detected_Density', 'Detected_Condition', 'Visible_Damage_Notes', 'Confidence_Score', 'Shine_Level', 'Frizz_Level', 'Dryness_Level', 'Oiliness_Level', 'Damage_Level', 'Bald_Spots_Present', 'Affected_Regions', 'Hair_Density_Score', 'Shedding_Level', 'Visible_Scalp_Area', 'Scalp_Coverage_Notes', 'Improvement_Tracking_Status', 'Improvement_Recommendation', 'Decision', 'Summary'],
   });
 
   const result = await supabase
     .from(aiScreeningsTable)
-    .insert([{
+    .upsert([{
       Submission_ID: payload?.submission_id || null,
-      Estimated_Length: payload?.estimated_length ?? null,
-      Detected_Color: payload?.detected_color || null,
-      Detected_Texture: payload?.detected_texture || null,
-      Detected_Density: payload?.detected_density || null,
-      Detected_Condition: payload?.detected_condition || null,
-      Visible_Damage_Notes: payload?.visible_damage_notes || null,
-      Confidence_Score: payload?.confidence_score ?? null,
-      Shine_Level: payload?.shine_level ?? null,
-      Frizz_Level: payload?.frizz_level ?? null,
-      Dryness_Level: payload?.dryness_level ?? null,
-      Oiliness_Level: payload?.oiliness_level ?? null,
-      Damage_Level: payload?.damage_level ?? null,
-      Decision: payload?.decision || null,
-      Summary: payload?.summary || null,
+      Estimated_Length: screeningPayload.estimated_length,
+      Detected_Color: screeningPayload.detected_color,
+      Detected_Texture: screeningPayload.detected_texture,
+      Detected_Density: screeningPayload.detected_density,
+      Detected_Condition: screeningPayload.detected_condition,
+      Visible_Damage_Notes: nonEmptyString(payload?.visible_damage_notes, 'No visible damage notes reported.'),
+      Confidence_Score: screeningPayload.confidence_score,
+      Shine_Level: levelOrDefault(payload?.shine_level, 5),
+      Frizz_Level: levelOrDefault(payload?.frizz_level, 5),
+      Dryness_Level: levelOrDefault(payload?.dryness_level, 5),
+      Oiliness_Level: levelOrDefault(payload?.oiliness_level, 5),
+      Damage_Level: levelOrDefault(payload?.damage_level, 5),
+      Bald_Spots_Present: payload?.bald_spots_present === true,
+      Affected_Regions: stringArrayOrDefault(payload?.affected_regions),
+      Hair_Density_Score: densityScoreOrDefault(payload?.hair_density_score),
+      Shedding_Level: screeningPayload.shedding_level,
+      Visible_Scalp_Area: screeningPayload.visible_scalp_area,
+      Scalp_Coverage_Notes: nonEmptyString(payload?.scalp_coverage_notes, 'No clear scalp coverage issue was reported.'),
+      Improvement_Tracking_Status: nonEmptyString(payload?.improvement_tracking_status, 'Needs improvement tracking'),
+      Improvement_Recommendation: nonEmptyString(payload?.improvement_recommendation, 'Keep tracking hair length and condition with future CheckHair scans before donating.'),
+      Decision: nonEmptyString(payload?.decision, 'Improve hair condition'),
+      Summary: nonEmptyString(payload?.summary, 'Hair analysis completed with limited details. Final screening requires manual review.'),
       Created_At: getPhilippineDatabaseTimestamp(),
-    }])
+    }], { onConflict: 'Submission_ID' })
     .select(aiScreeningSelect)
     .single();
 
@@ -642,6 +779,22 @@ export const createAiScreening = async (payload) => {
 };
 
 export const createDonorRecommendations = async (rows) => {
+  const submissionIds = [...new Set(rows.map((row) => row?.submission_id).filter(Boolean))];
+
+  if (submissionIds.length) {
+    const deleteResult = await supabase
+      .from(donorRecommendationsTable)
+      .delete()
+      .in('Submission_ID', submissionIds);
+
+    if (deleteResult.error) {
+      return {
+        data: [],
+        error: deleteResult.error,
+      };
+    }
+  }
+
   const insertRows = rows.map((row) => ({
     Submission_ID: row?.submission_id || null,
     Title: row?.title || null,
@@ -1075,7 +1228,7 @@ export const fetchDonationTimelineProductionByBundleId = async (bundleId) => {
   const [bundleResult, wigResult] = await Promise.all([
     supabase
       .from(hairSubmissionBundlesTable)
-      .select('Bundle_ID, Status, Notes, Created_At, Updated_At, Wig_Completed_At, Submission_Code')
+      .select('Bundle_ID, Status, Notes, Created_At, Updated_At, Wig_Completed_At, Bundle_Waybill_Code')
       .eq('Bundle_ID', normalizedBundleId)
       .maybeSingle(),
     supabase
@@ -1124,7 +1277,7 @@ export const fetchDonationTimelineProductionByBundleId = async (bundleId) => {
         created_at: bundleResult.data.Created_At || null,
         updated_at: bundleResult.data.Updated_At || null,
         wig_completed_at: bundleResult.data.Wig_Completed_At || null,
-        submission_code: bundleResult.data.Submission_Code || '',
+        donation_reference: bundleResult.data.Bundle_Waybill_Code || '',
       } : null,
       wig: wigResult.data ? {
         wig_id: wigResult.data.Wig_ID,
@@ -1224,7 +1377,7 @@ export const fetchHairSubmissionsByUserId = async (userId, limit = 10) => {
     table: hairSubmissionsTable,
     phase: 'read',
     filters: { User_ID: resolvedUserId.userId },
-    columns: ['Submission_ID', 'User_ID', 'Event_Request_ID', 'Submission_Code', 'From_Event', 'Donor_Notes', 'Status', 'Bundle_ID', 'Cut_At', 'Cut_By_User_ID', 'Created_At', 'Updated_At'],
+    columns: ['Submission_ID', 'User_ID', 'Event_Request_ID', 'From_Event', 'Donor_Notes', 'Status', 'Bundle_ID', 'Cut_At', 'Cut_By_User_ID', 'Created_At', 'Updated_At'],
   });
 
   const result = await supabase
@@ -1375,7 +1528,7 @@ export const fetchLatestHairSubmissionByUserId = async (userId) => {
     table: hairSubmissionsTable,
     phase: 'read',
     filters: { User_ID: resolvedUserId.userId },
-    columns: ['Submission_ID', 'User_ID', 'Event_Request_ID', 'Submission_Code', 'From_Event', 'Donor_Notes', 'Status', 'Bundle_ID', 'Cut_At', 'Cut_By_User_ID', 'Created_At', 'Updated_At'],
+    columns: ['Submission_ID', 'User_ID', 'Event_Request_ID', 'From_Event', 'Donor_Notes', 'Status', 'Bundle_ID', 'Cut_At', 'Cut_By_User_ID', 'Created_At', 'Updated_At'],
   });
 
   const result = await supabase
@@ -1423,7 +1576,7 @@ export const fetchHairSubmissionById = async (submissionId) => {
     table: hairSubmissionsTable,
     phase: 'read',
     filters: { Submission_ID: submissionId },
-    columns: ['Submission_ID', 'User_ID', 'Event_Request_ID', 'Submission_Code', 'From_Event', 'Status'],
+    columns: ['Submission_ID', 'User_ID', 'Event_Request_ID', 'From_Event', 'Status'],
   });
 
   const result = await supabase
@@ -1575,14 +1728,13 @@ export const updateHairSubmissionById = async (submissionId, payload) => {
     table: hairSubmissionsTable,
     phase: 'update',
     filters: { Submission_ID: submissionId },
-    columns: ['Event_Request_ID', 'Submission_Code', 'From_Event', 'Donor_Notes', 'Status', 'Bundle_ID', 'Cut_At', 'Cut_By_User_ID'],
+    columns: ['Event_Request_ID', 'From_Event', 'Donor_Notes', 'Status', 'Bundle_ID', 'Cut_At', 'Cut_By_User_ID'],
   });
 
   const result = await supabase
     .from(hairSubmissionsTable)
     .update({
       Event_Request_ID: payload?.event_request_id ?? payload?.donation_drive_id ?? undefined,
-      Submission_Code: payload?.submission_code ?? undefined,
       From_Event: payload?.from_event ?? undefined,
       Donor_Notes: payload?.donor_notes ?? undefined,
       Bundle_ID: payload?.bundle_id ?? undefined,
