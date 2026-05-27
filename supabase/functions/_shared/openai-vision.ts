@@ -266,6 +266,28 @@ const toOpenAiInput = (systemInstruction: string, contents: Array<Record<string,
   return input;
 };
 
+const normalizeJsonSchemaForProvider = (schema: unknown): unknown => {
+  if (Array.isArray(schema)) {
+    return schema.map((item) => normalizeJsonSchemaForProvider(item));
+  }
+
+  if (!schema || typeof schema !== 'object') return schema;
+
+  const source = schema as Record<string, unknown>;
+  const normalized: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(source)) {
+    if (key === 'nullable') continue;
+    normalized[key] = normalizeJsonSchemaForProvider(value);
+  }
+
+  if (source.nullable === true && typeof source.type === 'string') {
+    normalized.type = [source.type, 'null'];
+  }
+
+  return normalized;
+};
+
 export const createStructuredResponse = async ({
   model = Deno.env.get('OPENAI_VISION_MODEL') || Deno.env.get('OPENAI_MODEL') || OPENAI_DEFAULT_VISION_MODEL,
   systemInstruction = '',
@@ -285,6 +307,7 @@ export const createStructuredResponse = async ({
   };
 
   const input = toOpenAiInput(systemInstruction, contents);
+  const normalizedResponseJsonSchema = normalizeJsonSchemaForProvider(responseJsonSchema);
   if (!input.length) {
     throw createOpenAiError('No valid OpenAI input content was provided.', diagnostics);
   }
@@ -320,7 +343,7 @@ export const createStructuredResponse = async ({
             type: 'json_schema',
             name: 'hair_analysis_result',
             strict: false,
-            schema: responseJsonSchema,
+            schema: normalizedResponseJsonSchema,
           },
         },
       }),

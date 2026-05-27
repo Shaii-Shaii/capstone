@@ -1929,8 +1929,8 @@ Deno.serve(async (request) => {
       providerResult = await createStructuredResponse({
         model,
         systemInstruction: analysisInstructions,
-        responseJsonSchema: coreAnalysisSchema,
-        maxOutputTokens: 1600,
+        responseJsonSchema: analysisSchema,
+        maxOutputTokens: 3600,
         temperature: 0.2,
         includeDiagnostics: true,
         contents,
@@ -1964,7 +1964,7 @@ Deno.serve(async (request) => {
           throw providerError;
         }
 
-        console.warn('[analyze-hair-submission] provider unavailable; returning low-confidence AI_Screenings fallback', {
+        console.warn('[analyze-hair-submission] provider unavailable; failing analysis instead of returning generic fallback', {
           concernType,
           model,
           provider: diagnostics.provider || null,
@@ -1974,69 +1974,78 @@ Deno.serve(async (request) => {
           message: providerMessage,
         });
 
-        const rawAnalysis = {
-          is_hair_detected: true,
-          invalid_image_reason: '',
-          missing_views: [],
-          per_view_notes: Array.from(providedViews).map((view) => ({
-            view,
-            clearly_visible: true,
-            notes: 'The AI provider was busy, so this view was saved for low-confidence progress tracking only.',
-          })),
-          estimated_length: 0,
-          detected_color: 'Black',
-          detected_texture: 'Straight',
-          detected_density: 'Medium',
-          detected_condition: 'Needs manual hair review',
-          visible_damage_notes: 'Hair is visible in the submitted photos. Detailed visible damage scoring should be confirmed during manual screening.',
-          confidence_score: 0.25,
-          shine_level: 5,
-          frizz_level: 5,
-          dryness_level: 5,
-          oiliness_level: 5,
-          damage_level: 5,
-          bald_spots_present: false,
-          affected_regions: ['none'],
-          hair_density_score: 50,
-          shedding_level: 'mild',
-          visible_scalp_area: 'low',
-          scalp_coverage_notes: 'Scalp coverage is marked for progress tracking from the visible scalp and part-line areas.',
-          improvement_tracking_status: 'Needs improvement tracking',
-          improvement_recommendation: 'Use gentle scalp care, avoid tight hairstyles, and track coverage or shedding changes over time.',
-          decision: IMPROVE_STATUS,
-          summary: 'Hair is visible in the submitted photos. This low-confidence screening uses conservative hair-care values and still needs manual review.',
-          length_assessment: 'Visible hair length should be confirmed during manual screening because the automated estimate was conservative.',
-          donation_readiness_note: '',
-      history_assessment: inferHistoryAssessment(historyContext, 'Needs manual hair review', null),
-          recommendations: [],
-        };
+        if (providerErrorType === 'quota_exceeded' || providerErrorType === 'temporary_unavailable') {
+          const rawAnalysis = {
+            is_hair_detected: true,
+            invalid_image_reason: '',
+            missing_views: [],
+            per_view_notes: Array.from(providedViews).map((view) => ({
+              view,
+              clearly_visible: true,
+              notes: 'The AI provider was busy, so this view was saved for low-confidence progress tracking only.',
+            })),
+            estimated_length: 0,
+            detected_color: 'Black',
+            detected_texture: 'Straight',
+            detected_density: 'Medium',
+            detected_condition: 'Needs manual hair review',
+            visible_damage_notes: 'Hair is visible in the submitted photos. Detailed visible damage scoring should be confirmed during manual screening.',
+            confidence_score: 0.25,
+            shine_level: 5,
+            frizz_level: 5,
+            dryness_level: 5,
+            oiliness_level: 5,
+            damage_level: 5,
+            bald_spots_present: false,
+            affected_regions: ['none'],
+            hair_density_score: 50,
+            shedding_level: 'mild',
+            visible_scalp_area: 'low',
+            scalp_coverage_notes: 'Scalp coverage is marked for progress tracking from the visible scalp and part-line areas.',
+            improvement_tracking_status: 'Needs improvement tracking',
+            improvement_recommendation: 'Use gentle scalp care, avoid tight hairstyles, and track coverage or shedding changes over time.',
+            decision: IMPROVE_STATUS,
+            summary: 'Hair analysis reached the AI provider, but the provider was busy. This low-confidence screening uses conservative values and still needs manual review.',
+            length_assessment: 'Visible hair length should be confirmed during manual screening because the automated estimate was conservative.',
+            donation_readiness_note: '',
+            history_assessment: inferHistoryAssessment(historyContext, 'Needs manual hair review', null),
+            recommendations: [],
+          };
 
-        const analysis = {
-          ...normalizeAnalysisPayload(
-            rawAnalysis,
-            Array.from(providedViews),
-            concernType,
-            donationRequirementContext,
-            questionnaireAnswers,
-            historyContext,
-          ),
-          recommendations: [],
-        };
+          const analysis = {
+            ...normalizeAnalysisPayload(
+              rawAnalysis,
+              Array.from(providedViews),
+              concernType,
+              donationRequirementContext,
+              questionnaireAnswers,
+              historyContext,
+            ),
+            recommendations: [],
+          };
 
-        return createJsonResponse({
-          success: true,
-          provider: String(diagnostics.provider || 'gemini'),
-          edge_function_invoked: true,
-          provider_request_attempted: diagnostics.provider_request_attempted ?? true,
-          provider_response_status: providerStatus,
-          provider_parse_success: true,
-          recovered_from_provider_error: true,
-          provider_error_type: providerErrorType,
-          analysis,
-        });
+          return createJsonResponse({
+            success: true,
+            provider: String(diagnostics.provider || 'gemini'),
+            provider_model: diagnostics.provider_model || null,
+            edge_function_invoked: true,
+            provider_request_attempted: diagnostics.provider_request_attempted ?? true,
+            provider_response_status: providerStatus,
+            provider_parse_success: true,
+            recovered_from_provider_error: true,
+            provider_error_type: providerErrorType,
+            fallback_from_provider: diagnostics.fallback_from_provider || null,
+            fallback_from_provider_error_type: diagnostics.fallback_from_provider_error_type || null,
+            fallback_from_provider_response_status: diagnostics.fallback_from_provider_response_status ?? null,
+            fallback_from_provider_model: diagnostics.fallback_from_provider_model || null,
+            analysis,
+          });
+        }
+
+        throw providerError;
       }
 
-      console.warn('[analyze-hair-submission] provider returned unparseable JSON; returning low-confidence fallback', {
+      console.warn('[analyze-hair-submission] provider returned unparseable JSON; failing analysis instead of returning generic fallback', {
         concernType,
         model,
         providerStatus,
@@ -2044,74 +2053,7 @@ Deno.serve(async (request) => {
         message: providerMessage,
       });
 
-      const focusedFallbackAnalysis = await runFocusedLengthFallback({
-        model,
-        contents,
-        providedViews: Array.from(providedViews),
-      });
-
-      const rawAnalysis = focusedFallbackAnalysis || {
-        is_hair_detected: true,
-        invalid_image_reason: '',
-        missing_views: [],
-        per_view_notes: Array.from(providedViews).map((view) => ({
-          view,
-          clearly_visible: true,
-          notes: 'The AI provider received this photo but returned JSON that could not be parsed, so this view needs manual confirmation.',
-        })),
-        estimated_length: 0,
-        detected_color: 'Black',
-        detected_texture: 'Straight',
-        detected_density: 'Medium',
-        detected_condition: 'Needs manual hair review',
-        visible_damage_notes: 'The AI provider response could not be parsed into structured hair-analysis details.',
-        confidence_score: 0.35,
-        shine_level: 5,
-        frizz_level: 5,
-        dryness_level: 5,
-        oiliness_level: 5,
-        damage_level: 5,
-        bald_spots_present: false,
-        affected_regions: ['none'],
-        hair_density_score: 50,
-        shedding_level: 'mild',
-        visible_scalp_area: 'low',
-        scalp_coverage_notes: 'Scalp coverage is marked for progress tracking from the visible scalp and part-line areas.',
-        improvement_tracking_status: 'Needs improvement tracking',
-        improvement_recommendation: 'Use gentle scalp care, avoid tight hairstyles, and track coverage or shedding changes over time.',
-        decision: IMPROVE_STATUS,
-        summary: 'Hair is visible in the submitted photos. This low-confidence screening uses conservative hair-care values and still needs manual review.',
-        length_assessment: 'Visible hair length should be confirmed during manual screening because the automated estimate was conservative.',
-        donation_readiness_note: '',
-        history_assessment: inferHistoryAssessment(historyContext, 'Needs manual hair review', null),
-        recommendations: [
-          {
-            title: 'Track Hair Progress',
-            recommendation_text: 'Keep hair loose, protect the ends, and monitor scalp coverage and shedding changes over time.',
-            priority_order: 1,
-          },
-        ],
-      };
-
-      const analysis = normalizeAnalysisPayload(
-        rawAnalysis,
-        Array.from(providedViews),
-        concernType,
-        donationRequirementContext,
-        questionnaireAnswers,
-        historyContext,
-      );
-
-      return createJsonResponse({
-        success: true,
-        provider: 'gemini',
-        edge_function_invoked: true,
-        provider_request_attempted: true,
-        provider_response_status: providerStatus,
-        provider_parse_success: false,
-        recovered_from_provider_parse_error: true,
-        analysis,
-      });
+      throw providerError;
     }
 
     const result = providerResult?.parsed || {};
@@ -2157,48 +2099,19 @@ Deno.serve(async (request) => {
       });
       focusedLengthFallbackRan = true;
 
-      rawAnalysis = focusedFallbackAnalysis || {
-        is_hair_detected: true,
-        invalid_image_reason: '',
-        missing_views: [],
-        per_view_notes: Array.from(providedViews).map((view) => ({
-          view,
-          clearly_visible: true,
-          notes: 'The AI provider returned an empty structured object, so this view needs manual confirmation.',
-        })),
-        estimated_length: 0,
-        detected_color: 'Black',
-        detected_texture: 'Straight',
-        detected_density: 'Medium',
-        detected_condition: 'Needs manual hair review',
-        visible_damage_notes: 'The AI provider did not return enough structured details for a confident condition reading.',
-        confidence_score: 0.35,
-        shine_level: 5,
-        frizz_level: 5,
-        dryness_level: 5,
-        oiliness_level: 5,
-        damage_level: 5,
-        bald_spots_present: false,
-        affected_regions: ['none'],
-        hair_density_score: 50,
-        shedding_level: 'mild',
-        visible_scalp_area: 'low',
-        scalp_coverage_notes: 'Scalp coverage is marked for progress tracking from the visible scalp and part-line areas.',
-        improvement_tracking_status: 'Needs improvement tracking',
-        improvement_recommendation: 'Use gentle scalp care, avoid tight hairstyles, and track coverage or shedding changes over time.',
-        decision: IMPROVE_STATUS,
-        summary: 'Hair is visible in the submitted photos. This low-confidence screening uses conservative hair-care values and still needs manual review.',
-        length_assessment: 'Visible hair length should be confirmed during manual screening because the automated estimate was conservative.',
-        donation_readiness_note: '',
-        history_assessment: inferHistoryAssessment(historyContext, 'Needs manual hair review', null),
-        recommendations: [
-          {
-            title: 'Track Hair Progress',
-            recommendation_text: 'Keep hair loose, protect the ends, and monitor scalp coverage and shedding changes over time.',
-            priority_order: 1,
-          },
-        ],
-      };
+      if (!focusedFallbackAnalysis) {
+        return createJsonResponse({
+          error: 'The AI provider returned an incomplete hair analysis. Please tap Try again so the photos can be analyzed by the provider again.',
+          edge_function_invoked: true,
+          provider: String(diagnostics.provider || 'gemini'),
+          provider_request_attempted: diagnostics.provider_request_attempted ?? true,
+          provider_response_status: diagnostics.provider_response_status ?? null,
+          provider_parse_success: diagnostics.provider_parse_success ?? false,
+          error_type: 'insufficient_detail',
+        }, 502);
+      }
+
+      rawAnalysis = focusedFallbackAnalysis;
     }
 
     const isEstimatedLengthMissing = normalizeNumber(rawAnalysis?.estimated_length) == null;
@@ -2273,6 +2186,7 @@ Deno.serve(async (request) => {
     return createJsonResponse({
       success: true,
       provider: String(diagnostics.provider || 'gemini'),
+      provider_model: diagnostics.provider_model || null,
       edge_function_invoked: true,
       provider_request_attempted: diagnostics.provider_request_attempted,
       provider_response_status: diagnostics.provider_response_status,
@@ -2287,7 +2201,12 @@ Deno.serve(async (request) => {
       provider_request_attempted?: boolean;
       provider_response_status?: number | null;
       provider_parse_success?: boolean;
+      provider_model?: string | null;
       provider_error_type?: string;
+      fallback_from_provider?: string | null;
+      fallback_from_provider_error_type?: string | null;
+      fallback_from_provider_response_status?: number | null;
+      fallback_from_provider_model?: string | null;
       retry_after_seconds?: number | null;
     } })?.diagnostics;
 
@@ -2295,10 +2214,15 @@ Deno.serve(async (request) => {
       error: safeError.message,
       edge_function_invoked: true,
       provider: diagnostics?.provider || 'gemini',
+      provider_model: diagnostics?.provider_model || null,
       provider_request_attempted: diagnostics?.provider_request_attempted ?? false,
       provider_response_status: diagnostics?.provider_response_status ?? null,
       provider_parse_success: diagnostics?.provider_parse_success ?? false,
       error_type: diagnostics?.provider_error_type || null,
+      fallback_from_provider: diagnostics?.fallback_from_provider || null,
+      fallback_from_provider_error_type: diagnostics?.fallback_from_provider_error_type || null,
+      fallback_from_provider_response_status: diagnostics?.fallback_from_provider_response_status ?? null,
+      fallback_from_provider_model: diagnostics?.fallback_from_provider_model || null,
       retry_after_seconds: diagnostics?.retry_after_seconds ?? null,
     }, safeError.status);
   }

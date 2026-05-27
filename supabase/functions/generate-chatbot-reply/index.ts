@@ -100,12 +100,12 @@ Deno.serve(async (request) => {
                   welcomeMessage: settings?.welcomeMessage || '',
                   fallbackMessage: settings?.fallbackMessage || '',
                 },
-                faqs: faqs.map((faq) => ({
+                faqs: faqs.map((faq: Record<string, unknown>) => ({
                   question: faq?.question || '',
                   answer: faq?.answer || '',
                   keywords: Array.isArray(faq?.keywords) ? faq.keywords : [],
                 })),
-                recent_messages: recentMessages.map((entry) => ({
+                recent_messages: recentMessages.map((entry: Record<string, unknown>) => ({
                   sender: entry?.sender || '',
                   text: entry?.text || '',
                   source: entry?.source || '',

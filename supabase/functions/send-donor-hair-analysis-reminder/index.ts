@@ -182,8 +182,8 @@ Deno.serve(async (request) => {
   }
 
   const submissionIds = (submissionResult.data || [])
-    .map((row) => row?.Submission_ID)
-    .filter((value): value is number => Number.isInteger(value));
+    .map((row: { Submission_ID?: number | null }) => row?.Submission_ID)
+    .filter((value: unknown): value is number => Number.isInteger(value));
 
   if (submissionIds.length) {
     const screeningResult = await supabase

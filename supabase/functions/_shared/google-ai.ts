@@ -1,7 +1,10 @@
+/// <reference path="../deno-globals.d.ts" />
+
 const GOOGLE_AI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
 const GOOGLE_AI_MAX_ATTEMPTS = 2;
 const GOOGLE_AI_RETRYABLE_STATUS = new Set([500, 502, 503, 504]);
 const GOOGLE_AI_DEFAULT_FALLBACK_MODELS = [
+  'gemini-2.5-flash-lite',
   'gemini-2.5-flash',
   'gemini-2.5-flash-preview-05-20',
   'gemini-2.5-flash-preview-04-17',
@@ -169,12 +172,43 @@ const classifyProviderErrorType = ({
   return 'provider_error';
 };
 
-const parseModelList = (value: string | null) => (
+const parseModelList = (value: string | null | undefined) => (
   String(value || '')
     .split(',')
     .map((item) => item.trim())
     .filter(Boolean)
 );
+
+const normalizeGeminiSchemaForProvider = (schema: unknown): unknown => {
+  if (Array.isArray(schema)) {
+    return schema.map((item) => normalizeGeminiSchemaForProvider(item));
+  }
+
+  if (!schema || typeof schema !== 'object') return schema;
+
+  const source = schema as Record<string, unknown>;
+  const normalized: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(source)) {
+    if (key === 'type') continue;
+    normalized[key] = normalizeGeminiSchemaForProvider(value);
+  }
+
+  const rawType = source.type;
+  if (Array.isArray(rawType)) {
+    const nonNullType = rawType.find((item) => String(item || '').toLowerCase() !== 'null');
+    if (nonNullType) {
+      normalized.type = String(nonNullType).toUpperCase();
+    }
+    if (rawType.some((item) => String(item || '').toLowerCase() === 'null')) {
+      normalized.nullable = true;
+    }
+  } else if (typeof rawType === 'string') {
+    normalized.type = rawType.toUpperCase();
+  }
+
+  return normalized;
+};
 
 const resolveGoogleAiModelCandidates = (primaryModel: string) => {
   const configuredFallbackModels = [
@@ -515,6 +549,7 @@ export const createStructuredResponse = async ({
 }: GenerateStructuredContentParams) => {
   const apiKeySource = Deno.env.get('GOOGLE_AI_API_KEY') ? 'GOOGLE_AI_API_KEY' : '';
   const apiKey = (Deno.env.get('GOOGLE_AI_API_KEY') || '').trim();
+  const normalizedResponseJsonSchema = normalizeGeminiSchemaForProvider(responseJsonSchema);
   const modelCandidates = resolveGoogleAiModelCandidates(model);
   const initialEndpoint = `${GOOGLE_AI_API_URL}/${modelCandidates[0]}:generateContent`;
   const diagnostics: GoogleAiDiagnostics = {
@@ -567,6 +602,7 @@ export const createStructuredResponse = async ({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'x-goog-api-key': apiKey,
         },
         body: JSON.stringify({
           systemInstruction: systemInstruction
@@ -579,7 +615,7 @@ export const createStructuredResponse = async ({
             temperature,
             maxOutputTokens,
             responseMimeType: 'application/json',
-            responseSchema: responseJsonSchema,
+            responseSchema: normalizedResponseJsonSchema,
           },
         }),
       });

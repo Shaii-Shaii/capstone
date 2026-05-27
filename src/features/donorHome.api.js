@@ -6,7 +6,6 @@ const donationDriveRequestsTable = 'Event_Requests';
 const donationDriveRegistrationsTable = 'Event_Attendees';
 const hairSubmissionsTable = 'Hair_Submissions';
 const hairSubmissionDetailsTable = 'Hair_Submission_Details';
-const aiScreeningsTable = 'AI_Screenings';
 
 const donationDriveSelect = `
   event_request_id:Event_Request_ID,
@@ -610,6 +609,7 @@ export const createDonationDriveRegistration = async ({
   driveId,
   databaseUserId,
   hasEligibleHairScan = null,
+  hasHairScanLog = null,
 }) => {
   const effectiveDatabaseUserId = await resolveDatabaseUserIdFromSession(databaseUserId);
 
@@ -622,7 +622,11 @@ export const createDonationDriveRegistration = async ({
   }
 
   if (hasEligibleHairScan === false) {
-    const eligibilityError = new Error('Scan your hair first so the system can confirm if you are eligible to join this donation event.');
+    const eligibilityError = new Error(
+      hasHairScanLog
+        ? 'Your latest AI hair screening is not eligible for donation yet. Please follow the recommendations and scan again before registering for a donation event.'
+        : 'Scan your hair first so the system can confirm if you are eligible to join this donation event.'
+    );
     eligibilityError.code = 'HAIR_ELIGIBILITY_REQUIRED';
     return {
       data: null,

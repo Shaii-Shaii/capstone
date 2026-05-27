@@ -303,6 +303,73 @@ function DetailIconRow({ icon, label, value, meta, badge, onPress }) {
   );
 }
 
+function HairEligibilitySection({
+  isRegisteredForDrive = false,
+  hasHairScanLog = false,
+  isAiEligible = false,
+  hairEligibilityMessage = '',
+  ended = false,
+  onScanPress,
+}) {
+  const { resolvedTheme } = useAuth();
+  const roles = resolveThemeRoles(resolvedTheme);
+
+  if (isRegisteredForDrive || ended) return null;
+
+  const isEligible = hasHairScanLog && isAiEligible;
+  const hasScannedButNotEligible = hasHairScanLog && !isAiEligible;
+
+  const icon = isEligible
+    ? 'check-circle-outline'
+    : hasScannedButNotEligible
+      ? 'alert-circle-outline'
+      : 'hair-dryer-outline';
+  const iconColor = isEligible
+    ? '#2f8f57'
+    : hasScannedButNotEligible
+      ? '#c87a12'
+      : roles.primaryActionBackground;
+  const surfaceColor = isEligible
+    ? '#edf7f1'
+    : hasScannedButNotEligible
+      ? '#fff8ec'
+      : roles.iconPrimarySurface;
+  const borderColor = isEligible
+    ? '#b5dec8'
+    : hasScannedButNotEligible
+      ? '#f0d49a'
+      : roles.defaultCardBorder;
+  const title = isEligible
+    ? 'Hair eligible for donation'
+    : hasScannedButNotEligible
+      ? 'Not eligible for donation yet'
+      : 'Hair scan required to register';
+
+  return (
+    <View style={[styles.eligibilityCard, { backgroundColor: surfaceColor, borderColor }]}>
+      <View style={[styles.eligibilityIconWrap, { backgroundColor: isEligible ? '#d0f0de' : hasScannedButNotEligible ? '#fdebc8' : roles.iconPrimarySurface }]}>
+        <MaterialCommunityIcons name={icon} size={22} color={iconColor} />
+      </View>
+      <View style={styles.eligibilityContent}>
+        <Text style={[styles.eligibilityTitle, { color: iconColor }]}>{title}</Text>
+        <Text style={[styles.eligibilityMessage, { color: roles.bodyText }]}>{hairEligibilityMessage}</Text>
+        {!hasHairScanLog && onScanPress ? (
+          <Pressable
+            onPress={onScanPress}
+            style={({ pressed }) => [styles.eligibilityScanLink, pressed ? styles.pressed : null]}
+            accessibilityRole="button"
+            accessibilityLabel="Go to Hair Scan"
+          >
+            <Text style={[styles.eligibilityScanLinkText, { color: roles.primaryActionBackground }]}>
+              Scan your hair now →
+            </Text>
+          </Pressable>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
 function EventDetailsPanel({
   drive,
   shownRegistrationCount = 0,
@@ -390,6 +457,7 @@ export default function DonorDriveDetailRoute() {
     hasOngoingDonation: false,
     ongoingDonationMessage: '',
     hasHairScanLog: false,
+    isAiEligible: false,
     hairEligibilityMessage: '',
     hasSubmittedDonationForDrive: false,
   });
@@ -473,9 +541,16 @@ export default function DonorDriveDetailRoute() {
       hasOngoingDonation: Boolean(donationModuleResult.hasOngoingDonation),
       ongoingDonationMessage: donationModuleResult.ongoingDonationMessage || '',
       hasHairScanLog: Boolean(donationModuleResult.latestScreening && donationModuleResult.latestAnalysisEntry?.submission),
+      isAiEligible: Boolean(donationModuleResult.isAiEligible),
       hairEligibilityMessage: donationModuleResult.latestScreening
-        ? 'Your latest hair scan will be used for this donation.'
-        : 'Scan your hair first so the system can confirm if you are eligible to join this donation event.',
+        ? donationModuleResult.isAiEligible
+          ? 'Your hair is cleared for this drive.'
+          : (() => {
+              const reason = String(donationModuleResult.latestAiEligibility?.reason || '').trim();
+              const firstSentence = reason.split(/[.!]/)[0].trim();
+              return firstSentence ? `${firstSentence}.` : 'Follow the scan recommendations and try again.';
+            })()
+        : 'Complete a CheckHair scan to check eligibility.',
       hasSubmittedDonationForDrive,
     });
     setIsLoading(false);
@@ -589,10 +664,10 @@ export default function DonorDriveDetailRoute() {
   const handleDriveRsvp = React.useCallback(async () => {
     if (!drive?.donation_drive_id || ended) return;
 
-    if (!hasHairScanLog && !drive.registration?.registration_id) {
+    if ((!hasHairScanLog || !donationFlowState.isAiEligible) && !drive.registration?.registration_id) {
       setFeedbackMessage(hairEligibilityMessage);
       setFeedbackVariant('info');
-      router.navigate('/donor/donations');
+      if (!hasHairScanLog) router.navigate('/donor/donations');
       return;
     }
 
@@ -626,7 +701,8 @@ export default function DonorDriveDetailRoute() {
     const result = await createDonationDriveRegistration({
       driveId: drive.donation_drive_id,
       databaseUserId: profile.user_id,
-      hasEligibleHairScan: hasHairScanLog,
+      hasEligibleHairScan: Boolean(donationFlowState.isAiEligible),
+      hasHairScanLog,
     });
     setIsSubmittingRsvp(false);
 
@@ -655,6 +731,7 @@ export default function DonorDriveDetailRoute() {
     hairEligibilityMessage,
     hasOngoingDonation,
     hasHairScanLog,
+    donationFlowState.isAiEligible,
     hasSubmittedDonationForDrive,
     loadRegistrationCount,
     ongoingDonationMessage,
@@ -667,6 +744,8 @@ export default function DonorDriveDetailRoute() {
     ? 'Event ended'
     : !hasHairScanLog && !drive?.registration?.registration_id
       ? 'Scan hair first'
+    : hasHairScanLog && !donationFlowState.isAiEligible && !drive?.registration?.registration_id
+      ? 'Not eligible yet'
     : hasOngoingDonation && hasSubmittedDonationForDrive && drive?.registration?.registration_id
           ? 'View My Donation'
         : drive?.registration?.registration_id
@@ -675,7 +754,10 @@ export default function DonorDriveDetailRoute() {
             : 'Registered'
           : 'Register to Attend';
 
-  const actionDisabled = isLoading || ended || (hasOngoingDonation && hasSubmittedDonationForDrive && !drive?.registration?.registration_id);
+  const actionDisabled = isLoading
+    || ended
+    || (hasHairScanLog && !donationFlowState.isAiEligible && !drive?.registration?.registration_id)
+    || (hasOngoingDonation && hasSubmittedDonationForDrive && !drive?.registration?.registration_id);
   const isRegisteredForDrive = Boolean(drive?.registration?.registration_id);
   const shownRegistrationCount = Math.max(registrationCount, isRegisteredForDrive ? 1 : 0);
   const shouldHideBottomCta = actionTitle === 'Registered';
@@ -765,6 +847,15 @@ export default function DonorDriveDetailRoute() {
             drive={drive}
             shownRegistrationCount={shownRegistrationCount}
             isRegisteredForDrive={isRegisteredForDrive}
+          />
+
+          <HairEligibilitySection
+            isRegisteredForDrive={isRegisteredForDrive}
+            hasHairScanLog={hasHairScanLog}
+            isAiEligible={donationFlowState.isAiEligible}
+            hairEligibilityMessage={hairEligibilityMessage}
+            ended={ended}
+            onScanPress={() => router.navigate('/donor/donations')}
           />
 
           {drive?.registration?.registration_id ? (
@@ -1212,5 +1303,46 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.bodySm,
     paddingVertical: theme.spacing.xs,
+  },
+  eligibilityCard: {
+    marginBottom: theme.spacing.lg,
+    borderWidth: 1,
+    borderRadius: theme.radius.xl,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.md,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.spacing.sm,
+  },
+  eligibilityIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  eligibilityContent: {
+    flex: 1,
+    paddingTop: 2,
+  },
+  eligibilityTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    fontWeight: theme.typography.weights.bold,
+    marginBottom: 3,
+  },
+  eligibilityMessage: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    lineHeight: theme.typography.compact.caption * 1.5,
+  },
+  eligibilityScanLink: {
+    marginTop: theme.spacing.xs,
+  },
+  eligibilityScanLinkText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    fontWeight: theme.typography.weights.semibold,
   },
 });

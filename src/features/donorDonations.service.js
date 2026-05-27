@@ -383,6 +383,23 @@ const evaluateAiDonationEligibility = ({ screening = null, detail = null, donati
     reason: '',
   };
 
+  // Trust the AI result stored in the DB directly — if Decision is 'Eligible for Hair Donation'
+  // or Improvement_Tracking_Status is 'Ready for Donation', skip all local re-checks.
+  const normalizeKey = (v) => String(v || '').trim().toLowerCase().replace(/[_\s\-]+/g, '');
+  const dbSaysEligible = isEligibleHairAnalysisDecision(screening?.decision || '');
+  const dbSaysReady = normalizeKey(screening?.improvement_tracking_status || '') === 'readyfordonation';
+  if (dbSaysEligible || dbSaysReady) {
+    return {
+      isQualified: true,
+      normalized_length_cm: normalizedLengthCm,
+      minimum_length_cm: minimumLengthCm,
+      reasons: [],
+      reason: dbSaysEligible
+        ? screening.decision
+        : getScreeningLogMessage(screening, { preferSummary: true }),
+    };
+  }
+
   if (screening && !isEligibleHairAnalysisDecision(screening?.decision || '') && !inferredEligibleFromFields) {
     conditionReasons.forEach((reason) => pushUniqueReason(reasons, reason));
 
@@ -2086,9 +2103,9 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
   }
 
   const [submissionsResult, drivesResult, certificateResult, donationRequirementResult] = await Promise.all([
-    fetchHairSubmissionsByUserId(userId, 12),
+    fetchHairSubmissionsByUserId(databaseUserId || userId, 12),
     fetchUpcomingDonationDrives(driveLimit, databaseUserId || null),
-    fetchLatestDonationCertificateByUserId(userId),
+    fetchLatestDonationCertificateByUserId(databaseUserId || userId),
     fetchLatestDonationRequirement(),
   ]);
 

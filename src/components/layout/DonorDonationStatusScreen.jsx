@@ -294,14 +294,6 @@ const MY_DONATION_FILTERS = [
 
 const DONATION_WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-const hasDonationQrMetadata = (submission = null) => (
-  Boolean(
-    submission?.submission_id
-    && submission?.donation_reference
-    && !['', 'not generated'].includes(String(submission?.qr_status || '').trim().toLowerCase())
-  )
-);
-
 const isSubmittedDonationStatus = (status = '') => (
   String(status || '').trim().toLowerCase().includes('submitted')
 );
@@ -671,6 +663,7 @@ function HairEligibilityGateCard({ roles, hasScreening, screeningLabel, onCheckH
 
 // â”€â”€â”€ Active joined drive â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+// eslint-disable-next-line no-unused-vars
 function DonationHomeOverview({
   roles,
   latestScreening,
@@ -1684,6 +1677,7 @@ function DonationEventDetailsScreen({
   isGeneratingRsvp = false,
   hasOngoingDonation = false,
   hasHairScanLog = false,
+  isHairEligible = false,
   hairEligibilityMessage = '',
   onCheckHair,
 }) {
@@ -1691,7 +1685,7 @@ function DonationEventDetailsScreen({
   const hasRsvp = Boolean(registration?.registration_id);
   const rsvpStatus = registration?.attendance_status || registration?.registration_status || 'Not registered';
   const checkedIn = isRsvpCheckedIn(registration);
-  const canSubmit = hasHairScanLog && hasRsvp && checkedIn;
+  const canSubmit = hasHairScanLog && isHairEligible && hasRsvp && checkedIn;
   const rsvpQrPayloadText = hasRsvp
     ? buildDriveInvitationQrPayload({ drive, registration })
     : '';
@@ -1763,7 +1757,7 @@ function DonationEventDetailsScreen({
             message="You already have a donation in progress. You can view this event, but you cannot register or submit until the current donation is finished or cancelled."
             style={styles.eventRsvpBanner}
           />
-        ) : !hasHairScanLog ? (
+        ) : !hasHairScanLog || !isHairEligible ? (
           <StatusBanner
             variant="info"
             message={hairEligibilityMessage || 'Scan your hair first so the system can confirm if you are eligible to join this donation event.'}
@@ -1791,14 +1785,16 @@ function DonationEventDetailsScreen({
               ? 'Donation in progress'
               : !hasHairScanLog
               ? 'Scan hair first'
+              : !isHairEligible
+              ? 'Not eligible yet'
               : !hasRsvp
               ? (isGeneratingRsvp ? 'Generating RSVP QR...' : 'Generate RSVP QR')
               : canSubmit
                 ? 'Submit my hair donation'
                 : 'Waiting for RSVP check-in'
           }
-          onPress={hasOngoingDonation ? undefined : !hasHairScanLog ? onCheckHair : !hasRsvp ? onGenerateRsvp : onSubmit}
-          disabled={isGeneratingRsvp || hasOngoingDonation || (hasHairScanLog && hasRsvp && !canSubmit)}
+          onPress={hasOngoingDonation ? undefined : !hasHairScanLog ? onCheckHair : !isHairEligible ? undefined : !hasRsvp ? onGenerateRsvp : onSubmit}
+          disabled={isGeneratingRsvp || hasOngoingDonation || (hasHairScanLog && !isHairEligible) || (hasHairScanLog && hasRsvp && !canSubmit)}
           loading={isGeneratingRsvp}
         />
       </View>
@@ -2823,7 +2819,7 @@ export function DonorDonationStatusScreen() {
   const [isSavingBundle, setIsSavingBundle] = React.useState(false);
   const [isCancelModalOpen, setIsCancelModalOpen] = React.useState(false);
   const [isCancellingDonation, setIsCancellingDonation] = React.useState(false);
-  const [isSubmitPreviewOpen, setIsSubmitPreviewOpen] = React.useState(false);
+  const [, setIsSubmitPreviewOpen] = React.useState(false);
   const [isGeneratingEventRsvp, setIsGeneratingEventRsvp] = React.useState(false);
   const [selectedDriveForDonation, setSelectedDriveForDonation] = React.useState(null);
   const [donationModuleScreen, setDonationModuleScreen] = React.useState(DONATION_MODULE_SCREEN.EVENTS);
@@ -2979,7 +2975,9 @@ export function DonorDonationStatusScreen() {
   const isAiEligible = Boolean(moduleData?.isAiEligible);
   const hasHairScanLog = Boolean(latestScreening && moduleData?.latestAnalysisEntry?.submission);
   const hairEligibilityMessage = latestScreening
-    ? 'Your latest hair scan will be used for this donation.'
+    ? isAiEligible
+      ? 'Your latest eligible hair scan will be used for this donation.'
+      : (moduleData?.latestAiEligibility?.reason || 'Your latest AI hair screening is not eligible for donation yet. Please follow the recommendations and scan again before donating.')
     : 'Scan your hair first so the system can confirm if you are eligible to join this donation event.';
   const hasOngoingDonation = Boolean(moduleData?.hasOngoingDonation);
   const effectiveDonationModuleScreen = (
@@ -3233,11 +3231,6 @@ export function DonorDonationStatusScreen() {
   ]);
   const hasSubmittedDonationQr = Boolean(
     activeDonationQrItems.length && activeDonationQrItems.every(isSubmittedDonationItem)
-  );
-  const hasDonationQrForOverview = (
-    hasGeneratedDonationQr
-    || hasSubmittedDonationQr
-    || activeDonationQrItems.some((item) => hasDonationQrMetadata(item.submission))
   );
   const myDonationItems = React.useMemo(() => {
     const driveById = new Map(
@@ -3701,6 +3694,7 @@ export function DonorDonationStatusScreen() {
     manualForm,
     manualPhoto,
     moduleData?.latestDonationRequirement,
+    moduleData?.latestSubmission,
     manualEditTarget,
     profile?.user_id,
     router,
@@ -3787,11 +3781,7 @@ export function DonorDonationStatusScreen() {
     await loadModuleData();
     setDonationModuleScreen(DONATION_MODULE_SCREEN.SUMMARY);
   }, [
-    bundleForm.donorType,
-    bundleForm.donorBirthdate,
-    bundleForm.donorName,
-    bundleForm.relationshipToSubmitter,
-    bundleForm.consentConfirmed,
+    bundleForm,
     loadModuleData,
     moduleData?.latestAnalysisEntry?.detail,
     moduleData?.latestDetail,
@@ -3998,15 +3988,7 @@ export function DonorDonationStatusScreen() {
     );
   }, [loadModuleData, profile?.user_id]);
 
-  const handleGenerateDonationQr = React.useCallback(async () => {
-    if (!activeDonationQrItems.length) {
-      setModuleFeedback({ message: 'No active donation record found.', variant: 'error' });
-      return;
-    }
-
-    setModuleFeedback({ message: 'Waybill QR is generated by staff from the website after submission.', variant: 'info' });
-  }, [activeDonationQrItems.length]);
-
+  // eslint-disable-next-line no-unused-vars
   const handleSubmitDriveDonation = React.useCallback((drive) => {
     if (!drive?.donation_drive_id) return;
 
@@ -4191,6 +4173,13 @@ export function DonorDonationStatusScreen() {
       });
       return;
     }
+    if (!isAiEligible) {
+      setModuleFeedback({
+        message: hairEligibilityMessage,
+        variant: 'info',
+      });
+      return;
+    }
     if (!profile?.user_id) {
       setModuleFeedback({ message: 'Your donor profile is required before RSVP generation.', variant: 'error' });
       return;
@@ -4200,7 +4189,7 @@ export function DonorDonationStatusScreen() {
     const result = await createDonationDriveRegistration({
       driveId: selectedDriveForDonation.donation_drive_id,
       databaseUserId: profile.user_id,
-      hasEligibleHairScan: hasHairScanLog,
+      hasEligibleHairScan: isAiEligible,
       hasHairScanLog,
     });
     setIsGeneratingEventRsvp(false);
@@ -4220,7 +4209,7 @@ export function DonorDonationStatusScreen() {
         : 'RSVP generated. Show your RSVP QR at check-in. Donation submission unlocks after staff marks you Present.',
       variant: 'success',
     });
-  }, [hairEligibilityMessage, hasHairScanLog, hasOngoingDonation, isGeneratingEventRsvp, profile?.user_id, refreshDriveRegistrationFromTable, selectedDriveForDonation]);
+  }, [hairEligibilityMessage, hasHairScanLog, hasOngoingDonation, isAiEligible, isGeneratingEventRsvp, profile?.user_id, refreshDriveRegistrationFromTable, selectedDriveForDonation]);
 
   React.useEffect(() => {
     if (donationModuleScreen !== DONATION_MODULE_SCREEN.EVENT_DETAILS) return;
@@ -4245,6 +4234,13 @@ export function DonorDonationStatusScreen() {
     }
 
     if (!hasHairScanLog) {
+      setModuleFeedback({
+        message: hairEligibilityMessage,
+        variant: 'info',
+      });
+      return;
+    }
+    if (!isAiEligible) {
       setModuleFeedback({
         message: hairEligibilityMessage,
         variant: 'info',
@@ -4670,6 +4666,7 @@ export function DonorDonationStatusScreen() {
           isGeneratingRsvp={isGeneratingEventRsvp}
           hasOngoingDonation={hasOngoingDonation}
           hasHairScanLog={hasHairScanLog}
+          isHairEligible={isAiEligible}
           hairEligibilityMessage={hairEligibilityMessage}
           onCheckHair={() => router.navigate('/donor/donations')}
           onSubmit={async () => {
@@ -4796,7 +4793,6 @@ export function DonorDonationStatusScreen() {
       />
     );
   }, [
-    displayDrive,
     effectiveDonationModuleScreen,
     donationPreviewItems,
     donorProfileMeta,
@@ -4815,6 +4811,7 @@ export function DonorDonationStatusScreen() {
     hairEligibilityMessage,
     hasHairScanLog,
     hasOngoingDonation,
+    isAiEligible,
     isAiEligible,
     isGeneratingEventRsvp,
     isGeneratingQr,

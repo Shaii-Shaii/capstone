@@ -134,7 +134,7 @@ const mapAnalysisError = (message = '', extras = {}) => {
   ) {
     return createErrorState(
       'AI Access Needs Admin Fix',
-      'Hair analysis is connected, but the OpenAI API key or model access is blocked. Ask an admin to update the Supabase OPENAI_API_KEY secret with a valid OpenAI key that has vision model access.'
+      'Hair analysis is connected, but the configured AI API key or model access is blocked. Ask an admin to check the Supabase AI provider secrets and vision model access.'
     );
   }
 

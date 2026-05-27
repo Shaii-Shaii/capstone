@@ -1,3 +1,5 @@
+/// <reference path="../deno-globals.d.ts" />
+
 import { createStructuredResponse as createGoogleStructuredResponse } from './google-ai.ts';
 import { createStructuredResponse as createOpenAiStructuredResponse } from './openai-vision.ts';
 
@@ -30,6 +32,7 @@ const getProviderErrorType = (error: unknown) => (
 export const createStructuredResponse = async (params: GenerateStructuredContentParams) => {
   const googleConfigured = hasGoogleAiKey();
   const openAiConfigured = hasOpenAiKey();
+  let googleFailureDiagnostics: Record<string, unknown> | null = null;
 
   if (googleConfigured) {
     try {
@@ -48,6 +51,7 @@ export const createStructuredResponse = async (params: GenerateStructuredContent
         providerErrorType: getProviderErrorType(error) || null,
         providerResponseStatus: (error as { diagnostics?: { provider_response_status?: number | null } })?.diagnostics?.provider_response_status ?? null,
       });
+      googleFailureDiagnostics = (error as { diagnostics?: Record<string, unknown> })?.diagnostics || null;
     }
   }
 
@@ -56,10 +60,24 @@ export const createStructuredResponse = async (params: GenerateStructuredContent
       requestedModel: resolveOpenAiFallbackModel(params.model) || null,
       googleConfigured,
     });
-    return await createOpenAiStructuredResponse({
-      ...params,
-      model: resolveOpenAiFallbackModel(params.model),
-    });
+    try {
+      return await createOpenAiStructuredResponse({
+        ...params,
+        model: resolveOpenAiFallbackModel(params.model),
+      });
+    } catch (error) {
+      if (googleFailureDiagnostics) {
+        const diagnostics = (error as { diagnostics?: Record<string, unknown> })?.diagnostics || {};
+        (error as { diagnostics?: Record<string, unknown> }).diagnostics = {
+          ...diagnostics,
+          fallback_from_provider: 'gemini',
+          fallback_from_provider_error_type: googleFailureDiagnostics.provider_error_type || null,
+          fallback_from_provider_response_status: googleFailureDiagnostics.provider_response_status ?? null,
+          fallback_from_provider_model: googleFailureDiagnostics.provider_model || null,
+        };
+      }
+      throw error;
+    }
   }
 
   throw new Error('No AI provider API key is configured. Set GOOGLE_AI_API_KEY or OPENAI_API_KEY.');

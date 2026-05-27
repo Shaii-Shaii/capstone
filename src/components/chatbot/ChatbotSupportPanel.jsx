@@ -20,7 +20,6 @@ import { ChatQuickSuggestions } from './ChatQuickSuggestions';
 import { useChatbot } from '../../hooks/useChatbot';
 import { theme } from '../../design-system/theme';
 import chatbotIcon from '../../assets/images/chatbot_icon.png';
-import { useAuth } from '../../providers/AuthProvider';
 
 const MAX_ATTACHMENTS = 3;
 const IMAGE_MEDIA_TYPES = ['images'];
@@ -64,7 +63,6 @@ export function ChatbotSupportPanel({
   variant = 'screen',
   queuedMessage = null,
 }) {
-  const { resolvedTheme } = useAuth();
   const scrollRef = useRef(null);
   const lastQueuedMessageIdRef = useRef(null);
   const [draftMessage, setDraftMessage] = useState('');
@@ -75,7 +73,6 @@ export function ChatbotSupportPanel({
     quickSuggestions,
     isLoadingChat,
     isSendingMessage,
-    refreshChat,
     sendMessage,
   } = useChatbot({ role, userId });
 

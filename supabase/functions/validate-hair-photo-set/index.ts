@@ -20,6 +20,12 @@ const validationSchema = {
   required: ['validation'],
 };
 
+type HairValidationImage = {
+  dataUrl?: string;
+  viewKey?: string;
+  viewLabel?: string;
+};
+
 const normalizeString = (value: unknown) => (
   typeof value === 'string' ? value.trim() : ''
 );
@@ -159,7 +165,7 @@ Deno.serve(async (request) => {
       },
     ];
 
-    images.slice(0, 3).forEach((image, index) => {
+    images.slice(0, 3).forEach((image: HairValidationImage, index: number) => {
       const label = normalizeString(image?.viewLabel || image?.viewKey) || `Photo ${index + 1}`;
       const dataUrl = normalizeString(image?.dataUrl);
       parts.push({ text: `Image ${index + 1}: ${label}` });

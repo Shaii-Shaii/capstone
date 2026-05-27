@@ -236,7 +236,7 @@ Deno.serve(async (request) => {
       throw new Error('Gemini did not return the required wig preview variants.');
     }
 
-    const normalizedPreviews = rawVariants.map((variant, index) =>
+    const normalizedPreviews = rawVariants.map((variant: Record<string, unknown>, index: number) =>
       normalizeVariant(variant || {}, visualReference, index)
     );
     const payload = buildPreviewPayload(normalizedPreviews);

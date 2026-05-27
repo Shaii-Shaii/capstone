@@ -307,25 +307,6 @@ const buildStructuredAnalysisError = (message, extras = {}) => {
   return error;
 };
 
-const isIncompleteProviderAnalysisMessage = (message = '') => {
-  const normalized = String(message || '').toLowerCase();
-  return (
-    normalized.includes('incomplete analysis')
-    || normalized.includes('response was incomplete')
-    || normalized.includes('ai returned an incomplete')
-  );
-};
-
-const isProviderJsonParseMessage = (message = '') => {
-  const normalized = String(message || '').toLowerCase();
-  return (
-    normalized.includes('invalid json')
-    || normalized.includes('could not be parsed')
-    || normalized.includes('returned an empty response')
-    || normalized.includes('json parse')
-  );
-};
-
 const buildLowConfidenceFallbackAnalysis = ({ images = [], message = '' } = {}) => {
   const providedViews = (images || [])
     .map((image) => image?.viewLabel || image?.viewKey || '')
@@ -664,36 +645,6 @@ export const analyzeHairPhotos = async ({
         willRetry: canRetry,
       }, 'warn');
 
-      if (
-        edgeFunctionInvoked
-        && providerRequestAttempted
-        && providerResponseStatus === 200
-        && (
-          isIncompleteProviderAnalysisMessage(resolvedErrorMessage)
-          || isProviderJsonParseMessage(resolvedErrorMessage)
-        )
-      ) {
-        const fallbackAnalysis = buildLowConfidenceFallbackAnalysis({
-          images: payload.images,
-          message: 'The result below is marked low-confidence because the AI provider response could not be parsed into the expected structured format.',
-        });
-
-        logAppEvent('hairAnalysis.invoke', 'Recovered from incomplete provider analysis with a low-confidence fallback result.', {
-          functionName: hairAnalysisFunctionName,
-          imageCount: payload.images.length,
-          providerResponseStatus,
-          providerParseSuccess,
-          attempt,
-        }, 'warn');
-
-        return {
-          analysis: fallbackAnalysis,
-          provider: 'openai',
-          error: null,
-          recoveredFromIncompleteProviderResponse: true,
-        };
-      }
-
       if (allowPhotoQualityFallback && isPhotoQualityAnalysisError(resolvedErrorMessage, normalizedErrorType)) {
         const fallbackAnalysis = buildPhotoOverrideFallbackAnalysis({
           images: payload.images,
@@ -773,6 +724,7 @@ export const analyzeHairPhotos = async ({
       functionName: hairAnalysisFunctionName,
       success: functionResult.data?.success ?? null,
       provider: functionResult.data?.provider || '',
+      providerModel: functionResult.data?.provider_model || null,
       edgeFunctionInvoked: functionResult.data?.edge_function_invoked ?? null,
       providerRequestAttempted: functionResult.data?.provider_request_attempted ?? null,
       providerResponseStatus: functionResult.data?.provider_response_status ?? null,
@@ -811,12 +763,7 @@ export const analyzeHairPhotos = async ({
     });
 
     if (isLowDetailPlaceholderAnalysis(normalizedAnalysis)) {
-      const fallbackAnalysis = buildLowConfidenceFallbackAnalysis({
-        images: payload.images,
-        message: 'The AI returned limited detail for this scan, so this result is marked low-confidence and should be used for progress tracking only.',
-      });
-
-      logAppEvent('hairAnalysis.invoke', 'Converted low-detail AI provider response into a low-confidence fallback.', {
+      logAppEvent('hairAnalysis.invoke', 'Rejected low-detail AI provider response instead of showing fallback values.', {
         functionName: hairAnalysisFunctionName,
         imageCount: payload.images.length,
         providerMarker: functionResult.data?.provider || '',
@@ -826,13 +773,13 @@ export const analyzeHairPhotos = async ({
       }, 'warn');
 
       return {
-        analysis: fallbackAnalysis,
+        analysis: null,
         provider: functionResult.data?.provider || 'openai',
-        error: null,
+        error: 'The AI returned incomplete hair details instead of a usable photo-specific analysis. Please tap Try again to analyze the photos again.',
+        errorType: 'insufficient_detail',
         edgeFunctionInvoked: true,
         providerRequestAttempted: functionResult.data?.provider_request_attempted ?? true,
         providerResponseStatus: functionResult.data?.provider_response_status ?? null,
-        recoveredFromIncompleteProviderResponse: true,
       };
     }
 
@@ -888,10 +835,15 @@ export const analyzeHairPhotos = async ({
     });
 
     if (!hasStructuredAnalysisContent(normalizedAnalysis)) {
-      return buildLowConfidenceFallbackAnalysis({
-        images: preparedImages,
-        message: 'Hair analysis used conservative default values because the AI returned limited detail.',
-      });
+      return {
+        analysis: null,
+        provider: functionResult.data?.provider || '',
+        error: 'The AI analysis response was missing the required hair details. Please try analyzing the photos again.',
+        errorType: 'insufficient_detail',
+        edgeFunctionInvoked: true,
+        providerRequestAttempted: functionResult.data?.provider_request_attempted ?? true,
+        providerResponseStatus: functionResult.data?.provider_response_status ?? null,
+      };
     }
 
     const providerMarker = functionResult.data?.provider || '';
@@ -937,16 +889,6 @@ export const analyzeHairPhotos = async ({
       errorType,
       providerResponseStatus
     );
-    const canRecoverIncompleteProviderResponse = (
-      edgeFunctionInvoked
-      && providerRequestAttempted
-      && providerResponseStatus === 200
-      && (
-        isIncompleteProviderAnalysisMessage(resolvedMessage)
-        || isProviderJsonParseMessage(resolvedMessage)
-      )
-    );
-
     if (allowPhotoQualityFallback && isPhotoQualityAnalysisError(resolvedMessage, errorType)) {
       const fallbackAnalysis = buildPhotoOverrideFallbackAnalysis({
         images,
@@ -970,59 +912,6 @@ export const analyzeHairPhotos = async ({
         providerRequestAttempted,
         providerResponseStatus,
         recoveredFromPhotoQualityError: true,
-      };
-    }
-
-    if (canRecoverIncompleteProviderResponse) {
-      const fallbackAnalysis = buildLowConfidenceFallbackAnalysis({
-        images,
-        message: 'The result below is marked low-confidence because the AI provider response could not be parsed into the expected structured format.',
-      });
-
-      logAppEvent('hairAnalysis.analyzeHairPhotos', 'Recovered from incomplete AI provider analysis in catch path.', {
-        imageCount: images?.length || 0,
-        functionName: hairAnalysisFunctionName,
-        edgeFunctionInvoked,
-        providerRequestAttempted,
-        providerResponseStatus,
-        errorType: errorType || null,
-      }, 'warn');
-
-      return {
-        analysis: fallbackAnalysis,
-        provider: 'openai',
-        error: null,
-        edgeFunctionInvoked,
-        providerRequestAttempted,
-        providerResponseStatus,
-        recoveredFromIncompleteProviderResponse: true,
-      };
-    }
-
-    if (isRateLimitError || isTemporaryBusyError) {
-      const fallbackAnalysis = buildLowConfidenceFallbackAnalysis({
-        images,
-        message: 'The result below is marked low-confidence because the AI provider was busy. Save it for progress tracking, then scan again later for a stronger result.',
-      });
-
-      logAppEvent('hairAnalysis.analyzeHairPhotos', 'Recovered from provider busy response with low-confidence AI screening fallback.', {
-        imageCount: images?.length || 0,
-        functionName: hairAnalysisFunctionName,
-        edgeFunctionInvoked,
-        providerRequestAttempted,
-        providerResponseStatus,
-        errorType: isRateLimitError ? 'quota_exceeded' : 'temporary_unavailable',
-        retryAfterSeconds: Number.isFinite(retryAfterSeconds) ? retryAfterSeconds : null,
-      }, 'warn');
-
-      return {
-        analysis: fallbackAnalysis,
-        provider: 'gemini',
-        error: null,
-        edgeFunctionInvoked,
-        providerRequestAttempted,
-        providerResponseStatus,
-        recoveredFromProviderBusyResponse: true,
       };
     }
 
