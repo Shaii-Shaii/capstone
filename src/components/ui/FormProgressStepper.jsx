@@ -1,0 +1,133 @@
+import React from 'react';
+import { StyleSheet, Text, View } from 'react-native';
+import { theme } from '../../design-system/theme';
+import { useAuth } from '../../providers/AuthProvider';
+
+export const FormProgressStepper = ({ steps = [], currentStep = 0, style }) => {
+  const { resolvedTheme } = useAuth();
+  const safeSteps = Array.isArray(steps) ? steps : [];
+  const activeIndex = Math.max(0, Math.min(currentStep, Math.max(safeSteps.length - 1, 0)));
+  const activeColor = resolvedTheme?.primaryColor || theme.colors.brandPrimary;
+  const activeSoftColor = resolvedTheme?.secondaryColor || theme.colors.brandPrimaryMuted;
+
+  return (
+    <View style={[styles.container, style]}>
+      <View style={styles.trackRow}>
+        {safeSteps.map((step, index) => {
+          const isCompleted = index < activeIndex;
+          const isActive = index === activeIndex;
+          const isHighlighted = isCompleted || isActive;
+
+          return (
+            <React.Fragment key={step.key || step.label || index}>
+              <View style={styles.nodeWrap}>
+                <View style={[
+                  styles.node,
+                  isCompleted ? [styles.nodeCompleted, { backgroundColor: activeColor, borderColor: activeColor }] : null,
+                  isActive ? [styles.nodeActive, { borderColor: activeColor, backgroundColor: activeSoftColor }] : null,
+                ]}>
+                  <Text style={[
+                    styles.nodeText,
+                    isCompleted ? styles.nodeTextCompleted : null,
+                    isActive ? [styles.nodeTextActive, { color: activeColor }] : null,
+                  ]}>
+                    {index + 1}
+                  </Text>
+                </View>
+                <Text numberOfLines={1} style={[
+                  styles.label,
+                  isHighlighted ? styles.labelActive : null,
+                ]}>
+                  {step.shortLabel || step.label || `Step ${index + 1}`}
+                </Text>
+              </View>
+
+              {index < safeSteps.length - 1 ? (
+                <View style={styles.connectorWrap}>
+                  <View style={[styles.connector, index < activeIndex ? [styles.connectorCompleted, { backgroundColor: activeColor }] : null]} />
+                </View>
+              ) : null}
+            </React.Fragment>
+          );
+        })}
+      </View>
+
+      {safeSteps[activeIndex] ? <Text style={styles.caption}>{safeSteps[activeIndex].label}</Text> : null}
+    </View>
+  );
+};
+
+const styles = StyleSheet.create({
+  container: {
+    gap: theme.spacing.xs,
+  },
+  trackRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  nodeWrap: {
+    flex: 1,
+    minWidth: 0,
+    alignItems: 'center',
+    gap: 6,
+  },
+  node: {
+    width: 30,
+    height: 30,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.surfaceSoft,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+  },
+  nodeCompleted: {
+    backgroundColor: theme.colors.brandPrimary,
+    borderColor: theme.colors.brandPrimary,
+  },
+  nodeActive: {
+    borderColor: theme.colors.brandPrimary,
+    backgroundColor: theme.colors.brandPrimaryMuted,
+  },
+  nodeText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 11,
+    fontWeight: theme.typography.weights.bold,
+    color: theme.colors.textSecondary,
+  },
+  nodeTextCompleted: {
+    color: theme.colors.textInverse,
+  },
+  nodeTextActive: {
+    color: theme.colors.brandPrimary,
+  },
+  label: {
+    textAlign: 'center',
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 11,
+    lineHeight: 14,
+    color: theme.colors.textMuted,
+  },
+  labelActive: {
+    color: theme.colors.textPrimary,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  connectorWrap: {
+    flex: 1,
+    paddingTop: 15,
+  },
+  connector: {
+    height: 2,
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.borderSubtle,
+  },
+  connectorCompleted: {
+    backgroundColor: theme.colors.brandPrimary,
+  },
+  caption: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    color: theme.colors.textSecondary,
+    fontWeight: theme.typography.weights.medium,
+  },
+});

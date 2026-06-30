@@ -1,0 +1,1008 @@
+import React from 'react';
+import {
+  ActivityIndicator,
+  Image,
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { AppCard } from '../ui/AppCard';
+import { AppIcon } from '../ui/AppIcon';
+import { SectionTitleRow } from '../ui/SectionTitleRow';
+import {
+  fetchDonorRecommendationsBySubmissionId,
+  getHairSubmissionImageSignedUrl,
+} from '../../features/hairSubmission.api';
+import { resolveThemeRoles, theme } from '../../design-system/theme';
+import { useAuth } from '../../providers/AuthProvider';
+
+const CAPTURE_NOISE_PATTERNS = [
+  'retake', 'lighting', 'image quality', 'photo quality', 'clearer photo',
+  'clear photo', 'clear image', 'better photo', 'better image', 'capture',
+  'resubmit', 'provide a better', 'ensure all views', 'ensure the photo',
+  'improve the photo', 'improve lighting', 'provide clear', 'upload',
+  'reupload', 'all views are', 'photo is clear', 'visible in the',
+];
+const CARE_SAFETY_NOTE = 'If you have allergies, scalp irritation, or sensitivity, consult a qualified hair or scalp care professional before trying new ingredients.';
+
+const ADVERTISED_RECOMMENDATION_PATTERNS = [
+  /\bDove\b/gi,
+  /\bCream Silk\b/gi,
+  /\bHuman Nature\b/gi,
+  /\bVitress\b/gi,
+  /\bHead\s*&\s*Shoulders\b/gi,
+  /\bSelsun Blue\b/gi,
+  /\bPantene(?:\s+Pro-V)?\b/gi,
+  /\bWatsons\b/gi,
+  /\bLazada(?:\.ph)?\b/gi,
+  /\bShopee(?:\.ph)?\b/gi,
+];
+const RECOMMENDATION_ORIGIN_PATTERNS = [
+  /Philippine product options? to consider:.*?(?:\.|$)/gi,
+  /(?:neutral care|generic|local|country)?\s*product options? to consider:.*?(?:\.|$)/gi,
+  /\bPhilippine(?:s)?\b/gi,
+  /\b(?:country|locally|local)\s+(?:product|care)\s+options?\b/gi,
+  /\b[A-Z][a-z]+(?:n|ian|ese|ish|i)\s+(?:product|brand|care)\s+options?\b/g,
+  /Ingredient or product-type options to consider:.*?(?:\.|$)/gi,
+];
+
+const cleanRecommendationText = (value = '') => {
+  let text = String(value || '').replace(/\s+/g, ' ').trim();
+  RECOMMENDATION_ORIGIN_PATTERNS.forEach((pattern) => {
+    text = text.replace(pattern, '');
+  });
+  ADVERTISED_RECOMMENDATION_PATTERNS.forEach((pattern) => {
+    text = text.replace(pattern, 'a suitable product type');
+  });
+  text = text.replace(/\s+/g, ' ').trim();
+  if (/ingredients that may help/i.test(text) && !/consult a qualified hair or scalp care professional/i.test(text)) {
+    text = `${text} ${CARE_SAFETY_NOTE}`;
+  }
+  return text;
+};
+
+const hasNegatedCareConcern = (text = '') => (
+  /\b(no|not|without)\s+(?:visible\s+|significant\s+|major\s+)?(?:damage|dryness|frizz|breakage|split\s+ends?|issues?)\b/i.test(text)
+  || /\bno\s+significant\s+damage\s+or\s+issues\b/i.test(text)
+  || /\bsealed\s+ends?\b/i.test(text)
+);
+
+const hasExplicitCareConcern = (text = '') => {
+  const normalized = String(text || '').toLowerCase();
+  const negated = hasNegatedCareConcern(normalized);
+  if (/(split\s+ends?|split\s+tips?|breakage|brittle|fray(?:ed|ing)|frizz|flyaways|oily|greasy|stressed\s+ends)/i.test(normalized)) {
+    return true;
+  }
+  if (/(dry|dull|damage|damaged|needs care|not eligible|improve)/i.test(normalized) && !negated) {
+    return true;
+  }
+  return false;
+};
+
+const getCanonicalHairAssessment = (screening = null) => {
+  if (!screening) return { label: 'No result', needsCare: false };
+  const combined = [
+    screening.detected_condition,
+    screening.visible_damage_notes,
+    screening.summary,
+    screening.decision,
+  ].filter(Boolean).join(' ');
+  const condition = String(screening.detected_condition || '').trim();
+  const needsCare = hasExplicitCareConcern(combined);
+  const label = needsCare && /healthy/i.test(condition)
+    ? 'Needs care'
+    : condition || (needsCare ? 'Needs care' : 'Healthy');
+
+  return {
+    label,
+    needsCare,
+  };
+};
+
+const normalizeConditionTone = (condition = '') => {
+  const normalized = String(condition || '').trim().toLowerCase();
+
+  if (normalized.includes('healthy') || normalized.includes('good')) {
+    return {
+      dotColor: '#65b96f',
+      label: 'Healthy',
+    };
+  }
+
+  if (normalized.includes('dry') || normalized.includes('damage') || normalized.includes('frizz')) {
+    return {
+      dotColor: '#d89258',
+      label: 'Needs care',
+    };
+  }
+
+  return {
+    dotColor: theme.colors.brandPrimary,
+    label: condition || 'Hair check',
+  };
+};
+
+const formatModalDateLabel = (value) => (
+  new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Manila',
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  }).format(new Date(`${value}T12:00:00`))
+);
+
+const formatSavedDateTime = (value) => (
+  new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Manila',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(new Date(value))
+);
+
+const formatTimeLabel = (value) => (
+  new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Manila',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(new Date(value))
+);
+
+const formatLengthLabel = (value) => {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue) || numericValue <= 0) return 'Not detected';
+  const inches = numericValue / 2.54;
+  return `${inches.toFixed(1)} inches`;
+};
+
+const formatAffectedRegions = (regions = []) => (
+  Array.isArray(regions) && regions.length
+    ? regions.join(', ')
+    : 'No clear patchy area detected'
+);
+
+const formatDensityScore = (value) => {
+  const score = Number(value);
+  return Number.isFinite(score) ? `${Math.round(score)} / 100` : 'Not enough data';
+};
+
+const toCompactSummary = (value = '') => {
+  const normalized = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!normalized) return '';
+  if (normalized.length <= 220) return normalized;
+  return `${normalized.slice(0, 217).trimEnd()}...`;
+};
+
+const isHairCareTip = (recommendation) => {
+  const combined = `${recommendation?.title || ''} ${recommendation?.recommendation_text || ''}`.toLowerCase();
+  return Boolean(cleanRecommendationText(recommendation?.recommendation_text || recommendation?.title || ''))
+    && !CAPTURE_NOISE_PATTERNS.some((pattern) => combined.includes(pattern));
+};
+
+const sanitizeRecommendation = (recommendation = {}) => ({
+  ...recommendation,
+  title: cleanRecommendationText(recommendation.title),
+  recommendation_text: cleanRecommendationText(recommendation.recommendation_text),
+});
+
+const filterDisplayRecommendations = (rows = [], screening = null) => {
+  if (!getCanonicalHairAssessment(screening).needsCare) return [];
+  return rows
+    .filter(isHairCareTip)
+    .map(sanitizeRecommendation)
+    .filter((item) => item.title || item.recommendation_text);
+};
+
+const buildEntryKey = (entry, index) => (
+  String(
+    entry?.screening?.ai_screening_id
+    || entry?.screening?.created_at
+    || entry?.submission?.submission_id
+    || index
+  )
+);
+
+const getEventActivityDate = (event = null) => (
+  event?.registration?.registered_at
+  || event?.registration?.updated_at
+  || event?.start_date
+  || event?.updated_at
+  || ''
+);
+
+const getEventStatusLabel = (event = null) => (
+  String(
+    event?.registration?.attendance_status
+    || event?.registration?.registration_status
+    || 'Registered'
+  ).trim()
+);
+
+const getEventScheduleLabel = (event = null) => {
+  if (!event?.start_date) return 'Schedule to be announced';
+  const start = formatModalDateLabel(String(event.start_date).slice(0, 10));
+  if (!event?.end_date) return start;
+  return `${start} - ${formatModalDateLabel(String(event.end_date).slice(0, 10))}`;
+};
+
+const getEventLocationLabel = (event = null) => (
+  event?.address_label
+  || event?.location_label
+  || event?.venue_name
+  || 'Location to be announced'
+);
+
+export function HairLogDetailModal({
+  visible,
+  dateKey = '',
+  entries = [],
+  events = [],
+  onClose,
+}) {
+  const { resolvedTheme } = useAuth();
+  const roles = resolveThemeRoles(resolvedTheme);
+  const [activeEntryKey, setActiveEntryKey] = React.useState('');
+  const [signedUrls, setSignedUrls] = React.useState({});
+  const [isLoadingUrls, setIsLoadingUrls] = React.useState(false);
+  const [recommendations, setRecommendations] = React.useState([]);
+  const [isLoadingRecommendations, setIsLoadingRecommendations] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!visible || !entries.length) {
+      setActiveEntryKey('');
+      return;
+    }
+
+    const nextKey = buildEntryKey(entries[0], 0);
+    setActiveEntryKey((current) => (
+      current && entries.some((entry, index) => buildEntryKey(entry, index) === current)
+        ? current
+        : nextKey
+    ));
+  }, [entries, visible]);
+
+  const activeEntry = React.useMemo(
+    () => entries.find((entry, index) => buildEntryKey(entry, index) === activeEntryKey) || entries[0] || null,
+    [activeEntryKey, entries]
+  );
+
+  const allImages = React.useMemo(() => {
+    if (!activeEntry) return [];
+    if (Array.isArray(activeEntry.images) && activeEntry.images.length) return activeEntry.images;
+    return (activeEntry.submission?.submission_details || []).flatMap((detail) => detail.images || []);
+  }, [activeEntry]);
+
+  React.useEffect(() => {
+    let isCancelled = false;
+
+    if (!visible || !activeEntry) {
+      setSignedUrls({});
+      setRecommendations([]);
+      setIsLoadingUrls(false);
+      setIsLoadingRecommendations(false);
+      return () => {
+        isCancelled = true;
+      };
+    }
+
+    const imageRows = allImages.filter((image) => image?.file_path);
+    if (!imageRows.length) {
+      setSignedUrls({});
+      setIsLoadingUrls(false);
+    } else {
+      setIsLoadingUrls(true);
+      Promise.all(
+        imageRows.map((image) => (
+          getHairSubmissionImageSignedUrl(image.file_path).then((result) => ({
+            id: image.image_id || image.file_path,
+            url: result.data || '',
+          }))
+        ))
+      ).then((results) => {
+        if (isCancelled) return;
+        const nextUrls = {};
+        results.forEach(({ id, url }) => {
+          if (url) nextUrls[id] = url;
+        });
+        setSignedUrls(nextUrls);
+        setIsLoadingUrls(false);
+      });
+    }
+
+    if (!getCanonicalHairAssessment(activeEntry.screening).needsCare) {
+      setRecommendations([]);
+      setIsLoadingRecommendations(false);
+    } else if (Array.isArray(activeEntry.recommendations) && activeEntry.recommendations.length) {
+      setRecommendations(filterDisplayRecommendations(activeEntry.recommendations, activeEntry.screening));
+      setIsLoadingRecommendations(false);
+    } else if (activeEntry.submission?.submission_id) {
+      setIsLoadingRecommendations(true);
+      fetchDonorRecommendationsBySubmissionId(activeEntry.submission.submission_id, 5).then((result) => {
+        if (isCancelled) return;
+        setRecommendations(filterDisplayRecommendations(result.data || [], activeEntry.screening));
+        setIsLoadingRecommendations(false);
+      });
+    } else {
+      setRecommendations([]);
+      setIsLoadingRecommendations(false);
+    }
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [activeEntry, allImages, visible]);
+
+  if (!visible || (!activeEntry?.screening && !events.length)) return null;
+
+  const screening = activeEntry?.screening || null;
+  const hasScreening = Boolean(screening);
+  const assessment = hasScreening
+    ? getCanonicalHairAssessment(screening)
+    : { label: 'Registered event', needsCare: false };
+  const tone = hasScreening
+    ? (assessment.needsCare
+      ? { dotColor: '#d89258', label: 'Needs care' }
+      : normalizeConditionTone(assessment.label))
+    : {
+      dotColor: roles.primaryActionBackground,
+      label: 'Registered event',
+    };
+  const hasAssessmentDetails = Boolean(
+    screening?.estimated_length != null
+    || screening?.detected_color
+    || screening?.detected_texture
+    || screening?.detected_density
+    || screening?.bald_spots_present === true
+    || screening?.hair_density_score != null
+    || screening?.visible_scalp_area
+    || screening?.shedding_level
+    || screening?.scalp_coverage_notes
+    || screening?.summary
+    || screening?.visible_damage_notes
+  );
+  const photoUris = allImages
+    .map((image) => signedUrls[image.image_id || image.file_path])
+    .filter(Boolean);
+  const compactSummary = toCompactSummary(screening?.summary);
+  const assessmentSummary = compactSummary
+    || screening?.visible_damage_notes
+    || screening?.scalp_coverage_notes
+    || (hasScreening && assessment.needsCare
+      ? 'Analysis continued with user-approved photos after validation warning. The result is low-confidence and should not be used for donation approval.'
+      : 'Use this scan as a baseline and compare the next check for changes.');
+  const assessmentMetrics = [
+    { label: 'Condition', value: screening?.detected_condition || 'Not detected' },
+    { label: 'Color', value: screening?.detected_color || 'Not detected' },
+    { label: 'Texture', value: screening?.detected_texture || 'Not detected' },
+    { label: 'Density', value: screening?.detected_density || 'Not detected' },
+    { label: 'Length', value: formatLengthLabel(screening?.estimated_length) },
+    { label: 'Scalp area', value: screening?.visible_scalp_area || 'Not detected' },
+    { label: 'Coverage score', value: formatDensityScore(screening?.hair_density_score) },
+    { label: 'Affected area', value: formatAffectedRegions(screening?.affected_regions) },
+    { label: 'Shedding', value: screening?.shedding_level || 'Not sure' },
+  ];
+  const insightBullets = Array.from(new Set([
+    screening?.scalp_coverage_notes,
+    screening?.improvement_recommendation,
+    screening?.visible_damage_notes,
+    ...recommendations.map((recommendation) => cleanRecommendationText(recommendation.recommendation_text || recommendation.title || '')),
+  ]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)))
+    .filter((value) => value !== assessmentSummary)
+    .slice(0, 4);
+  const insightLead = assessment.needsCare
+    ? 'AI recommendations for this check:'
+    : 'Helpful follow-up notes:';
+  const insightNote = assessment.needsCare
+    ? 'Use these as general care tips and scan again for comparison.'
+    : 'Keep this scan as a baseline for your next check.';
+  const modalEyebrow = hasScreening && events.length
+    ? 'Hair check and events'
+    : hasScreening
+      ? 'Hair check'
+      : 'Registered events';
+  const modalTitle = dateKey
+    ? formatModalDateLabel(dateKey)
+    : formatSavedDateTime(screening?.created_at || getEventActivityDate(events[0]) || new Date().toISOString());
+
+  return (
+    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
+      <View style={styles.overlay}>
+        <Pressable style={styles.backdrop} onPress={onClose} />
+
+        <AppCard
+          variant="elevated"
+          radius="md"
+          padding="lg"
+          style={[
+            styles.card,
+            {
+              backgroundColor: roles.pageBackground,
+              borderColor: roles.defaultCardBorder,
+            },
+          ]}
+        >
+          <View style={styles.header}>
+            <View style={styles.headerCopy}>
+              <Text style={[styles.eyebrow, { color: roles.metaText }]}>{modalEyebrow}</Text>
+              <Text style={[styles.title, { color: roles.headingText }]}>{modalTitle}</Text>
+            </View>
+            <Pressable onPress={onClose} style={styles.closeButton} hitSlop={12}>
+              <AppIcon name="close" size="sm" state="muted" />
+            </Pressable>
+          </View>
+
+          <ScrollView
+            showsVerticalScrollIndicator={false}
+            style={styles.scroll}
+            contentContainerStyle={styles.scrollContent}
+            nestedScrollEnabled
+          >
+            {hasScreening ? (
+              <View style={[styles.statusCard, { backgroundColor: roles.pageBackground, borderColor: tone.dotColor + '3A' }]}>
+                <View style={styles.statusRow}>
+                  <View style={[styles.statusDot, { backgroundColor: tone.dotColor }]} />
+                  <Text style={[styles.statusLabel, { color: tone.dotColor }]}>{assessment.label}</Text>
+                </View>
+                <Text style={[styles.statusSubtext, { color: roles.bodyText }]}>
+                  Saved {formatSavedDateTime(screening.created_at)}
+                </Text>
+              </View>
+            ) : null}
+
+            {hasScreening && entries.length > 1 ? (
+              <View style={styles.entrySwitcherWrap}>
+                <SectionTitleRow
+                  title="Entries"
+                  icon="file-document-outline"
+                  color={roles.headingText}
+                  iconColor={roles.metaText}
+                  accentColor={roles.primaryActionBackground}
+                  titleStyle={styles.sectionTitle}
+                />
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.entrySwitcherRow}>
+                  {entries.map((entry, index) => {
+                    const entryKey = buildEntryKey(entry, index);
+                    const isActive = entryKey === activeEntryKey;
+                    return (
+                      <Pressable
+                        key={entryKey}
+                        onPress={() => setActiveEntryKey(entryKey)}
+                        style={[
+                          styles.entryChip,
+                          {
+                            backgroundColor: isActive ? roles.iconPrimarySurface : roles.supportCardBackground,
+                            borderColor: isActive ? roles.iconPrimaryColor : roles.supportCardBorder,
+                          },
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.entryChipText,
+                            { color: isActive ? roles.iconPrimaryColor : roles.bodyText },
+                          ]}
+                        >
+                          {formatTimeLabel(entry?.screening?.created_at)}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+            ) : null}
+
+            {events.length ? (
+              <>
+                <SectionTitleRow
+                  title={events.length === 1 ? 'Registered event' : 'Registered events'}
+                  icon="calendar-check-outline"
+                  color={roles.headingText}
+                  iconColor={roles.metaText}
+                  accentColor={roles.primaryActionBackground}
+                  titleStyle={styles.sectionTitle}
+                />
+                <View style={styles.eventList}>
+                  {events.map((event, index) => {
+                    const eventKey = String(
+                      event?.registration?.registration_id
+                      || event?.donation_drive_id
+                      || `${event?.event_title || 'event'}-${index}`
+                    );
+                    const statusLabel = getEventStatusLabel(event);
+                    const registeredAt = getEventActivityDate(event);
+                    return (
+                      <View
+                        key={eventKey}
+                        style={[
+                          styles.eventCard,
+                          {
+                            backgroundColor: roles.pageBackground,
+                            borderColor: roles.defaultCardBorder,
+                          },
+                        ]}
+                      >
+                        <View style={styles.eventCardHeader}>
+                          <View style={[styles.eventCardIconWrap, { backgroundColor: roles.iconPrimarySurface }]}>
+                            <MaterialCommunityIcons
+                              name="calendar-check-outline"
+                              size={18}
+                              color={roles.iconPrimaryColor}
+                            />
+                          </View>
+                          <View style={styles.eventCardCopy}>
+                            <Text style={[styles.eventCardTitle, { color: roles.headingText }]} numberOfLines={2}>
+                              {event?.event_title || 'Donation event'}
+                            </Text>
+                            <Text style={[styles.eventCardSubtitle, { color: roles.bodyText }]} numberOfLines={2}>
+                              {event?.organization_name || 'Event host'}
+                            </Text>
+                          </View>
+                          <View style={[styles.eventStatusChip, { backgroundColor: roles.iconPrimarySurface }]}>
+                            <Text style={[styles.eventStatusText, { color: roles.iconPrimaryColor }]} numberOfLines={1}>
+                              {statusLabel}
+                            </Text>
+                          </View>
+                        </View>
+
+                        <View style={styles.eventMetaList}>
+                          <View style={styles.eventMetaRow}>
+                            <MaterialCommunityIcons name="clock-outline" size={16} color={roles.metaText} />
+                            <Text style={[styles.eventMetaText, { color: roles.bodyText }]}>
+                              {registeredAt ? `Registered ${formatSavedDateTime(registeredAt)}` : 'Registration date not available'}
+                            </Text>
+                          </View>
+                          <View style={styles.eventMetaRow}>
+                            <MaterialCommunityIcons name="calendar-range-outline" size={16} color={roles.metaText} />
+                            <Text style={[styles.eventMetaText, { color: roles.bodyText }]}>
+                              {getEventScheduleLabel(event)}
+                            </Text>
+                          </View>
+                          <View style={styles.eventMetaRow}>
+                            <MaterialCommunityIcons name="map-marker-outline" size={16} color={roles.metaText} />
+                            <Text style={[styles.eventMetaText, { color: roles.bodyText }]}>
+                              {getEventLocationLabel(event)}
+                            </Text>
+                          </View>
+                        </View>
+                      </View>
+                    );
+                  })}
+                </View>
+              </>
+            ) : null}
+
+            {hasScreening ? (
+              <>
+                <SectionTitleRow
+                  title="Photos"
+                  icon="file-document-outline"
+                  color={roles.headingText}
+                  iconColor={roles.metaText}
+                  accentColor={roles.primaryActionBackground}
+                  titleStyle={styles.sectionTitle}
+                />
+                {isLoadingUrls ? (
+                  <View style={styles.photoLoading}>
+                    <ActivityIndicator color={resolvedTheme?.primaryColor || theme.colors.brandPrimary} />
+                  </View>
+                ) : photoUris.length ? (
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.photoRow}>
+                    {photoUris.map((uri) => (
+                      <Image key={uri} source={{ uri }} style={styles.photo} resizeMode="cover" />
+                    ))}
+                  </ScrollView>
+                ) : (
+                  <Text style={[styles.emptyText, { color: roles.metaText }]}>No photos saved for this check.</Text>
+                )}
+              </>
+            ) : null}
+
+            {hasScreening && hasAssessmentDetails ? (
+              <>
+                <SectionTitleRow
+                  title="Hair Assessment"
+                  icon="file-document-outline"
+                  color={roles.headingText}
+                  iconColor={roles.metaText}
+                  accentColor={roles.primaryActionBackground}
+                  titleStyle={styles.sectionTitle}
+                />
+                <View style={[styles.assessmentCard, { backgroundColor: roles.pageBackground, borderColor: roles.defaultCardBorder }]}>
+                  <Text style={[styles.assessmentSummary, { color: roles.bodyText }]}>
+                    {assessmentSummary}
+                  </Text>
+                  <View style={styles.metricGrid}>
+                    {assessmentMetrics.map((metric) => (
+                      <View key={metric.label} style={styles.metricItem}>
+                        <Text style={[styles.metaKey, { color: roles.metaText }]}>
+                          {metric.label}
+                        </Text>
+                        <Text
+                          style={[
+                            styles.metaValue,
+                            { color: roles.headingText },
+                            metric.label === 'Length' && metric.value === 'Not detected' ? styles.metricValueMuted : null,
+                            metric.label === 'Coverage score' ? styles.metricValueLarge : null,
+                          ]}
+                        >
+                          {metric.value}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              </>
+            ) : null}
+
+            {hasScreening ? (
+              <View style={[styles.insightsCard, {
+                backgroundColor: roles.pageBackground,
+                borderColor: roles.defaultCardBorder,
+                borderLeftColor: roles.primaryActionBackground,
+              }]}>
+                <View style={styles.insightsHeader}>
+                  <View style={[styles.insightsIconWrap, { backgroundColor: roles.iconPrimarySurface }]}>
+                    <MaterialCommunityIcons
+                      name="lightbulb-on-outline"
+                      size={16}
+                      color={roles.primaryActionBackground}
+                    />
+                  </View>
+                  <Text style={[styles.insightsTitle, { color: roles.primaryActionBackground }]}>
+                    AI Insights & Guidance
+                  </Text>
+                </View>
+
+                {isLoadingRecommendations ? (
+                  <ActivityIndicator
+                    color={resolvedTheme?.primaryColor || theme.colors.brandPrimary}
+                    style={styles.recommendationLoader}
+                  />
+                ) : (
+                  <View style={styles.insightsBody}>
+                    <Text style={[styles.insightsLead, { color: roles.bodyText }]}>
+                      {insightLead}
+                    </Text>
+                    {insightBullets.length ? (
+                      <View style={styles.bulletList}>
+                        {insightBullets.map((bullet, index) => (
+                          <View key={`${index}-${bullet.slice(0, 24)}`} style={styles.bulletRow}>
+                            <View style={[styles.bulletDot, { backgroundColor: roles.primaryActionBackground }]} />
+                            <Text style={[styles.bulletText, { color: roles.bodyText }]}>
+                              {bullet}
+                            </Text>
+                          </View>
+                        ))}
+                      </View>
+                    ) : (
+                      <Text style={[styles.insightsText, { color: roles.bodyText }]}>
+                        No additional recommendations were returned for this check.
+                      </Text>
+                    )}
+                  </View>
+                )}
+
+                {insightNote && !isLoadingRecommendations ? (
+                  <View style={[styles.insightsNoteCard, { backgroundColor: roles.pageBackground, borderColor: roles.defaultCardBorder }]}>
+                    <Text style={[styles.insightsNoteText, { color: roles.bodyText }]}>
+                      {insightNote}
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
+            ) : null}
+          </ScrollView>
+        </AppCard>
+      </View>
+    </Modal>
+  );
+}
+
+const styles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingHorizontal: theme.spacing.lg,
+    paddingVertical: theme.spacing.lg,
+    backgroundColor: theme.colors.overlay,
+  },
+  backdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  card: {
+    width: '100%',
+    maxWidth: 440,
+    maxHeight: '88%',
+    alignSelf: 'center',
+    overflow: 'hidden',
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+    marginBottom: theme.spacing.sm,
+  },
+  headerCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  eyebrow: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.label,
+    textTransform: 'uppercase',
+    letterSpacing: 1.4,
+  },
+  title: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.compact.titleLg,
+    lineHeight: theme.typography.compact.titleLg * theme.typography.lineHeights.tight,
+  },
+  closeButton: {
+    padding: theme.spacing.xs,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  scroll: {
+    flexShrink: 1,
+  },
+  scrollContent: {
+    gap: theme.spacing.md,
+    paddingBottom: theme.spacing.xl,
+  },
+  statusCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: theme.spacing.md,
+    gap: theme.spacing.xs,
+  },
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.xs,
+  },
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: theme.radius.full,
+  },
+  statusLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  statusSubtext: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+  },
+  sectionTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.snug,
+    fontWeight: theme.typography.weights.semibold,
+    marginTop: 4,
+  },
+  entrySwitcherWrap: {
+    gap: theme.spacing.sm,
+  },
+  entrySwitcherRow: {
+    gap: theme.spacing.sm,
+  },
+  entryChip: {
+    minWidth: 74,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: 6,
+    borderRadius: theme.radius.pill,
+    borderWidth: 1,
+    alignItems: 'center',
+  },
+  entryChipText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 11,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  eventList: {
+    gap: theme.spacing.md,
+  },
+  eventCard: {
+    borderRadius: 18,
+    borderWidth: 1,
+    padding: theme.spacing.md,
+    gap: theme.spacing.md,
+  },
+  eventCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.spacing.sm,
+  },
+  eventCardIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  eventCardCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  eventCardTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.compact.bodyMd,
+    lineHeight: theme.typography.compact.bodyMd * theme.typography.lineHeights.snug,
+  },
+  eventCardSubtitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.snug,
+  },
+  eventStatusChip: {
+    minHeight: 28,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: 6,
+    borderRadius: theme.radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  eventStatusText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  eventMetaList: {
+    gap: theme.spacing.sm,
+  },
+  eventMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.spacing.sm,
+  },
+  eventMetaText: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+  },
+  photoLoading: {
+    height: 84,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  photoRow: {
+    gap: theme.spacing.md,
+    paddingBottom: 4,
+  },
+  photo: {
+    width: 84,
+    height: 84,
+    borderRadius: 12,
+    backgroundColor: theme.colors.surfaceMuted,
+  },
+  emptyText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+  },
+  assessmentCard: {
+    borderRadius: 18,
+    borderWidth: 1,
+    padding: theme.spacing.md,
+    gap: theme.spacing.md,
+  },
+  assessmentSummary: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+  },
+  metricGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    rowGap: theme.spacing.md,
+    columnGap: theme.spacing.sm,
+  },
+  metricItem: {
+    width: '48%',
+    minWidth: 0,
+    gap: 2,
+  },
+  metricValueMuted: {
+    fontStyle: 'italic',
+    color: theme.colors.textMuted,
+  },
+  metricValueLarge: {
+    fontSize: theme.typography.compact.titleSm,
+    fontWeight: theme.typography.weights.bold,
+  },
+  insightsCard: {
+    borderWidth: 1,
+    borderRadius: 18,
+    padding: theme.spacing.md,
+    gap: theme.spacing.md,
+    borderLeftWidth: 4,
+  },
+  insightsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.xs,
+  },
+  insightsIconWrap: {
+    width: 28,
+    height: 28,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  insightsTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  insightsBody: {
+    gap: theme.spacing.sm,
+  },
+  insightsLead: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+  },
+  bulletList: {
+    gap: theme.spacing.sm,
+  },
+  bulletRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.spacing.sm,
+  },
+  bulletDot: {
+    width: 8,
+    height: 8,
+    borderRadius: theme.radius.full,
+    marginTop: 7,
+  },
+  bulletText: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+  },
+  insightsText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+  },
+  metaKey: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    fontWeight: theme.typography.weights.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+  },
+  metaValue: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.snug,
+  },
+  insightsNoteCard: {
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: theme.spacing.sm,
+  },
+  insightsNoteText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    lineHeight: theme.typography.compact.caption * theme.typography.lineHeights.relaxed,
+  },
+  recommendationLoader: {
+    marginVertical: theme.spacing.sm,
+  },
+});

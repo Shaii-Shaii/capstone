@@ -1,0 +1,264 @@
+import React, { useRef, useState, useEffect } from 'react';
+import { View, TextInput, StyleSheet } from 'react-native';
+import Animated, {
+  interpolateColor,
+  useAnimatedStyle,
+  useSharedValue,
+  withSequence,
+  withSpring,
+  withTiming,
+} from 'react-native-reanimated';
+import * as Haptics from 'expo-haptics';
+import { theme } from '../../design-system/theme';
+import { useAuth } from '../../providers/AuthProvider';
+
+const AnimatedView = Animated.createAnimatedComponent(View);
+
+const OtpCell = ({
+  cellValue,
+  isFocused,
+  error,
+  success,
+  disabled,
+  resolvedTheme,
+  keyboardType,
+  autoCapitalize,
+  inputRef,
+  onFocus,
+  onBlur,
+  onChangeText,
+  onKeyPress,
+  textColor,
+  restBorderColor,
+  midBorderColor,
+  focusBorderColor,
+  restBackgroundColor,
+  activeBackgroundColor,
+}) => {
+  const emphasis = useSharedValue(isFocused ? 1 : cellValue ? 0.7 : 0);
+  const focusColor = focusBorderColor || resolvedTheme?.primaryColor || theme.colors.borderFocus;
+  const successColor = resolvedTheme?.primaryColor || theme.colors.textSuccess;
+  const successBackgroundColor = resolvedTheme?.secondaryColor || theme.colors.brandPrimaryMuted;
+  const baseBorderColor = restBorderColor || theme.colors.borderSubtle;
+  const warmBorderColor = midBorderColor || theme.colors.borderStrong;
+  const baseBackgroundColor = restBackgroundColor || theme.colors.surfaceCard;
+  const warmBackgroundColor = activeBackgroundColor || theme.colors.surfaceSoft;
+
+  useEffect(() => {
+    emphasis.value = withSpring(isFocused ? 1 : cellValue ? 0.7 : 0, theme.motion.spring);
+  }, [cellValue, emphasis, isFocused]);
+
+  const cellStyle = useAnimatedStyle(() => ({
+    borderColor: success
+      ? successColor
+      : error
+        ? theme.colors.borderError
+        : interpolateColor(
+            emphasis.value,
+            [0, 0.7, 1],
+            [baseBorderColor, warmBorderColor, focusColor]
+          ),
+    backgroundColor: success
+      ? successBackgroundColor
+      : disabled
+        ? theme.colors.surfaceDisabled
+        : interpolateColor(
+            emphasis.value,
+            [0, 0.7, 1],
+            [baseBackgroundColor, warmBackgroundColor, warmBackgroundColor]
+          ),
+    transform: [
+      { scale: 1 + emphasis.value * 0.035 },
+      { translateY: emphasis.value * -2 },
+    ],
+    shadowOpacity: emphasis.value * 0.14,
+  }));
+
+  return (
+    <AnimatedView style={[styles.cell, cellStyle]}>
+      <TextInput
+        ref={inputRef}
+        style={[
+          styles.input,
+          { color: textColor },
+          success ? [styles.inputSuccess, { color: successColor }] : null,
+          disabled ? styles.inputDisabled : null,
+        ]}
+        value={cellValue || ''}
+        onFocus={onFocus}
+        onBlur={onBlur}
+        onChangeText={onChangeText}
+        onKeyPress={onKeyPress}
+        keyboardType={keyboardType}
+        maxLength={1}
+        editable={!disabled}
+        selectTextOnFocus={!disabled}
+        autoCapitalize={autoCapitalize}
+      />
+    </AnimatedView>
+  );
+};
+
+export const OtpInput = ({
+  length = 6,
+  value,
+  onChange,
+  error,
+  disabled = false,
+  success = false,
+  keyboardType = 'number-pad',
+  characterSet = 'numeric',
+  autoCapitalize,
+  style,
+  cellBorderColor,
+  cellBackgroundColor,
+  cellFocusBorderColor,
+  cellTextColor,
+}) => {
+  const { resolvedTheme } = useAuth();
+  const primaryTextColor = cellTextColor || resolvedTheme?.primaryTextColor || theme.colors.textPrimary;
+  const [internalCode, setInternalCode] = useState(value || '');
+  const [focusedIndex, setFocusedIndex] = useState(-1);
+  const inputRefs = useRef([]);
+  const shakeX = useSharedValue(0);
+  const successScale = useSharedValue(1);
+
+  useEffect(() => {
+    if (value !== undefined) {
+      setInternalCode(value);
+    }
+  }, [value]);
+
+  useEffect(() => {
+    if (!error) return;
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    shakeX.value = withSequence(
+      withTiming(-9, { duration: theme.motion.shake }),
+      withTiming(9, { duration: theme.motion.shake }),
+      withTiming(-7, { duration: theme.motion.shake }),
+      withTiming(7, { duration: theme.motion.shake }),
+      withTiming(0, { duration: theme.motion.shake })
+    );
+  }, [error, shakeX]);
+
+  useEffect(() => {
+    if (!success) return;
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    successScale.value = withSequence(
+      withTiming(1.05, { duration: 140 }),
+      withTiming(1, { duration: 170 })
+    );
+  }, [success, successScale]);
+
+  const sanitizeInput = (text) => (
+    characterSet === 'alphanumeric'
+      ? text.toUpperCase().replace(/[^A-Z0-9]/g, '')
+      : text.replace(/[^0-9]/g, '')
+  );
+
+  const containerStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: shakeX.value }, { scale: successScale.value }],
+  }));
+
+  const handleChange = async (text, index) => {
+    const cleanText = sanitizeInput(text);
+
+    if (cleanText.length > 1) {
+      const newCode = cleanText.substring(0, length);
+      setInternalCode(newCode);
+      onChange?.(newCode);
+      const focusIndex = Math.min(newCode.length, length - 1);
+      inputRefs.current[focusIndex]?.focus();
+      return;
+    }
+
+    const newCodeArr = internalCode.padEnd(length, ' ').split('');
+    newCodeArr[index] = cleanText || ' ';
+    const newCode = newCodeArr.join('').replace(/\s+$/g, '');
+
+    setInternalCode(newCode);
+    onChange?.(newCode);
+
+    if (cleanText && index < length - 1) {
+      await Haptics.selectionAsync();
+      inputRefs.current[index + 1]?.focus();
+    }
+  };
+
+  const handleKeyPress = (e, index) => {
+    if (e.nativeEvent.key === 'Backspace' && !internalCode[index] && index > 0) {
+      const newCodeArr = internalCode.padEnd(length, ' ').split('');
+      newCodeArr[index - 1] = ' ';
+      const newCode = newCodeArr.join('').replace(/\s+$/g, '');
+      setInternalCode(newCode);
+      onChange?.(newCode);
+      inputRefs.current[index - 1]?.focus();
+    }
+  };
+
+  return (
+    <AnimatedView style={[styles.container, containerStyle, style]}>
+      {Array(length)
+        .fill(0)
+        .map((_, index) => (
+          <OtpCell
+            key={index}
+            cellValue={internalCode[index]}
+            isFocused={focusedIndex === index}
+            error={error}
+            success={success}
+            disabled={disabled}
+            resolvedTheme={resolvedTheme}
+            keyboardType={keyboardType}
+            autoCapitalize={autoCapitalize || (characterSet === 'alphanumeric' ? 'characters' : 'none')}
+            inputRef={(ref) => {
+              inputRefs.current[index] = ref;
+            }}
+            onFocus={() => setFocusedIndex(index)}
+            onBlur={() => setFocusedIndex(-1)}
+            onChangeText={(text) => handleChange(text, index)}
+            onKeyPress={(e) => handleKeyPress(e, index)}
+            textColor={primaryTextColor}
+            restBorderColor={cellBorderColor}
+            midBorderColor={cellBorderColor}
+            focusBorderColor={cellFocusBorderColor}
+            restBackgroundColor={cellBackgroundColor}
+            activeBackgroundColor={cellBackgroundColor}
+          />
+        ))}
+    </AnimatedView>
+  );
+};
+
+const styles = StyleSheet.create({
+  container: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    width: '100%',
+    marginVertical: theme.spacing.lg,
+    gap: theme.spacing.sm,
+  },
+  cell: {
+    flex: 1,
+    minWidth: 44,
+    height: theme.inputs.otpSize,
+    borderWidth: 1,
+    borderRadius: theme.radius.lg,
+    justifyContent: 'center',
+    backgroundColor: theme.colors.surfaceCard,
+    ...theme.shadows.soft,
+  },
+  input: {
+    width: '100%',
+    height: '100%',
+    fontSize: theme.typography.semantic.bodyLg,
+    fontFamily: theme.typography.fontFamily,
+    fontWeight: theme.typography.weights.semibold,
+    textAlign: 'center',
+    color: theme.colors.textPrimary,
+  },
+  inputSuccess: {},
+  inputDisabled: {
+    color: theme.colors.textDisabled,
+  },
+});
