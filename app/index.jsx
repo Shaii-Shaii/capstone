@@ -19,6 +19,7 @@ import {
   completePostLoginOnboarding,
   getPatientLinkPreview,
 } from '../src/features/profile/services/profile.service';
+import { verifyMedicalCertificateAsset } from '../src/features/patientMedicalCertificate.service';
 import { calculateAgeFromBirthdate } from '../src/features/auth/validators/auth.schema';
 import { patientOnboardingSchema } from '../src/features/profile/profile.schema';
 import { guardianRelationshipOptions, profileGenderOptions, profileSuffixOptions } from '../src/constants/profile';
@@ -28,6 +29,7 @@ import { resolveBrandLogoSource, resolveThemeRoles, theme } from '../src/design-
 const BADGE_BORDER_GRAD = ['#6e2e0e', '#d4874e', '#f5dfa8', '#d4874e', '#6e2e0e'];
 const ACTION_BUTTON_BORDER_GRAD = ['#5f2f12', '#8e4f24', '#c8864f', '#ffe7ac', '#c8864f', '#8e4f24', '#5f2f12'];
 const ACTION_BUTTON_FILL_GRAD = ['#8a111d', '#740c15', '#5c0910'];
+const ONBOARDING_SUBMIT_TIMEOUT_MS = 25000;
 
 const normalizePatientCode = (value) => {
   const normalized = String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -56,9 +58,7 @@ const getMaximumDiagnosisDate = () => {
 const manualPatientStepFieldGroups = [
   [
     'first_name',
-    'middle_name',
     'last_name',
-    'suffix',
     'birthdate',
     'parental_consent',
     'gender',
@@ -199,6 +199,54 @@ const getPickedDocumentPayload = async (asset, fallbackPrefix) => {
   throw new Error('Unable to read the selected file.');
 };
 
+const VERIFIED_MEDICAL_DOCUMENT_STATUSES = new Set([
+  'auto_verified_with_qr',
+  'ocr_passed_prc_pending',
+  'prc_verified',
+  'verified',
+  'staff_verified',
+]);
+
+const getMedicalDocumentVerification = (medicalDocumentValue, fallbackVerification = null) => {
+  if (medicalDocumentValue && typeof medicalDocumentValue === 'object') {
+    return medicalDocumentValue.verification || fallbackVerification;
+  }
+  return fallbackVerification;
+};
+
+const getMedicalDocumentVerificationStatus = (medicalDocumentValue, fallbackVerification = null) => {
+  const verification = getMedicalDocumentVerification(medicalDocumentValue, fallbackVerification);
+  const objectStatus = medicalDocumentValue && typeof medicalDocumentValue === 'object'
+    ? medicalDocumentValue.medical_document_verification_status
+    : '';
+  return String(verification?.status || objectStatus || '').toLowerCase();
+};
+
+const isMedicalDocumentVerified = (medicalDocumentValue, fallbackVerification = null) => (
+  VERIFIED_MEDICAL_DOCUMENT_STATUSES.has(getMedicalDocumentVerificationStatus(
+    medicalDocumentValue,
+    fallbackVerification
+  ))
+);
+
+const runWithTimeout = async (promise, timeoutMs, timeoutMessage) => {
+  let timeoutId;
+  const timeoutPromise = new Promise((resolve) => {
+    timeoutId = setTimeout(() => {
+      resolve({
+        success: false,
+        error: timeoutMessage,
+      });
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+};
+
 // ─── BadgeLogo ───────────────────────────────────────────────────────────────
 // Rose-gold gradient border + dark wine inner card + cream logo plate.
 // Consistent badge design used across splash / login / signup / onboarding.
@@ -290,6 +338,8 @@ function FirstTimeOnboarding() {
   const [manualGuardianRelationshipOption, setManualGuardianRelationshipOption] = useState('');
   const [isUploadingPatientPicture, setIsUploadingPatientPicture] = useState(false);
   const [isUploadingMedicalDocument, setIsUploadingMedicalDocument] = useState(false);
+  const [medicalDocumentVerification, setMedicalDocumentVerification] = useState(null);
+  const [manualImagePreview, setManualImagePreview] = useState(null);
   const welcomeOpacity = useRef(new Animated.Value(0)).current;
   const startOpacity = useRef(new Animated.Value(0)).current;
   const patientCodeErrorModalTimerRef = useRef(null);
@@ -399,22 +449,31 @@ function FirstTimeOnboarding() {
     setIsSubmitting(true);
     setScreenError('');
 
-    const result = await completePostLoginOnboarding({
-      userId: user?.id,
-      email: user?.email || profile?.email || '',
-      ...payload,
-    });
+    try {
+      const result = await runWithTimeout(
+        completePostLoginOnboarding({
+          userId: user?.id,
+          email: user?.email || profile?.email || '',
+          ...payload,
+        }),
+        ONBOARDING_SUBMIT_TIMEOUT_MS,
+        'Saving is taking too long. Please check your connection and try again.'
+      );
 
-    setIsSubmitting(false);
+      if (!result.success) {
+        setScreenError(result.error || 'Unable to complete onboarding.');
+        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        return;
+      }
 
-    if (!result.success) {
-      setScreenError(result.error || 'Unable to complete onboarding.');
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      await continueToRoleHome(result.role);
+    } catch (error) {
+      setScreenError(error?.message || 'Unable to complete onboarding.');
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      return;
+    } finally {
+      setIsSubmitting(false);
     }
-
-    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    await continueToRoleHome(result.role);
   };
 
   const handleContinueAsDonor = async () => {
@@ -464,6 +523,12 @@ function FirstTimeOnboarding() {
   };
 
   const handleManualPatientSubmit = async (values) => {
+    if (!isMedicalDocumentVerified(values?.medical_document, medicalDocumentVerification)) {
+      setScreenError('Please upload or scan a valid medical certificate before continuing.');
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      return;
+    }
+
     await Haptics.selectionAsync();
     await finalizeOnboarding({
       mode: 'patient-manual',
@@ -500,6 +565,82 @@ function FirstTimeOnboarding() {
     setManualPatientStep((currentStep) => Math.min(currentStep + 1, 2));
   };
 
+  const verifyAndSaveManualMedicalDocument = async (mediaPayload) => {
+    setMedicalDocumentVerification(null);
+
+    const result = await verifyMedicalCertificateAsset({
+      authUserId: user?.id,
+      patientId: null,
+      asset: {
+        uri: mediaPayload.previewUri || mediaPayload.uri || '',
+        mimeType: mediaPayload.contentType,
+        fileName: mediaPayload.fileName,
+        fileBody: mediaPayload.fileBody,
+        publicUrl: mediaPayload.publicUrl || '',
+      },
+    });
+
+    const verification = result.verification
+      ? { ...result.verification, errorMessage: result.error || '' }
+      : null;
+    setMedicalDocumentVerification(verification);
+
+    if (!result.success) {
+      manualPatientForm.setValue('medical_document', {
+        ...mediaPayload,
+        publicUrl: result.documentUrl || '',
+        verification,
+        medical_document_verification_status: verification?.status || 'ocr_failed',
+        medical_document_ocr_text: verification?.extractedText || '',
+        medical_document_verified_at: new Date().toISOString(),
+        doctor_name: verification?.doctorName || '',
+        doctor_license_number: verification?.licenseNumber || '',
+      }, {
+        shouldDirty: true,
+        shouldValidate: true,
+      });
+      setScreenError('');
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      return false;
+    }
+
+    manualPatientForm.setValue('medical_document', {
+      ...mediaPayload,
+      publicUrl: result.documentUrl,
+      verification,
+      medical_document_verification_status: verification?.status || 'ocr_passed_prc_pending',
+      medical_document_ocr_text: verification?.extractedText || '',
+      medical_document_verified_at: new Date().toISOString(),
+      doctor_name: verification?.doctorName || '',
+      doctor_license_number: verification?.licenseNumber || '',
+    }, {
+      shouldDirty: true,
+      shouldValidate: true,
+    });
+    setScreenError('');
+    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    return true;
+  };
+
+  const retryManualPatientMedicalDocumentVerification = async () => {
+    const currentDocument = manualPatientForm.getValues('medical_document');
+    if (!currentDocument || typeof currentDocument !== 'object') {
+      setScreenError('Upload or scan the medical certificate first.');
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      return;
+    }
+
+    try {
+      setIsUploadingMedicalDocument(true);
+      await verifyAndSaveManualMedicalDocument(currentDocument);
+    } catch (error) {
+      setScreenError(error?.message || 'Unable to retry document verification.');
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    } finally {
+      setIsUploadingMedicalDocument(false);
+    }
+  };
+
   const pickManualPatientAsset = async (fieldName, setUploading) => {
     try {
       setUploading(true);
@@ -515,11 +656,7 @@ function FirstTimeOnboarding() {
         }
 
         const mediaPayload = await getPickedDocumentPayload(result.assets?.[0], 'patient-document');
-        manualPatientForm.setValue(fieldName, mediaPayload, {
-          shouldDirty: true,
-          shouldValidate: true,
-        });
-        setScreenError('');
+        await verifyAndSaveManualMedicalDocument(mediaPayload);
         return;
       }
 
@@ -558,6 +695,39 @@ function FirstTimeOnboarding() {
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     } finally {
       setUploading(false);
+    }
+  };
+
+  const scanManualPatientMedicalDocument = async () => {
+    try {
+      setIsUploadingMedicalDocument(true);
+      const permission = await ImagePicker.requestCameraPermissionsAsync();
+      if (!permission.granted) {
+        setScreenError('Please allow camera access to scan the medical certificate.');
+        return;
+      }
+
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: IMAGE_MEDIA_TYPES,
+        allowsEditing: false,
+        quality: 0.85,
+        base64: true,
+      });
+
+      if (result.canceled) {
+        return;
+      }
+
+      const mediaPayload = await getPickedMediaPayload(
+        result.assets?.[0],
+        'patient-document-scan'
+      );
+      await verifyAndSaveManualMedicalDocument(mediaPayload);
+    } catch (error) {
+      setScreenError(error?.message || 'Unable to scan the medical certificate.');
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    } finally {
+      setIsUploadingMedicalDocument(false);
     }
   };
 
@@ -899,14 +1069,42 @@ function FirstTimeOnboarding() {
       const patientPicturePreview = typeof patientPictureValue === 'string' ? patientPictureValue : patientPictureValue?.previewUri || '';
       const medicalDocumentPreview = typeof medicalDocumentValue === 'string' ? medicalDocumentValue : medicalDocumentValue?.previewUri || '';
       const medicalDocumentName = typeof medicalDocumentValue === 'object' ? medicalDocumentValue?.fileName || '' : '';
+      const activeMedicalDocumentVerification = getMedicalDocumentVerification(
+        medicalDocumentValue,
+        medicalDocumentVerification
+      );
+      const medicalDocumentVerificationStatus = getMedicalDocumentVerificationStatus(
+        medicalDocumentValue,
+        medicalDocumentVerification
+      );
+      const isMedicalDocumentVerificationPassed = isMedicalDocumentVerified(
+        medicalDocumentValue,
+        medicalDocumentVerification
+      );
+      const canRetryMedicalDocumentVerification = Boolean(medicalDocumentValue)
+        && typeof medicalDocumentValue === 'object'
+        && Boolean(activeMedicalDocumentVerification)
+        && !isMedicalDocumentVerificationPassed
+        && !isUploadingMedicalDocument
+        && !isSubmitting;
+      const medicalDocumentVerificationLabel = isUploadingMedicalDocument
+        ? 'Verifying document...'
+        : isMedicalDocumentVerificationPassed
+          ? 'Certificate verified by OCR. PRC review remains pending.'
+          : activeMedicalDocumentVerification?.errorMessage
+            ? activeMedicalDocumentVerification.errorMessage
+          : activeMedicalDocumentVerification?.missing?.length
+            ? `Missing: ${activeMedicalDocumentVerification.missing.join(', ')}`
+            : 'Upload or scan the certificate to verify doctor and license details.';
+      const medicalDocumentVerificationTitle = medicalDocumentVerificationStatus || isUploadingMedicalDocument
+        ? 'Document verification'
+        : 'Verification required';
       const hasMedicalDocumentImagePreview = typeof medicalDocumentValue === 'string'
         ? /\.(png|jpe?g|webp|gif)$/i.test(medicalDocumentValue)
         : String(medicalDocumentValue?.contentType || '').startsWith('image/');
       const stepOneValues = manualPatientForm.watch([
         'first_name',
-        'middle_name',
         'last_name',
-        'suffix',
         'birthdate',
         'gender',
         'contact_number',
@@ -928,7 +1126,7 @@ function FirstTimeOnboarding() {
       const isStepOneComplete = stepOneValues.every(isNonEmpty)
         && (!requiresParentalConsent || Boolean(parentalConsentValue));
       const isStepTwoComplete = stepTwoValues.every(isNonEmpty);
-      const isStepThreeComplete = Boolean(patientPictureValue) && Boolean(medicalDocumentValue);
+      const isStepThreeComplete = Boolean(patientPictureValue) && isMedicalDocumentVerificationPassed;
       const isManualNextDisabled = manualPatientStep === 0
         ? !isStepOneComplete
         : manualPatientStep === 1
@@ -987,7 +1185,10 @@ function FirstTimeOnboarding() {
         <View style={styles.patientManualPlainSection}>
           <ScrollView
             style={styles.patientManualFormScroll}
-            contentContainerStyle={styles.patientManualFormScrollContent}
+            contentContainerStyle={[
+              styles.patientManualFormScrollContent,
+              manualPatientStep === 2 ? styles.patientManualFormScrollContentCompact : null,
+            ]}
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
           >
@@ -1434,7 +1635,23 @@ function FirstTimeOnboarding() {
               </View>
 
               {patientPictureValue ? (
-                <Image source={{ uri: patientPicturePreview }} style={styles.uploadPreviewImage} />
+                <Pressable
+                  accessibilityRole="imagebutton"
+                  accessibilityLabel="Open patient photo preview"
+                  onPress={() => setManualImagePreview({
+                    uri: patientPicturePreview,
+                    title: 'Patient Photo',
+                  })}
+                  style={({ pressed }) => [
+                    styles.uploadPreviewButton,
+                    pressed ? styles.pressed : null,
+                  ]}
+                >
+                  <Image source={{ uri: patientPicturePreview }} style={styles.uploadPreviewImage} />
+                  <View style={styles.uploadPreviewHint}>
+                    <MaterialCommunityIcons name="magnify-plus-outline" size={16} color="#ffffff" />
+                  </View>
+                </Pressable>
               ) : null}
 
               <View style={styles.uploadFieldCard}>
@@ -1442,6 +1659,7 @@ function FirstTimeOnboarding() {
                 <View
                   style={[
                     styles.uploadFieldShell,
+                    styles.uploadFieldShellStacked,
                     {
                       borderColor: roles.defaultCardBorder,
                       backgroundColor: theme.colors.surfaceCard,
@@ -1451,30 +1669,60 @@ function FirstTimeOnboarding() {
                   <View style={styles.uploadCardCopy}>
                     <MaterialCommunityIcons name="file-document-outline" size={22} color={roles.primaryActionBackground} />
                     <View style={styles.uploadCardTextGroup}>
-                      <Text style={[styles.uploadCardTitle, { color: roles.headingText }]}>Add file</Text>
+                      <Text style={[styles.uploadCardTitle, { color: roles.headingText }]}>Verify certificate</Text>
                       <Text style={styles.uploadCardHint}>
-                        PDF or image of diagnosis or supporting document.
+                        Upload a PDF/image or scan the certificate with the camera.
                       </Text>
                     </View>
                   </View>
-                  <AppButton
-                    title={medicalDocumentValue ? 'Change' : 'Upload'}
-                    size="sm"
-                    variant="outline"
-                    fullWidth={false}
-                    style={styles.uploadActionButton}
-                    loading={isUploadingMedicalDocument}
-                    disabled={isUploadingMedicalDocument || isSubmitting}
-                    onPress={() => pickManualPatientAsset('medical_document', setIsUploadingMedicalDocument)}
-                    backgroundColorOverride={theme.colors.surfaceCard}
-                    borderColorOverride="#b87b44"
-                    textColorOverride={roles.primaryActionBackground}
-                  />
+                  <View style={styles.uploadActionGroup}>
+                    <AppButton
+                      title={medicalDocumentValue ? 'Change' : 'Upload'}
+                      size="sm"
+                      variant="outline"
+                      fullWidth={false}
+                      style={[styles.uploadActionButton, styles.uploadSplitActionButton]}
+                      loading={isUploadingMedicalDocument}
+                      disabled={isUploadingMedicalDocument || isSubmitting}
+                      onPress={() => pickManualPatientAsset('medical_document', setIsUploadingMedicalDocument)}
+                      backgroundColorOverride={theme.colors.surfaceCard}
+                      borderColorOverride="#b87b44"
+                      textColorOverride={roles.primaryActionBackground}
+                    />
+                    <AppButton
+                      title="Scan"
+                      size="sm"
+                      variant="outline"
+                      fullWidth={false}
+                      style={[styles.uploadActionButton, styles.uploadSplitActionButton]}
+                      disabled={isUploadingMedicalDocument || isSubmitting}
+                      onPress={scanManualPatientMedicalDocument}
+                      backgroundColorOverride={theme.colors.surfaceCard}
+                      borderColorOverride="#b87b44"
+                      textColorOverride={roles.primaryActionBackground}
+                    />
+                  </View>
                 </View>
               </View>
 
               {medicalDocumentValue && hasMedicalDocumentImagePreview ? (
-                <Image source={{ uri: medicalDocumentPreview }} style={styles.uploadPreviewImage} />
+                <Pressable
+                  accessibilityRole="imagebutton"
+                  accessibilityLabel="Open medical document preview"
+                  onPress={() => setManualImagePreview({
+                    uri: medicalDocumentPreview,
+                    title: 'Medical Document',
+                  })}
+                  style={({ pressed }) => [
+                    styles.uploadPreviewButton,
+                    pressed ? styles.pressed : null,
+                  ]}
+                >
+                  <Image source={{ uri: medicalDocumentPreview }} style={styles.uploadPreviewImage} />
+                  <View style={styles.uploadPreviewHint}>
+                    <MaterialCommunityIcons name="magnify-plus-outline" size={16} color="#ffffff" />
+                  </View>
+                </Pressable>
               ) : medicalDocumentValue ? (
                 <View style={styles.filePreviewRow}>
                   <MaterialCommunityIcons name="file-check-outline" size={20} color={roles.primaryActionBackground} />
@@ -1483,6 +1731,55 @@ function FirstTimeOnboarding() {
                   </Text>
                 </View>
               ) : null}
+
+              <View
+                style={[
+                  styles.documentVerificationRow,
+                  isMedicalDocumentVerificationPassed ? styles.documentVerificationRowSuccess : null,
+                  activeMedicalDocumentVerification && !isMedicalDocumentVerificationPassed
+                    ? styles.documentVerificationRowError
+                    : null,
+                ]}
+              >
+                <MaterialCommunityIcons
+                  name={isMedicalDocumentVerificationPassed ? 'check-circle-outline' : 'shield-search'}
+                  size={18}
+                  color={isMedicalDocumentVerificationPassed ? '#2f6b45' : roles.primaryActionBackground}
+                />
+                <View style={styles.documentVerificationTextGroup}>
+                  <Text
+                    style={[
+                      styles.documentVerificationTitle,
+                      isMedicalDocumentVerificationPassed ? styles.documentVerificationTitleSuccess : null,
+                    ]}
+                  >
+                    {medicalDocumentVerificationTitle}
+                  </Text>
+                  <Text style={styles.documentVerificationText}>
+                    {medicalDocumentVerificationLabel}
+                  </Text>
+                  {canRetryMedicalDocumentVerification ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      disabled={isUploadingMedicalDocument || isSubmitting}
+                      onPress={retryManualPatientMedicalDocumentVerification}
+                      style={({ pressed }) => [
+                        styles.documentRetryButton,
+                        pressed ? styles.pressed : null,
+                      ]}
+                    >
+                      <MaterialCommunityIcons name="refresh" size={16} color={roles.primaryActionBackground} />
+                      <Text style={[styles.documentRetryText, { color: roles.primaryActionBackground }]}>
+                        Retry verification
+                      </Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+              </View>
+
+              {screenError ? (
+                <Text style={styles.errorText}>{screenError}</Text>
+              ) : null}
             </View>
           </View>
 
@@ -1490,6 +1787,31 @@ function FirstTimeOnboarding() {
             <Text style={styles.errorText}>{screenError}</Text>
           ) : null}
           </ScrollView>
+
+          {manualImagePreview?.uri ? (
+            <View style={styles.manualImagePreviewRoot}>
+              <Pressable
+                style={styles.manualImagePreviewBackdrop}
+                onPress={() => setManualImagePreview(null)}
+              />
+              <View style={styles.manualImagePreviewHeader}>
+                <Text style={styles.manualImagePreviewTitle}>{manualImagePreview.title || 'Preview'}</Text>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Close image preview"
+                  onPress={() => setManualImagePreview(null)}
+                  style={styles.manualImagePreviewClose}
+                >
+                  <MaterialCommunityIcons name="close" size={22} color="#ffffff" />
+                </Pressable>
+              </View>
+              <Image
+                source={{ uri: manualImagePreview.uri }}
+                style={styles.manualImagePreviewImage}
+                resizeMode="contain"
+              />
+            </View>
+          ) : null}
 
           <View
             style={[
@@ -1516,6 +1838,7 @@ function FirstTimeOnboarding() {
                     setBranchMode('patient-code');
                     setManualPatientStep(0);
                     setManualGuardianRelationshipOption('');
+                    setMedicalDocumentVerification(null);
                     setScreenError('');
                   }}
                   style={[styles.backActionButton, styles.patientCodeSecondaryButton, styles.manualStepCompactButton]}
@@ -1709,6 +2032,7 @@ function FirstTimeOnboarding() {
       scrollable={branchMode !== 'patient-manual'}
       safeArea={false}
       variant="auth"
+      keyboardAvoidingEnabled={branchMode !== 'patient-manual'}
       contentStyle={[styles.obScreenContent, { backgroundColor: theme.colors.surfaceCard }]}
     >
       <View style={styles.obPage}>
@@ -1934,7 +2258,7 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 32,
     paddingHorizontal: theme.spacing.lg,
     paddingTop: theme.spacing.xl,
-    paddingBottom: theme.spacing.section,
+    paddingBottom: 0,
     flex: 1,
   },
 
@@ -2398,6 +2722,9 @@ const styles = StyleSheet.create({
   patientManualFormScrollContent: {
     paddingBottom: 170,
   },
+  patientManualFormScrollContentCompact: {
+    paddingBottom: 104,
+  },
   patientInputLabel: {
     fontSize: 11,
     letterSpacing: 0.9,
@@ -2836,7 +3163,7 @@ const styles = StyleSheet.create({
   },
   uploadFieldShell: {
     width: '100%',
-    minHeight: 76,
+    minHeight: 68,
     borderRadius: 16,
     borderWidth: 1,
     flexDirection: 'row',
@@ -2845,6 +3172,10 @@ const styles = StyleSheet.create({
     gap: theme.spacing.sm,
     paddingHorizontal: theme.spacing.md,
     paddingVertical: theme.spacing.sm,
+  },
+  uploadFieldShellStacked: {
+    alignItems: 'stretch',
+    flexDirection: 'column',
   },
   manualStepPanel: {
     width: '100%',
@@ -2878,17 +3209,87 @@ const styles = StyleSheet.create({
   },
   uploadActionButton: {
     minWidth: 96,
-    minHeight: 38,
-    paddingHorizontal: theme.spacing.md,
+    minHeight: 36,
+    paddingHorizontal: theme.spacing.sm,
     borderRadius: 12,
     borderWidth: 1.2,
   },
+  uploadSplitActionButton: {
+    flex: 1,
+    minWidth: 0,
+  },
+  uploadActionGroup: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+    justifyContent: 'space-between',
+  },
   uploadPreviewImage: {
     width: '100%',
-    height: 140,
+    height: 112,
     borderRadius: theme.radius.xl,
     borderWidth: 1,
     borderColor: theme.colors.borderSubtle,
+  },
+  uploadPreviewButton: {
+    width: '100%',
+    borderRadius: theme.radius.xl,
+    overflow: 'hidden',
+  },
+  uploadPreviewHint: {
+    position: 'absolute',
+    right: theme.spacing.sm,
+    bottom: theme.spacing.sm,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(20, 8, 12, 0.58)',
+  },
+  manualImagePreviewRoot: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 70,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(12, 5, 8, 0.92)',
+  },
+  manualImagePreviewBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  manualImagePreviewHeader: {
+    position: 'absolute',
+    top: theme.spacing.xl,
+    left: theme.spacing.md,
+    right: theme.spacing.md,
+    zIndex: 2,
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.md,
+  },
+  manualImagePreviewTitle: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.semibold,
+    color: '#ffffff',
+  },
+  manualImagePreviewClose: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.14)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.22)',
+  },
+  manualImagePreviewImage: {
+    width: '100%',
+    height: '100%',
   },
   filePreviewRow: {
     width: '100%',
@@ -2907,6 +3308,65 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.bodySm,
     color: theme.colors.textPrimary,
+  },
+  documentVerificationRow: {
+    width: '100%',
+    minHeight: 52,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.surfaceCard,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+  },
+  documentVerificationRowSuccess: {
+    borderColor: '#9ec2aa',
+    backgroundColor: '#f4faf6',
+  },
+  documentVerificationRowError: {
+    borderColor: '#d8aaaa',
+    backgroundColor: '#fff7f7',
+  },
+  documentVerificationTextGroup: {
+    flex: 1,
+    gap: 2,
+  },
+  documentVerificationTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textPrimary,
+    textTransform: 'uppercase',
+  },
+  documentVerificationTitleSuccess: {
+    color: '#2f6b45',
+  },
+  documentVerificationText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    color: theme.colors.textSecondary,
+    lineHeight: theme.typography.compact.caption * theme.typography.lineHeights.normal,
+  },
+  documentRetryButton: {
+    alignSelf: 'flex-start',
+    minHeight: 30,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: theme.spacing.xs,
+    paddingHorizontal: theme.spacing.sm,
+    borderRadius: theme.radius.md,
+    borderWidth: 1,
+    borderColor: '#d7b7a1',
+    backgroundColor: theme.colors.surfaceCard,
+  },
+  documentRetryText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    fontWeight: theme.typography.weights.semibold,
   },
   errorText: {
     textAlign: 'center',

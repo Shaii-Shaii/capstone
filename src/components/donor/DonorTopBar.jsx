@@ -1,6 +1,6 @@
 import React from 'react';
 import { Image, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
-import { useRouter } from 'expo-router';
+import { usePathname, useRouter } from 'expo-router';
 import { AppIcon } from '../ui/AppIcon';
 import { AppCard } from '../ui/AppCard';
 import { AppButton } from '../ui/AppButton';
@@ -13,10 +13,12 @@ export function DonorTopBar({
   subtitle = '',
   unreadCount = 0,
   showBack = false,
+  showFeedbackAction,
   showProfileAction = true,
   showNotificationsAction = true,
   showLogoutAction = false,
   onBackPress,
+  onFeedbackPress,
   onProfilePress,
   onNotificationsPress,
   onLogoutPress,
@@ -25,6 +27,7 @@ export function DonorTopBar({
 }) {
   const { resolvedTheme } = useAuth();
   const router = useRouter();
+  const pathname = usePathname();
   const { logout: fallbackLogout, isLoading: isFallbackLoggingOut } = useAuthActions();
   const roles = resolveThemeRoles(resolvedTheme);
   const [logoFailed, setLogoFailed] = React.useState(false);
@@ -32,6 +35,7 @@ export function DonorTopBar({
   const effectiveIsLoggingOut = Boolean(isLoggingOut || (!onLogoutPress && isFallbackLoggingOut));
   const appLogoSource = resolveBrandLogoSource(resolvedTheme, logoFailed);
   const headerIconColor = roles.primaryActionText || '#ffffff';
+  const shouldShowFeedbackAction = showFeedbackAction ?? String(pathname || '').startsWith('/donor');
 
   React.useEffect(() => {
     setLogoFailed(false);
@@ -63,6 +67,14 @@ export function DonorTopBar({
     }
   }, [fallbackLogout, onLogoutPress, router]);
 
+  const handleFeedbackPress = React.useCallback(() => {
+    if (onFeedbackPress) {
+      onFeedbackPress();
+      return;
+    }
+    router.navigate('/donor/feedback');
+  }, [onFeedbackPress, router]);
+
   return (
     <>
       <View style={[styles.headerRow, style]}>
@@ -72,7 +84,7 @@ export function DonorTopBar({
             disabled={!onBackPress}
             style={styles.headerIdentity}
           >
-            <View style={[styles.headerIconButton, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
+            <View style={styles.headerBackButton}>
               <AppIcon name="arrowLeft" size="md" state="default" color={roles.headingText} />
             </View>
             <View style={styles.headerCopy}>
@@ -109,8 +121,21 @@ export function DonorTopBar({
         )}
 
         <View style={styles.headerActions}>
+          {shouldShowFeedbackAction ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Open feedback"
+              onPress={handleFeedbackPress}
+              style={styles.headerIconButton}
+            >
+              <AppIcon name="feedback" size="md" state="default" color={headerIconColor} />
+            </Pressable>
+          ) : null}
+
           {showNotificationsAction ? (
             <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Open notifications"
               onPress={onNotificationsPress}
               style={styles.headerIconButton}
             >
@@ -127,6 +152,8 @@ export function DonorTopBar({
 
           {showProfileAction ? (
             <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Open profile"
               onPress={onProfilePress}
               disabled={!onProfilePress}
               style={styles.headerIconButton}
@@ -137,6 +164,8 @@ export function DonorTopBar({
 
           {showLogoutAction ? (
             <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Log out"
               onPress={openLogoutModal}
               disabled={effectiveIsLoggingOut}
               style={[styles.headerIconButton, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}
@@ -176,8 +205,15 @@ const styles = StyleSheet.create({
   headerIdentity: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 0,
+    gap: 4,
     flex: 1,
+  },
+  headerBackButton: {
+    width: 28,
+    height: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'transparent',
   },
   brandLogoWrap: {
     width: 34,

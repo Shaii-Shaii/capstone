@@ -554,20 +554,20 @@ const formatDensityScore = (value) => {
 
 const buildDonationAssessment = ({ analysis = {}, donationRequirement = null }) => {
   const totalLengthCm = Number(analysis?.estimated_length);
-  const configuredMinimumCm = Number(donationRequirement?.minimum_hair_length);
-  const minimumLengthCm = Math.max(
-    35.56,
-    Number.isFinite(configuredMinimumCm) && configuredMinimumCm > 0 ? configuredMinimumCm : 0,
-  );
+  const configuredMinimumCm = Number(donationRequirement?.minimum_hair_length_cm);
+  const minimumLengthCm = Number.isFinite(configuredMinimumCm) && configuredMinimumCm > 0
+    ? configuredMinimumCm
+    : null;
   const totalInches = cmToInches(totalLengthCm);
-  const minimumInches = cmToInches(minimumLengthCm);
+  const minimumInches = minimumLengthCm ? cmToInches(minimumLengthCm) : null;
   const isLengthDetected = Number.isFinite(totalLengthCm) && totalLengthCm > 0;
   const shortEndpoint = hasShortDonationEndpoint(analysis);
-  const meetsLengthRequirement = isLengthDetected && totalLengthCm >= minimumLengthCm && !shortEndpoint;
+  const hasRequirement = Boolean(donationRequirement?.donation_requirement_id) && Boolean(minimumLengthCm);
+  const meetsLengthRequirement = hasRequirement && isLengthDetected && totalLengthCm >= minimumLengthCm && !shortEndpoint;
   const hasHardBlocker = hasHardDonationBlocker(analysis);
   const isDonationReady = meetsLengthRequirement && !hasHardBlocker;
   const donatableLengthCm = meetsLengthRequirement && !hasHardBlocker ? totalLengthCm : 0;
-  const neededLengthCm = isLengthDetected ? Math.max(0, minimumLengthCm - totalLengthCm) : null;
+  const neededLengthCm = hasRequirement && isLengthDetected ? Math.max(0, minimumLengthCm - totalLengthCm) : null;
   const cutLineBottomPercent = isDonationReady && totalLengthCm > 0
     ? Math.max(24, Math.min(82, (minimumLengthCm / totalLengthCm) * 100))
     : 18;
@@ -588,9 +588,11 @@ const buildDonationAssessment = ({ analysis = {}, donationRequirement = null }) 
     hairLengthLabel,
     isDonationReady,
     meetsLengthRequirement,
-    minimumLengthLabel: `${minimumInches.toFixed(1)} inches`,
+    minimumLengthLabel: minimumInches ? `${minimumInches.toFixed(1)} inches` : 'Not configured',
     summary: isDonationReady
       ? (analysis?.donation_readiness_note || 'Your hair appears long enough for donation. You can prepare for a haircut assessment and final partner review.')
+      : !hasRequirement
+        ? 'Donation requirements are not configured. Please contact the team before using this result for donation eligibility.'
       : hasScalpCoverageConcern(analysis)
         ? 'Not eligible for donation yet. This check can still track visible scalp coverage, density, and hair wellness progress over time.'
       : meetsLengthRequirement && !hasHardBlocker
@@ -3061,6 +3063,9 @@ export function DonorHairSubmissionScreen() {
     const fieldError = questionForm.formState.errors[fieldName]?.message;
 
     if (currentQuestion.type === 'number') {
+      const minimumLengthPlaceholder = donationRequirement?.minimum_hair_length_inches
+        ? String(donationRequirement.minimum_hair_length_inches)
+        : '';
       return (
         <Controller
           control={questionForm.control}
@@ -3068,7 +3073,7 @@ export function DonorHairSubmissionScreen() {
           render={({ field }) => (
             <AppInput
               label={currentQuestion.title}
-              placeholder="14"
+              placeholder={minimumLengthPlaceholder || 'Length'}
               keyboardType="decimal-pad"
               variant="filled"
               helperText={currentQuestion.helperText}

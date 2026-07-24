@@ -262,20 +262,18 @@ export const validateDonationDetails = (donationDetails = {}, donationRequiremen
     errors.push('Donation photo is required');
   }
 
-  // Check against donation requirements if provided
-  if (donationRequirement) {
-    const minLength = Math.max(
-      35.56,
-      Number(donationRequirement.minimum_hair_length) > 0 ? Number(donationRequirement.minimum_hair_length) : 0,
-    );
-    const minLengthInches = (minLength / 2.54).toFixed(1);
+  const minLengthInches = Number(donationRequirement?.minimum_hair_length_inches);
+  if (!Number.isFinite(minLengthInches) || minLengthInches <= 0) {
+    errors.push('Donation requirements are not configured.');
+  } else {
+    const requiredLengthInches = Number(minLengthInches.toFixed(1));
 
-    const hairLengthInches = donationDetails.hairLengthUnit === 'cm'
+    const hairLengthInches = Number(donationDetails.hairLengthUnit === 'cm'
       ? (donationDetails.hairLengthValue / 2.54).toFixed(1)
-      : donationDetails.hairLengthValue;
+      : donationDetails.hairLengthValue);
 
-    if (hairLengthInches < minLengthInches) {
-      errors.push(`Hair must be at least ${minLengthInches} inches`);
+    if (hairLengthInches < requiredLengthInches) {
+      errors.push(`Hair must be at least ${requiredLengthInches} inches`);
     }
   }
 

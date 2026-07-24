@@ -296,6 +296,7 @@ type ComplianceContext = {
 type DonationRequirementContext = {
   donation_requirement_id?: number | null;
   minimum_hair_length?: number | null;
+  minimum_hair_length_inches?: number | null;
   chemical_treatment_status?: boolean | null;
   colored_hair_status?: boolean | null;
   bleached_hair_status?: boolean | null;
@@ -370,7 +371,6 @@ const requiredViewDefinitions = [
 ] as const;
 const minimumExpectedViews = ['Front View Photo', 'Side Profile Photo', 'Hair Scalp'];
 const expectedViews = minimumExpectedViews;
-const MIN_DONATION_LENGTH_CM = 35.56;
 const CM_PER_INCH = 2.54;
 const MIN_ELIGIBILITY_CONFIDENCE = 0.75;
 const ELIGIBLE_STATUS = 'Eligible for hair donation';
@@ -516,7 +516,7 @@ const instructions = [
   'Donation length starts at the likely cut-start area around the lower cheek, jawline, or neck ("bandang leeg"), not from the scalp, hairline, or root. Measure the visible hanging length from that cheek/neck start point down to the lowest clearly visible hair ends.',
   'Use the Front View Photo, Side Profile Photo, Right Side Photo, and Back Hair Photo together when available. The back-side photo is important for confirming the lowest visible ends and true hanging length. The hairline/root does not need to be visible for donation length if the cheek/neck or nape start area and lowest ends are visible.',
   'IMPORTANT LENGTH RULE: Do not return null just because there is no ruler. Make a conservative practical visual estimate using face/head scale and body landmarks. Approximate donation length from lower cheek/neck to ends: shoulder-length is usually about 4-8 inches, collarbone is usually about 6-10 inches, upper chest is usually about 8-12 inches, armpit is usually about 10-14 inches, mid-back is usually about 15-24 inches, waist is usually about 24-32 inches. Store the rounded numeric estimate in centimeters.',
-  `Do NOT mark the donor eligible when the visible ends only reach the shoulder, collarbone, or upper chest. For eligibility, the visible lower cheek/neck-to-ends length must clearly exceed ${formatLengthInches(MIN_DONATION_LENGTH_CM)} and usually needs to reach at least around armpit or longer in the side/front view.`,
+  'Do NOT mark the donor eligible when the visible ends only reach the shoulder, collarbone, or upper chest. For eligibility, the visible lower cheek/neck-to-ends length must clearly exceed the current database minimum hair length requirement and usually needs to reach at least around armpit or longer in the side/front view.',
   'Return null for estimated_length only when the lower cheek/neck cut-start area or the lowest visible ends are not visible enough to estimate at all. If hair is too short for donation, still return the best numeric estimate instead of null.',
   'In length_assessment, explicitly mention that the estimate starts around the lower cheek/neck/cut-start area and name the visible endpoint landmark, such as shoulder, collarbone, armpit, mid-back, waist, or "lowest visible ends". Use inches only in this text.',
 
@@ -584,7 +584,7 @@ const instructions = [
   `Use "${NOT_ELIGIBLE_STATUS}" when image quality prevents a confident visible-length or condition judgment.`,
 
   // donation_readiness_note
-  `donation_readiness_note: When the estimated_length clearly exceeds ${formatLengthInches(MIN_DONATION_LENGTH_CM)} from the lower cheek/neck cut-start area to the ends, the endpoint landmark is armpit/mid-back/waist or similarly long, confidence_score is at least ${MIN_ELIGIBILITY_CONFIDENCE}, AND the detected_condition is Healthy or otherwise suitable, write 1-2 specific, encouraging sentences about what the donor should do to prepare for donation. When the hair is not yet ready for donation, return an empty string.`,
+  `donation_readiness_note: When the estimated_length clearly exceeds the current database minimum hair length requirement from the lower cheek/neck cut-start area to the ends, the endpoint landmark is armpit/mid-back/waist or similarly long, confidence_score is at least ${MIN_ELIGIBILITY_CONFIDENCE}, AND the detected_condition is Healthy or otherwise suitable, write 1-2 specific, encouraging sentences about what the donor should do to prepare for donation. When the hair is not yet ready for donation, return an empty string.`,
 
   // history_assessment
   'history_assessment: if 2 or more prior hair-check entries are provided, compare current vs prior. Otherwise return empty string.',
@@ -632,10 +632,10 @@ const analysisInstructions = [
   'When the lower cheek/neck cut-start area and ends are visible but no measuring ruler is present, return a conservative approximate estimated_length in centimeters for storage using visible face/head/body proportions. Round to the nearest whole centimeter. Return null only when the lower cheek/neck cut-start area or lowest visible ends are completely blocked/cropped.',
   'If the hair appears short, shoulder-length, or below the donation threshold, return the approximate short length in centimeters instead of null.',
   'Do not invent fake precision when the hair is curled, tied, blocked, cropped, blurry, or lacks reliable scale. Prefer an approximate rounded estimate with lower confidence over null when the lower cheek/neck start area and ends are visible.',
-  `Donation suitability must respect the ${formatLengthInches(MIN_DONATION_LENGTH_CM)} rule measured from the lower cheek/neck cut-start area to the lowest visible ends.`,
+  'Donation suitability must respect the current database minimum hair length requirement measured from the lower cheek/neck cut-start area to the lowest visible ends.',
   `Set decision to exactly one of: "${ELIGIBLE_STATUS}" or "${NOT_ELIGIBLE_STATUS}".`,
-  `Use "${ELIGIBLE_STATUS}" only when the visible donation length clearly exceeds ${formatLengthInches(MIN_DONATION_LENGTH_CM)}, the visible endpoint is around armpit or longer, the visible condition appears suitable for donation, and confidence_score is at least ${MIN_ELIGIBILITY_CONFIDENCE}.`,
-  `Use "${NOT_ELIGIBLE_STATUS}" when the visible donation length appears below ${formatLengthInches(MIN_DONATION_LENGTH_CM)}, the visible condition is not suitable, or the evidence is too limited for confident eligibility.`,
+  `Use "${ELIGIBLE_STATUS}" only when the visible donation length clearly exceeds the current database minimum hair length requirement, the visible endpoint is around armpit or longer, the visible condition appears suitable for donation, and confidence_score is at least ${MIN_ELIGIBILITY_CONFIDENCE}.`,
+  `Use "${NOT_ELIGIBLE_STATUS}" when the visible donation length appears below the current database minimum hair length requirement, the visible condition is not suitable, or the evidence is too limited for confident eligibility.`,
   `Use "${NOT_ELIGIBLE_STATUS}" when clear bald spots, high visible scalp area, or severe shedding concerns mean the user is not ready to donate yet. Set improvement_tracking_status to "${TRACKING_STATUS}" when the user should track visible coverage or shedding progress.`,
   `If the hair looks healthy but too short for donation, still return "${NOT_ELIGIBLE_STATUS}" and tailor recommendations toward healthy growth, length retention, reduced breakage, and maintaining current hair health.`,
   'Questionnaire answers are required supporting context for wash frequency, itch, flakes, oiliness, dryness/roughness, hair fall, chemical history, heat use, and self-reported hair type. They must shape summary and recommendations without replacing photo evidence.',
@@ -1299,7 +1299,7 @@ const runFocusedLengthFallback = async ({
         'Use the front and side profile images for donation length. Use the Hair Scalp only to assess scalp/crown coverage and root/scalp condition.',
         'If the lower cheek/neck cut-start area and the lowest visible ends are visible, return a conservative approximate estimated_length in centimeters for storage even when no ruler is present.',
         'Use face/head/body proportions and landmarks for donation length from lower cheek/neck to ends: shoulder-length is usually about 4-8 inches, collarbone about 6-10 inches, upper chest about 8-12 inches, armpit about 10-14 inches, mid-back about 15-24 inches, waist about 24-32 inches.',
-        `Do not estimate eligible donation length when the visible ends only reach the shoulder, collarbone, or upper chest. Eligibility requires a clear lower cheek/neck-to-ends length above ${formatLengthInches(MIN_DONATION_LENGTH_CM)}.`,
+        'Do not estimate eligible donation length when the visible ends only reach the shoulder, collarbone, or upper chest. Eligibility requires a clear lower cheek/neck-to-ends length above the current database minimum hair length requirement.',
         'Return null only if the lower cheek/neck cut-start area or lowest visible ends are completely blocked or cropped.',
         'Write length_assessment in inches only and mention the lower cheek/neck start point.',
         'Do not reject ordinary eyeglasses unless they hide the hairline or hair.',
@@ -1482,6 +1482,7 @@ const formatRequirementContext = (requirementContext: DonationRequirementContext
   return [
     `donation_requirement_id: ${requirementContext.donation_requirement_id ?? 'not provided'}`,
     `minimum_hair_length_cm: ${requirementContext.minimum_hair_length ?? 'not provided'}`,
+    `minimum_hair_length_inches: ${requirementContext.minimum_hair_length_inches ?? 'not provided'}`,
     `chemical_treatment_allowed: ${requirementContext.chemical_treatment_status ?? 'unknown'}`,
     `colored_hair_allowed: ${requirementContext.colored_hair_status ?? 'unknown'}`,
     `bleached_hair_allowed: ${requirementContext.bleached_hair_status ?? 'unknown'}`,
@@ -1694,10 +1695,10 @@ const normalizeAnalysisPayload = (
   const oilinessLevel = rawOilinessLevel;
   const inferredMissingViews = expectedViews.filter((view) => !providedViews.includes(view));
   const missingViews = [...new Set([...inferredMissingViews, ...normalizedMissingViews])];
-  const minimumDonationLengthCm = Math.max(
-    MIN_DONATION_LENGTH_CM,
-    requirementContext?.minimum_hair_length != null ? Number(requirementContext.minimum_hair_length) : 0,
-  );
+  const configuredMinimumDonationLengthCm = Number(requirementContext?.minimum_hair_length);
+  const minimumDonationLengthCm = Number.isFinite(configuredMinimumDonationLengthCm) && configuredMinimumDonationLengthCm > 0
+    ? configuredMinimumDonationLengthCm
+    : null;
   const endpointEvidenceText = [
     lengthAssessment,
     normalizeString(analysis?.summary),
@@ -1705,11 +1706,11 @@ const normalizeAnalysisPayload = (
     ...normalizedViewNotes.map((item) => item.notes),
   ].join(' ');
   const hasBelowThresholdEndpointLandmark = (
-    (approximateLengthFromText != null && approximateLengthFromText < minimumDonationLengthCm)
+    (minimumDonationLengthCm != null && approximateLengthFromText != null && approximateLengthFromText < minimumDonationLengthCm)
     || hasShortEndpointLandmark(endpointEvidenceText)
   );
   const finalEstimatedLength = hasBelowThresholdEndpointLandmark && estimatedLength != null
-    ? Math.min(estimatedLength, approximateLengthFromText ?? minimumDonationLengthCm - 0.1)
+    ? Math.min(estimatedLength, approximateLengthFromText ?? (minimumDonationLengthCm != null ? minimumDonationLengthCm - 0.1 : estimatedLength))
     : estimatedLength;
   const donationReadinessNote = normalizeString(analysis?.donation_readiness_note);
   const historyAssessment = normalizeString(analysis?.history_assessment) || inferHistoryAssessment(
@@ -1726,12 +1727,13 @@ const normalizeAnalysisPayload = (
     questionnaireAnswers,
   );
   const hasClearEnoughEvidence = isHairDetected && !missingViews.length && confidenceScore != null && confidenceScore >= MIN_ELIGIBILITY_CONFIDENCE;
-  const meetsLengthRule = finalEstimatedLength != null && finalEstimatedLength >= minimumDonationLengthCm && !hasBelowThresholdEndpointLandmark;
+  const hasDonationRequirement = minimumDonationLengthCm != null;
+  const meetsLengthRule = hasDonationRequirement && finalEstimatedLength != null && finalEstimatedLength >= minimumDonationLengthCm && !hasBelowThresholdEndpointLandmark;
 
   let decision = normalizeString(analysis?.decision) === ELIGIBLE_STATUS
     ? ELIGIBLE_STATUS
     : IMPROVE_STATUS;
-  if (!hasClearEnoughEvidence || !meetsLengthRule || !conditionAcceptable || treatmentConflict || hasCoverageConcern) {
+  if (!hasDonationRequirement || !hasClearEnoughEvidence || !meetsLengthRule || !conditionAcceptable || treatmentConflict || hasCoverageConcern) {
     decision = IMPROVE_STATUS;
   } else if (concernType === 'donation_eligibility') {
     decision = ELIGIBLE_STATUS;
@@ -1959,7 +1961,7 @@ Deno.serve(async (request) => {
       'Do not reject the photo set in this step. The photo set already passed validation, so return the closest conservative hair analysis and keep is_hair_detected=true.',
       'Recommendations must be about hair care, condition maintenance, length retention, scalp care, or visible damage. Do not put photo capture, retake, lighting, upload, framing, or recheck instructions in recommendations.',
       'If questionnaire answers report at least one risk, at least one recommendation must directly address that reported risk.',
-      `Visible donation length must be at least ${formatLengthInches(MIN_DONATION_LENGTH_CM)} from the lower cheek/neck cut-start area for donation eligibility.`,
+      'Visible donation length must be at least the current database minimum hair length requirement from the lower cheek/neck cut-start area for donation eligibility.',
       `Use "${ELIGIBLE_STATUS}" only when visible condition is suitable, confidence_score is at least ${MIN_ELIGIBILITY_CONFIDENCE}, all required views are clearly visible, and the visible endpoint is around armpit or longer. Shoulder, collarbone, or upper-chest length is not eligible.`,
       'If donation requirements disallow colored, bleached, rebonded, or chemically treated hair and the photos or questionnaire suggest that treatment, mark the result as needing improvement or manual review.',
       'Do not recommend or advertise products. Include neutral ingredients only when they clearly fit a visible concern: dryness, visible damage, frizz, visible flakes, oily roots, or chemically treated hair. Skip ingredients when the recommendation is only about length, maintenance, retaking photos, or rechecking. Do not include brand names, company names, store names, marketplaces, shopping links, advertised product names, countries, country-made products, or country-specific product options. If ingredients are mentioned, include a short caution that users with allergies, scalp irritation, or sensitivity should consult a qualified hair or scalp care professional before trying new ingredients.',

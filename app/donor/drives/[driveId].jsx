@@ -3,12 +3,12 @@ import {
   ActivityIndicator,
   Image,
   Linking,
-  NativeModules,
   Pressable,
   Platform,
   ScrollView,
   StyleSheet,
   Text,
+  UIManager,
   useWindowDimensions,
   View,
 } from 'react-native';
@@ -18,6 +18,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { ScreenContainer } from '../../../src/components/ui/ScreenContainer';
 import { AppButton } from '../../../src/components/ui/AppButton';
 import { AppIcon } from '../../../src/components/ui/AppIcon';
+import { LocalQrCode } from '../../../src/components/ui/LocalQrCode';
 import { StatusBanner } from '../../../src/components/ui/StatusBanner';
 import { useAuth } from '../../../src/providers/AuthProvider';
 import {
@@ -25,23 +26,42 @@ import {
   fetchDonationDriveDetail,
   fetchDonationDrivePreview,
 } from '../../../src/features/donorHome.api';
-import { getDonorDonationsModuleData } from '../../../src/features/donorDonations.service';
+import {
+  buildDriveInvitationQrPayload,
+  getDonorDonationsModuleData,
+} from '../../../src/features/donorDonations.service';
 import { DONOR_PERMISSION_REASONS } from '../../../src/features/donorCompliance.service';
 import { supabase } from '../../../src/api/supabase/client';
 import { resolveThemeRoles, theme } from '../../../src/design-system/theme';
 
 const DRIVE_REALTIME_DEBOUNCE_MS = 380;
 
-const resolveWebView = () => {
-  if (!NativeModules?.RNCWebViewModule) return null;
+const resolveNativeMapComponents = () => {
+  if (!UIManager.getViewManagerConfig?.('AIRMap')) {
+    return {
+      MapView: null,
+      Marker: null,
+      PROVIDER_GOOGLE: null,
+    };
+  }
+
   try {
-    return require('react-native-webview').WebView;
+    const maps = require('react-native-maps');
+    return {
+      MapView: maps.default,
+      Marker: maps.Marker,
+      PROVIDER_GOOGLE: maps.PROVIDER_GOOGLE,
+    };
   } catch (_error) {
-    return null;
+    return {
+      MapView: null,
+      Marker: null,
+      PROVIDER_GOOGLE: null,
+    };
   }
 };
 
-const WebView = resolveWebView();
+const NativeMapComponents = resolveNativeMapComponents();
 
 const formatDriveDate = (startDate, endDate) => {
   if (!startDate) return 'Date to follow';
@@ -85,6 +105,7 @@ const normalizeRealtimeDriveRegistration = (row = {}) => ({
   registration_id: row?.Event_Attendee_ID || row?.registration_id || null,
   donation_drive_id: row?.Event_Request_ID || row?.donation_drive_id || null,
   user_id: row?.User_ID || row?.user_id || null,
+  attendee_type: row?.Attendee_Type || row?.attendee_type || 'Donor',
   waybill_code: row?.Waybill_Code || row?.waybill_code || null,
   registration_status: row?.Registration_Status || row?.registration_status || '',
   attendance_status: row?.Attendance_Status || row?.attendance_status || '',
@@ -127,36 +148,17 @@ const buildDirectionsUrl = (drive = null) => {
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
 };
 
-const buildCoordinateMapHtml = (latitude, longitude) => `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <style>
-    html, body, #map { height: 100%; width: 100%; margin: 0; padding: 0; background: #f7f7f7; }
-    .leaflet-control-container { display: none; }
-  </style>
-</head>
-<body>
-  <div id="map"></div>
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script>
-    const notify = (message) => {
-      if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
-        window.ReactNativeWebView.postMessage(message);
-      }
-    };
-    const lat = ${latitude};
-    const lng = ${longitude};
-    const map = L.map('map', { zoomControl: false, attributionControl: false, dragging: false, scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false, keyboard: false, tap: false }).setView([lat, lng], 16);
-    const tiles = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
-    tiles.on('load', () => notify('map-ready'));
-    tiles.on('tileerror', () => notify('map-error'));
-    L.marker([lat, lng]).addTo(map);
-  </script>
-</body>
-</html>`;
+const getDriveCoordinates = (drive = null) => {
+  const latitude = Number(drive?.latitude);
+  const longitude = Number(drive?.longitude);
+  return Number.isFinite(latitude) && Number.isFinite(longitude)
+    ? { latitude, longitude }
+    : null;
+};
+
+const getMapPreviewLabel = (drive = null) => (
+  drive?.address_label || drive?.location_label || 'Tap to view directions.'
+);
 
 const useResponsiveThemeRoles = (resolvedTheme) => {
   const { width } = useWindowDimensions();
@@ -195,73 +197,82 @@ function EventTopBar({ title, onBack }) {
 function EventMapPreview({ drive }) {
   const { resolvedTheme } = useAuth();
   const roles = useResponsiveThemeRoles(resolvedTheme);
-  const latitude = Number(drive?.latitude);
-  const longitude = Number(drive?.longitude);
-  const hasCoordinates = Number.isFinite(latitude) && Number.isFinite(longitude);
+  const coordinates = getDriveCoordinates(drive);
   const directionsUrl = buildDirectionsUrl(drive);
-  const mapHtml = hasCoordinates ? buildCoordinateMapHtml(latitude, longitude) : '';
-  const [mapReady, setMapReady] = React.useState(false);
-  const [mapFailed, setMapFailed] = React.useState(false);
+  const NativeMapView = NativeMapComponents.MapView;
+  const NativeMapMarker = NativeMapComponents.Marker;
+  const mapRegion = coordinates
+    ? {
+        ...coordinates,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01,
+      }
+    : null;
+  const canRenderNativeMap = Boolean(mapRegion && NativeMapView && NativeMapMarker);
 
   const handleOpenDirections = React.useCallback(async () => {
     if (!directionsUrl) return;
     await Linking.openURL(directionsUrl);
   }, [directionsUrl]);
 
-  const handleMapMessage = React.useCallback((event) => {
-    const message = String(event?.nativeEvent?.data || '');
-    if (message === 'map-ready') {
-      setMapReady(true);
-      return;
-    }
-    if (message === 'map-error') {
-      setMapFailed(true);
-    }
-  }, []);
-
-  React.useEffect(() => {
-    setMapReady(false);
-    setMapFailed(false);
-  }, [mapHtml]);
-
-  if (!directionsUrl && !mapHtml) return null;
+  if (!directionsUrl && !coordinates) return null;
 
   return (
-    <Pressable
-      onPress={handleOpenDirections}
-      accessibilityRole="button"
-      accessibilityLabel="Open event location in maps"
-      style={({ pressed }) => [
+    <View
+      style={[
         styles.mapPreview,
         { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder },
-        pressed ? styles.pressed : null,
       ]}
     >
-      <View style={[styles.mapFallback, (!WebView || mapFailed || !mapHtml || !mapReady) ? null : styles.mapFallbackHidden]}>
-        <MaterialCommunityIcons name="map-marker-radius-outline" size={34} color={roles.primaryActionBackground} />
-        <Text style={[styles.mapFallbackTitle, { color: roles.headingText }]}>
-          Open location in maps
-        </Text>
-        <Text numberOfLines={2} style={[styles.mapFallbackSubtitle, { color: roles.bodyText }]}>
-          {drive?.address_label || drive?.location_label || 'Tap to view directions.'}
-        </Text>
-      </View>
-      {WebView && mapHtml && !mapFailed ? (
-        <WebView
-          source={{ html: mapHtml }}
-          baseUrl="https://maps.local"
-          style={[styles.mapWebView, !mapReady ? styles.mapWebViewLoading : null]}
-          javaScriptEnabled
-          domStorageEnabled
+      {canRenderNativeMap ? (
+        <NativeMapView
+          provider={Platform.OS === 'android' ? NativeMapComponents.PROVIDER_GOOGLE : undefined}
+          style={styles.mapNativeView}
+          initialRegion={mapRegion}
+          mapType="standard"
+          liteMode={Platform.OS === 'android'}
           scrollEnabled={false}
-          originWhitelist={['*']}
-          onError={() => setMapFailed(true)}
-          onHttpError={() => setMapFailed(true)}
-          onMessage={handleMapMessage}
-          pointerEvents="none"
-        />
+          zoomEnabled={false}
+          rotateEnabled={false}
+          pitchEnabled={false}
+          toolbarEnabled={false}
+          moveOnMarkerPress={false}
+        >
+          <NativeMapMarker
+            coordinate={coordinates}
+            title={drive?.event_title || 'Donation drive'}
+            description={getMapPreviewLabel(drive)}
+          />
+        </NativeMapView>
+      ) : (
+        <View style={styles.mapFallback}>
+          <MaterialCommunityIcons name="map-marker-radius-outline" size={34} color={roles.primaryActionBackground} />
+          <Text style={[styles.mapFallbackTitle, { color: roles.headingText }]}>
+            {coordinates ? 'Map preview unavailable' : 'Event coordinates needed'}
+          </Text>
+          <Text numberOfLines={2} style={[styles.mapFallbackSubtitle, { color: roles.bodyText }]}>
+            {coordinates ? getMapPreviewLabel(drive) : 'Add latitude and longitude to enable directions.'}
+          </Text>
+        </View>
+      )}
+
+      {directionsUrl ? (
+        <Pressable
+          onPress={handleOpenDirections}
+          accessibilityRole="button"
+          accessibilityLabel="Open event location in maps"
+          style={({ pressed }) => [
+            styles.mapDirectionsOverlay,
+            pressed ? styles.pressed : null,
+          ]}
+        >
+          <View style={[styles.mapDirectionsBadge, { backgroundColor: roles.defaultCardBackground }]}>
+            <MaterialCommunityIcons name="directions" size={15} color={roles.primaryActionBackground} />
+            <Text style={[styles.mapDirectionsText, { color: roles.headingText }]}>Directions</Text>
+          </View>
+        </Pressable>
       ) : null}
-    </Pressable>
+    </View>
   );
 }
 
@@ -336,6 +347,44 @@ function HairEligibilitySection({
   );
 }
 
+function EventRsvpQrCard({ drive }) {
+  const { resolvedTheme } = useAuth();
+  const roles = useResponsiveThemeRoles(resolvedTheme);
+  const registration = drive?.registration || null;
+  const hasRsvp = Boolean(registration?.registration_id);
+  const isVoluntary = String(registration?.attendee_type || '').trim().toLowerCase() === 'voluntary';
+  const qrPayload = hasRsvp ? buildDriveInvitationQrPayload({ drive, registration }) : '';
+
+  if (!hasRsvp || !qrPayload) return null;
+
+  return (
+    <View style={[styles.rsvpQrCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
+      <View style={styles.rsvpQrHeader}>
+        <View style={styles.rsvpQrHeaderCopy}>
+          <Text style={[styles.rsvpQrTitle, { color: roles.headingText }]}>RSVP QR</Text>
+          <Text style={[styles.rsvpQrSubtitle, { color: roles.bodyText }]}>
+            Staff scans this at the event site to mark you Present.
+          </Text>
+        </View>
+        <View style={[styles.rsvpTypeBadge, { backgroundColor: roles.supportCardBackground, borderColor: roles.defaultCardBorder }]}>
+          <Text style={[styles.rsvpTypeText, { color: roles.headingText }]}>
+            {isVoluntary ? 'Voluntary' : 'Donor'}
+          </Text>
+        </View>
+      </View>
+
+      <View style={[styles.rsvpQrFrame, { borderColor: roles.defaultCardBorder }]}>
+        <LocalQrCode
+          value={qrPayload}
+          size={210}
+          color={theme.colors.brandPrimary}
+          backgroundColor={theme.colors.backgroundPrimary}
+        />
+      </View>
+    </View>
+  );
+}
+
 function EventDetailsPanel({
   drive,
   shownRegistrationCount = 0,
@@ -343,7 +392,9 @@ function EventDetailsPanel({
   actionTitle,
   actionDisabled = false,
   onRsvpPress,
+  onAttendOnlyPress,
   isSubmittingRsvp = false,
+  isSubmittingAttendOnly = false,
   hasHairScanLog = false,
   isAiEligible = false,
   hairEligibilityMessage = '',
@@ -356,11 +407,17 @@ function EventDetailsPanel({
   const shownCount = Number(shownRegistrationCount) || 0;
   const overviewText = drive?.event_overview
     || 'Join this Donivra hair donation drive and help provide meaningful support to people who need wigs and care.';
+  const isVoluntaryRegistration = String(drive?.registration?.attendee_type || '').trim().toLowerCase() === 'voluntary';
   const attendanceMeta = isRegisteredForDrive
-    ? (isPresentRegistration(drive?.registration)
-      ? 'You are marked present.'
-      : 'You are counted for this event.')
+    ? isVoluntaryRegistration
+      ? 'Voluntary attendee. You can observe or inquire at the event.'
+      : (isPresentRegistration(drive?.registration)
+        ? 'You are marked present.'
+        : 'You are counted for this event.')
     : 'RSVP to be counted.';
+  const canDonateAndParticipate = hasHairScanLog && isAiEligible && !ended && !isRegisteredForDrive;
+  const canAttendOnly = !ended && !isRegisteredForDrive;
+  const shouldShowRegisteredAction = ended || (isRegisteredForDrive && !actionDisabled);
 
   return (
     <View style={styles.detailsBlock}>
@@ -390,14 +447,42 @@ function EventDetailsPanel({
         />
       </View>
 
-      <AppButton
-        title={actionTitle || 'RSVP'}
-        onPress={onRsvpPress}
-        loading={isSubmittingRsvp}
-        disabled={actionDisabled}
-        size="sm"
-        style={styles.rsvpButton}
-      />
+      {shouldShowRegisteredAction ? (
+        <AppButton
+          title={actionTitle || 'RSVP'}
+          onPress={onRsvpPress}
+          loading={isSubmittingRsvp}
+          disabled={actionDisabled}
+          size="sm"
+          style={styles.rsvpButton}
+        />
+      ) : !isRegisteredForDrive && !ended ? (
+        <View style={styles.participationOptions}>
+          <Text style={[styles.participationTitle, { color: roles.headingText }]}>Choose how you will join</Text>
+          <AppButton
+            title="Donate and participate"
+            onPress={onRsvpPress}
+            loading={isSubmittingRsvp}
+            disabled={!canDonateAndParticipate || isSubmittingAttendOnly}
+            size="sm"
+            style={styles.participationButton}
+            leading={<MaterialCommunityIcons name="gift-outline" size={16} color={roles.primaryActionText} />}
+          />
+          <AppButton
+            title="Attend only"
+            variant="outline"
+            onPress={onAttendOnlyPress}
+            loading={isSubmittingAttendOnly}
+            disabled={!canAttendOnly || isSubmittingRsvp}
+            size="sm"
+            style={styles.participationButton}
+            leading={<MaterialCommunityIcons name="account-eye-outline" size={16} color={roles.headingText} />}
+          />
+          <Text style={[styles.participationHelper, { color: roles.bodyText }]}>
+            Attend-only RSVPs are saved as voluntary attendees for visitors who want to observe or inquire without donating hair.
+          </Text>
+        </View>
+      ) : null}
 
       <HairEligibilitySection
         isRegisteredForDrive={isRegisteredForDrive}
@@ -407,6 +492,8 @@ function EventDetailsPanel({
         ended={ended}
         onScanPress={onScanPress}
       />
+
+      <EventRsvpQrCard drive={drive} />
 
       <EventMapPreview drive={drive} />
 
@@ -445,6 +532,7 @@ export default function DonorDriveDetailRoute() {
   const [feedbackMessage, setFeedbackMessage] = React.useState('');
   const [feedbackVariant, setFeedbackVariant] = React.useState('info');
   const [isSubmittingRsvp, setIsSubmittingRsvp] = React.useState(false);
+  const [isSubmittingAttendOnly, setIsSubmittingAttendOnly] = React.useState(false);
   const [donationFlowState, setDonationFlowState] = React.useState({
     hasOngoingDonation: false,
     ongoingDonationMessage: '',
@@ -732,19 +820,64 @@ export default function DonorDriveDetailRoute() {
     router,
   ]);
 
+  const handleAttendOnlyRsvp = React.useCallback(async () => {
+    if (!drive?.donation_drive_id || ended) return;
+
+    if (drive.registration?.registration_id) {
+      setFeedbackMessage('You are already registered for this event.');
+      setFeedbackVariant('info');
+      return;
+    }
+
+    if (!profile?.user_id) {
+      setFeedbackMessage('Your donor account is required before joining this event.');
+      setFeedbackVariant('info');
+      return;
+    }
+
+    setIsSubmittingAttendOnly(true);
+    const result = await createDonationDriveRegistration({
+      driveId: drive.donation_drive_id,
+      databaseUserId: profile.user_id,
+      attendanceOnly: true,
+    });
+    setIsSubmittingAttendOnly(false);
+
+    if (result.error || !result.data?.registration_id) {
+      setFeedbackMessage(result.error?.message || 'Attendance RSVP could not be saved right now.');
+      setFeedbackVariant('error');
+      return;
+    }
+
+    await loadRegistrationCount();
+    await refreshDriveRegistration();
+    setRegistrationCount((current) => Math.max(current || 0, 1));
+    setFeedbackMessage(result.alreadyRegistered ? 'You are already registered as a voluntary attendee.' : 'Voluntary RSVP saved.');
+    setFeedbackVariant('success');
+  }, [
+    drive,
+    ended,
+    loadRegistrationCount,
+    profile?.user_id,
+    refreshDriveRegistration,
+  ]);
+
   const isRegisteredForDrive = Boolean(drive?.registration?.registration_id);
   const isDrivePresent = isPresentRegistration(drive?.registration);
+  const hasRegistrationDonationLink = Boolean(drive?.registration?.submission_id);
   const actionTitle = ended
     ? 'Event ended'
     : !isRegisteredForDrive
       ? 'RSVP'
-      : isDrivePresent
+      : isDrivePresent && hasRegistrationDonationLink
         ? 'Open Donation Module'
-        : 'Registered';
+        : isDrivePresent
+          ? 'Checked in'
+          : 'Registered';
 
   const actionDisabled = isLoading
     || ended
-    || (isRegisteredForDrive && !isDrivePresent);
+    || (isRegisteredForDrive && (!isDrivePresent || !hasRegistrationDonationLink));
   const shownRegistrationCount = Math.max(registrationCount, isRegisteredForDrive ? 1 : 0);
 
   return (
@@ -814,7 +947,9 @@ export default function DonorDriveDetailRoute() {
               actionTitle={actionTitle}
               actionDisabled={actionDisabled}
               onRsvpPress={handleDriveRsvp}
+              onAttendOnlyPress={handleAttendOnlyRsvp}
               isSubmittingRsvp={isSubmittingRsvp}
+              isSubmittingAttendOnly={isSubmittingAttendOnly}
               hasHairScanLog={hasHairScanLog}
               isAiEligible={donationFlowState.isAiEligible}
               hairEligibilityMessage={hairEligibilityMessage}
@@ -961,27 +1096,49 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     borderWidth: 1,
     overflow: 'hidden',
+    position: 'relative',
     justifyContent: 'center',
     alignItems: 'center',
   },
-  mapWebView: {
+  mapNativeView: {
+    ...StyleSheet.absoluteFillObject,
     width: '100%',
     height: '100%',
-    backgroundColor: 'transparent',
-  },
-  mapWebViewLoading: {
-    opacity: 0,
   },
   mapFallback: {
+    ...StyleSheet.absoluteFillObject,
     width: '100%',
     height: '100%',
     alignItems: 'center',
     justifyContent: 'center',
     padding: theme.spacing.lg,
     gap: 4,
+    zIndex: 2,
   },
-  mapFallbackHidden: {
-    opacity: 0,
+  mapDirectionsOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 3,
+  },
+  mapDirectionsBadge: {
+    position: 'absolute',
+    right: theme.spacing.sm,
+    bottom: theme.spacing.sm,
+    minHeight: 32,
+    borderRadius: 16,
+    paddingHorizontal: theme.spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    shadowColor: theme.colors.shadow,
+    shadowOpacity: 0.14,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 3,
+  },
+  mapDirectionsText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    fontWeight: theme.typography.weights.semibold,
   },
   mapFallbackTitle: {
     fontFamily: theme.typography.fontFamily,
@@ -1015,6 +1172,70 @@ const styles = StyleSheet.create({
   rsvpButton: {
     marginTop: theme.spacing.xs,
     marginBottom: theme.spacing.md,
+  },
+  rsvpQrCard: {
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: theme.spacing.md,
+    gap: theme.spacing.sm,
+    marginBottom: theme.spacing.md,
+  },
+  rsvpQrHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+  },
+  rsvpQrHeaderCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  rsvpQrTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.compact.bodyMd,
+    fontWeight: theme.typography.weights.bold,
+  },
+  rsvpQrSubtitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    lineHeight: theme.typography.compact.caption * 1.4,
+  },
+  rsvpTypeBadge: {
+    borderWidth: 1,
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: 4,
+  },
+  rsvpTypeText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 10,
+    fontWeight: theme.typography.weights.bold,
+  },
+  rsvpQrFrame: {
+    alignSelf: 'center',
+    borderWidth: 1,
+    borderRadius: 16,
+    padding: theme.spacing.sm,
+    backgroundColor: theme.colors.backgroundPrimary,
+  },
+  participationOptions: {
+    marginTop: theme.spacing.xs,
+    marginBottom: theme.spacing.md,
+    gap: theme.spacing.sm,
+  },
+  participationTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    fontWeight: theme.typography.weights.bold,
+  },
+  participationButton: {
+    width: '100%',
+  },
+  participationHelper: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    lineHeight: theme.typography.compact.caption * 1.4,
   },
   attendingSection: {
     marginTop: theme.spacing.md,

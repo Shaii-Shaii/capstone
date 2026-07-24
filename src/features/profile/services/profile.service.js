@@ -177,6 +177,10 @@ const persistSchemaSafeMediaValue = async ({ authUserId, mediaValue, documentTyp
   if (!mediaValue) return '';
 
   if (typeof mediaValue === 'object' && mediaValue !== null) {
+    if (mediaValue.publicUrl || mediaValue.path) {
+      return mediaValue.publicUrl || mediaValue.path || '';
+    }
+
     if (mediaValue.fileBody) {
       const uploadResult = await ProfileAPI.uploadPatientOnboardingMedia({
         authUserId,
@@ -193,7 +197,7 @@ const persistSchemaSafeMediaValue = async ({ authUserId, mediaValue, documentTyp
       return uploadResult.data.publicUrl;
     }
 
-    return mediaValue.publicUrl || mediaValue.path || '';
+    return '';
   }
 
   if (typeof mediaValue === 'string' && dataUrlPattern.test(mediaValue)) {
@@ -423,6 +427,11 @@ export const completePostLoginOnboarding = async ({
         mediaValue: manualPatientDetails?.medical_document,
         documentType: 'patient-document',
       });
+      const medicalDocumentMeta = manualPatientDetails?.medical_document
+        && typeof manualPatientDetails.medical_document === 'object'
+        ? manualPatientDetails.medical_document
+        : {};
+      const medicalDocumentVerification = medicalDocumentMeta.verification || {};
 
       if (patientPictureUrl) {
         const profilePhotoResult = await ProfileAPI.updateProfile(userId, {
@@ -442,6 +451,25 @@ export const completePostLoginOnboarding = async ({
         guardian_relationship: manualPatientDetails?.guardian_relationship || '',
         guardian_contact_number: manualPatientDetails?.guardian_contact_number || '',
         medical_document: medicalDocumentUrl || '',
+        medical_document_verification_status:
+          medicalDocumentMeta.medical_document_verification_status
+          || medicalDocumentVerification.status
+          || null,
+        medical_document_ocr_text:
+          medicalDocumentMeta.medical_document_ocr_text
+          || medicalDocumentVerification.extractedText
+          || null,
+        medical_document_verified_at:
+          medicalDocumentMeta.medical_document_verified_at
+          || (medicalDocumentVerification.status ? new Date().toISOString() : null),
+        doctor_name:
+          medicalDocumentMeta.doctor_name
+          || medicalDocumentVerification.doctorName
+          || null,
+        doctor_license_number:
+          medicalDocumentMeta.doctor_license_number
+          || medicalDocumentVerification.licenseNumber
+          || null,
       });
 
       if (patientResult.error) {

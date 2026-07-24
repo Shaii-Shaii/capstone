@@ -13,6 +13,7 @@ export const ScreenContainer = ({
   variant = 'default',
   heroColors,
   authHeroImageUri = '',
+  keyboardAvoidingEnabled = true,
 }) => {
   const { resolvedTheme } = useAuth();
   const roles = resolveThemeRoles(resolvedTheme);
@@ -80,7 +81,7 @@ export const ScreenContainer = ({
     content
   );
 
-  const keyboardWrapper = (
+  const keyboardWrapper = keyboardAvoidingEnabled ? (
     <KeyboardAvoidingView
       style={styles.flex}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -88,7 +89,7 @@ export const ScreenContainer = ({
     >
       {viewPort}
     </KeyboardAvoidingView>
-  );
+  ) : viewPort;
 
   const shell = (
     <View

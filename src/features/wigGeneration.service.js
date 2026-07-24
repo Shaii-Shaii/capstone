@@ -1,5 +1,3 @@
-import { invokeEdgeFunction } from '../api/supabase/client';
-import { wigGenerationFunctionName } from './wigRequest.constants';
 import { getErrorMessage, logAppError, logAppEvent } from '../utils/appErrors';
 
 const normalizePreviewOption = (item, index) => ({
@@ -13,7 +11,33 @@ const normalizePreviewOption = (item, index) => ({
   match_label: item?.match_label || item?.matchLabel || `Option ${index + 1}`,
   preview_url: item?.preview_url || item?.generated_image_data_url || item?.generatedImageDataUrl || '',
   generated_image_data_url: item?.generated_image_data_url || item?.generatedImageDataUrl || item?.preview_url || '',
+  render_mode: item?.render_mode || item?.renderMode || '',
+  selected_wig: item?.selected_wig || item?.selectedWig || null,
+  placement: item?.placement || null,
 });
+
+const normalizeSelectedWig = (selectedWig = {}) => {
+  const physicalSpec = selectedWig?.physical_specification || {};
+  const referenceUrl = selectedWig?.thumbnail_url
+    || selectedWig?.layer_full_wig_url
+    || selectedWig?.layer_front_bangs_url
+    || selectedWig?.layer_back_hair_url
+    || '';
+
+  return {
+    wig_id: selectedWig?.wig_id || selectedWig?.id || null,
+    wig_name: selectedWig?.wig_name || physicalSpec?.style || 'Selected wig',
+    reference_image_url: referenceUrl,
+    physical_specification: {
+      color: physicalSpec?.color || selectedWig?.pending_hair_color || '',
+      length: physicalSpec?.length ?? selectedWig?.pending_hair_length ?? '',
+      hair_texture: physicalSpec?.hair_texture || selectedWig?.pending_hair_texture || '',
+      hair_density: physicalSpec?.hair_density || selectedWig?.pending_hair_density || '',
+      cap_size: physicalSpec?.cap_size || selectedWig?.pending_cap_size || '',
+      style: physicalSpec?.style || selectedWig?.pending_style || '',
+    },
+  };
+};
 
 const normalizePreview = (data) => {
   const rawPreviews = Array.isArray(data?.previews)
@@ -35,98 +59,11 @@ const normalizePreview = (data) => {
     recommended_style_family: data?.recommended_style_family || primaryOption?.family || '',
     preview_url: data?.preview_url || data?.generated_image_data_url || primaryOption?.preview_url || primaryOption?.generated_image_data_url || '',
     generated_image_data_url: data?.generated_image_data_url || data?.preview_url || primaryOption?.generated_image_data_url || primaryOption?.preview_url || '',
+    render_mode: data?.render_mode || primaryOption?.render_mode || '',
+    selected_wig: data?.selected_wig || primaryOption?.selected_wig || null,
+    placement: data?.placement || primaryOption?.placement || null,
     options,
   };
-};
-
-const buildFallbackPreview = ({ preferences, referenceImage }) => {
-  const normalizedReferenceImage = normalizeReferenceImage(referenceImage);
-  const visualReference = normalizedReferenceImage.dataUrl || normalizedReferenceImage.imageUrl;
-  const color = preferences?.preferredColor?.trim() || 'available';
-  const length = preferences?.preferredLength?.trim() || 'Available length';
-  const texture = preferences?.hairTexture?.trim() || 'available texture';
-  const density = preferences?.hairDensity?.trim() || '';
-  const capSize = preferences?.capSize?.trim() || 'available cap size';
-  const baseOptions = [
-    {
-      id: 'fallback-soft-natural',
-      option_index: 1,
-      name: `${length} ${texture}`,
-      note: `${color} tone with a simple ${texture.toLowerCase()} finish.`,
-      summary: `A ${length.toLowerCase()} ${texture.toLowerCase()} option based on your selected preferences.`,
-      style_notes: `Color: ${color}. ${density ? `Density: ${density}. ` : ''}Cap size: ${capSize}.`,
-      family: 'Natural daily style',
-      match_label: 'Suggested',
-    },
-    {
-      id: 'fallback-face-frame',
-      option_index: 2,
-      name: 'Face Frame',
-      note: 'Soft layers around the face.',
-      summary: 'A gentle face-framing option for a natural look.',
-      style_notes: `Length: ${length}. Texture: ${texture}.`,
-      family: 'Face-framing style',
-      match_label: 'Option 2',
-    },
-    {
-      id: 'fallback-lightweight',
-      option_index: 3,
-      name: 'Light Fit',
-      note: 'Lightweight everyday fit.',
-      summary: 'A comfortable style option for daily wear.',
-      style_notes: `Cap size: ${capSize}.`,
-      family: 'Comfort fit',
-      match_label: 'Option 3',
-    },
-  ];
-
-  const options = baseOptions.map((option) => ({
-    ...option,
-    preview_url: visualReference,
-    generated_image_data_url: visualReference,
-  }));
-
-  return {
-    summary: 'Preview suggestions are ready. Live AI styling is temporarily unavailable.',
-    style_notes: 'These are preference-based suggestions and can still be submitted with your request.',
-    recommended_style_name: options[0].name,
-    recommended_style_family: options[0].family,
-    preview_url: visualReference,
-    generated_image_data_url: visualReference,
-    options,
-    is_fallback: true,
-  };
-};
-
-const resolveFunctionErrorMessage = async (error) => {
-  const response = error?.context;
-
-  if (!response || typeof response.clone !== 'function') {
-    return getErrorMessage(error);
-  }
-
-  try {
-    const payload = await response.clone().json();
-    if (typeof payload?.error === 'string' && payload.error.trim()) {
-      return payload.error.trim();
-    }
-    if (typeof payload?.message === 'string' && payload.message.trim()) {
-      return payload.message.trim();
-    }
-  } catch (_jsonError) {
-    // Fall back to plain text parsing.
-  }
-
-  try {
-    const text = await response.clone().text();
-    if (text?.trim()) {
-      return text.trim();
-    }
-  } catch (_textError) {
-    // Fall back to the original error message.
-  }
-
-  return getErrorMessage(error);
 };
 
 const normalizeReferenceImage = (referenceImage = {}) => {
@@ -139,109 +76,74 @@ const normalizeReferenceImage = (referenceImage = {}) => {
   };
 };
 
-export const generatePatientWigPreview = async ({ preferences, referenceImage }) => {
+export const generatePatientWigPreview = async ({ referenceImage, selectedWig }) => {
   try {
     const normalizedReferenceImage = normalizeReferenceImage(referenceImage);
+    const normalizedSelectedWig = normalizeSelectedWig(selectedWig);
     if (!normalizedReferenceImage.dataUrl && !normalizedReferenceImage.imageUrl) {
       throw new Error('A front photo is required before generating a wig preview.');
     }
-
-    const payload = {
-      preferred_color: preferences?.preferredColor?.trim() || '',
-      preferred_length: preferences?.preferredLength?.trim() || '',
-      hair_texture: preferences?.hairTexture?.trim() || '',
-      hair_density: preferences?.hairDensity?.trim() || '',
-      cap_size: preferences?.capSize?.trim() || '',
-      style_preference: preferences?.stylePreference?.trim() || '',
-      notes: preferences?.specialNotes?.trim() || '',
-      reference_image: normalizedReferenceImage,
-    };
-
-    logAppEvent('wigGeneration.invoke', 'Invoking wig preview edge function.', {
-      functionName: wigGenerationFunctionName,
-      provider: 'gemini',
-      hasReferenceImageDataUrl: Boolean(normalizedReferenceImage.dataUrl),
-      hasReferenceImageUrl: Boolean(normalizedReferenceImage.imageUrl),
-      payloadKeys: Object.keys(payload),
-    });
-
-    const { data, error } = await invokeEdgeFunction(wigGenerationFunctionName, {
-      body: payload,
-    });
-
-    if (error) {
-      throw new Error(await resolveFunctionErrorMessage(error));
+    if (!normalizedSelectedWig.reference_image_url) {
+      throw new Error('The selected wig does not have a reference image for preview generation.');
     }
 
-    const previewPayload = data?.preview
-      ? {
-          ...data.preview,
-          previews: Array.isArray(data?.previews) ? data.previews : data.preview?.options || [],
-          preview_url: data.preview.preview_url || data.preview.generated_image_data_url || data?.preview_url || '',
-          generated_image_data_url: data.preview.generated_image_data_url || data.preview.preview_url || data?.generated_image_data_url || '',
-        }
-      : {
-          ...data,
-          previews: Array.isArray(data?.previews) ? data.previews : [],
-        };
-    const preview = normalizePreview(previewPayload);
+    const localCompositePreviewUrl = referenceImage?.uri || normalizedReferenceImage.imageUrl || normalizedReferenceImage.dataUrl;
+    if (selectedWig?.layer_full_wig_url) {
+      const option = normalizePreviewOption({
+        id: normalizedSelectedWig.wig_id || 'selected-wig-preview',
+        option_index: 1,
+        name: normalizedSelectedWig.wig_name,
+        summary: 'Preview uses your original photo with the selected wig layer placed on the head.',
+        style_notes: 'The original photo is retained. The wig layer comes from the selected database wig asset.',
+        match_label: 'Selected',
+        preview_url: localCompositePreviewUrl,
+        generated_image_data_url: localCompositePreviewUrl,
+        render_mode: 'wig_overlay',
+        selected_wig: selectedWig,
+        placement: referenceImage?.placement || null,
+      }, 0);
 
-    logAppEvent('wigGeneration.invoke', 'Wig preview edge function returned.', {
-      functionName: wigGenerationFunctionName,
-      responseKeys: data ? Object.keys(data) : [],
-      previewKeys: previewPayload ? Object.keys(previewPayload) : [],
-      provider: data?.provider || 'gemini',
-      hasGeneratedImage: Boolean(preview.generated_image_data_url),
-      optionCount: preview.options.length,
-    });
+      const preview = normalizePreview({
+        summary: option.summary,
+        style_notes: option.style_notes,
+        recommended_style_name: normalizedSelectedWig.wig_name,
+        recommended_style_family: [
+          normalizedSelectedWig.physical_specification?.style,
+          normalizedSelectedWig.physical_specification?.color,
+        ].filter(Boolean).join(' - '),
+        preview_url: localCompositePreviewUrl,
+        generated_image_data_url: localCompositePreviewUrl,
+        render_mode: 'wig_overlay',
+        selected_wig: selectedWig,
+        placement: referenceImage?.placement || null,
+        previews: [option],
+      });
 
-    if (
-      preview.options.length < 3
-      || !preview.generated_image_data_url
-      || (!preview.summary && !preview.recommended_style_name && !preview.options.length)
-    ) {
-      throw new Error('The wig preview response was incomplete.');
+      logAppEvent('wigGeneration.localComposite', 'Prepared wig overlay preview from original photo.', {
+        selectedWigId: normalizedSelectedWig.wig_id,
+        hasFullWigLayer: Boolean(selectedWig?.layer_full_wig_url),
+        hasFrontLayer: Boolean(selectedWig?.layer_front_bangs_url),
+        hasBackLayer: Boolean(selectedWig?.layer_back_hair_url),
+      });
+
+      return {
+        preview,
+        previews: preview.options,
+        error: null,
+      };
     }
-
-    return {
-      preview,
-      previews: preview.options,
-      error: null,
-    };
+    throw new Error('The selected wig does not have a main transparent wig layer for preview alignment.');
   } catch (error) {
-    const resolvedMessage = await resolveFunctionErrorMessage(error);
+    const resolvedMessage = getErrorMessage(error);
     const technicalMessage = resolvedMessage.toLowerCase();
-    const fallbackPreview = buildFallbackPreview({ preferences, referenceImage });
-    const canUseFallback = Boolean(fallbackPreview.generated_image_data_url)
-      && !technicalMessage.includes('front photo')
-      && !technicalMessage.includes('invalid jwt')
-      && !technicalMessage.includes('session has expired');
-
     if (
-      !canUseFallback
-      &&
       !technicalMessage.includes('requested function was not found')
       && !technicalMessage.includes('not_found')
       && !technicalMessage.includes('invalid jwt')
     ) {
       logAppError('wigGeneration.generatePatientWigPreview', error, {
         hasReferenceImage: Boolean(referenceImage?.uri || referenceImage?.dataUrl),
-        functionName: wigGenerationFunctionName,
       });
-    }
-
-    if (canUseFallback) {
-      logAppEvent('wigGeneration.generatePatientWigPreview.fallback', 'Using local wig preview fallback.', {
-        functionName: wigGenerationFunctionName,
-        reason: resolvedMessage,
-        hasReferenceImage: Boolean(referenceImage?.uri || referenceImage?.dataUrl),
-      }, 'warn');
-
-      return {
-        preview: fallbackPreview,
-        previews: fallbackPreview.options,
-        error: null,
-      };
     }
 
     const userMessage = technicalMessage.includes('front photo')
@@ -250,11 +152,15 @@ export const generatePatientWigPreview = async ({ preferences, referenceImage })
         ? 'Your session has expired. Please sign in again, then retry the wig preview.'
         : technicalMessage.includes('not configured') || technicalMessage.includes('google ai api key')
           ? 'Wig preview is not configured on the server. Please try again later.'
+        : technicalMessage.includes('openai api key')
+          ? 'Wig preview is not configured on the server. Please try again later.'
         : technicalMessage.includes('requested function was not found') || technicalMessage.includes('not_found')
           ? 'Wig preview is still being connected on the server. Please try again in a moment.'
-          : technicalMessage.includes('incomplete')
-            ? 'Preview could not be generated right now.'
-            : 'Preview could not be generated right now.';
+          : technicalMessage.includes('selected wig') || technicalMessage.includes('reference image')
+            ? 'Choose a wig with a valid reference image first.'
+            : technicalMessage.includes('incomplete')
+              ? "We couldn't prepare your wig preview. Please try again or choose another photo."
+              : "We couldn't prepare your wig preview. Please try again or choose another photo.";
 
     return {
       preview: null,

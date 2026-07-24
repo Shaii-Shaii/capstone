@@ -517,7 +517,8 @@ export const analyzeHairPhotos = async ({
       donation_requirement_context: donationRequirementContext
         ? {
             donation_requirement_id: donationRequirementContext.donation_requirement_id || null,
-            minimum_hair_length: donationRequirementContext.minimum_hair_length ?? null,
+            minimum_hair_length: donationRequirementContext.minimum_hair_length_cm ?? null,
+            minimum_hair_length_inches: donationRequirementContext.minimum_hair_length_inches ?? null,
             chemical_treatment_status: donationRequirementContext.chemical_treatment_status ?? null,
             colored_hair_status: donationRequirementContext.colored_hair_status ?? null,
             bleached_hair_status: donationRequirementContext.bleached_hair_status ?? null,

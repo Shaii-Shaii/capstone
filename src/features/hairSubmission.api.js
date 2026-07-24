@@ -16,21 +16,7 @@ const donationCertificatesTable = 'Donation_Certificates';
 const wigsTable = 'Wigs';
 const wigAllocationsTable = 'Wig_Allocations';
 const hairSubmissionBundlesTable = 'Hair_Submission_Bundles';
-
-const defaultDonationRequirement = {
-  id: null,
-  donation_requirement_id: null,
-  minimum_number_donor: null,
-  minimum_hair_length: 12,
-  chemical_treatment_status: false,
-  colored_hair_status: false,
-  bleached_hair_status: false,
-  rebonded_hair_status: false,
-  hair_texture_status: '',
-  notes: 'Default requirement used because the database requirement row is not readable.',
-  updated_at: null,
-  updated_by: null,
-};
+const CM_PER_INCH = 2.54;
 
 const hairSubmissionSelect = `
   submission_id:Submission_ID,
@@ -130,7 +116,15 @@ const hairSubmissionLogisticsSelect = `
   submission_logistics_id:Submission_Logistics_ID,
   submission_id:Submission_ID,
   logistics_type:Logistics_Type,
+  courier_name:Courier_Name,
+  tracking_number:Tracking_Number,
   shipment_status:Shipment_Status,
+  pickup_schedule_date:Pickup_Schedule_Date,
+  pickup_scheduled_at:Pickup_Scheduled_At,
+  pickup_approved_at:Pickup_Approved_At,
+  queue_number:Queue_Number,
+  dropoff_window:Dropoff_Window,
+  dropoff_status:Dropoff_Status,
   received_by:Received_By,
   received_at:Received_At,
   notes:Notes,
@@ -234,6 +228,38 @@ const normalizeHairSubmissionStatusForDb = (status, fallback = 'Pending') => {
   if (key === 'wiginproduction' || key === 'inproduction') return 'Wig in Production';
   if (key === 'wigcreated' || key === 'wigcompleted' || key === 'completed') return 'Wig Created';
   if (key === 'cancelled' || key === 'canceled') return 'Cancelled';
+  return fallback;
+};
+
+const normalizeHairSubmissionDetailStatusForDb = (status, fallback = 'Pending') => {
+  const key = normalizeFlowKey(status);
+  if (!key) return fallback;
+  if (
+    key === 'pending'
+    || key === 'draft'
+    || key === 'qrgenerated'
+    || key === 'readyforshipping'
+    || key === 'waybillready'
+    || key === 'submitted'
+    || key === 'shipped'
+    || key === 'intransit'
+    || key === 'received'
+    || key === 'underreview'
+    || key === 'underqareview'
+  ) return 'Pending';
+  if (
+    key === 'approved'
+    || key === 'accepted'
+    || key === 'partiallyaccepted'
+    || key === 'cut'
+    || key === 'wiginproduction'
+    || key === 'inproduction'
+    || key === 'wigcreated'
+    || key === 'wigcompleted'
+    || key === 'completed'
+  ) return 'Approved';
+  if (key === 'rejectedcut') return 'Rejected Cut';
+  if (key === 'rejected' || key === 'cancelled' || key === 'canceled') return 'Rejected';
   return fallback;
 };
 
@@ -496,6 +522,9 @@ const normalizeHairSubmissionLogistics = (row) => ({
   pickup_scheduled_at: row?.pickup_scheduled_at || null,
   pickup_schedule_date: row?.pickup_schedule_date || null,
   pickup_approved_at: row?.pickup_approved_at || null,
+  queue_number: row?.queue_number ?? null,
+  dropoff_window: row?.dropoff_window || '',
+  dropoff_status: row?.dropoff_status || '',
   received_by: row?.received_by || null,
   received_at: row?.received_at || null,
   notes: row?.notes || '',
@@ -514,11 +543,24 @@ const normalizeTrackingEntry = (row) => ({
   updated_at: row?.updated_at || null,
 });
 
-const normalizeDonationRequirement = (row) => ({
+const normalizeRequirementLength = (value) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+};
+
+const normalizeDonationRequirement = (row) => {
+  const minimumHairLengthInches = normalizeRequirementLength(row?.minimum_hair_length);
+  const minimumHairLengthCm = minimumHairLengthInches != null
+    ? Number((minimumHairLengthInches * CM_PER_INCH).toFixed(2))
+    : null;
+
+  return ({
   id: row?.donation_requirement_id || null,
   donation_requirement_id: row?.donation_requirement_id || null,
   minimum_number_donor: row?.minimum_number_donor ?? null,
   minimum_hair_length: row?.minimum_hair_length ?? null,
+  minimum_hair_length_inches: minimumHairLengthInches,
+  minimum_hair_length_cm: minimumHairLengthCm,
   chemical_treatment_status: row?.chemical_treatment_status ?? null,
   colored_hair_status: row?.colored_hair_status ?? null,
   bleached_hair_status: row?.bleached_hair_status ?? null,
@@ -527,7 +569,8 @@ const normalizeDonationRequirement = (row) => ({
   notes: row?.notes || '',
   updated_at: row?.updated_at || null,
   updated_by: row?.updated_by || null,
-});
+  });
+};
 
 const normalizeLogisticsSettings = (row) => ({
   id: row?.logistics_settings_id || null,
@@ -656,7 +699,7 @@ export const createHairSubmissionDetail = async (payload) => {
       Is_Rebonded: payload?.is_rebonded ?? false,
       Detail_Notes: payload?.detail_notes || null,
       Rejection_Reason: payload?.rejection_reason || null,
-      Status: payload?.status || null,
+      Status: normalizeHairSubmissionDetailStatusForDb(payload?.status),
       Updated_By: payload?.updated_by || null,
       Created_At: getPhilippineDatabaseTimestamp(),
       Updated_At: getPhilippineDatabaseTimestamp(),
@@ -696,7 +739,7 @@ export const updateHairSubmissionDetailById = async (submissionDetailId, payload
       Is_Rebonded: payload?.is_rebonded ?? undefined,
       Detail_Notes: payload?.detail_notes ?? undefined,
       Rejection_Reason: payload?.rejection_reason ?? undefined,
-      Status: payload?.status ?? undefined,
+      Status: payload?.status == null ? undefined : normalizeHairSubmissionDetailStatusForDb(payload.status),
       Updated_By: payload?.updated_by ?? undefined,
       Updated_At: getPhilippineDatabaseTimestamp(),
     })
@@ -847,20 +890,14 @@ export const fetchLatestDonationRequirement = async () => {
     .limit(1)
     .maybeSingle();
 
-  if (result.error?.code === '42501') {
-    logAppError('hair_submission.requirements.permission', result.error, {
+  if (result.error) {
+    logAppError('hair_submission.requirements.read_failed', result.error, {
       table: donationRequirementsTable,
-      fallback: 'defaultDonationRequirement',
     });
-
-    return {
-      data: defaultDonationRequirement,
-      error: null,
-    };
   }
 
   return {
-    data: result.data ? normalizeDonationRequirement(result.data) : defaultDonationRequirement,
+    data: result.data ? normalizeDonationRequirement(result.data) : null,
     error: result.error,
   };
 };
@@ -1668,7 +1705,15 @@ export const createHairSubmissionLogistics = async (payload) => {
     .insert([{
       Submission_ID: payload?.submission_id || null,
       Logistics_Type: payload?.logistics_type || null,
+      Courier_Name: payload?.courier_name || null,
+      Tracking_Number: payload?.tracking_number || null,
       Shipment_Status: payload?.shipment_status || null,
+      Pickup_Schedule_Date: payload?.pickup_schedule_date || null,
+      Pickup_Scheduled_At: payload?.pickup_scheduled_at || null,
+      Pickup_Approved_At: payload?.pickup_approved_at || null,
+      Queue_Number: payload?.queue_number ?? null,
+      Dropoff_Window: payload?.dropoff_window || null,
+      Dropoff_Status: payload?.dropoff_status || null,
       Received_By: payload?.received_by || null,
       Received_At: payload?.received_at || null,
       Notes: payload?.notes || null,
@@ -1769,7 +1814,15 @@ export const updateHairSubmissionLogisticsById = async (submissionLogisticsId, p
     .from(hairSubmissionLogisticsTable)
     .update({
       Logistics_Type: payload?.logistics_type || null,
+      Courier_Name: payload?.courier_name || null,
+      Tracking_Number: payload?.tracking_number || null,
       Shipment_Status: payload?.shipment_status || null,
+      Pickup_Schedule_Date: payload?.pickup_schedule_date || null,
+      Pickup_Scheduled_At: payload?.pickup_scheduled_at || null,
+      Pickup_Approved_At: payload?.pickup_approved_at || null,
+      Queue_Number: payload?.queue_number ?? null,
+      Dropoff_Window: payload?.dropoff_window || null,
+      Dropoff_Status: payload?.dropoff_status || null,
       Received_By: payload?.received_by || null,
       Received_At: payload?.received_at || null,
       Notes: payload?.notes || null,

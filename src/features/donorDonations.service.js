@@ -3,7 +3,12 @@ import * as MediaLibrary from 'expo-media-library';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { logAppError } from '../utils/appErrors';
-import { createDonationDriveRegistration, fetchDonationDrivePreview, fetchUpcomingDonationDrives } from './donorHome.api';
+import {
+  createDonationDriveRegistration,
+  fetchDonationDrivePreview,
+  fetchRegisteredDonationDrivesByUserId,
+  fetchUpcomingDonationDrives,
+} from './donorHome.api';
 import {
     createDonationCertificate,
     createHairBundleTrackingEntry,
@@ -42,7 +47,6 @@ const INDEPENDENT_DONATION_SOURCE = 'Independent';
 const DRIVE_DONATION_SOURCE = 'drive_donation';
 const MANUAL_HAIR_PHOTO_IMAGE_TYPE = 'manual_donation_hair_photo';
 const MANUAL_DONATION_NOTE_MARKER = 'Manual donor details saved from the donor Donations module.';
-const MINIMUM_MANUAL_LENGTH_INCHES = 14;
 const CM_PER_INCH = 2.54;
 const PARCEL_IMAGE_TYPES = ['independent_parcel_photo', 'parcel_photo', 'parcel_log'];
 const QR_IMAGE_BASE_URL = 'https://api.qrserver.com/v1/create-qr-code/';
@@ -164,8 +168,10 @@ const convertLengthToInches = (value, unit = 'in') => {
 };
 
 const resolveMinimumLengthInches = (donationRequirement = null) => {
-  const minimumLengthCm = resolveMinimumLengthCm(donationRequirement);
-  return toRoundedNumber(minimumLengthCm / CM_PER_INCH, 1) || MINIMUM_MANUAL_LENGTH_INCHES;
+  const configuredLength = Number(donationRequirement?.minimum_hair_length_inches);
+  return Number.isFinite(configuredLength) && configuredLength > 0
+    ? toRoundedNumber(configuredLength, 1)
+    : null;
 };
 
 const buildManualDonationReason = (reasons = []) => (
@@ -285,17 +291,15 @@ const buildAiConditionReasons = (screening = null) => {
 const buildLengthRequirementMessage = ({ screening = null, minimumLengthCm = 0 }) => {
   const logMessage = getScreeningLogMessage(screening);
   const minimumInches = toRoundedNumber(minimumLengthCm / CM_PER_INCH, 1);
-  const requirementMessage = `Minimum hair length: ${minimumInches} inches.`;
+  const requirementMessage = minimumInches
+    ? `Minimum hair length: ${minimumInches} inches.`
+    : 'Donation minimum hair length is not configured.';
   return [logMessage, requirementMessage].filter(Boolean).join(' ');
 };
 
 const resolveMinimumLengthCm = (donationRequirement = null) => {
-  const defaultMinimumCm = MINIMUM_MANUAL_LENGTH_INCHES * CM_PER_INCH;
-  const configuredLength = Number(donationRequirement?.minimum_hair_length);
-  if (Number.isFinite(configuredLength) && configuredLength > 0) {
-    return Math.max(defaultMinimumCm, configuredLength);
-  }
-  return defaultMinimumCm;
+  const configuredLength = Number(donationRequirement?.minimum_hair_length_cm);
+  return Number.isFinite(configuredLength) && configuredLength > 0 ? configuredLength : null;
 };
 
 const screeningLooksDonationReady = ({
@@ -340,7 +344,9 @@ const evaluateManualDonationEligibility = ({ manualDetails = {}, donationRequire
   const isColored = normalizeYesNoChoice(manualDetails?.colored);
   const reasons = [];
 
-  if (!normalizedLengthInches || normalizedLengthInches < minimumLengthInches) {
+  if (!minimumLengthInches) {
+    reasons.push('Donation requirements are not configured. Please contact the team before submitting hair donation details.');
+  } else if (!normalizedLengthInches || normalizedLengthInches < minimumLengthInches) {
     reasons.push(`Hair must be at least ${minimumLengthInches} inches to qualify for donation.`);
   }
 
@@ -385,18 +391,13 @@ const evaluateAiDonationEligibility = ({ screening = null, detail = null, donati
 
   // Trust the AI result stored in the DB directly — if Decision is 'Eligible for Hair Donation'
   // or Improvement_Tracking_Status is 'Ready for Donation', skip all local re-checks.
-  const normalizeKey = (v) => String(v || '').trim().toLowerCase().replace(/[_\s\-]+/g, '');
-  const dbSaysEligible = isEligibleHairAnalysisDecision(screening?.decision || '');
-  const dbSaysReady = normalizeKey(screening?.improvement_tracking_status || '') === 'readyfordonation';
-  if (dbSaysEligible || dbSaysReady) {
+  if (!minimumLengthCm) {
     return {
-      isQualified: true,
+      isQualified: false,
       normalized_length_cm: normalizedLengthCm,
       minimum_length_cm: minimumLengthCm,
-      reasons: [],
-      reason: dbSaysEligible
-        ? screening.decision
-        : getScreeningLogMessage(screening, { preferSummary: true }),
+      reasons: ['Donation requirements are not configured. Please contact the team before submitting a donation.'],
+      reason: 'Donation requirements are not configured. Please contact the team before submitting a donation.',
     };
   }
 
@@ -726,10 +727,6 @@ const isIndependentDonationSource = (source = '') => (
   ['independent', 'independent_donation'].includes(String(source || '').trim().toLowerCase())
 );
 
-const isDriveDonationSource = (source = '') => (
-  ['drive_donation', 'event rsvp', 'event_rsvp'].includes(String(source || '').trim().toLowerCase())
-);
-
 const upsertSubmissionLogistics = async ({
   submissionId,
   logisticsType,
@@ -740,6 +737,9 @@ const upsertSubmissionLogistics = async ({
   pickupScheduleDate = undefined,
   pickupScheduledAt = undefined,
   pickupApprovedAt = undefined,
+  queueNumber = undefined,
+  dropoffWindow = undefined,
+  dropoffStatus = undefined,
   receivedBy = undefined,
   receivedAt = undefined,
 }) => {
@@ -758,6 +758,9 @@ const upsertSubmissionLogistics = async ({
     pickup_schedule_date: pickupScheduleDate ?? currentLogistics?.pickup_schedule_date ?? null,
     pickup_scheduled_at: pickupScheduledAt ?? currentLogistics?.pickup_scheduled_at ?? null,
     pickup_approved_at: pickupApprovedAt ?? currentLogistics?.pickup_approved_at ?? null,
+    queue_number: queueNumber ?? currentLogistics?.queue_number ?? null,
+    dropoff_window: dropoffWindow ?? currentLogistics?.dropoff_window ?? null,
+    dropoff_status: dropoffStatus ?? currentLogistics?.dropoff_status ?? null,
     received_by: receivedBy ?? currentLogistics?.received_by ?? null,
     received_at: receivedAt ?? currentLogistics?.received_at ?? null,
     notes: notes || currentLogistics?.notes || null,
@@ -769,6 +772,75 @@ const upsertSubmissionLogistics = async ({
         ...payload,
       })
     : await createHairSubmissionLogistics(payload);
+};
+
+export const scheduleWalkInDropoff = async ({
+  userId = null,
+  submission,
+  databaseUserId,
+  scheduleDate = '',
+  timeWindow = '',
+}) => {
+  if (!submission?.submission_id) {
+    return { success: false, error: 'Create a logistic donation before scheduling a walk-in drop-off.' };
+  }
+
+  const cleanDate = String(scheduleDate || '').trim();
+  const cleanWindow = String(timeWindow || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(cleanDate)) {
+    return { success: false, error: 'Choose a valid drop-off date.' };
+  }
+  if (!cleanWindow) {
+    return { success: false, error: 'Choose a drop-off time window.' };
+  }
+
+  const scheduledAt = `${cleanDate}T00:00:00+08:00`;
+  const logisticsResult = await upsertSubmissionLogistics({
+    submissionId: submission.submission_id,
+    logisticsType: 'onsite_delivery',
+    shipmentStatus: 'Walk-in scheduled',
+    pickupScheduleDate: cleanDate,
+    pickupScheduledAt: scheduledAt,
+    queueNumber: 0,
+    dropoffWindow: cleanWindow,
+    dropoffStatus: 'Scheduled',
+    notes: `Walk-in drop-off scheduled for ${cleanDate}, ${cleanWindow}. Staff can scan the donor QR when the donor arrives.`,
+  });
+
+  if (logisticsResult.error || !logisticsResult.data?.submission_logistics_id) {
+    return {
+      success: false,
+      error: logisticsResult.error?.message || 'Unable to save the walk-in schedule.',
+    };
+  }
+
+  const latestDetail = getLatestSubmissionDetailSnapshot(submission);
+  await createHairBundleTrackingEntry({
+    submission_id: submission.submission_id,
+    submission_detail_id: latestDetail?.submission_detail_id || null,
+    status: 'Walk-in scheduled',
+    title: 'Walk-in drop-off scheduled',
+    description: `Drop-off schedule: ${cleanDate}, ${cleanWindow}. Staff will scan the QR at receiving.`,
+    changed_by: databaseUserId || null,
+  });
+
+  await persistDonationNotifications({
+    userId,
+    notifications: [
+      buildDonationNotification({
+        dedupeKey: `${notificationTypes.logisticsUpdated}:${submission.submission_id}:walkin:${cleanDate}:${cleanWindow}`,
+        title: 'Walk-in drop-off scheduled',
+        message: `Bring your hair donation on ${cleanDate}, ${cleanWindow}. Staff will scan your QR when you arrive.`,
+        createdAt: new Date().toISOString(),
+        referenceId: submission.submission_id,
+      }),
+    ],
+  });
+
+  return {
+    success: true,
+    logistics: logisticsResult.data,
+  };
 };
 
 export const saveIndependentDonationShipment = async ({
@@ -1091,6 +1163,38 @@ const hasCurrentFlowStatus = (submission = null) => (
   ].some((token) => normalizeStatus(submission?.status).includes(token))
 );
 
+const hasSubmissionFlowProgress = (submission = null) => (
+  Boolean(
+    hasCurrentFlowStatus(submission)
+    || submission?.cut_at
+    || submission?.bundle_id
+    || Boolean(getIndependentQrMetadata(submission)?.reference)
+    || Boolean(getSubmissionParcelImages(submission).length)
+  )
+);
+
+const hasEventDonationProgress = ({ submission = null, registration = null } = {}) => (
+  Boolean(
+    Number(submission?.donation_drive_id) > 0
+    && (
+      hasSubmissionFlowProgress(submission)
+      || Boolean(registration?.waybill_code)
+      || Boolean(registration?.rsvp_scanned_at)
+      || isPresentAttendanceStatus(registration?.attendance_status)
+    )
+  )
+);
+
+const hasIndependentDonationProgress = (submission = null) => (
+  Boolean(
+    !Number(submission?.donation_drive_id)
+    && (
+      hasSubmissionFlowProgress(submission)
+      || isIndependentDonationSource(submission?.donation_source)
+    )
+  )
+);
+
 const isSubmissionCompleted = ({ submission = null }) => (
   Boolean(
     !submission?.submission_id
@@ -1175,12 +1279,8 @@ const resolveCurrentDonationRecord = ({
   const flowMatchedRecord = driveFirstSubmissions
     .filter((submission) => !isSubmissionCompleted({ submission }))
     .find((submission) => (
-      Boolean(submission?.donation_drive_id)
-      || Boolean(getIndependentQrMetadata(submission)?.reference)
-      || Boolean(getSubmissionParcelImages(submission).length)
-      || isIndependentDonationSource(submission?.donation_source)
-      || isDriveDonationSource(submission?.donation_source)
-      || hasCurrentFlowStatus(submission)
+      hasEventDonationProgress({ submission })
+      || hasIndependentDonationProgress(submission)
     ));
 
   if (flowMatchedRecord) {
@@ -1213,12 +1313,8 @@ const resolveCurrentFlowSubmission = ({
   return driveFirstSubmissions
     .filter((submission) => !isSubmissionCompleted({ submission }))
     .find((submission) => (
-      Boolean(submission?.donation_drive_id)
-      || Boolean(getIndependentQrMetadata(submission)?.reference)
-      || Boolean(getSubmissionParcelImages(submission).length)
-      || isIndependentDonationSource(submission?.donation_source)
-      || isDriveDonationSource(submission?.donation_source)
-      || hasCurrentFlowStatus(submission)
+      hasEventDonationProgress({ submission })
+      || hasIndependentDonationProgress(submission)
     )) || null;
 };
 
@@ -1234,12 +1330,8 @@ const resolveCurrentFlowSubmissions = ({
   return driveFirstSubmissions
     .filter((submission) => !isSubmissionCompleted({ submission }))
     .filter((submission) => (
-      Boolean(submission?.donation_drive_id)
-      || Boolean(getIndependentQrMetadata(submission)?.reference)
-      || Boolean(getSubmissionParcelImages(submission).length)
-      || isIndependentDonationSource(submission?.donation_source)
-      || isDriveDonationSource(submission?.donation_source)
-      || hasCurrentFlowStatus(submission)
+      hasEventDonationProgress({ submission })
+      || hasIndependentDonationProgress(submission)
     ));
 };
 
@@ -1313,11 +1405,23 @@ const isPresentAttendanceStatus = (value = '') => [
   'verified',
 ].includes(normalizeTimelineStatusKey(value));
 
-const isSuccessfulEventSubmission = (submission = null) => {
+const isMarkedPresentRegistration = (registration = null) => (
+  Boolean(
+    registration?.rsvp_scanned_at
+    || registration?.attendance_marked_at
+    || isPresentAttendanceStatus(registration?.attendance_status)
+  )
+);
+
+const isDisplayableEventSubmission = (submission = null) => {
   const normalizedStatus = normalizeStatus(submission?.status);
   if (!Number(submission?.donation_drive_id)) return false;
   if (['cancelled', 'canceled', 'rejected'].includes(normalizedStatus)) return false;
-  return Boolean(submission?.cut_at) || isCutAndShipCompletedStatus(normalizedStatus);
+  return Boolean(
+    hasSubmissionFlowProgress(submission)
+    || isCutAndShipCompletedStatus(normalizedStatus)
+    || isTerminalDonationStatus(normalizedStatus)
+  );
 };
 
 const isReceivedByOrganizationEntry = (entry = null) => {
@@ -1721,6 +1825,7 @@ export const buildDriveInvitationQrPayload = ({ drive, registration }) => (
     Event_Attendee_ID: registration?.registration_id || null,
     Event_Request_ID: registration?.donation_drive_id || drive?.event_request_id || drive?.donation_drive_id || null,
     User_ID: registration?.user_id || null,
+    Attendee_Type: registration?.attendee_type || 'Donor',
     Waybill_Code: registration?.waybill_code || '',
     Submission_ID: registration?.submission_id || null,
     Submission_Detail_ID: registration?.submission_detail_id || null,
@@ -2110,9 +2215,10 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
     };
   }
 
-  const [submissionsResult, drivesResult, certificateResult, donationRequirementResult] = await Promise.all([
-    fetchHairSubmissionsByUserId(databaseUserId || userId, 12),
+  const [submissionsResult, drivesResult, registeredDrivesResult, certificateResult, donationRequirementResult] = await Promise.all([
+    fetchHairSubmissionsByUserId(databaseUserId || userId, 50),
     fetchUpcomingDonationDrives(driveLimit, databaseUserId || null),
+    fetchRegisteredDonationDrivesByUserId({ databaseUserId: databaseUserId || null, limit: 50 }),
     fetchLatestDonationCertificateByUserId(databaseUserId || userId),
     fetchLatestDonationRequirement(),
   ]);
@@ -2126,6 +2232,7 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
       isAiEligible: false,
       isDonationReady: false,
       drives: drivesResult.data || [],
+      registeredDrives: registeredDrivesResult.data || [],
       completedEventDrives: [],
       timelineStages: [],
       timelineEvents: [],
@@ -2261,10 +2368,10 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
     || parcelImages.length
     || hasMeaningfulTrackingEntries(trackingEntries)
   );
-  const hasDriveFlow = Boolean(
-    activeSubmission?.donation_drive_id
-    || activeDrive?.registration?.registration_id
-  );
+  const hasDriveFlow = hasEventDonationProgress({
+    submission: activeSubmission,
+    registration: activeDrive?.registration || null,
+  });
   const activeFlowType = hasDriveFlow ? 'drive' : hasIndependentFlow ? 'independent' : '';
   const timelineStages = activeSubmission
     ? resolveTimelineStages({
@@ -2298,21 +2405,46 @@ const hasCompletedDonation = Boolean(
     submissions,
     activeSubmission: hasOngoingDonation ? activeSubmission : null,
   });
-  const completedEventDriveIds = [...new Set(
+  const eventSubmissionDriveIds = [...new Set(
     sortSubmissionsByCreatedAt(submissions)
-      .filter((submission) => submission?.submission_id !== activeSubmission?.submission_id)
-      .filter(isSuccessfulEventSubmission)
+      .filter(isDisplayableEventSubmission)
       .map((submission) => Number(submission?.donation_drive_id))
       .filter((driveId) => Number.isFinite(driveId) && driveId > 0)
   )];
-  const completedEventDriveResults = completedEventDriveIds.length
-    ? await Promise.all(completedEventDriveIds.map((driveId) => (
+  const eventSubmissionDriveIdSet = new Set(eventSubmissionDriveIds);
+  const registeredEventDriveIds = (registeredDrivesResult.data || [])
+    .filter((drive) => isMarkedPresentRegistration(drive?.registration))
+    .map((drive) => Number(drive?.donation_drive_id))
+    .filter((driveId) => Number.isFinite(driveId) && driveId > 0);
+  const knownEventDriveIds = new Set([
+    ...registeredEventDriveIds,
+  ].filter((driveId) => Number.isFinite(driveId) && driveId > 0));
+  const missingEventSubmissionDriveIds = eventSubmissionDriveIds
+    .filter((driveId) => !knownEventDriveIds.has(driveId));
+  const eventSubmissionDriveResults = missingEventSubmissionDriveIds.length
+    ? await Promise.all(missingEventSubmissionDriveIds.map((driveId) => (
         fetchDonationDrivePreview(driveId, databaseUserId || null)
       )))
     : [];
-  const completedEventDrives = completedEventDriveResults
-    .map((result) => result?.data || null)
-    .filter((drive) => Number(drive?.donation_drive_id) > 0);
+  const completedEventDrivesById = new Map();
+  [
+    ...(registeredDrivesResult.data || []).filter((drive) => isMarkedPresentRegistration(drive?.registration)),
+    activeDrive,
+    ...eventSubmissionDriveResults.map((result) => result?.data || null),
+  ]
+    .filter((drive) => Number(drive?.donation_drive_id) > 0)
+    .filter((drive) => (
+      isMarkedPresentRegistration(drive?.registration)
+      || eventSubmissionDriveIdSet.has(Number(drive?.donation_drive_id))
+    ))
+    .forEach((drive) => {
+      const driveId = Number(drive.donation_drive_id);
+      const existing = completedEventDrivesById.get(driveId);
+      if (!existing || drive?.registration?.registration_id || !existing?.registration?.registration_id) {
+        completedEventDrivesById.set(driveId, drive);
+      }
+    });
+  const completedEventDrives = Array.from(completedEventDrivesById.values());
 
   return {
     latestAnalysisEntry,
@@ -2345,6 +2477,7 @@ const hasCompletedDonation = Boolean(
     donationHistory,
     completedDonationHistory: donationHistory,
     drives: drivesResult.data || [],
+    registeredDrives: registeredDrivesResult.data || [],
     completedEventDrives,
     logistics,
     independentQrState,
@@ -2355,6 +2488,7 @@ const hasCompletedDonation = Boolean(
     certificate,
     error: submissionsResult.error?.message
       || drivesResult.error?.message
+      || registeredDrivesResult.error?.message
       || logisticsError?.message
       || trackingError?.message
       || productionTimelineError?.message

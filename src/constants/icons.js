@@ -35,6 +35,8 @@ export const appIconMap = {
   requestsActive: 'clipboard-text',
   support: 'lifebuoy',
   supportActive: 'lifebuoy',
+  feedback: 'message-alert-outline',
+  feedbackActive: 'message-alert',
   notifications: 'bell-outline',
   notificationsActive: 'bell',
   eye: 'eye-outline',

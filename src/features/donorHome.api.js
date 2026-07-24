@@ -43,6 +43,7 @@ const donationDriveRegistrationSelect = `
   registration_id:Event_Attendee_ID,
   donation_drive_id:Event_Request_ID,
   user_id:User_ID,
+  attendee_type:Attendee_Type,
   waybill_code:Waybill_Code,
   registration_status:Registration_Status,
   attendance_status:Attendance_Status,
@@ -250,6 +251,7 @@ const normalizeDonationDriveRegistration = (row) => ({
   registration_id: row?.registration_id || null,
   donation_drive_id: row?.donation_drive_id || null,
   user_id: row?.user_id || null,
+  attendee_type: row?.attendee_type || 'Donor',
   waybill_code: row?.waybill_code || null,
   submission_id: row?.submission_id || null,
   donation_reference: row?.donation_reference || '',
@@ -517,6 +519,26 @@ const findExistingDriveRegistration = async (driveId, databaseUserId) => {
   };
 };
 
+const updateDriveRegistrationAttendeeType = async (registrationId, attendeeType = 'Donor') => {
+  if (!registrationId) return { data: null, error: null };
+
+  const normalizedType = attendeeType === 'Voluntary' ? 'Voluntary' : 'Donor';
+  const result = await supabase
+    .from(donationDriveRegistrationsTable)
+    .update({
+      Attendee_Type: normalizedType,
+      Updated_At: new Date().toISOString(),
+    })
+    .eq('Event_Attendee_ID', registrationId)
+    .select(donationDriveRegistrationSelect)
+    .maybeSingle();
+
+  return {
+    data: result.data ? normalizeDonationDriveRegistration(result.data) : null,
+    error: result.error || null,
+  };
+};
+
 const findDriveRegistrationsByUserIdAndDriveIds = async (driveIds = [], databaseUserId) => {
   if (!databaseUserId || !driveIds.length) {
     return {
@@ -613,6 +635,7 @@ export const createDonationDriveRegistration = async ({
   databaseUserId,
   hasEligibleHairScan = null,
   hasHairScanLog = null,
+  attendanceOnly = false,
 }) => {
   const effectiveDatabaseUserId = await resolveDatabaseUserIdFromSession(databaseUserId);
 
@@ -624,7 +647,7 @@ export const createDonationDriveRegistration = async ({
     };
   }
 
-  if (hasEligibleHairScan === false) {
+  if (!attendanceOnly && hasEligibleHairScan === false) {
     const eligibilityError = new Error(
       hasHairScanLog
         ? 'Your latest AI hair screening is not eligible for donation yet. Please follow the recommendations and scan again before registering for a donation event.'
@@ -638,15 +661,17 @@ export const createDonationDriveRegistration = async ({
     };
   }
 
-  const permission = await canSubmitHairDonation(effectiveDatabaseUserId);
-  if (!permission.allowed) {
-    const permissionError = new Error(mapDonationPermissionError(permission.reason));
-    permissionError.code = permission.reason;
-    return {
-      data: null,
-      error: permissionError,
-      alreadyRegistered: false,
-    };
+  if (!attendanceOnly) {
+    const permission = await canSubmitHairDonation(effectiveDatabaseUserId);
+    if (!permission.allowed) {
+      const permissionError = new Error(mapDonationPermissionError(permission.reason));
+      permissionError.code = permission.reason;
+      return {
+        data: null,
+        error: permissionError,
+        alreadyRegistered: false,
+      };
+    }
   }
 
   const driveResult = await supabase
@@ -699,6 +724,30 @@ export const createDonationDriveRegistration = async ({
   }
 
   if (existingResult.data?.registration_id) {
+    if (attendanceOnly) {
+      const typeResult = existingResult.data.attendee_type === 'Voluntary'
+        ? { data: existingResult.data, error: null }
+        : await updateDriveRegistrationAttendeeType(existingResult.data.registration_id, 'Voluntary');
+
+      return {
+        data: typeResult.data || existingResult.data,
+        error: typeResult.error,
+        alreadyRegistered: true,
+      };
+    }
+
+    const donorTypeResult = existingResult.data.attendee_type === 'Donor'
+      ? { data: existingResult.data, error: null }
+      : await updateDriveRegistrationAttendeeType(existingResult.data.registration_id, 'Donor');
+
+    if (donorTypeResult.error) {
+      return {
+        data: null,
+        error: donorTypeResult.error,
+        alreadyRegistered: true,
+      };
+    }
+
     const ensured = await ensureHairSubmissionForDrive({
       driveId,
       databaseUserId: effectiveDatabaseUserId,
@@ -724,6 +773,7 @@ export const createDonationDriveRegistration = async ({
     .upsert({
       Event_Request_ID: driveId,
       User_ID: effectiveDatabaseUserId,
+      Attendee_Type: attendanceOnly ? 'Voluntary' : 'Donor',
       Registration_Status: 'Registered',
       Attendance_Status: 'Not Marked',
     }, {
@@ -735,6 +785,30 @@ export const createDonationDriveRegistration = async ({
   if (insertResult.error) {
     const duplicateLookupResult = await findExistingDriveRegistration(driveId, effectiveDatabaseUserId);
     if (duplicateLookupResult.data?.registration_id) {
+      if (attendanceOnly) {
+        const typeResult = duplicateLookupResult.data.attendee_type === 'Voluntary'
+          ? { data: duplicateLookupResult.data, error: null }
+          : await updateDriveRegistrationAttendeeType(duplicateLookupResult.data.registration_id, 'Voluntary');
+
+        return {
+          data: typeResult.data || duplicateLookupResult.data,
+          error: typeResult.error,
+          alreadyRegistered: true,
+        };
+      }
+
+      const donorTypeResult = duplicateLookupResult.data.attendee_type === 'Donor'
+        ? { data: duplicateLookupResult.data, error: null }
+        : await updateDriveRegistrationAttendeeType(duplicateLookupResult.data.registration_id, 'Donor');
+
+      if (donorTypeResult.error) {
+        return {
+          data: null,
+          error: donorTypeResult.error,
+          alreadyRegistered: true,
+        };
+      }
+
       const ensured = await ensureHairSubmissionForDrive({
         driveId,
         databaseUserId: effectiveDatabaseUserId,
@@ -762,6 +836,15 @@ export const createDonationDriveRegistration = async ({
     };
   }
 
+  const normalizedRegistration = normalizeDonationDriveRegistration(insertResult.data);
+  if (attendanceOnly) {
+    return {
+      data: normalizedRegistration,
+      error: null,
+      alreadyRegistered: false,
+    };
+  }
+
   const ensured = await ensureHairSubmissionForDrive({
     driveId,
     databaseUserId: effectiveDatabaseUserId,
@@ -776,7 +859,7 @@ export const createDonationDriveRegistration = async ({
   }
 
   return {
-    data: attachEventHairSubmissionLink(normalizeDonationDriveRegistration(insertResult.data), ensured.data),
+    data: attachEventHairSubmissionLink(normalizedRegistration, ensured.data),
     error: null,
     alreadyRegistered: false,
   };

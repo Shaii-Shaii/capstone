@@ -284,7 +284,7 @@ const buildHairCalendarCells = (cursorDate, markedDateKeys = new Set(), selected
   });
 };
 
-function HairAnalysisHomeModule() {
+function HairAnalysisHomeModule({ initialTab = 'overview' }) {
   const router = useRouter();
   const { user, profile, resolvedTheme } = useAuth();
   const roles = resolveThemeRoles(resolvedTheme);
@@ -300,12 +300,20 @@ function HairAnalysisHomeModule() {
   const [isFirstCheckPromptVisible, setIsFirstCheckPromptVisible] = React.useState(false);
   const [isProfileCompletionPromptVisible, setIsProfileCompletionPromptVisible] = React.useState(false);
   const [firstCheckPromptDismissed, setFirstCheckPromptDismissed] = React.useState(false);
-  const [activeHairAnalysisTab, setActiveHairAnalysisTab] = React.useState('overview');
+  const [activeHairAnalysisTab, setActiveHairAnalysisTab] = React.useState(
+    initialTab === 'history' ? 'checkhair' : 'overview'
+  );
   const [calendarMonth, setCalendarMonth] = React.useState(() => {
     const now = new Date();
     return new Date(now.getFullYear(), now.getMonth(), 1);
   });
   const [selectedCalendarDateKey, setSelectedCalendarDateKey] = React.useState('');
+
+  React.useEffect(() => {
+    if (initialTab === 'history') {
+      setActiveHairAnalysisTab('checkhair');
+    }
+  }, [initialTab]);
 
   const { unreadCount } = useNotifications({
     role: 'donor',
@@ -1008,12 +1016,13 @@ function HairAnalysisHomeModule() {
 export default function DonorDonationsScreen() {
   const params = useLocalSearchParams();
   const mode = Array.isArray(params.mode) ? params.mode[0] : params.mode;
+  const tab = Array.isArray(params.tab) ? params.tab[0] : params.tab;
 
   if (mode === 'scan') {
     return <DonorHairSubmissionScreen />;
   }
 
-  return <HairAnalysisHomeModule />;
+  return <HairAnalysisHomeModule initialTab={tab === 'history' || mode === 'history' ? 'history' : 'overview'} />;
 }
 
 const styles = StyleSheet.create({

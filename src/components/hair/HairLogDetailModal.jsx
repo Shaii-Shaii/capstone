@@ -427,6 +427,7 @@ export function HairLogDetailModal({
               borderColor: roles.defaultCardBorder,
             },
           ]}
+          contentStyle={styles.cardContent}
         >
           <View style={styles.header}>
             <View style={styles.headerCopy}>
@@ -718,9 +719,14 @@ const styles = StyleSheet.create({
   card: {
     width: '100%',
     maxWidth: 440,
-    maxHeight: '88%',
+    maxHeight: '92%',
     alignSelf: 'center',
     overflow: 'hidden',
+    flexShrink: 1,
+  },
+  cardContent: {
+    flexShrink: 1,
+    minHeight: 0,
   },
   header: {
     flexDirection: 'row',
@@ -750,11 +756,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   scroll: {
+    flexGrow: 1,
     flexShrink: 1,
+    minHeight: 0,
   },
   scrollContent: {
     gap: theme.spacing.md,
-    paddingBottom: theme.spacing.xl,
+    paddingBottom: theme.spacing.xxxl,
   },
   statusCard: {
     borderRadius: 16,

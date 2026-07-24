@@ -1,10 +1,15 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import Constants from "expo-constants";
+import * as DocumentPicker from "expo-document-picker";
+import * as ImagePicker from "expo-image-picker";
+import * as MediaLibrary from "expo-media-library";
 import { useRouter } from "expo-router";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Controller, useForm, useWatch } from "react-hook-form";
+import Pdf from "react-native-pdf";
 import {
+    ActivityIndicator,
     Alert,
     Image,
     KeyboardAvoidingView,
@@ -17,6 +22,7 @@ import {
     Text,
     View,
 } from "react-native";
+import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { patientDashboardNavItems } from "../../constants/dashboard";
 import { resolveThemeRoles, theme } from "../../design-system/theme";
@@ -28,6 +34,7 @@ import { useNotifications } from "../../hooks/useNotifications";
 import { usePatientWigRequest } from "../../hooks/usePatientWigRequest";
 import { useProcessTracking } from "../../hooks/useProcessTracking";
 import { useAuth } from "../../providers/AuthProvider";
+import { verifyMedicalCertificateAsset } from "../../features/patientMedicalCertificate.service";
 import { logAppError } from "../../utils/appErrors";
 import { DonorTopBar } from "../donor/DonorTopBar";
 import { ProcessStatusTracker } from "../tracking/ProcessStatusTracker";
@@ -48,6 +55,8 @@ let MediaPipeCamera = null;
 let useMediaPipeFaceLandmarkDetection = null;
 let MediaPipeRunningMode = null;
 let MediaPipeDelegate = null;
+let viewShotCaptureRef = null;
+let didTryLoadViewShot = false;
 const isExpoGoRuntime = Constants?.appOwnership === "expo";
 
 try {
@@ -116,6 +125,20 @@ const canUseNativeTryOnCamera = Boolean(
 
 const canUseFaceTrackingTryOnCamera =
   canUseMediaPipeTryOnCamera || canUseNativeTryOnCamera;
+
+const getViewShotCaptureRef = () => {
+  if (didTryLoadViewShot) return viewShotCaptureRef;
+  didTryLoadViewShot = true;
+
+  try {
+    viewShotCaptureRef = require("react-native-view-shot")?.captureRef || null;
+  } catch {
+    viewShotCaptureRef = null;
+  }
+
+  return viewShotCaptureRef;
+};
+
 const FACE_LANDMARKER_MODEL = "face_landmarker.task";
 const CAPTURE_FRAME_INSET = 20;
 const CAPTURE_FACE_GUIDE_TOP = 46;
@@ -187,6 +210,16 @@ const getFileNameFromUrl = (value) => {
     return normalized.split("/").filter(Boolean).pop() || normalized;
   }
 };
+
+const isImageDocumentUrl = (value = "") => (
+  /^data:image\//i.test(String(value || ""))
+  || /\.(png|jpe?g|webp|gif)(?:\?|#|$)/i.test(String(value || ""))
+);
+
+const isPdfDocumentUrl = (value = "") => (
+  /^data:application\/pdf/i.test(String(value || ""))
+  || /\.pdf(?:\?|#|$)/i.test(String(value || ""))
+);
 
 const buildRecommendationOptions = ({
   preview,
@@ -876,6 +909,83 @@ const resolveFaceBoxInStage = (faceFrame, stageLayout) => {
   };
 };
 
+const mapStaticImagePointToStage = (point, frameSize, stageLayout) => {
+  if (
+    !point ||
+    !frameSize?.width ||
+    !frameSize?.height ||
+    !stageLayout?.width ||
+    !stageLayout?.height
+  ) {
+    return null;
+  }
+
+  const coverScale = Math.max(
+    stageLayout.width / frameSize.width,
+    stageLayout.height / frameSize.height,
+  );
+  const renderedWidth = frameSize.width * coverScale;
+  const renderedHeight = frameSize.height * coverScale;
+  const offsetX = (renderedWidth - stageLayout.width) / 2;
+  const offsetY = (renderedHeight - stageLayout.height) / 2;
+
+  return {
+    x: Number(point.x || 0) * coverScale - offsetX,
+    y: Number(point.y || 0) * coverScale - offsetY,
+  };
+};
+
+const mapStaticImageFaceFrameToStage = (faceFrame, stageLayout) => {
+  if (
+    faceFrame?.source !== "ai_photo_detection" &&
+    faceFrame?.source !== "mediapipe_static_image"
+  ) {
+    return faceFrame;
+  }
+
+  const frameSize = {
+    width: Number(faceFrame.frameWidth || 0),
+    height: Number(faceFrame.frameHeight || 0),
+  };
+  const bounds = faceFrame.bounds || {};
+  const topLeft = mapStaticImagePointToStage(
+    { x: bounds.x, y: bounds.y },
+    frameSize,
+    stageLayout,
+  );
+  const bottomRight = mapStaticImagePointToStage(
+    {
+      x: Number(bounds.x || 0) + Number(bounds.width || 0),
+      y: Number(bounds.y || 0) + Number(bounds.height || 0),
+    },
+    frameSize,
+    stageLayout,
+  );
+  if (!topLeft || !bottomRight) return null;
+
+  const landmarks = Object.entries(faceFrame.landmarks || {}).reduce(
+    (result, [key, point]) => {
+      const mappedPoint = mapStaticImagePointToStage(point, frameSize, stageLayout);
+      return mappedPoint ? { ...result, [key]: mappedPoint } : result;
+    },
+    {},
+  );
+
+  return {
+    ...faceFrame,
+    autoMode: true,
+    frameWidth: stageLayout.width,
+    frameHeight: stageLayout.height,
+    bounds: {
+      x: topLeft.x,
+      y: topLeft.y,
+      width: bottomRight.x - topLeft.x,
+      height: bottomRight.y - topLeft.y,
+    },
+    landmarks,
+  };
+};
+
 const normalizeLayerScale = (scale) => {
   const numericScale = Number(scale);
   if (!Number.isFinite(numericScale)) return 1;
@@ -1503,6 +1613,87 @@ const scoreWigRecommendation = (wig, values = {}) => {
   }, stockScore);
 };
 
+const validateAiTryOnPhoto = (photo) => {
+  if (!photo?.uri) {
+    return {
+      valid: false,
+      message: "Upload a clear front-facing photo first.",
+    };
+  }
+
+  const mimeType = String(photo?.mimeType || "").toLowerCase();
+  const uri = String(photo?.uri || "").toLowerCase();
+  const hasAcceptedFormat =
+    mimeType.includes("jpeg") ||
+    mimeType.includes("jpg") ||
+    mimeType.includes("png") ||
+    uri.endsWith(".jpg") ||
+    uri.endsWith(".jpeg") ||
+    uri.endsWith(".png") ||
+    uri.startsWith("file:") ||
+    uri.startsWith("content:");
+
+  if (!hasAcceptedFormat) {
+    return {
+      valid: false,
+      message: "Use a JPG, JPEG, or PNG photo.",
+    };
+  }
+
+  const width = Number(photo?.width || 0);
+  const height = Number(photo?.height || 0);
+  if ((width && width < 512) || (height && height < 512)) {
+    return {
+      valid: false,
+      message: "The photo resolution is too low. Upload a sharper photo.",
+    };
+  }
+
+  if (width && height) {
+    const aspectRatio = width / height;
+    if (aspectRatio < 0.45 || aspectRatio > 2.1) {
+      return {
+        valid: false,
+        message: "Make sure your full head is visible and not cropped.",
+      };
+    }
+  }
+
+  const faceFrame = photo?.placement?.faceFrame;
+  const bounds = faceFrame?.bounds || faceFrame;
+  if (bounds?.width && bounds?.height) {
+    const left = Number(bounds.x ?? bounds.left ?? 0);
+    const top = Number(bounds.y ?? bounds.top ?? 0);
+    const faceWidth = Number(bounds.width || 0);
+    const faceHeight = Number(bounds.height || 0);
+    const stageWidth = Number(photo?.placement?.stageLayout?.width || width || 0);
+    const stageHeight = Number(photo?.placement?.stageLayout?.height || height || 0);
+    const isSeverelyOutsideFrame =
+      stageWidth &&
+      stageHeight &&
+      (left < -stageWidth * 0.03 ||
+        top < -stageHeight * 0.03 ||
+        left + faceWidth > stageWidth * 1.03 ||
+        top + faceHeight > stageHeight * 1.03);
+    const faceFillsTooMuchFrame =
+      stageWidth &&
+      stageHeight &&
+      (faceWidth > stageWidth * 0.92 || faceHeight > stageHeight * 0.92);
+
+    if (isSeverelyOutsideFrame || faceFillsTooMuchFrame) {
+      return {
+        valid: false,
+        message: "Your head appears cropped. Upload another front-facing photo.",
+      };
+    }
+  }
+
+  return {
+    valid: true,
+    message: "Photo validated.",
+  };
+};
+
 function PreferenceChipGroup({
   control,
   name,
@@ -1920,27 +2111,31 @@ function WigInfoTile({ label, value, roles }) {
 }
 
 function WigInfoList({ rows, roles }) {
-  const groupedRows = [];
-  for (let index = 0; index < rows.length; index += 2) {
-    groupedRows.push(rows.slice(index, index + 2));
+  const visibleRows = rows.filter((row) => {
+    const normalizedValue = String(row?.value ?? "").trim().toLowerCase();
+    return normalizedValue && normalizedValue !== "not provided" && normalizedValue !== "pending";
+  });
+
+  if (!visibleRows.length) {
+    return (
+      <View style={styles.requestedWigPendingNote}>
+        <AppIcon name="requests" size="sm" color={roles.primaryActionBackground} />
+        <Text style={[styles.requestedWigPendingText, { color: roles.bodyText }]}>
+          Wig preferences will appear after your request is reviewed.
+        </Text>
+      </View>
+    );
   }
 
   return (
     <View style={styles.requestedWigDetailGrid}>
-      {groupedRows.map((pair, index) => (
-        <View
-          key={`requested-wig-row-${index}`}
-          style={styles.requestedWigDetailRow}
-        >
-          {pair.map((row) => (
-            <WigInfoTile
-              key={row.label}
-              label={row.label}
-              value={row.value}
-              roles={roles}
-            />
-          ))}
-        </View>
+      {visibleRows.map((row) => (
+        <WigInfoTile
+          key={row.label}
+          label={row.label}
+          value={row.value}
+          roles={roles}
+        />
       ))}
     </View>
   );
@@ -1975,6 +2170,7 @@ function RequestFlowHeader({ title, onBack, roles }) {
   );
 }
 
+// eslint-disable-next-line no-unused-vars
 function CaptureModal({
   visible,
   referenceImage,
@@ -2574,6 +2770,7 @@ function CaptureModal({
   );
 }
 
+// eslint-disable-next-line no-unused-vars
 function AiMatcherSkeleton({ roles }) {
   return (
     <View
@@ -2628,6 +2825,7 @@ function AiMatcherSkeleton({ roles }) {
   );
 }
 
+// eslint-disable-next-line no-unused-vars
 function MatcherRecommendationCard({
   option,
   isActive,
@@ -2734,6 +2932,215 @@ function MatcherRecommendationCard({
   );
 }
 
+function AiWigCompositePreview({
+  baseImageUri,
+  selectedWig,
+  placement,
+  previewCaptureRef,
+  roles,
+}) {
+  const [previewLayout, setPreviewLayout] = useState({ width: 0, height: 0 });
+  const [manualFit, setManualFit] = useState({
+    offsetX: 0,
+    offsetY: 0,
+    scale: 1,
+  });
+  const detectedFaceFrame =
+    previewLayout.width && previewLayout.height
+      ? mapStaticImageFaceFrameToStage(placement?.faceFrame, previewLayout)
+      : null;
+  const activeFaceFrame =
+    detectedFaceFrame ||
+    (previewLayout.width && previewLayout.height ? buildGuideFaceFrame(previewLayout) : null);
+  const mainWigUrl = selectedWig?.layer_full_wig_url || getPrimaryTryOnImageUrl(selectedWig);
+  const faceBox =
+    activeFaceFrame && previewLayout.width && previewLayout.height
+      ? resolveFaceBoxInStage(activeFaceFrame, previewLayout)
+      : null;
+  const forehead = getFacePoint(activeFaceFrame, "FOREHEAD");
+  const chin = getFacePoint(activeFaceFrame, "CHIN");
+  const leftEye = getFacePoint(activeFaceFrame, "LEFT_EYE");
+  const rightEye = getFacePoint(activeFaceFrame, "RIGHT_EYE");
+  const leftTemple = getFacePoint(activeFaceFrame, "LEFT_TEMPLE");
+  const rightTemple = getFacePoint(activeFaceFrame, "RIGHT_TEMPLE");
+  const leftEar = getFacePoint(activeFaceFrame, "LEFT_EAR");
+  const rightEar = getFacePoint(activeFaceFrame, "RIGHT_EAR");
+  const nose = getFacePoint(activeFaceFrame, "NOSE");
+  const eyeCenter = averagePoints([leftEye, rightEye]);
+  const templeCenter = averagePoints([leftTemple, rightTemple]);
+  const earCenter = averagePoints([leftEar, rightEar]);
+  const faceCenter = averagePoints([templeCenter, earCenter, eyeCenter, nose]);
+  const templeDistance = distanceBetweenPoints(leftTemple, rightTemple);
+  const earDistance = distanceBetweenPoints(leftEar, rightEar);
+  const eyeDistance = distanceBetweenPoints(leftEye, rightEye);
+  const landmarkFaceWidth = Math.max(
+    earDistance ? earDistance * 0.94 : 0,
+    templeDistance ? templeDistance * 1.08 : 0,
+    eyeDistance ? eyeDistance * 2.32 : 0,
+    faceBox?.width ? faceBox.width * 0.96 : 0,
+  );
+  const landmarkFaceTop =
+    forehead?.y ??
+    (eyeCenter && landmarkFaceWidth
+      ? eyeCenter.y - landmarkFaceWidth * 0.34
+      : faceBox?.y);
+  const landmarkFaceBottom = chin?.y ?? (faceBox ? faceBox.y + faceBox.height : 0);
+  const landmarkFaceHeight = Math.max(
+    landmarkFaceBottom - landmarkFaceTop,
+    faceBox?.height || 0,
+  );
+  const mainWigStyle = faceBox
+    ? (() => {
+        const centerX = faceCenter?.x || faceBox.x + faceBox.width / 2;
+        const faceWidth = landmarkFaceWidth || faceBox.width;
+        const faceTop = landmarkFaceTop ?? faceBox.y;
+        const faceHeight = landmarkFaceHeight || faceBox.height;
+        const fitSettings = selectedWig?.fit_settings || {};
+        const layerFit = resolveLayerFit(fitSettings, "fullWig");
+        const tryOnConfig = resolveTryOnConfig(fitSettings, "fullWig");
+        const faceHole = tryOnConfig.faceHole || {
+          x: 0.24,
+          y: 0.26,
+          width: 0.52,
+          height: 0.66,
+        };
+        const layerScale = normalizeLayerScale(layerFit.scale);
+        const targetFaceWidth = faceWidth * 0.9;
+        const targetFaceHeight = faceHeight * 0.98;
+        const baseWidth =
+          (targetFaceWidth / Math.max(faceHole.width, 0.18)) *
+          layerScale *
+          manualFit.scale;
+        const baseHeight =
+          (targetFaceHeight / Math.max(faceHole.height, 0.24)) *
+          layerScale *
+          manualFit.scale;
+        const faceHoleCenterX = faceHole.x + faceHole.width / 2;
+        const hairlineLift = -faceHeight * 0.08;
+        return {
+          position: "absolute",
+          left:
+            centerX -
+            baseWidth * faceHoleCenterX +
+            faceWidth * 0.005 +
+            manualFit.offsetX +
+            normalizeLayerOffset(layerFit.offsetX, previewLayout),
+          top:
+            faceTop -
+            baseHeight * faceHole.y -
+            hairlineLift +
+            manualFit.offsetY +
+            normalizeLayerOffset(layerFit.offsetY, previewLayout),
+          width: baseWidth,
+          height: baseHeight,
+          zIndex: 3,
+          elevation: 3,
+        };
+      })()
+    : buildTryOnLayerStyle(selectedWig?.fit_settings, "fullWig", 3);
+  const nudge = (key, amount) => {
+    setManualFit((current) => ({
+      ...current,
+      [key]: key === "scale"
+        ? Math.min(1.35, Math.max(0.7, current.scale + amount))
+        : current[key] + amount,
+    }));
+  };
+  const resetFit = () => setManualFit({ offsetX: 0, offsetY: 0, scale: 1 });
+
+  return (
+    <View style={styles.aiCompositeShell}>
+      <View
+        ref={previewCaptureRef}
+        collapsable={false}
+        style={[
+          styles.aiResultImage,
+          styles.aiCompositeFrame,
+          { backgroundColor: roles.supportCardBackground },
+        ]}
+        onLayout={(event) =>
+          setPreviewLayout({
+            width: event.nativeEvent.layout.width,
+            height: event.nativeEvent.layout.height,
+          })
+        }
+      >
+        {baseImageUri ? (
+          <Image
+            source={{ uri: baseImageUri }}
+            resizeMode="cover"
+            style={styles.aiCompositeBaseImage}
+          />
+        ) : null}
+        {mainWigUrl ? (
+          <WigLayerImage
+            sourceUri={mainWigUrl}
+            style={[mainWigStyle, styles.matcherWigOverlay]}
+          />
+        ) : null}
+      </View>
+      <View style={styles.wigFitControls}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Move wig left"
+          onPress={() => nudge("offsetX", -8)}
+          style={styles.wigFitButton}
+        >
+          <Text style={styles.wigFitButtonText}>Left</Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Move wig up"
+          onPress={() => nudge("offsetY", -8)}
+          style={styles.wigFitButton}
+        >
+          <Text style={styles.wigFitButtonText}>Up</Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Move wig down"
+          onPress={() => nudge("offsetY", 8)}
+          style={styles.wigFitButton}
+        >
+          <Text style={styles.wigFitButtonText}>Down</Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Move wig right"
+          onPress={() => nudge("offsetX", 8)}
+          style={styles.wigFitButton}
+        >
+          <Text style={styles.wigFitButtonText}>Right</Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Make wig smaller"
+          onPress={() => nudge("scale", -0.05)}
+          style={styles.wigFitButton}
+        >
+          <Text style={styles.wigFitButtonText}>-</Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Make wig larger"
+          onPress={() => nudge("scale", 0.05)}
+          style={styles.wigFitButton}
+        >
+          <Text style={styles.wigFitButtonText}>+</Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Reset wig fit"
+          onPress={resetFit}
+          style={styles.wigFitButton}
+        >
+          <Text style={styles.wigFitButtonText}>Reset</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
 function RequestFlowModal({
   visible,
   step,
@@ -2754,12 +3161,30 @@ function RequestFlowModal({
   wigPreferenceOptions,
   isLoadingWigPreferenceOptions,
   generatedImageUri,
+  preview,
   hasGeneratedPreview,
   isGeneratingPreview,
   isSavingRequest,
+  isPickingReference,
+  isCapturingPhoto,
+  certificateVerification,
+  isVerifyingCertificate,
+  photoValidation,
+  hasCameraPermission,
+  cameraRef,
   onClose,
   onContinueToDetails,
-  onOpenCamera,
+  onUploadPhoto,
+  onCapturePhoto,
+  onUploadCertificate,
+  onScanCertificate,
+  onRequestCameraPermission,
+  onContinueToWigs,
+  onStartGeneration,
+  onTryAnotherWig,
+  onUploadAnotherPhoto,
+  onDownloadImage,
+  previewCaptureRef,
   onSubmitRequest,
   onViewTimeline,
   onSelectWig,
@@ -2767,6 +3192,8 @@ function RequestFlowModal({
   roles,
 }) {
   const insets = useSafeAreaInsets();
+  const [isRetakingPhoto, setIsRetakingPhoto] = useState(false);
+  const [documentPreviewUri, setDocumentPreviewUri] = useState("");
   const hasPreferenceOptions = Boolean(
     wigPreferenceOptions?.lengths?.length ||
     wigPreferenceOptions?.colors?.length ||
@@ -2786,12 +3213,6 @@ function RequestFlowModal({
       : theme.typography.semantic.titleSm;
   const patientRows = [
     {
-      key: "patient",
-      label: "Patient",
-      value: patientName || "Patient account",
-      fallback: "Patient account",
-    },
-    {
       key: "patient_code",
       label: "Patient code",
       value: patientCode,
@@ -2802,12 +3223,6 @@ function RequestFlowModal({
       label: "Hospital",
       value: hospitalName,
       fallback: "Not linked",
-    },
-    {
-      key: "medical_condition",
-      label: "Medical condition",
-      value: medicalCondition || patientDetails?.medical_condition,
-      fallback: "Not provided",
     },
     {
       key: "date_of_diagnosis",
@@ -2825,7 +3240,50 @@ function RequestFlowModal({
   const medicalDocumentName = medicalDocument
     ? getFileNameFromUrl(medicalDocument)
     : "No document uploaded";
-  const medicalDocumentStatus = medicalDocument ? "Attached" : "No document";
+  const hasMedicalDocumentPreview = Boolean(medicalDocument);
+  const isMedicalDocumentImage = isImageDocumentUrl(medicalDocument);
+  const isMedicalDocumentPdf = isPdfDocumentUrl(medicalDocument);
+  const persistedVerificationStatus = patientDetails?.medical_document_verification_status || "";
+  const effectiveVerification = certificateVerification || {
+    status: persistedVerificationStatus,
+    doctorName: patientDetails?.doctor_name || "",
+    licenseNumber: patientDetails?.doctor_license_number || "",
+  };
+  const certificatePassed = ["ocr_passed_prc_pending", "verified", "prc_verified"].includes(
+    String(effectiveVerification?.status || "").toLowerCase(),
+  );
+  const medicalDocumentStatus = certificatePassed
+    ? "OCR passed"
+    : medicalDocument
+      ? "Needs OCR"
+      : "Required";
+  const shouldShowCapturedPhoto = Boolean(referenceImage?.uri && !isRetakingPhoto);
+  const captureButtonTitle = !hasCameraPermission
+    ? "Allow Camera"
+    : isCapturingPhoto
+      ? "Capturing..."
+      : shouldShowCapturedPhoto
+        ? "Retake Photo"
+        : "Take Photo";
+  const handleCameraAction = () => {
+    if (!hasCameraPermission) {
+      onRequestCameraPermission?.();
+      return;
+    }
+
+    if (shouldShowCapturedPhoto) {
+      setIsRetakingPhoto(true);
+      return;
+    }
+
+    onCapturePhoto?.();
+  };
+
+  useEffect(() => {
+    if (referenceImage?.uri) {
+      setIsRetakingPhoto(false);
+    }
+  }, [referenceImage?.uri]);
 
   if (!visible) return null;
 
@@ -2970,47 +3428,165 @@ function RequestFlowModal({
 
                 <View
                   style={[
-                    styles.documentRowCard,
+                    styles.documentPreviewCard,
                     {
                       borderColor: roles.defaultCardBorder,
+                      backgroundColor: roles.defaultCardBackground,
                     },
                   ]}
                 >
-                  <View style={styles.documentRowIcon}>
-                    <AppIcon
-                      name="requests"
-                      size="sm"
-                      color={roles.primaryActionBackground}
-                    />
-                  </View>
-                  <View style={styles.documentRowCopy}>
+                  <View style={styles.documentPreviewHeader}>
+                    <View style={styles.documentRowIcon}>
+                      <MaterialCommunityIcons
+                        name="file-document-outline"
+                        size={18}
+                        color={roles.primaryActionBackground}
+                      />
+                    </View>
+                    <View style={styles.documentRowCopy}>
+                      <Text style={[styles.documentRowLabel, { color: roles.bodyText }]}>
+                        Medical certificate
+                      </Text>
+                      <Text style={[styles.documentRowValue, { color: roles.headingText }]} numberOfLines={1}>
+                        {medicalDocumentName}
+                      </Text>
+                    </View>
                     <Text
                       style={[
-                        styles.documentRowLabel,
-                        { color: roles.bodyText },
-                      ]}
-                    >
-                      Document
-                    </Text>
-                    <Text
-                      style={[
-                        styles.documentRowValue,
-                        { color: roles.headingText },
+                        styles.documentRowStatus,
+                        { color: certificatePassed ? roles.successText : roles.bodyText },
                       ]}
                       numberOfLines={1}
                     >
-                      {medicalDocumentName}
+                      {medicalDocumentStatus}
                     </Text>
                   </View>
-                  <Text
-                    style={[
-                      styles.documentRowStatus,
-                      { color: roles.bodyText },
-                    ]}
-                    numberOfLines={1}
-                  >
-                    {medicalDocumentStatus}
-                  </Text>
+
+                  <View style={[styles.documentPreviewFrame, { backgroundColor: roles.pageBackground, borderColor: roles.defaultCardBorder }]}>
+                    {hasMedicalDocumentPreview && isMedicalDocumentImage ? (
+                      <Pressable
+                        accessibilityRole="imagebutton"
+                        accessibilityLabel="Open medical certificate preview"
+                        onPress={() => setDocumentPreviewUri(medicalDocument)}
+                        style={({ pressed }) => [
+                          styles.documentPreviewPressable,
+                          pressed ? styles.preferencePressed : null,
+                        ]}
+                      >
+                        <Image
+                          source={{ uri: medicalDocument }}
+                          style={styles.documentPreviewImage}
+                          resizeMode="cover"
+                        />
+                        <View style={styles.documentPreviewZoomBadge}>
+                          <MaterialCommunityIcons name="magnify-plus-outline" size={16} color="#ffffff" />
+                        </View>
+                      </Pressable>
+                    ) : hasMedicalDocumentPreview && isMedicalDocumentPdf ? (
+                      <Pdf
+                        source={{ uri: medicalDocument, cache: true }}
+                        style={styles.documentPreviewPdf}
+                        singlePage
+                        page={1}
+                        trustAllCerts={false}
+                      />
+                    ) : (
+                      <View style={styles.documentPreviewPlaceholder}>
+                        <MaterialCommunityIcons
+                          name={hasMedicalDocumentPreview ? "file-document-outline" : "file-upload-outline"}
+                          size={34}
+                          color={roles.primaryActionBackground}
+                        />
+                        <Text style={[styles.documentPreviewPlaceholderText, { color: roles.bodyText }]}>
+                          {hasMedicalDocumentPreview
+                            ? "Preview is unavailable for this file type."
+                            : "Upload or scan the medical certificate."}
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+
+                  <View style={styles.certificateActionRow}>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Upload medical certificate"
+                      disabled={isVerifyingCertificate}
+                      onPress={onUploadCertificate}
+                      style={({ pressed }) => [
+                        styles.certificateIconButton,
+                        { borderColor: roles.defaultCardBorder, backgroundColor: roles.defaultCardBackground },
+                        pressed ? styles.preferencePressed : null,
+                        isVerifyingCertificate ? styles.certificateIconButtonDisabled : null,
+                      ]}
+                    >
+                      <MaterialCommunityIcons
+                        name="file-upload-outline"
+                        size={22}
+                        color={roles.primaryActionBackground}
+                      />
+                    </Pressable>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Scan medical certificate"
+                      disabled={isVerifyingCertificate}
+                      onPress={onScanCertificate}
+                      style={({ pressed }) => [
+                        styles.certificateIconButton,
+                        styles.certificateIconButtonPrimary,
+                        pressed ? styles.preferencePressed : null,
+                        isVerifyingCertificate ? styles.certificateIconButtonDisabled : null,
+                      ]}
+                    >
+                      {isVerifyingCertificate ? (
+                        <ActivityIndicator size="small" color="#ffffff" />
+                      ) : (
+                        <MaterialCommunityIcons name="camera-outline" size={22} color="#ffffff" />
+                      )}
+                    </Pressable>
+                  </View>
+                </View>
+                <View
+                  style={[
+                    styles.certificateValidationCard,
+                    {
+                      borderColor: certificatePassed
+                        ? roles.successText
+                        : roles.defaultCardBorder,
+                      backgroundColor: roles.defaultCardBackground,
+                    },
+                  ]}
+                >
+                  <View style={styles.certificateValidationHeader}>
+                    <View style={styles.documentRowIcon}>
+                      <MaterialCommunityIcons
+                        name={certificatePassed ? "shield-check-outline" : "shield-search"}
+                        size={18}
+                        color={certificatePassed ? roles.successText : roles.primaryActionBackground}
+                      />
+                    </View>
+                    <View style={styles.documentRowCopy}>
+                      <Text style={[styles.documentRowLabel, { color: roles.bodyText }]}>
+                        Certificate validation
+                      </Text>
+                      <Text style={[styles.documentRowValue, { color: roles.headingText }]} numberOfLines={2}>
+                        {certificatePassed
+                          ? "Doctor license details detected. PRC/staff verification pending."
+                          : "Upload or scan a medical certificate with doctor name and PRC/license number."}
+                      </Text>
+                    </View>
+                  </View>
+                  {effectiveVerification?.doctorName || effectiveVerification?.licenseNumber ? (
+                    <Text style={[styles.certificateMetaText, { color: roles.bodyText }]}>
+                      {[effectiveVerification.doctorName, effectiveVerification.licenseNumber]
+                        .filter(Boolean)
+                        .join(" • ")}
+                    </Text>
+                  ) : null}
+                  {effectiveVerification?.missing?.length ? (
+                    <Text style={styles.fieldError}>
+                      Missing: {effectiveVerification.missing.join(", ")}
+                    </Text>
+                  ) : null}
                 </View>
 
                 <Controller
@@ -3057,12 +3633,95 @@ function RequestFlowModal({
               </View>
             ) : null}
 
+            {step === "photo" ? (
+              <View style={styles.flowSection}>
+                <View style={styles.requestFlowSectionHeader}>
+                  <Text style={styles.flowTitle}>Photo Upload</Text>
+                  <Text style={[styles.flowBody, { color: roles.bodyText }]}>
+                    Upload a clear front-facing photo. Make sure your full head
+                    is visible, the photo is not blurry, lighting is good, and
+                    only one person is in the image.
+                  </Text>
+                </View>
+
+                <View style={styles.aiPhotoStage}>
+                  {shouldShowCapturedPhoto ? (
+                    <Image
+                      source={{ uri: referenceImage.uri }}
+                      resizeMode="cover"
+                      style={styles.aiPhotoPreview}
+                    />
+                  ) : hasCameraPermission ? (
+                    <CameraView
+                      ref={cameraRef}
+                      style={styles.aiPhotoPreview}
+                      facing="front"
+                      mirror={false}
+                    />
+                  ) : (
+                    <View style={styles.aiPhotoPlaceholder}>
+                      <AppIcon
+                        name="image"
+                        size="xl"
+                        color={roles.iconPrimaryColor}
+                      />
+                      <Text
+                        style={[
+                          styles.aiPhotoPlaceholderText,
+                          { color: roles.bodyText },
+                        ]}
+                      >
+                        Add a JPG, JPEG, or PNG front photo.
+                      </Text>
+                    </View>
+                  )}
+                </View>
+
+                {photoValidation?.message ? (
+                  <StatusBanner
+                    title={photoValidation.valid ? "Photo ready" : "Photo needs review"}
+                    message={photoValidation.message}
+                    variant={photoValidation.valid ? "success" : "error"}
+                    presentation="inline"
+                    visible={true}
+                  />
+                ) : null}
+
+                <View style={styles.aiPhotoActions}>
+                  <AppButton
+                    title={isPickingReference ? "Uploading..." : "Upload Photo"}
+                    variant="outline"
+                    loading={isPickingReference}
+                    onPress={onUploadPhoto}
+                    leading={<AppIcon name="image" state="active" />}
+                    style={styles.aiPhotoActionButton}
+                  />
+                  <AppButton
+                    title={captureButtonTitle}
+                    loading={isCapturingPhoto}
+                    onPress={handleCameraAction}
+                    leading={<AppIcon name="camera" state="inverse" />}
+                    style={styles.aiPhotoActionButton}
+                  />
+                </View>
+
+                <AppButton
+                  title="Continue to Wig Selection"
+                  disabled={!photoValidation?.valid}
+                  onPress={onContinueToWigs}
+                  fullWidth={true}
+                  leading={<AppIcon name="success" state="inverse" />}
+                />
+              </View>
+            ) : null}
+
             {step === "styles" ? (
               <View style={styles.flowSection}>
                 <View style={styles.requestFlowSectionHeader}>
-                  <Text style={styles.flowTitle}>Available Wig Styles</Text>
+                  <Text style={styles.flowTitle}>Select Wig</Text>
                   <Text style={[styles.flowBody, { color: roles.bodyText }]}>
-                    Choose a stock wig to continue with the Wig AI Filter.
+                    Select one wig. The selected wig reference image will be
+                    sent with your photo to prepare the wig preview.
                   </Text>
                 </View>
 
@@ -3072,13 +3731,13 @@ function RequestFlowModal({
                       const isSelected = selectedWig?.id === wig.id;
                       const wigSpec = wig?.physical_specification || {};
                       const specSummary = [
-                        wigSpec?.style || wig?.wig_name || "",
-                        wigSpec?.color || "",
-                        wigSpec?.hair_texture || "",
-                        wigSpec?.cap_size || "",
+                        wigSpec?.color ? `Color: ${wigSpec.color}` : "",
+                        wigSpec?.length != null ? `Length: ${wigSpec.length}` : "",
+                        wigSpec?.style ? `Style: ${wigSpec.style}` : "",
+                        wigSpec?.hair_texture ? `Texture: ${wigSpec.hair_texture}` : "",
                       ]
                         .filter(Boolean)
-                        .join(" / ");
+                        .join("\n");
                       const previewUrl = getWigPreviewImageUrl(wig);
 
                       return (
@@ -3142,8 +3801,7 @@ function RequestFlowModal({
                                   styles.wigStyleSpec,
                                   { color: roles.bodyText },
                                 ]}
-                                numberOfLines={1}
-                                ellipsizeMode="tail"
+                                numberOfLines={4}
                               >
                                 {specSummary}
                               </Text>
@@ -3151,27 +3809,12 @@ function RequestFlowModal({
                           </View>
 
                           <View style={styles.wigStyleSelectRail}>
-                            <View
-                              style={[
-                                styles.wigStyleSelectRing,
-                                {
-                                  borderColor: isSelected
-                                    ? roles.primaryActionBackground
-                                    : roles.defaultCardBorder,
-                                  backgroundColor: isSelected
-                                    ? roles.primaryActionBackground
-                                    : "transparent",
-                                },
-                              ]}
-                            >
-                              {isSelected ? (
-                                <AppIcon
-                                  name="checkmark"
-                                  size="xs"
-                                  color={roles.primaryActionText}
-                                />
-                              ) : null}
-                            </View>
+                            <AppButton
+                              title={isSelected ? "Selected" : "Select"}
+                              size="sm"
+                              variant={isSelected ? "primary" : "outline"}
+                              onPress={() => onSelectWig?.(wig.id)}
+                            />
                           </View>
                         </Pressable>
                       );
@@ -3201,6 +3844,27 @@ function RequestFlowModal({
                   </View>
                 )}
 
+                <View style={styles.singleActionRow}>
+                  <AppButton
+                    title="Create Wig Preview"
+                    disabled={!selectedWig}
+                    onPress={onStartGeneration}
+                    fullWidth={true}
+                    leading={<AppIcon name="sparkle" state="inverse" />}
+                  />
+                </View>
+              </View>
+            ) : null}
+
+            {step === "generating" ? (
+              <View style={styles.aiGeneratingState}>
+                <ActivityIndicator
+                  size="large"
+                  color={roles.primaryActionBackground}
+                />
+                <Text style={[styles.flowTitle, { textAlign: "center" }]}>
+                  Preparing your wig preview...
+                </Text>
               </View>
             ) : null}
 
@@ -3357,43 +4021,53 @@ function RequestFlowModal({
                       { color: roles.headingText },
                     ]}
                   >
-                    Selected Wig
+                    Wig Preview Result
                   </Text>
                 </View>
 
-                {isGeneratingPreview ? (
-                  <AiMatcherSkeleton roles={roles} />
-                ) : (
-                  <>
-                    {hasGeneratedPreview ? (
-                      <View style={styles.matcherRecommendationsSection}>
-                        <View style={styles.matcherCardsGrid}>
-                          {recommendationOptions
-                            .slice(0, 1)
-                            .map((option, index) => {
-                              const optionImageUri =
-                                option.generatedImageUri ||
-                                generatedImageUri ||
-                                referenceImage?.uri ||
-                                "";
-                              const active =
-                                selectedOptionId === option.id ||
-                                (!selectedOptionId && index === 0);
-                              return (
-                                <MatcherRecommendationCard
-                                  key={option.id}
-                                  option={option}
-                                  isActive={active}
-                                  imageUri={optionImageUri}
-                                  selectedWig={selectedWig}
-                                  onPress={() => onSelectOption(option.id)}
-                                  roles={roles}
-                                />
-                              );
-                            })}
-                        </View>
-                      </View>
-                    ) : (
+                {hasGeneratedPreview ? (
+                  <View style={styles.aiResultGrid}>
+                    <View style={styles.aiResultPanel}>
+                      <Text
+                        style={[
+                          styles.aiResultLabel,
+                          { color: roles.bodyText },
+                        ]}
+                      >
+                        Original Photo
+                      </Text>
+                      <Image
+                        source={{ uri: referenceImage?.uri }}
+                        resizeMode="cover"
+                        style={styles.aiResultImage}
+                      />
+                    </View>
+                    <View style={styles.aiResultPanel}>
+                      <Text
+                        style={[
+                          styles.aiResultLabel,
+                          { color: roles.bodyText },
+                        ]}
+                      >
+                        Wig Preview
+                      </Text>
+                      {preview?.render_mode === "wig_overlay" ? (
+                        <AiWigCompositePreview
+                          baseImageUri={referenceImage?.uri || generatedImageUri}
+                          selectedWig={preview?.selected_wig || selectedWig}
+                          placement={preview?.placement || referenceImage?.placement}
+                          previewCaptureRef={previewCaptureRef}
+                          roles={roles}
+                        />
+                      ) : (
+                        <Image
+                          source={{ uri: generatedImageUri }}
+                          resizeMode="cover"
+                          style={styles.aiResultImage}
+                        />
+                      )}
+                    </View>
+                    {selectedWig ? (
                       <AppCard
                         variant="soft"
                         radius="sm"
@@ -3406,18 +4080,69 @@ function RequestFlowModal({
                             { color: roles.headingText },
                           ]}
                         >
-                          No wig selected
+                          {selectedWig.wig_name}
                         </Text>
-                        <Text
-                          style={[styles.flowBody, { color: roles.bodyText }]}
-                        >
-                          Choose one wig first.
+                        <Text style={[styles.flowBody, { color: roles.bodyText }]}>
+                          {[
+                            selectedWig?.physical_specification?.color
+                              ? `Color: ${selectedWig.physical_specification.color}`
+                              : "",
+                            selectedWig?.physical_specification?.length != null
+                              ? `Length: ${selectedWig.physical_specification.length}`
+                              : "",
+                            selectedWig?.physical_specification?.style
+                              ? `Style: ${selectedWig.physical_specification.style}`
+                              : "",
+                            selectedWig?.physical_specification?.hair_texture
+                              ? `Texture: ${selectedWig.physical_specification.hair_texture}`
+                              : "",
+                          ]
+                            .filter(Boolean)
+                            .join("\n")}
                         </Text>
                       </AppCard>
-                    )}
-                  </>
+                    ) : null}
+                  </View>
+                ) : (
+                  <AppCard
+                    variant="soft"
+                    radius="sm"
+                    padding="md"
+                    style={styles.summaryNoteCard}
+                  >
+                    <Text
+                      style={[
+                        styles.summaryNoteTitle,
+                        { color: roles.headingText },
+                      ]}
+                    >
+                      Preview unavailable
+                    </Text>
+                    <Text style={[styles.flowBody, { color: roles.bodyText }]}>
+                      We could not prepare your wig preview. Please try again or choose another photo.
+                    </Text>
+                  </AppCard>
                 )}
 
+                <AppButton
+                  title="Download Image"
+                  variant="outline"
+                  disabled={!generatedImageUri}
+                  onPress={onDownloadImage}
+                  leading={<AppIcon name="image" state="active" />}
+                />
+                <AppButton
+                  title="Try Another Wig"
+                  variant="outline"
+                  onPress={onTryAnotherWig}
+                  leading={<AppIcon name="sparkle" state="active" />}
+                />
+                <AppButton
+                  title="Upload Another Photo"
+                  variant="outline"
+                  onPress={onUploadAnotherPhoto}
+                  leading={<AppIcon name="image" state="active" />}
+                />
                 <AppButton
                   title="Submit Request"
                   loading={isSavingRequest}
@@ -3440,47 +4165,38 @@ function RequestFlowModal({
             ) : null}
           </ScrollView>
 
-          {step === "styles" ? (
-            <View
-              style={[
-                styles.stylesActionFooter,
-                {
-                  backgroundColor: roles.pageBackground,
-                  paddingBottom: Math.max(insets.bottom, theme.spacing.md),
-                },
-              ]}
-            >
-              <View style={styles.stylesActionRow}>
-                {hasAvailableWigs ? (
-                  <AppButton
-                    title="Continue to AI  Filter"
-                    onPress={onOpenCamera}
-                    disabled={!selectedWig}
-                    variant="primary"
-                    size="sm"
-                    fullWidth={false}
-                    leading={<AppIcon name="sparkle" state="inverse" />}
-                    textNumberOfLines={1}
-                    textAdjustsFontSizeToFit={true}
-                    textMinimumFontScale={0.72}
-                    style={styles.stylesActionButton}
-                  />
-                ) : null}
-                <AppButton
-                  title="Request A Wig"
-                  variant={hasAvailableWigs ? "outline" : "primary"}
-                  onPress={onRequestOwnWig}
-                  size="sm"
-                  fullWidth={false}
-                  textNumberOfLines={1}
-                  textAdjustsFontSizeToFit={true}
-                  textMinimumFontScale={0.72}
-                  style={styles.stylesActionButton}
-                />
-              </View>
-            </View>
-          ) : null}
         </View>
+        <Modal
+          transparent
+          visible={Boolean(documentPreviewUri)}
+          animationType="fade"
+          onRequestClose={() => setDocumentPreviewUri("")}
+        >
+          <View style={styles.documentFullPreviewRoot}>
+            <Pressable
+              style={styles.documentFullPreviewBackdrop}
+              onPress={() => setDocumentPreviewUri("")}
+            />
+            <View style={styles.documentFullPreviewHeader}>
+              <Text style={styles.documentFullPreviewTitle}>
+                Medical Certificate
+              </Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Close medical certificate preview"
+                onPress={() => setDocumentPreviewUri("")}
+                style={styles.documentFullPreviewClose}
+              >
+                <MaterialCommunityIcons name="close" size={22} color="#ffffff" />
+              </Pressable>
+            </View>
+            <Image
+              source={{ uri: documentPreviewUri }}
+              style={styles.documentFullPreviewImage}
+              resizeMode="contain"
+            />
+          </View>
+        </Modal>
       </KeyboardAvoidingView>
     </Modal>
   );
@@ -3490,14 +4206,17 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const cameraRef = useRef(null);
+  const wigPreviewCaptureRef = useRef(null);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
-  const [isCaptureOpen, setIsCaptureOpen] = useState(false);
   const [isCapturingPhoto, setIsCapturingPhoto] = useState(false);
   const [selectedOptionId, setSelectedOptionId] = useState("");
   const [selectedWigFilterId, setSelectedWigFilterId] = useState("");
   const [isTimelineOpen, setIsTimelineOpen] = useState(false);
   const [flowStep, setFlowStep] = useState("patient");
   const [requestMode, setRequestMode] = useState("selected");
+  const [photoValidation, setPhotoValidation] = useState(null);
+  const [certificateVerification, setCertificateVerification] = useState(null);
+  const [isVerifyingCertificate, setIsVerifyingCertificate] = useState(false);
   const { user, profile, patientProfile, resolvedTheme } = useAuth();
   const roles = resolveThemeRoles(resolvedTheme);
   const headerPrimaryColor =
@@ -3537,14 +4256,16 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
     isSavingRequest,
     isCancellingRequest,
     availableWigs,
-    isLoadingAvailableWigs,
     wigPreferenceOptions,
     isLoadingWigPreferenceOptions,
     pickReferenceImage,
     saveCapturedReferenceImage,
+    clearReferenceImage,
+    clearPreview,
     generatePreview,
     saveRequest,
     cancelRequest,
+    refreshContext,
   } = usePatientWigRequest({ userId: user?.id });
 
   const {
@@ -3618,8 +4339,6 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
     requestedWigSpec?.style || latestWigSpecification?.style_preference,
   );
   const requestedWigRows = [
-    { label: "Wig code", value: requestedWigCodeValue },
-    { label: "Status", value: requestedWigStatusValue },
     { label: "Style", value: requestedWigStyleValue },
     { label: "Color", value: requestedWigColorValue },
     { label: "Length", value: requestedWigLengthValue },
@@ -3675,7 +4394,6 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
       null
     );
   }, [availableStockWigs, draftValues]);
-  const aiRecommendedWigId = aiRecommendedWig?.id || "";
   const recommendedPreferenceOptions = useMemo(
     () => ({
       preferredLength: [
@@ -3701,15 +4419,9 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
   );
   const selectedWig = useMemo(
     () =>
-      availableStockWigs.find((wig) => wig.id === selectedWigFilterId) ||
-      aiRecommendedWig ||
-      availableStockWigs[0] ||
-      null,
-    [aiRecommendedWig, availableStockWigs, selectedWigFilterId],
+      availableStockWigs.find((wig) => wig.id === selectedWigFilterId) || null,
+    [availableStockWigs, selectedWigFilterId],
   );
-  const activeSelectedWigId =
-    selectedWigFilterId || selectedWig?.id || aiRecommendedWigId || "";
-
   useEffect(() => {
     setSelectedOptionId(recommendationOptions[0]?.id || "");
   }, [
@@ -3736,19 +4448,88 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
     router.navigate(item.route);
   };
 
-  const openCaptureFlow = async () => {
-    setIsCaptureOpen(true);
+  const handleVerifyCertificateAsset = async (asset) => {
+    if (!asset?.uri || isVerifyingCertificate) return { success: false };
 
-    if (!cameraPermission?.granted) {
-      await requestCameraPermission();
+    setIsVerifyingCertificate(true);
+    const result = await verifyMedicalCertificateAsset({
+      authUserId: user?.id,
+      patientId: requestPatientDetails?.patient_id || null,
+      asset,
+    });
+    setIsVerifyingCertificate(false);
+
+    if (result?.verification) {
+      setCertificateVerification(result.verification);
     }
+
+    if (!result?.success) {
+      Alert.alert(
+        "Certificate needs review",
+        result?.error || "Upload a clear medical certificate that shows the doctor's name and PRC/license number.",
+      );
+      return result;
+    }
+
+    await refreshContext();
+    Alert.alert(
+      "Certificate checked",
+      "OCR detected the doctor license details. Staff will still verify the license against PRC records.",
+    );
+    return result;
   };
 
-  const closeCaptureFlow = () => {
-    setIsCaptureOpen(false);
+  const handleUploadCertificate = async () => {
+    const result = await DocumentPicker.getDocumentAsync({
+      type: ["application/pdf", "image/*"],
+      copyToCacheDirectory: true,
+      multiple: false,
+    });
+
+    if (result.canceled) return { success: false, canceled: true };
+    const asset = result.assets?.[0] || null;
+    return await handleVerifyCertificateAsset({
+      uri: asset?.uri,
+      mimeType: asset?.mimeType || "application/pdf",
+      fileName: asset?.name || asset?.fileName || "medical-certificate",
+    });
   };
 
-  const handleCapturePhoto = async (placement = null) => {
+  const handleScanCertificate = async () => {
+    const permission = await ImagePicker.requestCameraPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert("Camera needed", "Allow camera access to scan the medical certificate.");
+      return { success: false };
+    }
+
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ["images"],
+      quality: 0.86,
+      base64: true,
+    });
+
+    if (result.canceled) return { success: false, canceled: true };
+    const asset = result.assets?.[0] || null;
+    return await handleVerifyCertificateAsset({
+      uri: asset?.uri,
+      mimeType: asset?.mimeType || "image/jpeg",
+      fileName: asset?.fileName || "medical-certificate-scan.jpg",
+      base64: asset?.base64 || "",
+    });
+  };
+
+  const handleUploadAiPhoto = async () => {
+    const result = await pickReferenceImage();
+    if (!result?.success || !result.image) return result;
+
+    const validation = validateAiTryOnPhoto(result.image);
+    setPhotoValidation(validation);
+    if (!validation.valid) return { success: false, error: validation.message };
+
+    return result;
+  };
+
+  const handleCapturePhoto = async () => {
     if (!cameraPermission?.granted) {
       await requestCameraPermission();
       return;
@@ -3760,17 +4541,18 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
 
     try {
       const photo =
-        typeof cameraRef.current.takePhoto === "function"
-          ? await cameraRef.current.takePhoto().then((result) => ({
-              ...result,
-              uri: result?.uri || (result?.path ? `file://${result.path}` : ""),
-            }))
-          : await cameraRef.current.takePictureAsync({
-              quality: 0.8,
+        typeof cameraRef.current.takePictureAsync === "function"
+          ? await cameraRef.current.takePictureAsync({
+              quality: 0.86,
               base64: true,
-            });
+              mirror: false,
+            })
+          : null;
 
-      await saveCapturedReferenceImage(photo, placement);
+      const result = await saveCapturedReferenceImage(photo);
+      if (result?.image) {
+        setPhotoValidation(validateAiTryOnPhoto(result.image));
+      }
     } catch {
       await saveCapturedReferenceImage(null);
     } finally {
@@ -3778,16 +4560,107 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
     }
   };
 
-  const handleGeneratePreviewFromModal = handleSubmit(async (values) => {
+  const handleContinueToWigs = () => {
+    const validation = validateAiTryOnPhoto(referenceImage);
+    setPhotoValidation(validation);
+    if (!validation.valid) return { success: false, error: validation.message };
+    setFlowStep("styles");
+    return { success: true };
+  };
+
+  const handleStartGeneration = handleSubmit(async (values) => {
+    const validation = validateAiTryOnPhoto(referenceImage);
+    setPhotoValidation(validation);
+    if (!validation.valid) return { success: false, error: validation.message };
+
+    if (!selectedWig?.id) {
+      Alert.alert("Select a wig", "Choose one wig before creating a preview.");
+      return { success: false, error: "Choose one wig before creating a preview." };
+    }
+
+    setFlowStep("generating");
     const result = await generatePreview(values, selectedWig);
 
     if (result?.success) {
-      closeCaptureFlow();
       setFlowStep("summary");
+      return result;
     }
 
+    setFlowStep("styles");
+    Alert.alert(
+      "Preview unavailable",
+      "We couldn't prepare your wig preview. Please try again or choose another photo.",
+    );
     return result;
   });
+
+  const handleTryAnotherWig = () => {
+    clearPreview();
+    setSelectedOptionId("");
+    setFlowStep("styles");
+  };
+
+  const handleUploadAnotherPhoto = () => {
+    clearPreview();
+    clearReferenceImage();
+    setSelectedWigFilterId("");
+    setSelectedOptionId("");
+    setPhotoValidation(null);
+    setFlowStep("photo");
+  };
+
+  const captureAdjustedWigPreview = async () => {
+    if (preview?.render_mode !== "wig_overlay") {
+      return generatedImageUri
+        ? { uri: generatedImageUri, mimeType: "image/jpeg" }
+        : null;
+    }
+
+    if (!wigPreviewCaptureRef.current) {
+      throw new Error("The wig preview is not ready to save yet.");
+    }
+
+    const captureRef = getViewShotCaptureRef();
+    if (typeof captureRef !== "function") {
+      throw new Error(
+        "Preview capture is not available in this app build. Rebuild the app to enable saving wig previews.",
+      );
+    }
+
+    const uri = await captureRef(wigPreviewCaptureRef.current, {
+      format: "jpg",
+      quality: 0.95,
+      result: "tmpfile",
+    });
+
+    return uri ? { uri, mimeType: "image/jpeg" } : null;
+  };
+
+  const handleDownloadImage = async () => {
+    if (!generatedImageUri && preview?.render_mode !== "wig_overlay") return;
+
+    try {
+      const permission = await MediaLibrary.requestPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert(
+          "Photo access needed",
+          "Allow photo library access to download the wig preview.",
+        );
+        return;
+      }
+
+      const capturedPreview = await captureAdjustedWigPreview();
+      const imageToSave = capturedPreview?.uri || generatedImageUri;
+
+      await MediaLibrary.saveToLibraryAsync(imageToSave);
+      Alert.alert("Downloaded", "The wig preview was saved.");
+    } catch {
+      Alert.alert(
+        "Download unavailable",
+        "The wig preview is visible here, but it could not be saved on this device yet.",
+      );
+    }
+  };
 
   const handleSaveRequest = handleSubmit(async (values) => {
     if (!values.acceptedTerms) {
@@ -3803,7 +4676,23 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
 
     const requestedWigId =
       requestMode === "custom" ? null : selectedWig?.wig_id || null;
-    const result = await saveRequest(values, selectedOptionId, requestedWigId);
+    let capturedPreviewImage = null;
+    try {
+      capturedPreviewImage = await captureAdjustedWigPreview();
+    } catch {
+      Alert.alert(
+        "Preview not ready",
+        "The adjusted wig preview could not be saved yet. Please wait a moment and try again.",
+      );
+      return { success: false, error: "The adjusted wig preview could not be saved yet." };
+    }
+
+    const result = await saveRequest(
+      values,
+      selectedOptionId,
+      requestedWigId,
+      capturedPreviewImage,
+    );
 
     if (result?.success) {
       await refreshTracking();
@@ -3851,18 +4740,31 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
       };
     }
 
+    const verificationStatus = String(
+      certificateVerification?.status
+      || requestPatientDetails?.medical_document_verification_status
+      || "",
+    ).toLowerCase();
+    const certificateReady = ["ocr_passed_prc_pending", "verified", "prc_verified"].includes(verificationStatus);
+    if (!certificateReady) {
+      Alert.alert(
+        "Certificate validation required",
+        "Upload or scan the doctor's medical certificate first. OCR must detect the doctor name, PRC/license number, and diagnosis details before you can request a wig.",
+      );
+      return {
+        success: false,
+        error: "Certificate validation is required.",
+      };
+    }
+
     setRequestMode(availableStockWigs.length ? "selected" : "custom");
-    setFlowStep(availableStockWigs.length ? "styles" : "customSpec");
+    setFlowStep(availableStockWigs.length ? "photo" : "customSpec");
     return { success: true };
   });
 
   const handleRequestOwnWig = () => {
     setRequestMode("custom");
     setFlowStep("customSpec");
-  };
-
-  const handleStartPreview = async () => {
-    await openCaptureFlow();
   };
 
   const stickyRequestButtonBottom =
@@ -3952,40 +4854,90 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
 
       {!showFlowOnly ? (
         <>
-          <View style={styles.simpleWigSection}>
-            <View style={styles.simpleRecordHeader}>
-              <View
-                style={[
-                  styles.requestedWigIcon,
-                  { backgroundColor: roles.iconPrimarySurface },
-                ]}
-              >
-                <AppIcon
-                  name="requests"
-                  size="sm"
-                  color={roles.iconPrimaryColor}
-                />
-              </View>
-              <View style={styles.referralIdentityCopy}>
-                <Text
-                  numberOfLines={1}
+          <View style={[
+            styles.simpleWigSection,
+            !hasSubmittedRequest ? styles.simpleWigSectionEmpty : null,
+          ]}>
+            <View style={[
+              styles.requestedWigSummaryCard,
+              !hasSubmittedRequest ? styles.requestedWigSummaryPlain : null,
+            ]}>
+              <View style={[
+                styles.simpleRecordHeader,
+                !hasSubmittedRequest ? styles.simpleRecordHeaderEmpty : null,
+              ]}>
+                <View
                   style={[
-                    styles.referralHospitalName,
-                    { color: roles.headingText },
+                    styles.requestedWigIcon,
+                    { backgroundColor: roles.iconPrimarySurface },
                   ]}
                 >
-                  Requested Wig
-                </Text>
+                  <AppIcon
+                    name="requests"
+                    size="sm"
+                    color={roles.iconPrimaryColor}
+                  />
+                </View>
+                <View style={[
+                  styles.referralIdentityCopy,
+                  !hasSubmittedRequest ? styles.referralIdentityCopyEmpty : null,
+                ]}>
+                  <Text
+                    numberOfLines={1}
+                    style={[
+                      styles.referralHospitalName,
+                      { color: roles.headingText },
+                      !hasSubmittedRequest ? styles.referralHospitalNameEmpty : null,
+                    ]}
+                  >
+                    Requested Wig
+                  </Text>
+                  <Text style={[
+                    styles.requestFlowCopy,
+                    { color: roles.bodyText },
+                    !hasSubmittedRequest ? styles.requestFlowCopyEmpty : null,
+                  ]}>
+                    {hasSubmittedRequest
+                      ? "Track the request and wig details from here."
+                      : "Start a request so the team can prepare your wig details."}
+                  </Text>
+                </View>
               </View>
-            </View>
 
-            <View style={styles.recordDetailSection}>
-              <Text style={[styles.requestFlowCopy, { color: roles.bodyText }]}>
-                Your requested wig details will appear here once they are available.
-              </Text>
-            </View>
+              {hasSubmittedRequest ? (
+                <>
+                  <View style={styles.requestedWigStatusRow}>
+                    <View style={styles.requestedWigStatusPill}>
+                      <Text style={[styles.requestedWigStatusLabel, { color: roles.bodyText }]}>Code</Text>
+                      <Text
+                        numberOfLines={1}
+                        style={[styles.requestedWigStatusValue, { color: roles.headingText }]}
+                      >
+                        {requestedWigCodeValue}
+                      </Text>
+                    </View>
+                    <View style={styles.requestedWigStatusPill}>
+                      <Text style={[styles.requestedWigStatusLabel, { color: roles.bodyText }]}>Status</Text>
+                      <Text
+                        numberOfLines={1}
+                        style={[styles.requestedWigStatusValue, { color: roles.headingText }]}
+                      >
+                        {requestedWigStatusValue}
+                      </Text>
+                    </View>
+                  </View>
 
-            <WigInfoList rows={requestedWigRows} roles={roles} />
+                  <WigInfoList rows={requestedWigRows} roles={roles} />
+                </>
+              ) : (
+                <View style={styles.requestedWigEmptyLine}>
+                  <AppIcon name="requests" size="sm" color={roles.primaryActionBackground} />
+                  <Text style={[styles.requestedWigEmptyText, { color: roles.bodyText }]}>
+                    No wig request has been submitted yet.
+                  </Text>
+                </View>
+              )}
+            </View>
           </View>
 
           {hasSubmittedRequest ? (
@@ -4095,12 +5047,30 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
         wigPreferenceOptions={wigPreferenceOptions}
         isLoadingWigPreferenceOptions={isLoadingWigPreferenceOptions}
         generatedImageUri={generatedImageUri}
+        preview={preview}
         hasGeneratedPreview={hasGeneratedPreview}
         isGeneratingPreview={isGeneratingPreview}
         isSavingRequest={isSavingRequest}
+        isPickingReference={isPickingReference}
+        isCapturingPhoto={isCapturingPhoto}
+        certificateVerification={certificateVerification}
+        isVerifyingCertificate={isVerifyingCertificate}
+        photoValidation={photoValidation}
+        hasCameraPermission={hasCameraPermission}
+        cameraRef={cameraRef}
         onClose={() => router.back()}
         onContinueToDetails={handleContinueToDetails}
-        onOpenCamera={handleStartPreview}
+        onUploadPhoto={handleUploadAiPhoto}
+        onCapturePhoto={handleCapturePhoto}
+        onUploadCertificate={handleUploadCertificate}
+        onScanCertificate={handleScanCertificate}
+        onRequestCameraPermission={requestCameraPermission}
+        onContinueToWigs={handleContinueToWigs}
+        onStartGeneration={handleStartGeneration}
+        onTryAnotherWig={handleTryAnotherWig}
+        onUploadAnotherPhoto={handleUploadAnotherPhoto}
+        onDownloadImage={handleDownloadImage}
+        previewCaptureRef={wigPreviewCaptureRef}
         onSubmitRequest={handleSaveRequest}
         onSelectWig={setSelectedWigFilterId}
         onRequestOwnWig={handleRequestOwnWig}
@@ -4111,28 +5081,6 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
           }
           setIsTimelineOpen(true);
         }}
-        roles={roles}
-      />
-
-      <CaptureModal
-        visible={isCaptureOpen}
-        referenceImage={referenceImage}
-        availableWigs={availableStockWigs}
-        selectedWig={selectedWig}
-        selectedWigId={activeSelectedWigId}
-        recommendedWigId={aiRecommendedWigId}
-        isLoadingAvailableWigs={isLoadingAvailableWigs}
-        hasCameraPermission={hasCameraPermission}
-        cameraRef={cameraRef}
-        onCameraReady={() => {}}
-        isCapturingPhoto={isCapturingPhoto}
-        isPickingReference={isPickingReference}
-        onClose={closeCaptureFlow}
-        onUpload={pickReferenceImage}
-        onCapture={handleCapturePhoto}
-        onSelectWig={setSelectedWigFilterId}
-        onGeneratePreview={handleGeneratePreviewFromModal}
-        onRequestPermission={requestCameraPermission}
         roles={roles}
       />
     </DashboardLayout>
@@ -4163,9 +5111,31 @@ const styles = StyleSheet.create({
       theme.typography.semantic.body * theme.typography.lineHeights.relaxed,
   },
   simpleWigSection: {
-    gap: theme.spacing.md,
+    gap: theme.spacing.sm,
     paddingHorizontal: theme.spacing.lg,
-    paddingVertical: theme.spacing.lg,
+    paddingTop: theme.spacing.lg,
+    paddingBottom: theme.spacing.md,
+  },
+  simpleWigSectionEmpty: {
+    flex: 1,
+    minHeight: 520,
+    justifyContent: "center",
+    paddingBottom: 132,
+  },
+  requestedWigSummaryCard: {
+    gap: theme.spacing.md,
+    borderRadius: theme.radius.xl,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+    backgroundColor: theme.colors.backgroundPrimary,
+    padding: theme.spacing.lg,
+  },
+  requestedWigSummaryPlain: {
+    borderWidth: 0,
+    backgroundColor: "transparent",
+    paddingHorizontal: 0,
+    paddingVertical: theme.spacing.xs,
+    alignItems: "center",
   },
   requestStickyOverlay: {
     position: "absolute",
@@ -4181,6 +5151,11 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: theme.spacing.md,
+  },
+  simpleRecordHeaderEmpty: {
+    flexDirection: "column",
+    justifyContent: "center",
+    gap: theme.spacing.sm,
   },
   aiTabIcon: {
     width: 64,
@@ -4289,9 +5264,9 @@ const styles = StyleSheet.create({
     gap: theme.spacing.md,
   },
   requestedWigIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: theme.radius.full,
+    width: 44,
+    height: 44,
+    borderRadius: theme.radius.lg,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -4300,10 +5275,17 @@ const styles = StyleSheet.create({
     minWidth: 0,
     gap: 2,
   },
+  referralIdentityCopyEmpty: {
+    flex: 0,
+    alignItems: "center",
+  },
   referralHospitalName: {
     fontFamily: theme.typography.fontFamilyDisplay,
     fontSize: theme.typography.semantic.bodyMd,
     fontWeight: theme.typography.weights.bold,
+  },
+  referralHospitalNameEmpty: {
+    textAlign: "center",
   },
   recordDetailSection: {
     paddingTop: 0,
@@ -4314,10 +5296,14 @@ const styles = StyleSheet.create({
     lineHeight:
       theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
   },
+  requestFlowCopyEmpty: {
+    maxWidth: 260,
+    textAlign: "center",
+  },
   requestedWigDetailGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
     gap: theme.spacing.sm,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: theme.colors.borderMuted,
   },
   requestedWigDetailRow: {
     flexDirection: "row",
@@ -4325,13 +5311,15 @@ const styles = StyleSheet.create({
     gap: theme.spacing.md,
   },
   requestedWigDetailTile: {
-    flex: 1,
+    width: "48%",
     minWidth: 0,
     gap: 4,
-    paddingHorizontal: theme.spacing.xs,
-    paddingVertical: theme.spacing.md,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: theme.colors.borderMuted,
+    borderRadius: theme.radius.md,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+    backgroundColor: theme.colors.surfaceSoft,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: theme.spacing.sm,
   },
   requestedWigDetailLabel: {
     fontFamily: theme.typography.fontFamily,
@@ -4346,6 +5334,68 @@ const styles = StyleSheet.create({
     fontWeight: theme.typography.weights.bold,
     lineHeight:
       theme.typography.semantic.bodySm * theme.typography.lineHeights.normal,
+  },
+  requestedWigStatusRow: {
+    flexDirection: "row",
+    gap: theme.spacing.sm,
+  },
+  requestedWigStatusPill: {
+    flex: 1,
+    minHeight: 54,
+    justifyContent: "center",
+    gap: 3,
+    borderRadius: theme.radius.md,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+    backgroundColor: theme.colors.surfaceSoft,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+  },
+  requestedWigStatusLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.semibold,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+  },
+  requestedWigStatusValue: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.bold,
+  },
+  requestedWigPendingNote: {
+    minHeight: 48,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.sm,
+    borderRadius: theme.radius.md,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+    backgroundColor: theme.colors.surfaceSoft,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+  },
+  requestedWigPendingText: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight:
+      theme.typography.compact.bodySm * theme.typography.lineHeights.normal,
+  },
+  requestedWigEmptyLine: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.md,
+  },
+  requestedWigEmptyText: {
+    flexShrink: 1,
+    textAlign: "center",
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight:
+      theme.typography.compact.bodySm * theme.typography.lineHeights.normal,
   },
   manualRequestCard: {
     gap: theme.spacing.md,
@@ -5468,8 +6518,12 @@ const styles = StyleSheet.create({
   },
   patientDetailRow: {
     width: "100%",
-    gap: 4,
-    paddingVertical: theme.spacing.md,
+    minHeight: 46,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   patientDetailLabel: {
@@ -5480,11 +6534,109 @@ const styles = StyleSheet.create({
     letterSpacing: 0.4,
   },
   patientDetailValue: {
+    flex: 1,
+    textAlign: "right",
     fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.body,
+    fontSize: theme.typography.semantic.bodySm,
     lineHeight:
       theme.typography.semantic.bodySm * theme.typography.lineHeights.normal,
     fontWeight: theme.typography.weights.semibold,
+  },
+  documentPreviewCard: {
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: theme.spacing.md,
+    gap: theme.spacing.sm,
+  },
+  documentPreviewHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.md,
+  },
+  documentPreviewFrame: {
+    height: 172,
+    borderWidth: 1,
+    borderRadius: 12,
+    overflow: "hidden",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  documentPreviewPressable: {
+    width: "100%",
+    height: "100%",
+  },
+  documentPreviewImage: {
+    width: "100%",
+    height: "100%",
+  },
+  documentPreviewZoomBadge: {
+    position: "absolute",
+    right: theme.spacing.sm,
+    bottom: theme.spacing.sm,
+    width: 30,
+    height: 30,
+    borderRadius: theme.radius.full,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(20, 8, 12, 0.58)",
+  },
+  documentFullPreviewRoot: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(12, 5, 8, 0.94)",
+  },
+  documentFullPreviewBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  documentFullPreviewHeader: {
+    position: "absolute",
+    top: theme.spacing.xl,
+    left: theme.spacing.md,
+    right: theme.spacing.md,
+    zIndex: 2,
+    minHeight: 44,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: theme.spacing.md,
+  },
+  documentFullPreviewTitle: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.semibold,
+    color: "#ffffff",
+  },
+  documentFullPreviewClose: {
+    width: 40,
+    height: 40,
+    borderRadius: theme.radius.full,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255, 255, 255, 0.14)",
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.22)",
+  },
+  documentFullPreviewImage: {
+    width: "100%",
+    height: "100%",
+  },
+  documentPreviewPdf: {
+    width: "100%",
+    height: "100%",
+  },
+  documentPreviewPlaceholder: {
+    alignItems: "center",
+    justifyContent: "center",
+    gap: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.lg,
+  },
+  documentPreviewPlaceholderText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    textAlign: "center",
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
   },
   documentRowCard: {
     minHeight: 56,
@@ -5527,6 +6679,43 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.caption,
     fontWeight: theme.typography.weights.semibold,
+  },
+  certificateValidationCard: {
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: theme.spacing.md,
+    gap: theme.spacing.sm,
+  },
+  certificateValidationHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: theme.spacing.md,
+  },
+  certificateMetaText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    lineHeight: theme.typography.semantic.caption * theme.typography.lineHeights.relaxed,
+  },
+  certificateActionRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: theme.spacing.sm,
+  },
+  certificateIconButton: {
+    width: 54,
+    height: 54,
+    borderRadius: theme.radius.full,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  certificateIconButtonPrimary: {
+    backgroundColor: theme.colors.brandPrimary,
+    borderColor: theme.colors.brandPrimary,
+    ...theme.shadows.soft,
+  },
+  certificateIconButtonDisabled: {
+    opacity: 0.45,
   },
   agreementRowCompact: {
     flexDirection: "row",
@@ -5699,6 +6888,99 @@ const styles = StyleSheet.create({
   photoPreviewImage: {
     width: "100%",
     height: 210,
+  },
+  aiPhotoStage: {
+    minHeight: 320,
+    overflow: "hidden",
+    borderRadius: theme.radius.sm,
+    backgroundColor: theme.colors.surfaceSoft,
+    borderWidth: 1,
+    borderColor: theme.colors.borderMuted,
+  },
+  aiPhotoPreview: {
+    width: "100%",
+    height: 320,
+  },
+  aiPhotoPlaceholder: {
+    minHeight: 320,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.xl,
+  },
+  aiPhotoPlaceholderText: {
+    textAlign: "center",
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight:
+      theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+  },
+  aiPhotoActions: {
+    flexDirection: "row",
+    gap: theme.spacing.sm,
+  },
+  aiPhotoActionButton: {
+    flex: 1,
+    minWidth: 0,
+  },
+  aiGeneratingState: {
+    minHeight: 420,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: theme.spacing.lg,
+    paddingHorizontal: theme.spacing.xl,
+  },
+  aiResultGrid: {
+    gap: theme.spacing.md,
+  },
+  aiResultPanel: {
+    gap: theme.spacing.xs,
+  },
+  aiResultLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.semibold,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+  },
+  aiResultImage: {
+    width: "100%",
+    height: 300,
+    borderRadius: theme.radius.sm,
+    backgroundColor: theme.colors.surfaceSoft,
+  },
+  aiCompositeShell: {
+    gap: theme.spacing.sm,
+  },
+  aiCompositeFrame: {
+    overflow: "hidden",
+    position: "relative",
+  },
+  aiCompositeBaseImage: {
+    width: "100%",
+    height: "100%",
+  },
+  wigFitControls: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: theme.spacing.xs,
+  },
+  wigFitButton: {
+    minHeight: 34,
+    minWidth: 52,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: theme.radius.xs,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+    backgroundColor: theme.colors.surface,
+    paddingHorizontal: theme.spacing.sm,
+  },
+  wigFitButtonText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.semibold,
+    color: theme.colors.textPrimary,
   },
   photoPlaceholder: {
     minHeight: 180,

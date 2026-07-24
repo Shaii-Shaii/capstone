@@ -59,6 +59,58 @@ const extractOutputText = (payload: any) => {
   return textItem?.text?.trim() || '';
 };
 
+const getExtensionFromMimeType = (mimeType = 'image/png') => {
+  if (mimeType.includes('jpeg') || mimeType.includes('jpg')) return 'jpg';
+  if (mimeType.includes('webp')) return 'webp';
+  return 'png';
+};
+
+const dataUrlToBlob = (dataUrl: string) => {
+  const match = /^data:([^;]+);base64,(.*)$/i.exec(dataUrl || '');
+  if (!match?.[2]) {
+    throw new Error('Invalid image data URL.');
+  }
+
+  const mimeType = match[1] || 'image/png';
+  const binary = atob(match[2]);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+
+  return {
+    blob: new Blob([bytes], { type: mimeType }),
+    mimeType,
+  };
+};
+
+const loadImageEditBlob = async (image: ImageEditReference, index: number) => {
+  const imageUrl = String(image?.image_url || '').trim();
+
+  if (!imageUrl) {
+    throw new Error('Image edit references must include image_url values.');
+  }
+
+  if (imageUrl.startsWith('data:')) {
+    const { blob, mimeType } = dataUrlToBlob(imageUrl);
+    return {
+      blob,
+      fileName: `image-${index + 1}.${getExtensionFromMimeType(mimeType)}`,
+    };
+  }
+
+  const response = await fetch(imageUrl);
+  if (!response.ok) {
+    throw new Error(`Unable to load image reference ${index + 1}.`);
+  }
+
+  const contentType = response.headers.get('content-type') || 'image/png';
+  return {
+    blob: new Blob([await response.arrayBuffer()], { type: contentType }),
+    fileName: `image-${index + 1}.${getExtensionFromMimeType(contentType)}`,
+  };
+};
+
 export const readOpenAiKey = () => {
   const openAiKey = (Deno.env.get('OPENAI_API_KEY') || '').trim();
 
@@ -221,22 +273,26 @@ export const createImageEdit = async ({
   });
 
   const openAiKey = readOpenAiKey();
+  const formData = new FormData();
+  formData.append('model', model);
+  formData.append('prompt', prompt);
+  formData.append('quality', quality);
+  formData.append('size', size);
+  formData.append('moderation', moderation);
+  formData.append('output_format', outputFormat);
+  formData.append('n', '1');
+
+  const imageBlobs = await Promise.all(validImages.map(loadImageEditBlob));
+  imageBlobs.forEach(({ blob, fileName }) => {
+    formData.append('image[]', blob, fileName);
+  });
+
   const response = await fetch(OPENAI_IMAGE_EDITS_URL, {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/json',
       Authorization: `Bearer ${openAiKey}`,
     },
-    body: JSON.stringify({
-      model,
-      prompt,
-      images: validImages,
-      quality,
-      size,
-      moderation,
-      output_format: outputFormat,
-      n: 1,
-    }),
+    body: formData,
   });
 
   const payload = await response.json().catch(() => ({}));

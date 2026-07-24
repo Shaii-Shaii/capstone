@@ -103,6 +103,13 @@ export const patientOnboardingSchema = z.object({
     contentType: z.string().optional(),
     fileName: z.string().optional(),
     previewUri: z.string().optional(),
+    publicUrl: z.string().optional(),
+    verification: z.any().optional(),
+    medical_document_verification_status: z.string().optional(),
+    medical_document_ocr_text: z.string().optional(),
+    medical_document_verified_at: z.string().optional(),
+    doctor_name: z.string().optional(),
+    doctor_license_number: z.string().optional(),
   })]).optional().or(z.literal('')),
 }).superRefine((data, ctx) => {
   const contactNumber = normalizePhoneComparable(data.contact_number);

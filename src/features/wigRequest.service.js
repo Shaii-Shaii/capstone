@@ -19,37 +19,55 @@ const getFileExtension = (mimeType = 'image/jpeg') => {
   return 'jpg';
 };
 
-const buildReferenceImageUrl = async ({ userId, referenceImage }) => {
-  if (!referenceImage?.uri) return null;
+const buildUploadedWigRequestImageUrl = async ({
+  userId,
+  image,
+  fileNamePrefix = 'wig-reference',
+}) => {
+  if (!image?.uri) return null;
 
   const sessionResult = await ensureActiveSession();
   const activeAuthUserId = sessionResult?.session?.user?.id || '';
   if (sessionResult?.error || !activeAuthUserId) {
-    throw new Error('Please sign in again before uploading your reference photo.');
+    throw new Error('Please sign in again before uploading your wig request image.');
   }
 
   if (userId && activeAuthUserId !== userId) {
     throw new Error('Your session changed. Please sign in again before submitting a wig request.');
   }
 
-  const fileResponse = await fetch(referenceImage.uri);
+  const fileResponse = await fetch(image.uri);
   const fileBody = await fileResponse.arrayBuffer();
-  const extension = getFileExtension(referenceImage.mimeType);
-  const filePath = `${activeAuthUserId}/wig-reference-${Date.now()}.${extension}`;
+  const extension = getFileExtension(image.mimeType);
+  const filePath = `${activeAuthUserId}/${fileNamePrefix}-${Date.now()}.${extension}`;
 
   const uploadResult = await WigRequestAPI.uploadWigReferenceImage({
     path: filePath,
     fileBody,
-    contentType: referenceImage.mimeType || 'image/jpeg',
+    contentType: image.mimeType || 'image/jpeg',
   });
 
   if (uploadResult.error) {
-    throw new Error(uploadResult.error.message || 'Unable to upload the reference image.');
+    throw new Error(uploadResult.error.message || 'Unable to upload the wig request image.');
   }
 
   const { data } = WigRequestAPI.getStoragePublicUrl({ path: filePath });
   return data?.publicUrl || filePath;
 };
+
+const buildReferenceImageUrl = async ({ userId, referenceImage }) =>
+  buildUploadedWigRequestImageUrl({
+    userId,
+    image: referenceImage,
+    fileNamePrefix: 'wig-reference',
+  });
+
+const buildPreviewImageUrl = async ({ userId, previewImage }) =>
+  buildUploadedWigRequestImageUrl({
+    userId,
+    image: previewImage,
+    fileNamePrefix: 'wig-preview',
+  });
 
 const COMPLETED_REQUEST_TOKENS = ['completed', 'claimed', 'released', 'cancelled', 'canceled', 'rejected', 'closed'];
 
@@ -118,6 +136,15 @@ export const getPatientWigRequestContext = async (userId) => {
   try {
     if (!userId) {
       throw new Error('Your session is not ready.');
+    }
+
+    const sessionResult = await ensureActiveSession();
+    const activeAuthUserId = sessionResult?.session?.user?.id || '';
+    if (sessionResult?.error || !activeAuthUserId) {
+      throw new Error('Your session has expired. Please sign in again.');
+    }
+    if (activeAuthUserId !== userId) {
+      throw new Error('Your session changed. Please sign in again.');
     }
 
     logAppEvent('wig_request.context', 'Loading wig request context.', {
@@ -311,6 +338,7 @@ export const savePatientWigRequestFlow = async ({
   userId,
   preferences,
   preview,
+  previewImage,
   referenceImage,
   selectedWigId = null,
 }) => {
@@ -320,6 +348,7 @@ export const savePatientWigRequestFlow = async ({
     logAppEvent('wig_request.save', 'Saving wig request flow.', {
       userId,
       hasReferenceImage: Boolean(referenceImage?.uri),
+      hasPreviewImage: Boolean(previewImage?.uri),
       hasPreview: Boolean(preview),
       previewKeys: preview ? Object.keys(preview) : [],
       selectedOptionId: preview?.selected_option_id || '',
@@ -353,6 +382,20 @@ export const savePatientWigRequestFlow = async ({
     const { data: systemUser, error: systemUserError } = await resolveSystemUser(userId);
     if (systemUserError) {
       throw new Error(systemUserError.message || 'Unable to resolve the patient account.');
+    }
+
+    let savedPreviewImageUrl = null;
+    if (previewImage?.uri) {
+      try {
+        savedPreviewImageUrl = await buildPreviewImageUrl({ userId, previewImage });
+      } catch (uploadError) {
+        logAppEvent('wig_request.save', 'Adjusted wig preview upload failed.', {
+          userId,
+          patientId: patientDetails.patient_id,
+          uploadError: uploadError.message || 'Wig preview upload error',
+        }, 'warn');
+        throw uploadError;
+      }
     }
 
     // Create main wig request first (BEFORE uploading reference image)
@@ -423,7 +466,7 @@ export const savePatientWigRequestFlow = async ({
       cap_size: preferences.capSize || null,
       style_preference: preferences.stylePreference || preview?.recommended_style_name || null,
       notes: preferenceNotes,
-      ai_wig_preview_url: preview?.preview_url || preview?.generated_image_data_url || null,
+      ai_wig_preview_url: savedPreviewImageUrl || preview?.preview_url || preview?.generated_image_data_url || null,
     });
 
     logAppEvent('wig_request.save', 'Wig specification payload prepared.', {
@@ -431,7 +474,7 @@ export const savePatientWigRequestFlow = async ({
       reqId: wigRequest?.req_id || null,
       previewPayloadKeys: preview ? Object.keys(preview) : [],
       selectedOptionId: preview?.selected_option_id || '',
-      selectedPreviewUrl: preview?.preview_url || preview?.generated_image_data_url || '',
+      selectedPreviewUrl: savedPreviewImageUrl || preview?.preview_url || preview?.generated_image_data_url || '',
       dbPayloadKeys: [
         'preferred_color',
         'preferred_length',

@@ -26,6 +26,11 @@ const patientSelectColumns = `
   guardian_relationship:Guardian_Relationship,
   guardian_contact_number:Guardian_Contact_Number,
   medical_document:Medical_Document,
+  medical_document_verification_status:Medical_Document_Verification_Status,
+  medical_document_ocr_text:Medical_Document_OCR_Text,
+  medical_document_verified_at:Medical_Document_Verified_At,
+  doctor_name:Doctor_Name,
+  doctor_license_number:Doctor_License_Number,
   created_at:Created_At,
   updated_at:Updated_At
 `;
@@ -331,6 +336,11 @@ const normalizePatient = (row) => ({
   guardian_relationship: row?.guardian_relationship || '',
   guardian_contact_number: row?.guardian_contact_number || '',
   medical_document: row?.medical_document || '',
+  medical_document_verification_status: row?.medical_document_verification_status || '',
+  medical_document_ocr_text: row?.medical_document_ocr_text || '',
+  medical_document_verified_at: row?.medical_document_verified_at || null,
+  doctor_name: row?.doctor_name || '',
+  doctor_license_number: row?.doctor_license_number || '',
   created_at: row?.created_at || null,
   updated_at: row?.updated_at || null,
 });
@@ -371,6 +381,10 @@ const normalizePatientLinkPreview = (row) => ({
   guardian_relationship: row?.guardian_relationship || '',
   guardian_contact_number: row?.guardian_contact_number || '',
   medical_document: row?.medical_document || '',
+  medical_document_verification_status: row?.medical_document_verification_status || '',
+  medical_document_verified_at: row?.medical_document_verified_at || null,
+  doctor_name: row?.doctor_name || '',
+  doctor_license_number: row?.doctor_license_number || '',
   user_id: row?.user_id || null,
   linked_auth_user_id: row?.linked_auth_user_id || '',
   first_name: row?.first_name || '',
@@ -1473,6 +1487,11 @@ export const createPatientDetails = async (payload) => {
     guardian_relationship: payload?.guardian_relationship || null,
     guardian_contact_number: payload?.guardian_contact_number || null,
     medical_document: payload?.medical_document || null,
+    medical_document_verification_status: payload?.medical_document_verification_status || null,
+    medical_document_ocr_text: payload?.medical_document_ocr_text || null,
+    medical_document_verified_at: payload?.medical_document_verified_at || null,
+    doctor_name: payload?.doctor_name || null,
+    doctor_license_number: payload?.doctor_license_number || null,
   };
 
   const authContext = await ensureMutationAuthContext({
@@ -1512,6 +1531,11 @@ export const createPatientDetails = async (payload) => {
       Guardian_Relationship: patientPayload.guardian_relationship,
       Guardian_Contact_Number: patientPayload.guardian_contact_number,
       Medical_Document: patientPayload.medical_document,
+      Medical_Document_Verification_Status: patientPayload.medical_document_verification_status,
+      Medical_Document_OCR_Text: patientPayload.medical_document_ocr_text,
+      Medical_Document_Verified_At: patientPayload.medical_document_verified_at,
+      Doctor_Name: patientPayload.doctor_name,
+      Doctor_License_Number: patientPayload.doctor_license_number,
     }]);
 
   if (result.error) {
@@ -1609,6 +1633,11 @@ export const updatePatientDetails = async (userIdentifier, updates) => {
     Guardian_Relationship: updates.guardian_relationship ?? undefined,
     Guardian_Contact_Number: updates.guardian_contact_number ?? undefined,
     Medical_Document: updates.medical_document ?? undefined,
+    Medical_Document_Verification_Status: updates.medical_document_verification_status ?? undefined,
+    Medical_Document_OCR_Text: updates.medical_document_ocr_text ?? undefined,
+    Medical_Document_Verified_At: updates.medical_document_verified_at ?? undefined,
+    Doctor_Name: updates.doctor_name ?? undefined,
+    Doctor_License_Number: updates.doctor_license_number ?? undefined,
     Updated_At: new Date().toISOString(),
   };
 

@@ -35,11 +35,12 @@ import {
   updateManualDonationDetail,
   ensureIndependentDonationQr,
   submitDonationForStaffWaybill,
+  scheduleWalkInDropoff,
   linkDonationRecipient,
   cancelDonorDonation,
 } from '../../features/donorDonations.service';
 import { createDonationDriveRegistration } from '../../features/donorHome.api';
-import { fetchLatestLogisticsSettings, updateHairSubmissionDetailById } from '../../features/hairSubmission.api';
+import { fetchLatestLogisticsSettings, updateHairSubmissionById, updateHairSubmissionDetailById } from '../../features/hairSubmission.api';
 import { hairDonationModeOptions } from '../../features/hairSubmission.constants';
 import { buildProfileCompletionMeta } from '../../features/profile/services/profile.service';
 import { canSubmitHairDonation, DONOR_PERMISSION_REASONS, mapDonationPermissionError } from '../../features/donorCompliance.service';
@@ -82,8 +83,15 @@ const LENGTH_UNIT_OPTIONS = [
   { label: 'Inches', value: 'in' },
 ];
 const DONATION_REALTIME_DEBOUNCE_MS = 420;
+const WALK_IN_DROPOFF_WINDOWS = ['9:00 AM - 11:00 AM', '1:00 PM - 3:00 PM', '3:00 PM - 5:00 PM'];
 let cachedDonorDonationModuleData = null;
 let cachedDonorDonationModuleUserId = '';
+
+const formatRequirementLengthInputValue = (donationRequirement = null) => {
+  const value = Number(donationRequirement?.minimum_hair_length_inches);
+  if (!Number.isFinite(value) || value <= 0) return '';
+  return String(Number(value.toFixed(1)));
+};
 
 const getFriendlyDonationModuleError = (error = '') => {
   const text = String(error?.message || error || '').trim();
@@ -338,8 +346,12 @@ const isSubmittedDonationStatus = (status = '') => (
 const isRemovedHairDetail = (detail = null) => {
   const status = String(detail?.status || '').trim().toLowerCase();
   const trackingStatus = String(detail?.current_tracking_status || '').trim().toLowerCase();
+  const rejectionReason = String(detail?.rejection_reason || '').trim().toLowerCase();
   return ['removed', 'cancelled', 'canceled'].includes(status)
-    || ['removed', 'cancelled', 'canceled'].includes(trackingStatus);
+    || ['removed', 'cancelled', 'canceled'].includes(trackingStatus)
+    || rejectionReason.includes('removed by donor')
+    || rejectionReason.includes('cancelled by donor')
+    || rejectionReason.includes('canceled by donor');
 };
 
 const normalizeTimelineKey = (value = '') => String(value || '')
@@ -506,6 +518,68 @@ const formatDateTimeLabel = (dateString) => {
   } catch {
     return String(dateString || '');
   }
+};
+
+const toLocalDateKey = (date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const buildWalkInDateOptions = (count = 5) => {
+  const options = [];
+  const cursor = new Date();
+  while (options.length < count) {
+    const day = cursor.getDay();
+    if (day !== 0) {
+      const value = toLocalDateKey(cursor);
+      options.push({
+        value,
+        label: options.length === 0 ? 'Today' : cursor.toLocaleDateString('en-PH', { weekday: 'short', month: 'short', day: 'numeric' }),
+      });
+    }
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return options;
+};
+
+const formatQueueNumber = (value) => {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) return '';
+  return `#${String(number).padStart(3, '0')}`;
+};
+
+const getMainIneligibilityReason = (eligibility = null) => {
+  if (!eligibility) {
+    return 'Your latest hair scan is not eligible for donation yet.';
+  }
+
+  const currentLengthCm = Number(eligibility.normalized_length_cm);
+  const minimumLengthCm = Number(eligibility.minimum_length_cm);
+  if (
+    Number.isFinite(currentLengthCm)
+    && Number.isFinite(minimumLengthCm)
+    && currentLengthCm > 0
+    && minimumLengthCm > 0
+    && currentLengthCm < minimumLengthCm
+  ) {
+    return `Hair length is below the donation requirement. Minimum required length: ${(minimumLengthCm / 2.54).toFixed(0)} inches.`;
+  }
+
+  const reasons = Array.isArray(eligibility.reasons) ? eligibility.reasons : [];
+  const primaryReason = reasons[0] || eligibility.reason || '';
+  const reasonText = String(primaryReason || '').trim();
+  if (!reasonText) {
+    return 'Your latest hair scan is not eligible for donation yet.';
+  }
+
+  if (/chemically treated/i.test(reasonText)) return 'Chemically treated hair is not allowed by the current donation rules.';
+  if (/colored hair/i.test(reasonText)) return 'Colored hair is not allowed by the current donation rules.';
+  if (/bleached hair/i.test(reasonText)) return 'Bleached hair is not allowed by the current donation rules.';
+  if (/rebonded hair/i.test(reasonText)) return 'Rebonded hair is not allowed by the current donation rules.';
+
+  return reasonText.split(/(?<=[.!?])\s+/)[0] || 'Your latest hair scan is not eligible for donation yet.';
 };
 
 const getDriveLocationLabel = (drive = null) => (
@@ -1099,15 +1173,14 @@ function DonationEventCard({ roles, drive, onOpenDetails }) {
 function DonationHomeOverview({
   roles,
   completedDrives = [],
-  onSubmitDriveDonation,
+  onOpenDonationDetails,
 }) {
   const [eventSortOrder, setEventSortOrder] = React.useState('latest');
   const [eventVisibilityFilter, setEventVisibilityFilter] = React.useState('all');
   const visibleEventDrives = React.useMemo(() => {
     const seen = new Set();
-    const completedHistoryDrives = (completedDrives || [])
+    const eventDonationDrives = (completedDrives || [])
       .filter(Boolean)
-      .filter((drive) => getDriveTimeState(drive) === 'past')
       .filter((drive) => {
         const driveId = Number(drive?.donation_drive_id);
         const key = Number.isFinite(driveId) && driveId > 0
@@ -1124,7 +1197,7 @@ function DonationHomeOverview({
         return true;
       });
 
-    return sortDonationEventsByDate(completedHistoryDrives, eventSortOrder);
+    return sortDonationEventsByDate(eventDonationDrives, eventSortOrder);
   }, [completedDrives, eventSortOrder, eventVisibilityFilter]);
 
   return (
@@ -1161,14 +1234,14 @@ function DonationHomeOverview({
                 key={`event-drive-${drive?.donation_drive_id || drive?.event_title || drive?.start_date}`}
                 roles={roles}
                 drive={drive}
-                onOpenDetails={() => onSubmitDriveDonation?.(drive)}
+                onOpenDetails={() => onOpenDonationDetails?.(drive)}
               />
             ))}
           </View>
         ) : (
           <DonationEventsEmptyState
-            title="No completed hair donation events."
-            message="Only ended events where your hair donation was successfully completed appear here."
+            title="No hair donation events yet."
+            message="Events appear here after you are marked present or after an event donation is completed."
           />
         )}
       </ScrollView>
@@ -1814,6 +1887,8 @@ function ManualInputCard({ roles, onOpen }) {
 function ManualEntryModal({
   visible, form, errors, photo, feedback, isSaving, aiPrefilled,
   isEditing = false,
+  minimumLengthPlaceholder = '',
+  minimumLengthHelperText = '',
   onClose, onChangeField, onPickPhoto, onSave,
 }) {
   const { resolvedTheme } = useAuth();
@@ -1825,10 +1900,10 @@ function ManualEntryModal({
   return (
     <ModalShell
       visible={visible}
-      title={isEditing ? 'Edit hair details' : 'Add hair to donate'}
+      title={isEditing ? 'Edit hair details' : 'Hair details'}
       subtitle={isEditing
-        ? 'Update the saved hair detail before generating the final QR.'
-        : 'Add hair under this account. Use this for your own hair or hair from someone without an account.'}
+        ? 'Update this hair item before generating the final QR.'
+        : 'Enter the donor and hair measurements.'}
       onClose={onClose}
       cardBackground={roles.defaultCardBackground}
       scrollContent
@@ -1847,7 +1922,7 @@ function ManualEntryModal({
         <StatusBanner
           message={isOtherPersonHair
             ? 'Recent AI screening is used only to pre-fill this donation form. It will not create a CheckHair log for this donor.'
-            : 'Hair length pre-filled from your recent AI screening. Adjust if needed.'}
+            : 'Length filled from your latest scan. Adjust if needed.'}
           variant="info"
           style={styles.bannerSpacing}
         />
@@ -1859,7 +1934,7 @@ function ManualEntryModal({
       <ManualSection
         icon="account-circle-outline"
         title="Hair owner"
-        body="Choose whether this hair is yours or from another person using your account."
+        body="Who owns this hair?"
         roles={roles}
       >
         <ChoiceField
@@ -1913,7 +1988,7 @@ function ManualEntryModal({
       <ManualSection
         icon="donations"
         title="Hair measurements"
-        body="Enter your current hair length."
+        body="Enter the current length."
         roles={roles}
       >
         <AppInput
@@ -1922,9 +1997,9 @@ function ManualEntryModal({
           value={form.lengthValue}
           onChangeText={(v) => onChangeField('lengthValue', v.replace(/[^0-9.]/g, ''))}
           keyboardType="decimal-pad"
-          placeholder="14"
+          placeholder={minimumLengthPlaceholder || 'Length'}
           error={errors.lengthValue}
-          helperText="Minimum required is 14 inches"
+          helperText={minimumLengthHelperText}
         />
         <ChoiceField
           label="Unit"
@@ -1992,6 +2067,7 @@ function AddBundleModal({
   onOpenScanner,
   onAttachLatestScan,
   onSave,
+  minimumLengthPlaceholder = '',
 }) {
   const { resolvedTheme } = useAuth();
   const { width } = useWindowDimensions();
@@ -2122,7 +2198,7 @@ function AddBundleModal({
                 value={bundleForm.lengthValue}
                 onChangeText={(v) => onChangeField('lengthValue', v.replace(/[^0-9.]/g, ''))}
                 keyboardType="decimal-pad"
-                placeholder="14"
+                placeholder={minimumLengthPlaceholder || 'Length'}
                 error={bundleErrors.lengthValue}
               />
             </View>
@@ -2496,10 +2572,16 @@ function DonationHairSummaryScreen({
         onBack={onBack}
       />
       <View style={[styles.summaryCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
-        <Text style={[styles.summarySectionTitle, { color: roles.headingText }]}>Event</Text>
-        <Text style={[styles.summaryMainText, { color: roles.headingText }]}>{drive?.event_title || 'Selected donation drive'}</Text>
-        <Text style={[styles.flowMetaText, { color: roles.bodyText }]}>{getDriveDateLabel(drive)}</Text>
-        <Text style={[styles.flowMetaText, { color: roles.bodyText }]}>Recipient default: {getDriveOrganizationLabel(drive)}</Text>
+        <Text style={[styles.summarySectionTitle, { color: roles.headingText }]}>{drive?.donation_drive_id ? 'Event' : 'Logistic donation'}</Text>
+        <Text style={[styles.summaryMainText, { color: roles.headingText }]}>
+          {drive?.donation_drive_id ? drive?.event_title || 'Selected donation drive' : 'Independent hair donation'}
+        </Text>
+        <Text style={[styles.flowMetaText, { color: roles.bodyText }]}>
+          {drive?.donation_drive_id ? getDriveDateLabel(drive) : 'Send your hair directly to the donation receiving location.'}
+        </Text>
+        <Text style={[styles.flowMetaText, { color: roles.bodyText }]}>
+          Recipient default: {drive?.donation_drive_id ? getDriveOrganizationLabel(drive) : 'Partner organization'}
+        </Text>
       </View>
       <View style={[styles.summaryCard, { backgroundColor: roles.supportCardBackground, borderColor: roles.defaultCardBorder }]}>
         <View style={styles.summaryHeaderRow}>
@@ -2726,9 +2808,18 @@ function DonationQrCodesScreen({
 function MyJoinedDonationsScreen({
   roles,
   logisticsSettings = null,
+  activeSubmission = null,
+  logistics = null,
+  donationItems = [],
+  onViewDonation,
+  onScheduleDropoff,
+  isSchedulingDropoff = false,
 }) {
   const [sendOffMapFailed, setSendOffMapFailed] = React.useState(false);
   const [isSendOffExpanded, setIsSendOffExpanded] = React.useState(false);
+  const dateOptions = React.useMemo(() => buildWalkInDateOptions(), []);
+  const [selectedDropoffDate, setSelectedDropoffDate] = React.useState(() => dateOptions[0]?.value || '');
+  const [selectedDropoffWindow, setSelectedDropoffWindow] = React.useState(WALK_IN_DROPOFF_WINDOWS[0] || '');
   const shippingFeeNote = getShippingFeeNote();
   const sendOffAddressRows = React.useMemo(
     () => getLogisticsSummaryRows(logisticsSettings),
@@ -2738,6 +2829,21 @@ function MyJoinedDonationsScreen({
     () => buildStaticMapPreviewUrl(logisticsSettings),
     [logisticsSettings]
   );
+  const independentDonationItems = React.useMemo(() => (
+    (donationItems || []).filter((item) => (
+      item?.submission?.submission_id
+      && !Number(item?.submission?.donation_drive_id)
+      && !isClosedDonationStatus(item?.submission?.status)
+    ))
+  ), [donationItems]);
+  const hasSchedulableDonation = Boolean(
+    activeSubmission?.submission_id
+    && !Number(activeSubmission?.donation_drive_id)
+    && !isClosedDonationStatus(activeSubmission?.status)
+  );
+  const savedQueueNumber = formatQueueNumber(logistics?.queue_number);
+  const savedScheduleDate = logistics?.pickup_schedule_date || '';
+  const savedDropoffWindow = logistics?.dropoff_window || '';
 
   React.useEffect(() => {
     setSendOffMapFailed(false);
@@ -2812,6 +2918,149 @@ function MyJoinedDonationsScreen({
           </View>
         ) : null}
       </View>
+
+      <View style={[styles.walkInCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
+        <View style={styles.summaryHeaderRow}>
+          <View style={styles.walkInHeaderCopy}>
+            <Text style={[styles.summarySectionTitle, { color: roles.headingText }]}>Walk-in drop-off</Text>
+            <Text style={[styles.flowMetaText, { color: roles.bodyText }]}>
+              Schedule when you will bring the hair donation to the send-off site.
+            </Text>
+          </View>
+          {savedQueueNumber ? (
+            <View style={[styles.summaryStatusChip, { backgroundColor: roles.iconPrimarySurface }]}>
+              <Text style={[styles.summaryStatusText, { color: roles.iconPrimaryColor }]}>{savedQueueNumber}</Text>
+            </View>
+          ) : null}
+        </View>
+
+        {savedScheduleDate ? (
+          <View style={[styles.walkInSavedRow, { backgroundColor: roles.supportCardBackground }]}>
+            <MaterialCommunityIcons name="calendar-check-outline" size={18} color={roles.iconPrimaryColor} />
+            <Text style={[styles.flowMetaText, { color: roles.bodyText }]}>
+              {formatDateLabel(`${savedScheduleDate}T00:00:00`)}{savedDropoffWindow ? `, ${savedDropoffWindow}` : ''}
+            </Text>
+          </View>
+        ) : null}
+
+        <View style={styles.walkInChoiceGroup}>
+          <Text style={[styles.walkInLabel, { color: roles.metaText }]}>Date</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.walkInChipRow}>
+            {dateOptions.map((option) => {
+              const isSelected = selectedDropoffDate === option.value;
+              return (
+                <Pressable
+                  key={option.value}
+                  accessibilityRole="button"
+                  onPress={() => setSelectedDropoffDate(option.value)}
+                  style={[
+                    styles.walkInChip,
+                    {
+                      backgroundColor: isSelected ? roles.primaryActionBackground : roles.supportCardBackground,
+                      borderColor: isSelected ? roles.primaryActionBackground : roles.defaultCardBorder,
+                    },
+                  ]}
+                >
+                  <Text style={[styles.walkInChipText, { color: isSelected ? roles.primaryActionText : roles.bodyText }]}>
+                    {option.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </View>
+
+        <View style={styles.walkInChoiceGroup}>
+          <Text style={[styles.walkInLabel, { color: roles.metaText }]}>Time window</Text>
+          <View style={styles.walkInWindowGrid}>
+            {WALK_IN_DROPOFF_WINDOWS.map((window) => {
+              const isSelected = selectedDropoffWindow === window;
+              return (
+                <Pressable
+                  key={window}
+                  accessibilityRole="button"
+                  onPress={() => setSelectedDropoffWindow(window)}
+                  style={[
+                    styles.walkInWindowChip,
+                    {
+                      backgroundColor: isSelected ? roles.primaryActionBackground : roles.supportCardBackground,
+                      borderColor: isSelected ? roles.primaryActionBackground : roles.defaultCardBorder,
+                    },
+                  ]}
+                >
+                  <Text style={[styles.walkInChipText, { color: isSelected ? roles.primaryActionText : roles.bodyText }]}>
+                    {window}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
+
+        <AppButton
+          title={savedScheduleDate ? 'Update schedule' : 'Schedule drop-off'}
+          onPress={() => onScheduleDropoff?.({
+            scheduleDate: selectedDropoffDate,
+            timeWindow: selectedDropoffWindow,
+          })}
+          loading={isSchedulingDropoff}
+          disabled={!hasSchedulableDonation || isSchedulingDropoff}
+        />
+        {!hasSchedulableDonation ? (
+          <Text style={[styles.flowMetaText, { color: roles.metaText }]}>
+            Add a logistic donation first so the schedule can be linked to your QR.
+          </Text>
+        ) : null}
+      </View>
+
+      {independentDonationItems.length ? (
+      <View style={styles.flowCardList}>
+        <Text style={[styles.summarySectionTitle, { color: roles.headingText }]}>Donation in progress</Text>
+        {independentDonationItems.map((item) => {
+          const primaryPreview = item.previewItems?.[0] || null;
+          return (
+            <Pressable
+              key={item.key}
+              accessibilityRole="button"
+              accessibilityLabel={`Open timeline for ${item.title || 'logistic donation'}`}
+              onPress={() => onViewDonation?.(item)}
+              style={({ pressed }) => [
+                styles.summaryHairRow,
+                {
+                  backgroundColor: roles.defaultCardBackground,
+                  borderColor: roles.defaultCardBorder,
+                  opacity: pressed ? 0.82 : 1,
+                },
+              ]}
+            >
+              <View style={styles.summaryHeaderRow}>
+                <View style={styles.upcomingDonationCopy}>
+                  <Text style={[styles.summaryMainText, { color: roles.headingText }]} numberOfLines={2}>
+                    {item.title || 'Independent hair donation'}
+                  </Text>
+                  <Text style={[styles.flowMetaText, { color: roles.bodyText }]}>
+                    {item.hairCount || item.previewItems?.length || 1} hair item{(item.hairCount || item.previewItems?.length || 1) === 1 ? '' : 's'}
+                  </Text>
+                </View>
+                <View style={[styles.summaryStatusChip, { backgroundColor: roles.iconPrimarySurface }]}>
+                  <Text style={[styles.summaryStatusText, { color: roles.iconPrimaryColor }]}>
+                    {item.statusLabel || 'In progress'}
+                  </Text>
+                </View>
+              </View>
+              {primaryPreview ? (
+                <Text style={[styles.flowMetaText, { color: roles.bodyText }]}>
+                  {primaryPreview.lengthLabel} - {primaryPreview.condition || 'Hair details saved'}
+                </Text>
+              ) : null}
+              <Text style={[styles.flowMetaText, { color: roles.metaText }]}>
+                Tap to view timeline
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+      ) : null}
     </View>
   );
 /*
@@ -3130,16 +3379,29 @@ function DonationTimelineStatusScreen({
   onCancelDonation,
 }) {
   const primaryPreview = previewItems[0] || item?.previewItems?.[0] || null;
-  const submittedAt = item?.submission?.created_at || item?.submission?.updated_at || '';
+  const registration = item?.drive?.registration || item?.registration || null;
+  const submittedAt = item?.submission?.created_at
+    || item?.submission?.updated_at
+    || registration?.rsvp_scanned_at
+    || registration?.updated_at
+    || registration?.registered_at
+    || '';
   const canCancel = canCancelDonationSubmission({
     submission: item?.submission || null,
-    registration: item?.drive?.registration || item?.registration || null,
+    registration,
     certificate,
     timelineStages,
     timelineEvents,
   });
   const recipientLabel = item?.recipientName || item?.organizationName || 'Donation drive';
   const isEventDonation = Boolean(item?.submission?.donation_drive_id || item?.drive?.donation_drive_id);
+  const hasHairPreview = Boolean(primaryPreview);
+  const heroTitle = hasHairPreview
+    ? `Hair #1 - ${primaryPreview?.donorName || accountDonorName || 'Donor'}`
+    : item?.title || item?.drive?.event_title || 'Hair donation';
+  const attendanceLabel = isRsvpCheckedIn(registration)
+    ? 'Marked present'
+    : (registration?.attendance_status || registration?.registration_status || item?.statusLabel || 'Not recorded');
   const canViewDonationQr = Boolean(
     !isEventDonation
     && isSubmittedDonationItem({ submission: item?.submission })
@@ -3154,7 +3416,7 @@ function DonationTimelineStatusScreen({
       <DonationStepHeader
         roles={roles}
         title="Donation Status"
-        body="View the logistics timeline for this hair donation."
+        body="View donation details and progress."
         onBack={onBack}
       />
 
@@ -3162,7 +3424,7 @@ function DonationTimelineStatusScreen({
         <View style={styles.timelineHeroTop}>
           <View style={styles.timelineHeroCopy}>
             <Text style={[styles.timelineHeroTitle, { color: roles.headingText }]} numberOfLines={2}>
-              Hair #1 - {primaryPreview?.donorName || accountDonorName || 'Donor'}
+              {heroTitle}
             </Text>
             <View style={[styles.timelineHeroChip, { backgroundColor: roles.iconPrimarySurface }]}>
               <Text style={[styles.timelineHeroChipText, { color: roles.iconPrimaryColor }]}>
@@ -3176,12 +3438,12 @@ function DonationTimelineStatusScreen({
         </View>
         <View style={[styles.timelineMetricGrid, { borderTopColor: roles.defaultCardBorder }]}>
           <View style={styles.timelineMetric}>
-            <Text style={[styles.summaryMetricLabel, { color: roles.metaText }]}>Length</Text>
-            <Text style={[styles.summaryMetricValue, { color: roles.headingText }]}>{primaryPreview?.lengthLabel || 'Not recorded'}</Text>
+            <Text style={[styles.summaryMetricLabel, { color: roles.metaText }]}>{hasHairPreview ? 'Length' : 'Attendance'}</Text>
+            <Text style={[styles.summaryMetricValue, { color: roles.headingText }]}>{hasHairPreview ? (primaryPreview?.lengthLabel || 'Not recorded') : attendanceLabel}</Text>
           </View>
           <View style={styles.timelineMetric}>
-            <Text style={[styles.summaryMetricLabel, { color: roles.metaText }]}>Date Submitted</Text>
-            <Text style={[styles.summaryMetricValue, { color: roles.headingText }]}>{submittedAt ? formatDateLabel(submittedAt) : 'Not submitted'}</Text>
+            <Text style={[styles.summaryMetricLabel, { color: roles.metaText }]}>{hasHairPreview ? 'Submitted' : 'Event date'}</Text>
+            <Text style={[styles.summaryMetricValue, { color: roles.headingText }]}>{hasHairPreview ? (submittedAt ? formatDateLabel(submittedAt) : 'Not submitted') : (item?.dateLabel || (submittedAt ? formatDateLabel(submittedAt) : 'Not recorded'))}</Text>
           </View>
           <View style={styles.timelineMetric}>
             <Text style={[styles.summaryMetricLabel, { color: roles.metaText }]}>Recipient</Text>
@@ -3610,6 +3872,7 @@ export function DonorDonationStatusScreen() {
   const [qrActionFeedback, setQrActionFeedback] = React.useState({ message: '', variant: 'info' });
   const [printingQrKey, setPrintingQrKey] = React.useState('');
   const [savingQrKey, setSavingQrKey] = React.useState('');
+  const [isSchedulingDropoff, setIsSchedulingDropoff] = React.useState(false);
   // When the user picks a view manually, stop auto-routing away from it.
   const hasManualDonationViewSelectionRef = React.useRef(false);
 
@@ -3749,6 +4012,10 @@ export function DonorDonationStatusScreen() {
 
   const isProfileComplete = donorProfileMeta.isComplete;
   const latestScreening = moduleData?.latestScreening || null;
+  const currentRequirementMinimumInches = formatRequirementLengthInputValue(moduleData?.latestDonationRequirement || null);
+  const currentRequirementHelperText = currentRequirementMinimumInches
+    ? `Minimum required is ${currentRequirementMinimumInches} inches`
+    : 'Current minimum requirement is not configured';
   const screeningDate = latestScreening?.created_at || '';
   const screeningLabel = screeningDate ? formatDateLabel(screeningDate) : '';
   const isHairFresh = Boolean(
@@ -3766,7 +4033,7 @@ export function DonorDonationStatusScreen() {
     : 'Not Eligible for Donation Yet';
   const logisticEligibilityPromptMessage = !hasHairScanLog
     ? 'Complete Hair Check in Analysis first so we can confirm if your hair is eligible for a logistic donation.'
-    : `${hairEligibilityMessage} Open Analysis to review your latest result before starting a logistic donation.`;
+    : `${getMainIneligibilityReason(moduleData?.latestAiEligibility)} Open Analysis to review your latest result.`;
   const hasOngoingDonation = Boolean(moduleData?.hasOngoingDonation);
   const effectiveDonationModuleScreen = donationModuleScreen;
   const activeDonationTabKey = React.useMemo(() => (
@@ -3845,12 +4112,7 @@ export function DonorDonationStatusScreen() {
     (drive) => Number(drive?.donation_drive_id) === Number(selectedDriveForDonation?.donation_drive_id)
   ) || null;
   const selectedFlowDrive = selectedDriveFromList || selectedDriveForDonation || displayDrive;
-  const selectedDonationDriveId = (
-    selectedDriveForDonation?.donation_drive_id
-    || activeDriveFromSubmission?.donation_drive_id
-    || displayDrive?.donation_drive_id
-    || null
-  );
+  const selectedDonationDriveId = selectedDriveForDonation?.donation_drive_id || null;
   const trackedSubmissionId = moduleData?.latestSubmission?.submission_id || null;
   const trackedDetailIds = React.useMemo(() => {
     const activeSubmissions = Array.isArray(moduleData?.activeSubmissions)
@@ -3985,26 +4247,23 @@ export function DonorDonationStatusScreen() {
           ? moduleData.latestDetail
           : getLatestPreviewDetail(submission);
         const details = submissionDetails.length ? submissionDetails : (fallbackDetail && !isRemovedHairDetail(fallbackDetail) ? [fallbackDetail] : []);
-        const payloadSubmission = selectedDonationDriveId && !submission?.donation_drive_id
-          ? { ...submission, donation_drive_id: selectedDonationDriveId }
-          : submission;
-
         return details.map((detail, index) => ({
           key: `${submission.submission_id}-${detail?.submission_detail_id || index}`,
           submission,
           detail,
           qrPayload: buildDonationTrackingQrPayload({
-            submission: payloadSubmission,
+            submission,
             detail,
-            drive: selectedDriveForDonation || displayDrive || null,
+            drive: Number(submission?.donation_drive_id) > 0
+              ? selectedDriveForDonation || activeDriveFromSubmission || null
+              : null,
           }),
         }));
       });
   }, [
-    displayDrive,
+    activeDriveFromSubmission,
     moduleData?.activeSubmissions,
     moduleData?.latestDetail,
-    selectedDonationDriveId,
     selectedDriveForDonation,
   ]);
   const activeDonationQrPayload = activeDonationQrItems[0]?.qrPayload || '';
@@ -4053,7 +4312,10 @@ export function DonorDonationStatusScreen() {
       const primarySubmission = [...submissions]
         .sort((left, right) => new Date(right?.updated_at || right?.created_at || 0) - new Date(left?.updated_at || left?.created_at || 0))[0];
       const driveId = Number(primarySubmission?.donation_drive_id);
-      const drive = driveById.get(driveId) || activeDriveFromSubmission || selectedDriveForDonation || null;
+      const isDriveSubmission = Number.isFinite(driveId) && driveId > 0;
+      const drive = isDriveSubmission
+        ? driveById.get(driveId) || activeDriveFromSubmission || selectedDriveForDonation || null
+        : null;
       const groupQrItems = activeDonationQrItems.filter((item) => (
         submissions.some((submission) => Number(submission?.submission_id) === Number(item?.submission?.submission_id))
       ));
@@ -4086,13 +4348,13 @@ export function DonorDonationStatusScreen() {
         submissions,
         previewItems,
         drive,
-        title: drive?.event_title || 'Hair donation',
-        organizationName: getDriveOrganizationLabel(drive),
+        title: drive?.event_title || 'Independent hair donation',
+        organizationName: drive ? getDriveOrganizationLabel(drive) : 'Partner organization',
         recipientName: selectedRecipient?.type === 'patient'
           ? selectedRecipient?.patient?.patient_name || ''
-          : getDriveOrganizationLabel(drive),
-        dateLabel: getDriveDateLabel(drive),
-        locationLabel: getDriveLocationLabel(drive),
+          : drive ? getDriveOrganizationLabel(drive) : 'Partner organization',
+        dateLabel: drive ? getDriveDateLabel(drive) : formatDateLabel(primarySubmission?.updated_at || primarySubmission?.created_at || ''),
+        locationLabel: drive ? getDriveLocationLabel(drive) : 'Send-off location',
         imageUrl: drive?.event_image_url || drive?.organization_logo_url || '',
         statusLabel: statusMeta.label,
         statusCategory: statusMeta.category,
@@ -4162,6 +4424,59 @@ export function DonorDonationStatusScreen() {
     }
     return myDonationItems.find((item) => item.submission) || myDonationItems[0] || null;
   }, [myDonationItems, selectedDonationStatusItem]);
+  const handleOpenEventDonationDetails = React.useCallback((drive) => {
+    if (!drive?.donation_drive_id) return;
+
+    const driveId = Number(drive.donation_drive_id);
+    const matchingItem = myDonationItems.find((item) => (
+      Number(item?.drive?.donation_drive_id || item?.submission?.donation_drive_id) === driveId
+    ));
+
+    if (matchingItem) {
+      setSelectedDonationStatusItem({
+        ...matchingItem,
+        originScreen: DONATION_MODULE_SCREEN.EVENTS,
+      });
+      setDonationModuleScreen(DONATION_MODULE_SCREEN.DONATION_STATUS);
+      return;
+    }
+
+    const statusMeta = getDonationCardMeta({ drive });
+    const checkedIn = isRsvpCheckedIn(drive?.registration || null);
+    setSelectedDonationStatusItem({
+      key: `event-drive-${drive.donation_drive_id}`,
+      type: 'drive',
+      submission: null,
+      submissions: [],
+      previewItems: [],
+      drive,
+      title: drive?.event_title || 'Donation drive',
+      organizationName: getDriveOrganizationLabel(drive),
+      recipientName: getDriveOrganizationLabel(drive),
+      dateLabel: getDriveDateLabel(drive),
+      locationLabel: getDriveLocationLabel(drive),
+      imageUrl: drive?.event_image_url || drive?.organization_logo_url || '',
+      statusLabel: checkedIn ? 'Marked present' : statusMeta.label,
+      statusCategory: checkedIn ? 'submitted' : statusMeta.category,
+      statusIcon: checkedIn ? 'account-check-outline' : statusMeta.icon,
+      hairCount: 0,
+      updatedAt: drive?.registration?.rsvp_scanned_at
+        || drive?.registration?.updated_at
+        || drive?.updated_at
+        || drive?.start_date
+        || '',
+      originScreen: DONATION_MODULE_SCREEN.EVENTS,
+    });
+    setDonationModuleScreen(DONATION_MODULE_SCREEN.DONATION_STATUS);
+  }, [myDonationItems]);
+  const handleOpenLogisticDonationDetails = React.useCallback((item) => {
+    if (!item?.submission?.submission_id) return;
+    setSelectedDonationStatusItem({
+      ...item,
+      originScreen: DONATION_MODULE_SCREEN.MY_DONATIONS,
+    });
+    setDonationModuleScreen(DONATION_MODULE_SCREEN.DONATION_STATUS);
+  }, []);
   const handleShowHairEventTab = React.useCallback(() => {
     hasManualDonationViewSelectionRef.current = true;
     setSelectedDonationStatusItem(null);
@@ -4174,15 +4489,6 @@ export function DonorDonationStatusScreen() {
     setDonationModuleScreen(DONATION_MODULE_SCREEN.MY_DONATIONS);
     setIsHairEligibilityPromptOpen(false);
   }, []);
-  const handleAddLogisticDonation = React.useCallback(() => {
-    if (!hasHairScanLog || !isAiEligible) {
-      setIsHairEligibilityPromptOpen(true);
-      return;
-    }
-    hasManualDonationViewSelectionRef.current = true;
-    setIsHairEligibilityPromptOpen(false);
-    router.navigate('/donor/donations');
-  }, [hasHairScanLog, isAiEligible, router]);
   const handleStartHairCheckFromPrompt = React.useCallback(() => {
     setIsHairEligibilityPromptOpen(false);
     router.push('/donor/donations');
@@ -4274,7 +4580,10 @@ export function DonorDonationStatusScreen() {
 
   const handleOpenManualModal = React.useCallback(() => {
     if (!isProfileComplete) { router.navigate('/profile'); return; }
-    if (!isHairFresh && !selectedDriveForDonation) { router.navigate('/donor/donations'); return; }
+    if (!selectedDriveForDonation && (!hasHairScanLog || !isAiEligible)) {
+      setIsHairEligibilityPromptOpen(true);
+      return;
+    }
     setManualEditTarget(null);
     const screening = moduleData?.latestScreening;
     if (screening) {
@@ -4288,7 +4597,57 @@ export function DonorDonationStatusScreen() {
     setManualPhoto(null);
     setManualFeedback({ message: '', variant: 'info' });
     setIsManualModalOpen(true);
-  }, [isHairFresh, isProfileComplete, moduleData?.latestScreening, router, selectedDriveForDonation]);
+  }, [hasHairScanLog, isAiEligible, isProfileComplete, moduleData?.latestScreening, router, selectedDriveForDonation]);
+
+  const handleAddLogisticDonation = React.useCallback(() => {
+    if (!hasHairScanLog || !isAiEligible) {
+      setIsHairEligibilityPromptOpen(true);
+      return;
+    }
+    hasManualDonationViewSelectionRef.current = true;
+    setIsHairEligibilityPromptOpen(false);
+    setSelectedDriveForDonation(null);
+    setSelectedRecipient({ type: 'organization', patient: null });
+    setSelectedDonationStatusItem(null);
+    handleOpenManualModal();
+  }, [handleOpenManualModal, hasHairScanLog, isAiEligible]);
+
+  const handleScheduleWalkInDropoff = React.useCallback(async ({ scheduleDate = '', timeWindow = '' } = {}) => {
+    const activeSubmission = moduleData?.latestSubmission || null;
+    if (!activeSubmission?.submission_id || Number(activeSubmission?.donation_drive_id)) {
+      setModuleFeedback({
+        message: 'Add a logistic donation first so this schedule can be linked to your QR.',
+        variant: 'info',
+      });
+      return;
+    }
+
+    setIsSchedulingDropoff(true);
+    const result = await scheduleWalkInDropoff({
+      userId: user?.id || null,
+      databaseUserId: profile?.user_id || null,
+      submission: activeSubmission,
+      scheduleDate,
+      timeWindow,
+    });
+    setIsSchedulingDropoff(false);
+
+    setModuleFeedback({
+      message: result.success
+        ? 'Walk-in drop-off schedule saved. Bring your QR when you visit the site.'
+        : (result.error || 'Unable to save the walk-in schedule.'),
+      variant: result.success ? 'success' : 'error',
+    });
+
+    if (result.success) {
+      await loadModuleData({ silent: true });
+    }
+  }, [
+    loadModuleData,
+    moduleData?.latestSubmission,
+    profile?.user_id,
+    user?.id,
+  ]);
 
   const updateManualField = React.useCallback((field, value) => {
     setManualForm((prev) => ({ ...prev, [field]: value }));
@@ -4770,8 +5129,13 @@ export function DonorDonationStatusScreen() {
 
   const handleRemoveSummaryHair = React.useCallback((item) => {
     const detail = item?.detail || null;
+    const submission = item?.submission || null;
     if (!detail?.submission_detail_id) {
       setModuleFeedback({ message: 'No removable hair detail was found for this item.', variant: 'error' });
+      return;
+    }
+    if (!submission?.submission_id) {
+      setModuleFeedback({ message: 'No donation record was found for this hair item.', variant: 'error' });
       return;
     }
 
@@ -4779,17 +5143,31 @@ export function DonorDonationStatusScreen() {
       setRemovingHairKey(item.key);
       setModuleFeedback({ message: '', variant: 'info' });
 
-      const result = await updateHairSubmissionDetailById(detail.submission_detail_id, {
-        status: 'Cancelled',
-        current_tracking_status: 'Cancelled',
+      const detailResult = await updateHairSubmissionDetailById(detail.submission_detail_id, {
+        status: 'Rejected',
+        rejection_reason: 'Removed by donor',
         updated_by: profile?.user_id || null,
+      });
+
+      if (detailResult.error) {
+        setRemovingHairKey('');
+        setModuleFeedback({
+          message: detailResult.error?.message || 'Could not remove this hair item right now.',
+          variant: 'error',
+        });
+        return;
+      }
+
+      const submissionResult = await updateHairSubmissionById(submission.submission_id, {
+        status: 'Cancelled',
+        donor_notes: [submission.donor_notes, 'Removed by donor from donation summary.'].filter(Boolean).join('\n'),
       });
 
       setRemovingHairKey('');
 
-      if (result.error) {
+      if (submissionResult.error) {
         setModuleFeedback({
-          message: result.error?.message || 'Could not remove this hair item right now.',
+          message: submissionResult.error?.message || 'Could not close this donation record right now.',
           variant: 'error',
         });
         return;
@@ -4808,58 +5186,6 @@ export function DonorDonationStatusScreen() {
       ]
     );
   }, [loadModuleData, profile?.user_id]);
-
-  // eslint-disable-next-line no-unused-vars
-  const handleSubmitDriveDonation = React.useCallback((drive) => {
-    if (!drive?.donation_drive_id) return;
-
-    setSelectedDriveForDonation(drive);
-
-    if (!isProfileComplete) {
-      setModuleFeedback({
-        message: 'Complete your donor profile before submitting hair for this donation drive.',
-        variant: 'info',
-      });
-      router.navigate('/profile');
-      return;
-    }
-
-    if (!hasHairScanLog) {
-      setModuleFeedback({
-        message: hairEligibilityMessage,
-        variant: 'info',
-      });
-      return;
-    }
-
-    if (hasOngoingDonation) {
-      setModuleFeedback({
-        message: 'You already have a donation in progress. Finish or cancel it before starting another hair submission.',
-        variant: 'info',
-      });
-      return;
-    }
-
-    const screening = moduleData?.latestScreening;
-    if (screening) {
-      const estLengthCm = Number(screening.estimated_length);
-      const estLengthIn = estLengthCm > 0 ? String((estLengthCm / 2.54).toFixed(1)) : '';
-      setManualForm({ ...MANUAL_FORM_DEFAULTS, lengthValue: estLengthIn });
-    } else {
-      setManualForm(MANUAL_FORM_DEFAULTS);
-    }
-    setManualFormErrors({});
-    setManualPhoto(null);
-    setManualFeedback({
-      message: `Add the hair details for ${drive.event_title || 'this donation drive'}. You can use manual details here, then preview before QR generation.`,
-      variant: 'info',
-    });
-    setIsManualModalOpen(true);
-    setModuleFeedback({
-      message: `Selected ${drive.event_title || 'this donation drive'}. Add hair details, then submit for staff waybill issuance.`,
-      variant: 'info',
-    });
-  }, [hairEligibilityMessage, hasHairScanLog, hasOngoingDonation, isProfileComplete, moduleData?.latestScreening, router]);
 
   const refreshDriveRegistrationFromTable = React.useCallback(async (driveId) => {
     if (!driveId || !profile?.user_id) return null;
@@ -5195,7 +5521,7 @@ export function DonorDonationStatusScreen() {
     }
 
     const hasEventLinkedItems = itemsToSubmit.some(
-      (item) => Number(item?.submission?.donation_drive_id) > 0 || Number(selectedDonationDriveId) > 0
+      (item) => Number(item?.submission?.donation_drive_id) > 0
     );
     setModuleFeedback({
       message: itemsToSubmit.length > 1
@@ -5239,7 +5565,7 @@ export function DonorDonationStatusScreen() {
             userId: user?.id,
             submission,
             databaseUserId: profile?.user_id || null,
-            donationDriveId: selectedDonationDriveId,
+            donationDriveId: submission?.donation_drive_id || null,
           }));
         } else {
           submissionResults.push(await ensureIndependentDonationQr({
@@ -5308,7 +5634,6 @@ export function DonorDonationStatusScreen() {
     profile?.user_id,
     selectedRecipient?.patient?.patient_id,
     selectedRecipient?.type,
-    selectedDonationDriveId,
     user?.id,
   ]);
 
@@ -5451,6 +5776,7 @@ export function DonorDonationStatusScreen() {
         <DonationHomeOverview
           roles={roles}
           completedDrives={moduleData?.completedEventDrives || []}
+          onOpenDonationDetails={handleOpenEventDonationDetails}
         />
       );
     }
@@ -5484,13 +5810,15 @@ export function DonorDonationStatusScreen() {
       return (
         <DonationHairSummaryScreen
           roles={roles}
-          drive={selectedFlowDrive}
+          drive={selectedDonationDriveId ? selectedFlowDrive : null}
           latestScreening={latestScreening}
           isEligible={isAiEligible}
           ineligibilityReason={moduleData?.latestAiEligibility?.reason || ''}
           hairItems={donationPreviewItems}
           isSubmitting={isGeneratingQr}
-          onBack={() => setDonationModuleScreen(DONATION_MODULE_SCREEN.EVENT_DETAILS)}
+          onBack={() => setDonationModuleScreen(
+            selectedDonationDriveId ? DONATION_MODULE_SCREEN.EVENT_DETAILS : DONATION_MODULE_SCREEN.MY_DONATIONS
+          )}
           allowAddAnotherHair={false}
           onRemoveHair={handleRemoveSummaryHair}
           removingHairKey={removingHairKey}
@@ -5507,7 +5835,7 @@ export function DonorDonationStatusScreen() {
       return (
         <RecipientChoiceScreen
           roles={roles}
-          drive={selectedFlowDrive}
+          drive={selectedDonationDriveId ? selectedFlowDrive : null}
           patients={recipientPatients}
           selectedRecipient={selectedRecipient}
           onBack={() => setDonationModuleScreen(DONATION_MODULE_SCREEN.SUMMARY)}
@@ -5542,6 +5870,8 @@ export function DonorDonationStatusScreen() {
         <MyJoinedDonationsScreen
           roles={roles}
           logisticsSettings={moduleData?.logisticsSettings || null}
+          donationItems={myDonationItems}
+          onViewDonation={handleOpenLogisticDonationDetails}
         />
       );
     }
@@ -5557,7 +5887,9 @@ export function DonorDonationStatusScreen() {
           parcelImages={moduleData?.parcelImages || []}
           certificate={certificate}
           accountDonorName={accountDonorName}
-          onBack={() => setDonationModuleScreen(DONATION_MODULE_SCREEN.MY_DONATIONS)}
+          onBack={() => setDonationModuleScreen(
+            selectedDonationStatusItem?.originScreen || DONATION_MODULE_SCREEN.MY_DONATIONS
+          )}
           onViewDonationQr={() => {
             if (selectedDonationTimelineItem?.submission?.donation_drive_id) return;
             setDonationModuleScreen(DONATION_MODULE_SCREEN.QR_CODES);
@@ -5571,6 +5903,12 @@ export function DonorDonationStatusScreen() {
       <MyJoinedDonationsScreen
         roles={roles}
         logisticsSettings={moduleData?.logisticsSettings || null}
+        activeSubmission={moduleData?.latestSubmission || null}
+        logistics={moduleData?.logistics || null}
+        donationItems={myDonationItems}
+        onViewDonation={handleOpenLogisticDonationDetails}
+        onScheduleDropoff={handleScheduleWalkInDropoff}
+        isSchedulingDropoff={isSchedulingDropoff}
       />
     );
   }, [
@@ -5581,10 +5919,13 @@ export function DonorDonationStatusScreen() {
     accountDonorName,
     certificate,
     handleEnsureEventRsvp,
+    handleOpenEventDonationDetails,
+    handleOpenLogisticDonationDetails,
     handleRemoveSummaryHair,
     handleDoneFromQrCodes,
     handlePrintQrFromScreen,
     handleSaveQrFromScreen,
+    handleScheduleWalkInDropoff,
     handleSubmitDonationAndShowQr,
     handleSubmitSelectedEventDonation,
     hairEligibilityMessage,
@@ -5593,14 +5934,18 @@ export function DonorDonationStatusScreen() {
     isAiEligible,
     isGeneratingEventRsvp,
     isGeneratingQr,
+    isSchedulingDropoff,
     isProfileComplete,
     latestScreening,
+    moduleData?.latestSubmission,
+    moduleData?.logistics,
     moduleData?.timelineEvents,
     moduleData?.timelineStages,
     moduleData?.parcelImages,
     moduleData?.latestAiEligibility?.reason,
     moduleData?.completedEventDrives,
     moduleData?.logisticsSettings,
+    myDonationItems,
     printingQrKey,
     qrActionFeedback,
     recipientPatients,
@@ -5778,6 +6123,8 @@ export function DonorDonationStatusScreen() {
         feedback={manualFeedback}
         isSaving={isSavingManual}
         isEditing={Boolean(manualEditTarget)}
+        minimumLengthPlaceholder={currentRequirementMinimumInches}
+        minimumLengthHelperText={currentRequirementHelperText}
         aiPrefilled={Boolean(
           moduleData?.latestScreening
           && manualForm.lengthValue
@@ -5826,6 +6173,7 @@ export function DonorDonationStatusScreen() {
         bundlePhoto={bundlePhoto}
         bundleFeedback={bundleFeedback}
         isSaving={isSavingBundle}
+        minimumLengthPlaceholder={currentRequirementMinimumInches}
         onClose={() => {
           if (!isSavingBundle) setIsAddBundleModalOpen(false);
         }}
@@ -6524,6 +6872,63 @@ const styles = StyleSheet.create({
   },
   logisticLocationBody: {
     gap: theme.spacing.md,
+  },
+  walkInCard: {
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: theme.spacing.lg,
+    gap: theme.spacing.md,
+    ...theme.shadows.soft,
+  },
+  walkInHeaderCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  walkInSavedRow: {
+    borderRadius: 12,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  walkInChoiceGroup: {
+    gap: theme.spacing.xs,
+  },
+  walkInLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.bold,
+    textTransform: 'uppercase',
+  },
+  walkInChipRow: {
+    gap: theme.spacing.sm,
+    paddingRight: theme.spacing.sm,
+  },
+  walkInChip: {
+    minHeight: 38,
+    borderWidth: 1,
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: theme.spacing.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  walkInWindowGrid: {
+    gap: theme.spacing.sm,
+  },
+  walkInWindowChip: {
+    minHeight: 40,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: theme.spacing.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  walkInChipText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.semibold,
   },
   logisticFabOverlay: {
     position: 'absolute',

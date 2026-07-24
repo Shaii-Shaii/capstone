@@ -31,6 +31,7 @@ import { HairLogDetailModal as SharedHairLogDetailModal } from '../../src/compon
 import { donorDashboardNavItems } from '../../src/constants/dashboard';
 import {
   fetchHairSubmissionsByUserId,
+  fetchLatestDonationRequirement,
   fetchLatestDonorRecommendationByUserId,
 } from '../../src/features/hairSubmission.api';
 import {
@@ -49,6 +50,43 @@ import { buildProfileCompletionMeta } from '../../src/features/profile/services/
 const formatDayLabel = (value) => (
   new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(new Date(value))
 );
+
+const formatRequirementLength = (requirement = null) => {
+  const inches = Number(requirement?.minimum_hair_length_inches);
+  if (!Number.isFinite(inches) || inches <= 0) return 'Not set';
+  const rounded = Number(inches.toFixed(1));
+  return `${rounded} in`;
+};
+
+const formatRequirementDate = (value) => {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return `Updated ${new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  }).format(date)}`;
+};
+
+const formatRequirementStatus = (value) => {
+  if (value === true) return 'Accepted';
+  if (value === false) return 'Not accepted';
+  return 'Not set';
+};
+
+const getRequirementStatusTone = (value) => {
+  if (value === true) return 'accepted';
+  if (value === false) return 'blocked';
+  return 'neutral';
+};
+
+const buildDonationTreatmentRequirementItems = (requirement = null) => ([
+  { key: 'chemical', label: 'Chemical', value: requirement?.chemical_treatment_status },
+  { key: 'colored', label: 'Colored', value: requirement?.colored_hair_status },
+  { key: 'bleached', label: 'Bleached', value: requirement?.bleached_hair_status },
+  { key: 'rebonded', label: 'Rebonded', value: requirement?.rebonded_hair_status },
+]);
 
 
 const formatDriveDate = (startDate, endDate) => {
@@ -657,7 +695,7 @@ function HairConditionWidget({ screening, onViewDetail }) {
   );
 }
 
-function RecentHairLogWidget({ hairSubmissions, latestRecommendation, onOpenLog }) {
+function RecentHairLogWidget({ hairSubmissions, latestRecommendation, onOpenLog, onOpenHistory }) {
   const { resolvedTheme } = useAuth();
   const roles = resolveThemeRoles(resolvedTheme);
   const headingFont = resolvedTheme?.secondaryFontFamily || theme.typography.fontFamilyDisplay;
@@ -714,12 +752,167 @@ function RecentHairLogWidget({ hairSubmissions, latestRecommendation, onOpenLog 
       {totalCount > 3 ? (
         <>
           <View style={[styles.recentLogDivider, { backgroundColor: roles.defaultCardBorder }]} />
-          <View style={styles.recentLogFlatMore}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`View ${totalCount - 3} more hair checks`}
+            onPress={onOpenHistory}
+            style={({ pressed }) => [styles.recentLogFlatMore, pressed ? styles.cardPressed : null]}
+          >
             <Text style={[styles.recentLogFlatMoreText, { color: roles.metaText, fontFamily: bodyFont }]}>
               +{totalCount - 3} more — view in Hair Checks
             </Text>
+          </Pressable>
+        </>
+      ) : null}
+    </View>
+  );
+}
+
+function DonationRequirementsOverview({ requirement }) {
+  const { resolvedTheme } = useAuth();
+  const roles = resolveThemeRoles(resolvedTheme);
+  const headingFont = resolvedTheme?.secondaryFontFamily || theme.typography.fontFamilyDisplay;
+  const bodyFont = resolvedTheme?.fontFamily || theme.typography.fontFamily;
+  const [isExpanded, setIsExpanded] = React.useState(false);
+  const hasRequirement = Boolean(requirement);
+  const treatmentItems = React.useMemo(
+    () => buildDonationTreatmentRequirementItems(requirement),
+    [requirement]
+  );
+  const updatedLabel = formatRequirementDate(requirement?.updated_at);
+  const textureLabel = String(requirement?.hair_texture_status || '').trim();
+  const notes = String(requirement?.notes || '').trim();
+  const minimumDonors = Number(requirement?.minimum_number_donor);
+
+  return (
+    <View style={[styles.donationRequirementsCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={isExpanded ? 'Hide donation requirements' : 'Show donation requirements'}
+        onPress={() => setIsExpanded((current) => !current)}
+        style={({ pressed }) => [styles.donationRequirementsDropdownHeader, pressed ? styles.cardPressed : null]}
+      >
+        <View style={[styles.donationRequirementsIconWrap, { backgroundColor: roles.iconPrimarySurface }]}>
+          <MaterialCommunityIcons name="clipboard-check-outline" size={18} color={roles.primaryActionBackground} />
+        </View>
+        <View style={styles.donationRequirementsMainCopy}>
+          <Text style={[styles.donationRequirementsTitle, { color: roles.headingText, fontFamily: headingFont }]}>
+            Donation Requirements
+          </Text>
+          <Text style={[styles.donationRequirementsSubtitle, { color: roles.metaText, fontFamily: bodyFont }]} numberOfLines={2}>
+            Check the current hair donation rules before joining an event.
+          </Text>
+        </View>
+        <MaterialCommunityIcons
+          name={isExpanded ? 'chevron-up' : 'chevron-down'}
+          size={22}
+          color={roles.primaryActionBackground}
+        />
+      </Pressable>
+
+      {isExpanded && hasRequirement ? (
+        <>
+          <View style={[styles.donationRequirementDivider, { backgroundColor: roles.defaultCardBorder }]} />
+
+          <View style={styles.donationRequirementsHero}>
+            <View style={[styles.donationRequirementsHeroIcon, { backgroundColor: roles.primaryActionBackground }]}>
+              <MaterialCommunityIcons name="ruler-square" size={22} color="#fff" />
+            </View>
+            <View style={styles.donationRequirementsMainCopy}>
+              <Text style={[styles.donationRequirementsLabel, { color: roles.metaText, fontFamily: bodyFont }]}>
+                Required hair length
+              </Text>
+              <Text style={[styles.donationRequirementsLength, { color: roles.headingText, fontFamily: headingFont }]}>
+                {formatRequirementLength(requirement)}
+              </Text>
+            </View>
+            {updatedLabel ? (
+              <Text style={[styles.donationRequirementsUpdated, { color: roles.metaText, fontFamily: bodyFont }]}>
+                {updatedLabel}
+              </Text>
+            ) : null}
+          </View>
+
+          <Text style={[styles.donationRequirementGuideText, { color: roles.bodyText, fontFamily: bodyFont }]}>
+            Your latest hair analysis and staff screening will be compared with these active requirements.
+          </Text>
+
+          <View style={styles.donationRequirementChipGrid}>
+            {treatmentItems.map((item) => {
+              const tone = getRequirementStatusTone(item.value);
+              const isAccepted = tone === 'accepted';
+              const isBlocked = tone === 'blocked';
+              return (
+                <View
+                  key={item.key}
+                  style={[
+                    styles.donationRequirementChip,
+                    {
+                      backgroundColor: isAccepted ? '#edf8f0' : isBlocked ? '#fff4f4' : roles.pageBackground,
+                      borderColor: isAccepted ? '#b8dfc1' : isBlocked ? '#e4c8c8' : roles.defaultCardBorder,
+                    },
+                  ]}
+                >
+                  <MaterialCommunityIcons
+                    name={isAccepted ? 'check-circle-outline' : isBlocked ? 'close-circle-outline' : 'minus-circle-outline'}
+                    size={15}
+                    color={isAccepted ? '#247a3b' : isBlocked ? roles.primaryActionBackground : roles.metaText}
+                  />
+                  <View style={styles.donationRequirementChipCopy}>
+                    <Text style={[styles.donationRequirementChipLabel, { color: roles.metaText, fontFamily: bodyFont }]}>
+                      {item.label}
+                    </Text>
+                    <Text style={[styles.donationRequirementChipValue, { color: roles.headingText, fontFamily: bodyFont }]}>
+                      {formatRequirementStatus(item.value)}
+                    </Text>
+                  </View>
+                </View>
+              );
+            })}
+          </View>
+
+          <View style={[styles.donationRequirementDivider, { backgroundColor: roles.defaultCardBorder }]} />
+
+          <View style={styles.donationRequirementMetaList}>
+            {textureLabel ? (
+              <View style={styles.donationRequirementMetaRow}>
+                <Text style={[styles.donationRequirementMetaLabel, { color: roles.metaText, fontFamily: bodyFont }]}>
+                  Texture
+                </Text>
+                <Text style={[styles.donationRequirementMetaValue, { color: roles.headingText, fontFamily: bodyFont }]}>
+                  {textureLabel}
+                </Text>
+              </View>
+            ) : null}
+            {Number.isFinite(minimumDonors) && minimumDonors > 0 ? (
+              <View style={styles.donationRequirementMetaRow}>
+                <Text style={[styles.donationRequirementMetaLabel, { color: roles.metaText, fontFamily: bodyFont }]}>
+                  Donors per wig
+                </Text>
+                <Text style={[styles.donationRequirementMetaValue, { color: roles.headingText, fontFamily: bodyFont }]}>
+                  {minimumDonors}
+                </Text>
+              </View>
+            ) : null}
+            {notes ? (
+              <Text style={[styles.donationRequirementNotes, { color: roles.bodyText, fontFamily: bodyFont }]}>
+                {notes}
+              </Text>
+            ) : null}
           </View>
         </>
+      ) : null}
+
+      {isExpanded && !hasRequirement ? (
+        <View style={styles.donationRequirementsEmpty}>
+          <MaterialCommunityIcons name="database-alert-outline" size={20} color={roles.primaryActionBackground} />
+          <Text style={[styles.donationRequirementsEmptyTitle, { color: roles.headingText, fontFamily: headingFont }]}>
+            Requirements not configured
+          </Text>
+          <Text style={[styles.donationRequirementsEmptyText, { color: roles.metaText, fontFamily: bodyFont }]}>
+            Add a row in wig_requirements so donors can check the current donation rules.
+          </Text>
+        </View>
       ) : null}
     </View>
   );
@@ -1857,6 +2050,7 @@ export default function DonorHomeScreen() {
   const [donationDrives, setDonationDrives] = React.useState(cachedHome?.donationDrives || []);
   const [hairSubmissions, setHairSubmissions] = React.useState(cachedHome?.hairSubmissions || []);
   const [registeredEventDrives, setRegisteredEventDrives] = React.useState(cachedHome?.registeredEventDrives || []);
+  const [donationRequirement, setDonationRequirement] = React.useState(cachedHome?.donationRequirement || null);
   // Hair log detail modal
   const [isHairLogModalOpen, setIsHairLogModalOpen] = React.useState(false);
   const [selectedHairLogDateKey, setSelectedHairLogDateKey] = React.useState('');
@@ -2078,6 +2272,7 @@ export default function DonorHomeScreen() {
       submissionsResult,
       registeredDrivesResult,
       recommendationResult,
+      requirementResult,
     ] = await Promise.all([
       getDonorDonationsModuleData({
         userId: user.id,
@@ -2091,6 +2286,7 @@ export default function DonorHomeScreen() {
         limit: 24,
       }),
       fetchLatestDonorRecommendationByUserId(user.id).catch(() => ({ data: null })),
+      fetchLatestDonationRequirement().catch((error) => ({ data: null, error })),
     ]);
 
     const visibleDriveRows = Array.isArray(upcomingDrivesResult.data)
@@ -2100,11 +2296,13 @@ export default function DonorHomeScreen() {
     const nextHairSubmissions = submissionsResult.data || [];
     const nextRegisteredEventDrives = registeredDrivesResult.data || [];
     const nextLatestRecommendation = recommendationResult?.data || null;
+    const nextDonationRequirement = requirementResult?.data || null;
     const nextHomeData = {
       donationDrives: nextDonationDrives,
       hairSubmissions: nextHairSubmissions,
       registeredEventDrives: nextRegisteredEventDrives,
       latestRecommendation: nextLatestRecommendation,
+      donationRequirement: nextDonationRequirement,
       cachedAt: Date.now(),
     };
     cachedDonorHomeData = nextHomeData;
@@ -2114,11 +2312,13 @@ export default function DonorHomeScreen() {
     setHairSubmissions(nextHairSubmissions);
     setRegisteredEventDrives(nextRegisteredEventDrives);
     setLatestRecommendation(nextLatestRecommendation);
+    setDonationRequirement(nextDonationRequirement);
     const loadFailed = Boolean(
       donationModuleResult.error
       || upcomingDrivesResult.error
       || submissionsResult.error
       || registeredDrivesResult.error
+      || requirementResult?.error
     );
     setHomeError(loadFailed ? 'Some updates could not load.' : '');
     setIsLoadingHome(false);
@@ -2188,6 +2388,11 @@ export default function DonorHomeScreen() {
         filter: `User_ID=eq.${profile.user_id}`,
       }, onRealtimeEvent)
       .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'wig_requirements',
+      }, onRealtimeEvent)
+      .on('postgres_changes', {
         event: 'INSERT',
         schema: 'public',
         table: 'Donation_Certificates',
@@ -2225,6 +2430,10 @@ export default function DonorHomeScreen() {
     setSelectedHairLogEvents(events);
     setIsHairLogModalOpen(true);
   }, [latestRecommendation]);
+
+  const handleOpenHairLogHistory = React.useCallback(() => {
+    router.navigate('/donor/donations?tab=history');
+  }, [router]);
 
   const handleCloseHairLogModal = React.useCallback(() => {
     setIsHairLogModalOpen(false);
@@ -2419,6 +2628,10 @@ export default function DonorHomeScreen() {
               />
             </AnimatedHomeSection>
 
+            <AnimatedHomeSection delay={45} style={styles.section} animate={shouldAnimateHomeSections}>
+              <DonationRequirementsOverview requirement={donationRequirement} />
+            </AnimatedHomeSection>
+
             {!areCredentialsCompleted ? (
               <AnimatedHomeSection delay={60} animate={shouldAnimateHomeSections}>
                 <FinishSetupCard
@@ -2438,6 +2651,7 @@ export default function DonorHomeScreen() {
                 hairSubmissions={hairSubmissions}
                 latestRecommendation={latestRecommendation}
                 onOpenLog={handleOpenHairLogEntry}
+                onOpenHistory={handleOpenHairLogHistory}
               />
               {showHairActivityCalendar ? (
                 <>
@@ -4305,6 +4519,151 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.compact.bodySm,
   },
   // ─── Monthly Calendar ───────────────────────────────────────────────────────
+  donationRequirementsCard: {
+    borderRadius: 14,
+    borderWidth: 1,
+    overflow: 'hidden',
+  },
+  donationRequirementsDropdownHeader: {
+    minHeight: 70,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  donationRequirementsIconWrap: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  donationRequirementsMainCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  donationRequirementsTitle: {
+    fontSize: theme.typography.compact.bodyLg,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  donationRequirementsSubtitle: {
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.snug,
+  },
+  donationRequirementsHero: {
+    paddingHorizontal: theme.spacing.md,
+    paddingTop: theme.spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  donationRequirementsHeroIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  donationRequirementsLabel: {
+    fontSize: theme.typography.compact.caption,
+    textTransform: 'uppercase',
+    letterSpacing: 0,
+  },
+  donationRequirementsLength: {
+    fontSize: theme.typography.compact.titleSm,
+    fontWeight: theme.typography.weights.bold,
+  },
+  donationRequirementsUpdated: {
+    maxWidth: 104,
+    textAlign: 'right',
+    fontSize: theme.typography.compact.caption,
+    lineHeight: theme.typography.compact.caption * theme.typography.lineHeights.snug,
+  },
+  donationRequirementChipGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.spacing.xs,
+    paddingHorizontal: theme.spacing.md,
+  },
+  donationRequirementChip: {
+    flexGrow: 1,
+    flexBasis: '47%',
+    minHeight: 48,
+    borderRadius: 12,
+    borderWidth: 1,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: 7,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.xs,
+  },
+  donationRequirementChipCopy: {
+    flex: 1,
+    gap: 1,
+  },
+  donationRequirementChipLabel: {
+    fontSize: theme.typography.compact.caption,
+  },
+  donationRequirementChipValue: {
+    fontSize: theme.typography.compact.caption,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  donationRequirementDivider: {
+    height: 1,
+    marginHorizontal: theme.spacing.md,
+  },
+  donationRequirementMetaList: {
+    gap: theme.spacing.xs,
+    paddingHorizontal: theme.spacing.md,
+    paddingBottom: theme.spacing.md,
+  },
+  donationRequirementMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.md,
+  },
+  donationRequirementMetaLabel: {
+    fontSize: theme.typography.compact.caption,
+    textTransform: 'uppercase',
+    letterSpacing: 0,
+  },
+  donationRequirementMetaValue: {
+    flex: 1,
+    textAlign: 'right',
+    fontSize: theme.typography.compact.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  donationRequirementNotes: {
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+  },
+  donationRequirementGuideText: {
+    paddingHorizontal: theme.spacing.md,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+  },
+  donationRequirementsEmpty: {
+    minHeight: 116,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: theme.spacing.xs,
+    paddingVertical: theme.spacing.sm,
+  },
+  donationRequirementsEmptyTitle: {
+    fontSize: theme.typography.compact.body,
+    fontWeight: theme.typography.weights.semibold,
+    textAlign: 'center',
+  },
+  donationRequirementsEmptyText: {
+    maxWidth: 260,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+    textAlign: 'center',
+  },
   calMonthHeader: {
     flexDirection: 'row',
     alignItems: 'center',
