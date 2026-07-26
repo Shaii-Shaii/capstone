@@ -143,6 +143,7 @@ export const StatusBanner = ({
         style={[
           styles.container,
           isFloating ? styles.floatingCard : null,
+          variant === 'success' ? styles.successContainer : null,
           { backgroundColor: resolvedBackgroundColor, borderLeftColor: resolvedAccentColor },
           style,
           animatedStyle,
@@ -230,6 +231,9 @@ const styles = StyleSheet.create({
     borderColor: theme.colors.borderSubtle,
     paddingRight: theme.spacing.sm,
     ...theme.shadows.lg,
+  },
+  successContainer: {
+    borderLeftWidth: 0,
   },
   iconWrap: {
     width: 38,

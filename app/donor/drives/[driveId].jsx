@@ -279,16 +279,17 @@ function EventMapPreview({ drive }) {
 function DetailIconRow({ icon, value, meta, onPress }) {
   const { resolvedTheme } = useAuth();
   const roles = useResponsiveThemeRoles(resolvedTheme);
+  const primaryTextColor = resolvedTheme?.primaryTextColor || roles.headingText;
   const content = (
     <View style={styles.detailIconRow}>
-      <View style={[styles.detailIcon, { backgroundColor: roles.iconPrimarySurface }]}>
-        <MaterialCommunityIcons name={icon} size={18} color={roles.primaryActionBackground} />
+      <View style={[styles.detailIcon, { backgroundColor: roles.pageBackground }]}>
+        <MaterialCommunityIcons name={icon} size={18} color={primaryTextColor} />
       </View>
       <View style={styles.detailIconCopy}>
-        <Text numberOfLines={1} style={[styles.detailIconValue, { color: roles.headingText }]}>{value}</Text>
-        {meta ? <Text numberOfLines={1} style={[styles.detailIconMeta, { color: roles.bodyText }]}>{meta}</Text> : null}
+        <Text style={[styles.detailIconValue, { color: primaryTextColor }]}>{value}</Text>
+        {meta ? <Text style={[styles.detailIconMeta, { color: primaryTextColor }]}>{meta}</Text> : null}
       </View>
-      {onPress ? <MaterialCommunityIcons name="chevron-right" size={22} color={roles.metaText} /> : null}
+      {onPress ? <MaterialCommunityIcons name="chevron-right" size={22} color={primaryTextColor} /> : null}
     </View>
   );
 
@@ -311,25 +312,25 @@ function HairEligibilitySection({
 }) {
   const { resolvedTheme } = useAuth();
   const roles = useResponsiveThemeRoles(resolvedTheme);
+  const primaryTextColor = resolvedTheme?.primaryTextColor || roles.headingText;
 
   if (isRegisteredForDrive || ended) return null;
   if (hasHairScanLog && isAiEligible) return null;
 
   const hasScannedButNotEligible = hasHairScanLog && !isAiEligible;
   const icon = hasScannedButNotEligible ? 'alert-circle-outline' : 'hair-dryer-outline';
-  const iconColor = hasScannedButNotEligible ? '#c87a12' : roles.primaryActionBackground;
   const surfaceColor = roles.defaultCardBackground;
-  const borderColor = hasScannedButNotEligible ? '#f0d49a' : roles.defaultCardBorder;
+  const borderColor = roles.defaultCardBorder;
   const title = hasScannedButNotEligible ? 'Not eligible yet' : 'Hair scan required';
 
   return (
     <View style={[styles.eligibilityBanner, { backgroundColor: surfaceColor, borderColor }]}>
-      <View style={[styles.eligibilityIconWrap, { backgroundColor: hasScannedButNotEligible ? '#fdebc8' : roles.defaultCardBackground }]}>
-        <MaterialCommunityIcons name={icon} size={18} color={iconColor} />
+      <View style={[styles.eligibilityIconWrap, { backgroundColor: roles.pageBackground }]}>
+        <MaterialCommunityIcons name={icon} size={18} color={primaryTextColor} />
       </View>
       <View style={styles.eligibilityContent}>
-        <Text style={[styles.eligibilityTitle, { color: roles.headingText }]}>{title}</Text>
-        <Text numberOfLines={2} style={[styles.eligibilityMessage, { color: roles.bodyText }]}>{hairEligibilityMessage}</Text>
+        <Text style={[styles.eligibilityTitle, { color: primaryTextColor }]}>{title}</Text>
+        <Text style={[styles.eligibilityMessage, { color: primaryTextColor }]}>{hairEligibilityMessage}</Text>
         {!hasHairScanLog && onScanPress ? (
           <Pressable
             onPress={onScanPress}
@@ -337,7 +338,7 @@ function HairEligibilitySection({
             accessibilityRole="button"
             accessibilityLabel="Go to Hair Scan"
           >
-            <Text style={[styles.eligibilityScanLinkText, { color: roles.primaryActionBackground }]}>
+            <Text style={[styles.eligibilityScanLinkText, { color: primaryTextColor }]}>
               Scan
             </Text>
           </Pressable>
@@ -350,6 +351,7 @@ function HairEligibilitySection({
 function EventRsvpQrCard({ drive }) {
   const { resolvedTheme } = useAuth();
   const roles = useResponsiveThemeRoles(resolvedTheme);
+  const primaryTextColor = resolvedTheme?.primaryTextColor || roles.headingText;
   const registration = drive?.registration || null;
   const hasRsvp = Boolean(registration?.registration_id);
   const isVoluntary = String(registration?.attendee_type || '').trim().toLowerCase() === 'voluntary';
@@ -361,13 +363,13 @@ function EventRsvpQrCard({ drive }) {
     <View style={[styles.rsvpQrCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
       <View style={styles.rsvpQrHeader}>
         <View style={styles.rsvpQrHeaderCopy}>
-          <Text style={[styles.rsvpQrTitle, { color: roles.headingText }]}>RSVP QR</Text>
-          <Text style={[styles.rsvpQrSubtitle, { color: roles.bodyText }]}>
+          <Text style={[styles.rsvpQrTitle, { color: primaryTextColor }]}>RSVP QR</Text>
+          <Text style={[styles.rsvpQrSubtitle, { color: primaryTextColor }]}>
             Staff scans this at the event site to mark you Present.
           </Text>
         </View>
         <View style={[styles.rsvpTypeBadge, { backgroundColor: roles.supportCardBackground, borderColor: roles.defaultCardBorder }]}>
-          <Text style={[styles.rsvpTypeText, { color: roles.headingText }]}>
+          <Text style={[styles.rsvpTypeText, { color: primaryTextColor }]}>
             {isVoluntary ? 'Voluntary' : 'Donor'}
           </Text>
         </View>
@@ -403,6 +405,7 @@ function EventDetailsPanel({
 }) {
   const { resolvedTheme } = useAuth();
   const roles = useResponsiveThemeRoles(resolvedTheme);
+  const primaryTextColor = resolvedTheme?.primaryTextColor || roles.headingText;
   const directionsUrl = buildDirectionsUrl(drive);
   const shownCount = Number(shownRegistrationCount) || 0;
   const overviewText = drive?.event_overview
@@ -422,10 +425,10 @@ function EventDetailsPanel({
   return (
     <View style={styles.detailsBlock}>
       <View style={styles.detailsCopy}>
-        <Text numberOfLines={2} style={[styles.eventTitle, { color: roles.headingText }]}>
+        <Text style={[styles.eventTitle, { color: primaryTextColor }]}>
           {drive?.event_title || 'Donation drive'}
         </Text>
-        <Text numberOfLines={3} style={[styles.eventDescription, { color: roles.bodyText }]}>
+        <Text style={[styles.eventDescription, { color: primaryTextColor }]}>
           {overviewText}
         </Text>
       </View>
@@ -458,7 +461,7 @@ function EventDetailsPanel({
         />
       ) : !isRegisteredForDrive && !ended ? (
         <View style={styles.participationOptions}>
-          <Text style={[styles.participationTitle, { color: roles.headingText }]}>Choose how you will join</Text>
+          <Text style={[styles.participationTitle, { color: primaryTextColor }]}>Choose how you will join</Text>
           <AppButton
             title="Donate and participate"
             onPress={onRsvpPress}
@@ -476,9 +479,10 @@ function EventDetailsPanel({
             disabled={!canAttendOnly || isSubmittingRsvp}
             size="sm"
             style={styles.participationButton}
-            leading={<MaterialCommunityIcons name="account-eye-outline" size={16} color={roles.headingText} />}
+            textColorOverride={primaryTextColor}
+            leading={<MaterialCommunityIcons name="account-eye-outline" size={16} color={primaryTextColor} />}
           />
-          <Text style={[styles.participationHelper, { color: roles.bodyText }]}>
+          <Text style={[styles.participationHelper, { color: primaryTextColor }]}>
             Attend-only RSVPs are saved as voluntary attendees for visitors who want to observe or inquire without donating hair.
           </Text>
         </View>
@@ -498,16 +502,16 @@ function EventDetailsPanel({
       <EventMapPreview drive={drive} />
 
       <View style={styles.attendingSection}>
-        <Text style={[styles.sectionHeading, { color: roles.headingText }]}>Who&apos;s Attending</Text>
+        <Text style={[styles.sectionHeading, { color: primaryTextColor }]}>Who&apos;s Attending</Text>
         <View style={[styles.attendingCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
-          <View style={[styles.attendingIcon, { backgroundColor: roles.iconPrimarySurface }]}>
-            <MaterialCommunityIcons name="account-group-outline" size={18} color={roles.primaryActionBackground} />
+          <View style={[styles.attendingIcon, { backgroundColor: roles.pageBackground }]}>
+            <MaterialCommunityIcons name="account-group-outline" size={18} color={primaryTextColor} />
           </View>
           <View style={styles.attendingCopy}>
-            <Text style={[styles.attendingCount, { color: roles.headingText }]}>
+            <Text style={[styles.attendingCount, { color: primaryTextColor }]}>
               {shownCount > 0 ? `${shownCount} attending` : 'No registered donors yet'}
             </Text>
-            <Text style={[styles.attendingMeta, { color: roles.bodyText }]}>
+            <Text style={[styles.attendingMeta, { color: primaryTextColor }]}>
               {attendanceMeta}
             </Text>
           </View>
@@ -1058,14 +1062,15 @@ const styles = StyleSheet.create({
     fontWeight: theme.typography.weights.bold,
   },
   detailIconList: {
-    gap: theme.spacing.xs,
+    gap: theme.spacing.sm,
+    marginTop: theme.spacing.xs,
+    marginBottom: theme.spacing.md,
   },
   detailIconRow: {
-    minHeight: 48,
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: theme.spacing.sm,
-    paddingVertical: 2,
+    paddingVertical: theme.spacing.xs,
   },
   detailIcon: {
     width: 34,
@@ -1078,6 +1083,7 @@ const styles = StyleSheet.create({
   detailIconCopy: {
     flex: 1,
     minWidth: 0,
+    gap: 3,
   },
   detailIconValue: {
     fontFamily: theme.typography.fontFamily,
@@ -1152,11 +1158,11 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   detailsBlock: {
-    paddingBottom: theme.spacing.xs,
+    paddingBottom: theme.spacing.lg,
   },
   detailsCopy: {
-    gap: theme.spacing.xs,
-    marginBottom: theme.spacing.sm,
+    gap: theme.spacing.sm,
+    marginBottom: theme.spacing.md,
   },
   eventTitle: {
     fontFamily: theme.typography.fontFamilyDisplay,
@@ -1167,7 +1173,7 @@ const styles = StyleSheet.create({
   eventDescription: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.bodySm,
-    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+    lineHeight: theme.typography.compact.bodySm * 1.65,
   },
   rsvpButton: {
     marginTop: theme.spacing.xs,
@@ -1220,9 +1226,9 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.backgroundPrimary,
   },
   participationOptions: {
-    marginTop: theme.spacing.xs,
-    marginBottom: theme.spacing.md,
-    gap: theme.spacing.sm,
+    marginTop: theme.spacing.sm,
+    marginBottom: theme.spacing.lg,
+    gap: theme.spacing.md,
   },
   participationTitle: {
     fontFamily: theme.typography.fontFamily,
@@ -1235,7 +1241,7 @@ const styles = StyleSheet.create({
   participationHelper: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.caption,
-    lineHeight: theme.typography.compact.caption * 1.4,
+    lineHeight: theme.typography.compact.caption * 1.55,
   },
   attendingSection: {
     marginTop: theme.spacing.md,
@@ -1385,11 +1391,11 @@ const styles = StyleSheet.create({
   eligibilityBanner: {
     marginBottom: theme.spacing.lg,
     borderWidth: 1,
-    borderRadius: 14,
+    borderRadius: 8,
     paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.sm,
+    paddingVertical: theme.spacing.md,
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: theme.spacing.sm,
   },
   eligibilityIconWrap: {
@@ -1403,6 +1409,7 @@ const styles = StyleSheet.create({
   eligibilityContent: {
     flex: 1,
     minWidth: 0,
+    gap: 4,
   },
   eligibilityTitle: {
     fontFamily: theme.typography.fontFamily,
@@ -1412,8 +1419,7 @@ const styles = StyleSheet.create({
   eligibilityMessage: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.caption,
-    lineHeight: theme.typography.compact.caption * 1.35,
-    marginTop: 2,
+    lineHeight: theme.typography.compact.caption * 1.55,
   },
   eligibilityScanLink: {
     alignSelf: 'flex-start',
@@ -1425,4 +1431,3 @@ const styles = StyleSheet.create({
     fontWeight: theme.typography.weights.semibold,
   },
 });
-

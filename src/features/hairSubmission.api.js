@@ -16,6 +16,7 @@ const donationCertificatesTable = 'Donation_Certificates';
 const wigsTable = 'Wigs';
 const wigAllocationsTable = 'Wig_Allocations';
 const hairSubmissionBundlesTable = 'Hair_Submission_Bundles';
+const salonDonationAppointmentsTable = 'Salon_Donation_Appointments';
 const CM_PER_INCH = 2.54;
 
 const hairSubmissionSelect = `
@@ -116,20 +117,38 @@ const hairSubmissionLogisticsSelect = `
   submission_logistics_id:Submission_Logistics_ID,
   submission_id:Submission_ID,
   logistics_type:Logistics_Type,
-  courier_name:Courier_Name,
-  tracking_number:Tracking_Number,
   shipment_status:Shipment_Status,
-  pickup_schedule_date:Pickup_Schedule_Date,
-  pickup_scheduled_at:Pickup_Scheduled_At,
-  pickup_approved_at:Pickup_Approved_At,
-  queue_number:Queue_Number,
-  dropoff_window:Dropoff_Window,
-  dropoff_status:Dropoff_Status,
   received_by:Received_By,
   received_at:Received_At,
   notes:Notes,
   created_at:Created_At
 `;
+
+const LOGISTICS_NOTES_PREFIX = '__DONIVRA_LOGISTICS__:';
+
+const parseLogisticsNotes = (value = '') => {
+  const raw = String(value || '');
+  if (!raw.startsWith(LOGISTICS_NOTES_PREFIX)) return { notes: raw };
+
+  try {
+    const parsed = JSON.parse(raw.slice(LOGISTICS_NOTES_PREFIX.length));
+    return parsed && typeof parsed === 'object' ? parsed : { notes: '' };
+  } catch {
+    return { notes: raw };
+  }
+};
+
+const buildLogisticsNotes = (payload = {}) => `${LOGISTICS_NOTES_PREFIX}${JSON.stringify({
+  notes: payload?.notes || '',
+  courier_name: payload?.courier_name || '',
+  tracking_number: payload?.tracking_number || '',
+  pickup_schedule_date: payload?.pickup_schedule_date || null,
+  pickup_scheduled_at: payload?.pickup_scheduled_at || null,
+  pickup_approved_at: payload?.pickup_approved_at || null,
+  queue_number: payload?.queue_number ?? null,
+  dropoff_window: payload?.dropoff_window || '',
+  dropoff_status: payload?.dropoff_status || '',
+})}`;
 
 const trackingEntrySelect = `
   tracking_id:Tracking_ID,
@@ -511,25 +530,28 @@ const normalizeHairSubmissionImage = (row) => ({
   uploaded_at: row?.uploaded_at || null,
 });
 
-const normalizeHairSubmissionLogistics = (row) => ({
+const normalizeHairSubmissionLogistics = (row) => {
+  const metadata = parseLogisticsNotes(row?.notes);
+  return ({
   id: row?.submission_logistics_id || null,
   submission_logistics_id: row?.submission_logistics_id || null,
   submission_id: row?.submission_id || null,
   logistics_type: row?.logistics_type || '',
-  courier_name: row?.courier_name || '',
-  tracking_number: row?.tracking_number || '',
+  courier_name: metadata?.courier_name || '',
+  tracking_number: metadata?.tracking_number || '',
   shipment_status: row?.shipment_status || '',
-  pickup_scheduled_at: row?.pickup_scheduled_at || null,
-  pickup_schedule_date: row?.pickup_schedule_date || null,
-  pickup_approved_at: row?.pickup_approved_at || null,
-  queue_number: row?.queue_number ?? null,
-  dropoff_window: row?.dropoff_window || '',
-  dropoff_status: row?.dropoff_status || '',
+  pickup_scheduled_at: metadata?.pickup_scheduled_at || null,
+  pickup_schedule_date: metadata?.pickup_schedule_date || null,
+  pickup_approved_at: metadata?.pickup_approved_at || null,
+  queue_number: metadata?.queue_number ?? null,
+  dropoff_window: metadata?.dropoff_window || '',
+  dropoff_status: metadata?.dropoff_status || '',
   received_by: row?.received_by || null,
   received_at: row?.received_at || null,
-  notes: row?.notes || '',
+  notes: metadata?.notes || '',
   created_at: row?.created_at || null,
-});
+  });
+};
 
 const normalizeTrackingEntry = (row) => ({
   id: row?.tracking_id || null,
@@ -1705,18 +1727,10 @@ export const createHairSubmissionLogistics = async (payload) => {
     .insert([{
       Submission_ID: payload?.submission_id || null,
       Logistics_Type: payload?.logistics_type || null,
-      Courier_Name: payload?.courier_name || null,
-      Tracking_Number: payload?.tracking_number || null,
       Shipment_Status: payload?.shipment_status || null,
-      Pickup_Schedule_Date: payload?.pickup_schedule_date || null,
-      Pickup_Scheduled_At: payload?.pickup_scheduled_at || null,
-      Pickup_Approved_At: payload?.pickup_approved_at || null,
-      Queue_Number: payload?.queue_number ?? null,
-      Dropoff_Window: payload?.dropoff_window || null,
-      Dropoff_Status: payload?.dropoff_status || null,
       Received_By: payload?.received_by || null,
       Received_At: payload?.received_at || null,
-      Notes: payload?.notes || null,
+      Notes: buildLogisticsNotes(payload),
     }])
     .select(hairSubmissionLogisticsSelect)
     .single();
@@ -1725,6 +1739,98 @@ export const createHairSubmissionLogistics = async (payload) => {
     data: result.data ? normalizeHairSubmissionLogistics(result.data) : null,
     error: result.error,
   };
+};
+
+export const upsertSalonDonationAppointment = async ({
+  appointmentId = null,
+  userId,
+  submissionId,
+  startAt,
+  endAt,
+  contactName,
+  contactEmail = null,
+  contactNumber,
+  hairDetails = {},
+  screeningAnswers = {},
+  donorNotes = null,
+}) => {
+  if (!userId || !submissionId || !startAt || !endAt || !contactName || !contactNumber) {
+    return { data: null, error: new Error('Complete the appointment details before scheduling your drop-off.') };
+  }
+
+  let resolvedAppointmentId = appointmentId;
+  if (!resolvedAppointmentId) {
+    const existingResult = await supabase
+      .from(salonDonationAppointmentsTable)
+      .select('appointment_id:Appointment_ID')
+      .eq('Hair_Submission_ID', submissionId)
+      .maybeSingle();
+    if (existingResult.error) {
+      return { data: null, error: existingResult.error };
+    }
+    resolvedAppointmentId = existingResult.data?.appointment_id || null;
+  }
+
+  const row = {
+    User_ID: userId,
+    Hair_Submission_ID: submissionId,
+    Appointment_Start_At: startAt,
+    Appointment_End_At: endAt,
+    Status: resolvedAppointmentId ? 'Rescheduled' : 'Confirmed',
+    Contact_Name: contactName,
+    Contact_Email: contactEmail || null,
+    Contact_Number: contactNumber,
+    Hair_Details: hairDetails || {},
+    Screening_Answers: screeningAnswers || {},
+    Donor_Notes: donorNotes || null,
+    Booking_Source: 'Mobile',
+    Updated_At: new Date().toISOString(),
+  };
+
+  const query = resolvedAppointmentId
+    ? supabase
+        .from(salonDonationAppointmentsTable)
+        .update(row)
+        .eq('Appointment_ID', resolvedAppointmentId)
+    : supabase
+        .from(salonDonationAppointmentsTable)
+        .insert([row]);
+  const result = await query
+    .select(`
+      appointment_id:Appointment_ID,
+      user_id:User_ID,
+      submission_id:Hair_Submission_ID,
+      appointment_start_at:Appointment_Start_At,
+      appointment_end_at:Appointment_End_At,
+      status:Status
+    `)
+    .single();
+
+  return { data: result.data || null, error: result.error };
+};
+
+export const fetchSalonDonationAppointmentBySubmissionId = async (submissionId) => {
+  if (!submissionId) return { data: null, error: null };
+
+  const result = await supabase
+    .from(salonDonationAppointmentsTable)
+    .select(`
+      appointment_id:Appointment_ID,
+      user_id:User_ID,
+      submission_id:Hair_Submission_ID,
+      appointment_start_at:Appointment_Start_At,
+      appointment_end_at:Appointment_End_At,
+      status:Status,
+      checked_in_at:Checked_In_At,
+      completed_at:Completed_At,
+      cancelled_at:Cancelled_At,
+      created_at:Created_At,
+      updated_at:Updated_At
+    `)
+    .eq('Hair_Submission_ID', submissionId)
+    .maybeSingle();
+
+  return { data: result.data || null, error: result.error };
 };
 
 export const createHairSubmissionLogisticsItems = async (rows = []) => {
@@ -1814,18 +1920,10 @@ export const updateHairSubmissionLogisticsById = async (submissionLogisticsId, p
     .from(hairSubmissionLogisticsTable)
     .update({
       Logistics_Type: payload?.logistics_type || null,
-      Courier_Name: payload?.courier_name || null,
-      Tracking_Number: payload?.tracking_number || null,
       Shipment_Status: payload?.shipment_status || null,
-      Pickup_Schedule_Date: payload?.pickup_schedule_date || null,
-      Pickup_Scheduled_At: payload?.pickup_scheduled_at || null,
-      Pickup_Approved_At: payload?.pickup_approved_at || null,
-      Queue_Number: payload?.queue_number ?? null,
-      Dropoff_Window: payload?.dropoff_window || null,
-      Dropoff_Status: payload?.dropoff_status || null,
       Received_By: payload?.received_by || null,
       Received_At: payload?.received_at || null,
-      Notes: payload?.notes || null,
+      Notes: buildLogisticsNotes(payload),
     })
     .eq('Submission_Logistics_ID', submissionLogisticsId)
     .select(hairSubmissionLogisticsSelect)

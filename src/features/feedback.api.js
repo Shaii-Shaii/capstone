@@ -21,19 +21,28 @@ const normalizeFeedbackType = (value = '') => {
     : 'issue';
 };
 
-export const submitDonorFeedback = async ({
+export const submitFeedback = async ({
   databaseUserId,
   feedbackType,
   message,
-  sourceRoute = '/donor/feedback',
+  appRole = 'donor',
+  sourceRoute,
 }) => {
   const normalizedUserId = Number(databaseUserId);
   const normalizedMessage = String(message || '').replace(/\s+/g, ' ').trim();
+  const normalizedRole = String(appRole || '').trim().toLowerCase();
 
   if (!Number.isFinite(normalizedUserId) || normalizedUserId <= 0) {
     return {
       data: null,
-      error: new Error('Your donor account is required before submitting feedback.'),
+      error: new Error('Your account is required before submitting feedback.'),
+    };
+  }
+
+  if (!['donor', 'patient'].includes(normalizedRole)) {
+    return {
+      data: null,
+      error: new Error('This account role cannot submit feedback.'),
     };
   }
 
@@ -51,8 +60,8 @@ export const submitDonorFeedback = async ({
       User_ID: normalizedUserId,
       Feedback_Type: normalizeFeedbackType(feedbackType),
       Message: normalizedMessage,
-      Source_Route: sourceRoute,
-      App_Role: 'donor',
+      Source_Route: sourceRoute || `/${normalizedRole}/feedback`,
+      App_Role: normalizedRole,
       Status: 'New',
       Created_At: now,
       Updated_At: now,
@@ -60,3 +69,6 @@ export const submitDonorFeedback = async ({
     .select(donorFeedbackSelect)
     .single();
 };
+
+export const submitDonorFeedback = (options) =>
+  submitFeedback({ ...options, appRole: 'donor' });

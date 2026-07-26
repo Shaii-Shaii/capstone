@@ -2,6 +2,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { logAppError } from '../utils/appErrors';
 import {
   createDonationDriveRegistration,
@@ -29,11 +30,13 @@ import {
     fetchDonationTimelineProductionByBundleId,
     fetchLatestDonationCertificateByUserId,
     fetchLatestDonationRequirement,
+    fetchSalonDonationAppointmentBySubmissionId,
     getHairSubmissionImageSignedUrl,
     updateHairSubmissionDetailById,
     updateHairSubmissionById,
     updateHairSubmissionLogisticsById,
     updateHairSubmissionLogisticsItemsByDetailIds,
+    upsertSalonDonationAppointment,
     uploadHairSubmissionImage,
 } from './hairSubmission.api';
 import { hairSubmissionStorageBucket } from './hairSubmission.constants';
@@ -41,7 +44,11 @@ import { notificationTypes } from './notification.constants';
 import { buildImmediateNotificationEvents, recordNotifications } from './notification.service';
 import { canSubmitHairDonation, mapDonationPermissionError } from './donorCompliance.service';
 
-const ELIGIBLE_DECISION = 'eligible for hair donation';
+const ELIGIBLE_DECISIONS = new Set([
+  'eligible',
+  'eligible for donation',
+  'eligible for hair donation',
+]);
 const MANUAL_DONATION_SOURCE = 'manual_donor_details';
 const INDEPENDENT_DONATION_SOURCE = 'Independent';
 const DRIVE_DONATION_SOURCE = 'drive_donation';
@@ -110,7 +117,7 @@ const isTerminalDonationStatus = (status = '') => (
 );
 
 export const isEligibleHairAnalysisDecision = (decision = '') => (
-  normalizeDecision(decision) === ELIGIBLE_DECISION
+  ELIGIBLE_DECISIONS.has(normalizeDecision(decision))
 );
 
 const flattenScreeningEntries = (submissions = []) => (
@@ -369,7 +376,7 @@ const evaluateManualDonationEligibility = ({ manualDetails = {}, donationRequire
   };
 };
 
-const evaluateAiDonationEligibility = ({ screening = null, detail = null, donationRequirement = null }) => {
+export const evaluateAiDonationEligibility = ({ screening = null, detail = null, donationRequirement = null }) => {
   const minimumLengthCm = resolveMinimumLengthCm(donationRequirement);
   const normalizedLengthCm = toRoundedNumber(screening?.estimated_length, 1);
   const reasons = [];
@@ -724,7 +731,8 @@ const isManualDonationSubmission = (submission = null) => {
 };
 
 const isIndependentDonationSource = (source = '') => (
-  ['independent', 'independent_donation'].includes(String(source || '').trim().toLowerCase())
+  ['independent', 'independent_donation', MANUAL_DONATION_SOURCE]
+    .includes(String(source || '').trim().toLowerCase())
 );
 
 const upsertSubmissionLogistics = async ({
@@ -780,6 +788,9 @@ export const scheduleWalkInDropoff = async ({
   databaseUserId,
   scheduleDate = '',
   timeWindow = '',
+  contactName = '',
+  contactEmail = '',
+  contactNumber = '',
 }) => {
   if (!submission?.submission_id) {
     return { success: false, error: 'Create a logistic donation before scheduling a walk-in drop-off.' };
@@ -794,13 +805,49 @@ export const scheduleWalkInDropoff = async ({
     return { success: false, error: 'Choose a drop-off time window.' };
   }
 
-  const scheduledAt = `${cleanDate}T00:00:00+08:00`;
+  const windowMatch = cleanWindow.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)\s*-\s*(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+  if (!windowMatch) {
+    return { success: false, error: 'Choose a valid drop-off time window.' };
+  }
+  const to24Hour = (hour, meridiem) => {
+    const value = Number(hour) % 12;
+    return value + (String(meridiem).toUpperCase() === 'PM' ? 12 : 0);
+  };
+  const startHour = to24Hour(windowMatch[1], windowMatch[3]);
+  const endHour = to24Hour(windowMatch[4], windowMatch[6]);
+  const pad = (value) => String(value).padStart(2, '0');
+  const appointmentStartAt = `${cleanDate}T${pad(startHour)}:${windowMatch[2]}:00`;
+  const appointmentEndAt = `${cleanDate}T${pad(endHour)}:${windowMatch[5]}:00`;
+
+  const appointmentResult = await upsertSalonDonationAppointment({
+    userId: databaseUserId,
+    submissionId: submission.submission_id,
+    startAt: appointmentStartAt,
+    endAt: appointmentEndAt,
+    contactName: String(contactName || '').trim(),
+    contactEmail: String(contactEmail || '').trim() || null,
+    contactNumber: String(contactNumber || '').trim(),
+    hairDetails: {
+      submission_id: submission.submission_id,
+      donation_source: submission.donation_source || 'Independent',
+    },
+    screeningAnswers: {},
+    donorNotes: `Walk-in hair donation scheduled from the mobile Donations module.`,
+  });
+
+  if (appointmentResult.error || !appointmentResult.data?.appointment_id) {
+    return {
+      success: false,
+      error: appointmentResult.error?.message || 'Unable to create the salon drop-off appointment.',
+    };
+  }
+
   const logisticsResult = await upsertSubmissionLogistics({
     submissionId: submission.submission_id,
     logisticsType: 'onsite_delivery',
     shipmentStatus: 'Walk-in scheduled',
     pickupScheduleDate: cleanDate,
-    pickupScheduledAt: scheduledAt,
+    pickupScheduledAt: appointmentStartAt,
     queueNumber: 0,
     dropoffWindow: cleanWindow,
     dropoffStatus: 'Scheduled',
@@ -839,7 +886,56 @@ export const scheduleWalkInDropoff = async ({
 
   return {
     success: true,
+    appointment: appointmentResult.data,
     logistics: logisticsResult.data,
+  };
+};
+
+export const markDonationShippedByDonor = async ({
+  submission,
+  databaseUserId = null,
+}) => {
+  if (!submission?.submission_id) {
+    return { success: false, error: 'Donation record was not found.' };
+  }
+  if (Number(submission?.donation_drive_id)) {
+    return { success: false, error: 'Event donations do not use independent shipping.' };
+  }
+
+  const details = (submission?.submission_details || [])
+    .filter((detail) => detail?.submission_detail_id);
+  if (!details.length) {
+    return { success: false, error: 'No hair item is linked to this donation.' };
+  }
+
+  for (const detail of details) {
+    const statusResult = await updateHairItemStatus(
+      detail.submission_detail_id,
+      'Shipped',
+      '',
+      databaseUserId
+    );
+    if (!statusResult.success) {
+      return { success: false, error: statusResult.error || 'Unable to update the shipment status.' };
+    }
+  }
+
+  const shippedAt = new Date().toISOString();
+  const logisticsResult = await upsertSubmissionLogistics({
+    submissionId: submission.submission_id,
+    logisticsType: 'independent_shipping',
+    shipmentStatus: 'Shipped',
+    notes: 'The donor confirmed that the parcel was sent with the printed waybill QR attached.',
+  });
+
+  if (logisticsResult.error) {
+    return { success: false, error: logisticsResult.error.message || 'Unable to save the shipment update.' };
+  }
+
+  return {
+    success: true,
+    shippedAt,
+    logistics: logisticsResult.data || null,
   };
 };
 
@@ -1188,10 +1284,7 @@ const hasEventDonationProgress = ({ submission = null, registration = null } = {
 const hasIndependentDonationProgress = (submission = null) => (
   Boolean(
     !Number(submission?.donation_drive_id)
-    && (
-      hasSubmissionFlowProgress(submission)
-      || isIndependentDonationSource(submission?.donation_source)
-    )
+    && isIndependentDonationSource(submission?.donation_source)
   )
 );
 
@@ -1474,13 +1567,19 @@ const resolveTimelineStages = ({
   flowType = '',
   registration = null,
   production = null,
+  appointment = null,
 }) => {
   const isEventFlow = flowType === 'drive' || Boolean(submission?.donation_drive_id);
+  const isWalkInFlow = !isEventFlow && (
+    Boolean(appointment?.appointment_id)
+    || matchesAnyToken(logistics?.logistics_type, ['onsite', 'walk-in', 'walk in', 'dropoff', 'drop-off'])
+  );
   const donationSubmittedEvidenceAt = submission?.submitted_at || submission?.updated_at || submission?.created_at || null;
   const hasCutStatus = isCutAndShipCompletedStatus(submission?.status);
   const cutAndShipApprovedAt = submission?.cut_at
     || (hasCutStatus ? submission?.updated_at || submission?.created_at || null : null);
-  const waybillEvidenceAt = submission?.qr_generated_at || submission?.submitted_at || submission?.updated_at || submission?.created_at || null;
+  const waybillEvidenceAt = submission?.qr_generated_at
+    || (submission?.donation_reference ? submission?.updated_at || submission?.created_at || null : null);
   const readyEntry = findTimelineMatch(trackingEntries, (entry) => (
     matchesAnyToken(entry?.status, ['ready for shipment', 'parcel logged', 'parcel prepared'])
     || matchesAnyToken(entry?.title, ['ready for shipment', 'parcel logged', 'parcel prepared'])
@@ -1490,7 +1589,6 @@ const resolveTimelineStages = ({
   const transitEntry = findTimelineMatch(trackingEntries, (entry) => (
     matchesAnyToken(entry?.status, ['transit', 'shipped', 'shipping', 'cut & shipped', 'cut and shipped', 'cut shipped'])
     || matchesAnyToken(entry?.title, ['transit', 'shipped', 'shipping', 'cut & shipped', 'cut and shipped', 'cut shipped'])
-    || matchesAnyToken(entry?.description, ['transit', 'shipped', 'shipping', 'cut & shipped', 'cut and shipped', 'cut shipped'])
   ));
   const transitEvidenceAt = transitEntry?.updated_at
     || (matchesAnyToken(logistics?.shipment_status, ['transit', 'shipped', 'received', 'quality']) ? logistics?.created_at || null : null);
@@ -1505,10 +1603,7 @@ const resolveTimelineStages = ({
   const detailStatus = latestDetail?.status || '';
   const screeningDecision = latestScreening?.decision || '';
   const hasQualityDbStatus = Boolean(detailStatus || screeningDecision);
-  const qualityEvidenceAt = qualityEntry?.updated_at
-    || latestDetail?.updated_at
-    || latestScreening?.created_at
-    || null;
+  const qualityEvidenceAt = qualityEntry?.updated_at || null;
   const bundlingEntry = findTimelineMatch(trackingEntries, (entry) => (
     matchesAnyToken(entry?.status, ['bundle', 'bundling', 'bundled', 'in production', 'wig production'])
     || matchesAnyToken(entry?.title, ['bundle', 'bundling', 'bundled', 'in production', 'wig production'])
@@ -1556,8 +1651,9 @@ const resolveTimelineStages = ({
     || matchesAnyToken(entry?.description, ['received by patient', 'released to patient', 'delivered to patient'])
   ));
   const receivedByPatientEvidenceAt = receivedByPatientEntry?.updated_at
-    || releasedDbAt
-    || (matchesAnyToken(allocationStatus, ['released', 'received', 'completed']) ? allocatedDbAt : null);
+    || (matchesAnyToken(allocationStatus, ['received', 'completed'])
+      ? releasedDbAt || allocatedDbAt
+      : null);
 
   const eventStageEntries = isEventFlow ? [
     {
@@ -1570,6 +1666,15 @@ const resolveTimelineStages = ({
       parcelImages,
     },
     {
+      key: 'qa_assessment',
+      label: 'QA Assessment',
+      statusLabel: qualityEntry?.status || '',
+      savedNote: qualityEntry?.description || 'The donated hair is reviewed before wig production.',
+      evidenceAt: qualityEvidenceAt,
+      entry: qualityEntry,
+      parcelImages,
+    },
+    {
       key: 'wig_production',
       label: 'Wig Production',
       statusLabel: wigProductionEntry?.status || wigStatus || bundleStatus || '',
@@ -1579,26 +1684,95 @@ const resolveTimelineStages = ({
       parcelImages,
     },
     {
-      key: 'wig_distribution_hospitals',
-      label: 'Wig Distribution for Hospital',
-      statusLabel: wigCompletedEntry?.status || (wigCompletedEvidenceAt ? 'Distributed' : ''),
-      savedNote: wigCompletedEntry?.description || 'The completed wig is prepared for hospital distribution.',
-      evidenceAt: wigCompletedEvidenceAt || assignedToPatientEvidenceAt,
-      entry: wigCompletedEntry || production?.wig || production?.allocation,
+      key: 'assigned_to_patient',
+      label: 'Assigned to Patient',
+      statusLabel: assignedToPatientEntry?.status || '',
+      savedNote: assignedToPatientEntry?.description || 'The completed wig is assigned to a patient.',
+      evidenceAt: assignedToPatientEvidenceAt,
+      entry: assignedToPatientEntry || production?.allocation,
       parcelImages,
     },
     {
-      key: 'distribution_to_patients',
-      label: 'Distribution to Patients',
+      key: 'received_by_patient',
+      label: 'Received by the Patient',
       statusLabel: receivedByPatientEntry?.status || allocationStatus || '',
-      savedNote: receivedByPatientEntry?.description || production?.allocation?.notes || 'The wig is distributed to patients.',
+      savedNote: receivedByPatientEntry?.description || 'The patient confirms receipt of the wig.',
       evidenceAt: receivedByPatientEvidenceAt,
       entry: receivedByPatientEntry || production?.allocation,
       parcelImages,
     },
   ] : null;
 
-  const baseStages = eventStageEntries || [
+  const walkInStageEntries = isWalkInFlow ? [
+    {
+      key: 'donation_submitted',
+      label: 'Donation Submitted',
+      statusLabel: submission?.status || '',
+      savedNote: 'Your walk-in donation record has been submitted.',
+      evidenceAt: donationSubmittedEvidenceAt,
+      entry: submission,
+    },
+    {
+      key: 'waybill_ready',
+      label: 'Waybill QR Ready',
+      statusLabel: submission?.qr_status || readyEntry?.status || '',
+      savedNote: readyEntry?.description || 'Open the QR and bring it with your hair donation.',
+      evidenceAt: waybillEvidenceAt || readyEvidenceAt,
+      entry: readyEntry || submission,
+    },
+    {
+      key: 'dropoff_scheduled',
+      label: 'Drop Off Wig',
+      statusLabel: appointment?.checked_in_at ? 'Dropped off' : (appointment?.status || logistics?.dropoff_status || 'Scheduled'),
+      savedNote: appointment?.appointment_start_at
+        ? `Scheduled arrival: ${formatDateTime(appointment.appointment_start_at)}`
+        : 'Bring your donation during your selected salon schedule.',
+      evidenceAt: appointment?.checked_in_at || null,
+      entry: appointment || logistics,
+    },
+    {
+      key: 'received_by_company',
+      label: 'Received by Hair for Hope',
+      statusLabel: appointment?.completed_at || logistics?.received_at ? 'Received' : '',
+      savedNote: 'The organization confirms receipt of your hair donation.',
+      evidenceAt: appointment?.completed_at || logistics?.received_at || null,
+      entry: appointment || logistics,
+    },
+    {
+      key: 'qa_assessment',
+      label: 'QA Assessment',
+      statusLabel: qualityEntry?.status || '',
+      savedNote: qualityEntry?.description || 'Your donated hair will be reviewed after drop-off.',
+      evidenceAt: qualityEntry?.updated_at || null,
+      entry: qualityEntry,
+    },
+    {
+      key: 'wig_production',
+      label: 'Wig Production',
+      statusLabel: wigProductionEntry?.status || wigStatus || bundleStatus || '',
+      savedNote: wigProductionEntry?.description || 'The approved hair bundle is being made into a wig.',
+      evidenceAt: wigProductionEvidenceAt,
+      entry: wigProductionEntry || production?.wig,
+    },
+    {
+      key: 'assigned_to_patient',
+      label: 'Assigned to Patient',
+      statusLabel: assignedToPatientEntry?.status || '',
+      savedNote: assignedToPatientEntry?.description || 'The completed wig has been assigned to a patient.',
+      evidenceAt: assignedToPatientEvidenceAt,
+      entry: assignedToPatientEntry || production?.allocation,
+    },
+    {
+      key: 'received_by_patient',
+      label: 'Received by the Patient',
+      statusLabel: receivedByPatientEntry?.status || allocationStatus || '',
+      savedNote: receivedByPatientEntry?.description || 'The patient has received the completed wig.',
+      evidenceAt: receivedByPatientEvidenceAt,
+      entry: receivedByPatientEntry || production?.allocation,
+    },
+  ] : null;
+
+  const baseStages = eventStageEntries || walkInStageEntries || [
     {
       key: 'donation_submitted',
       label: 'Donation submitted',
@@ -1636,19 +1810,10 @@ const resolveTimelineStages = ({
     {
       key: 'qa_assessment',
       label: 'QA Assessment',
-      statusLabel: qualityEntry?.status || detailStatus || screeningDecision || '',
+      statusLabel: qualityEntry?.status || '',
       savedNote: qualityEntry?.description || (hasQualityDbStatus ? 'QA status is loaded from the saved hair submission assessment.' : ''),
       evidenceAt: qualityEvidenceAt,
       entry: qualityEntry || latestDetail || latestScreening,
-      parcelImages,
-    },
-    {
-      key: 'bundling',
-      label: 'For bundling',
-      statusLabel: bundlingEntry?.status || bundleStatus || '',
-      savedNote: bundlingEntry?.description || production?.bundle?.notes || '',
-      evidenceAt: bundlingEvidenceAt,
-      entry: bundlingEntry || production?.bundle,
       parcelImages,
     },
     {
@@ -1658,15 +1823,6 @@ const resolveTimelineStages = ({
       savedNote: wigProductionEntry?.description || production?.wig?.wig_name || '',
       evidenceAt: wigProductionEvidenceAt,
       entry: wigProductionEntry || production?.wig,
-      parcelImages,
-    },
-    {
-      key: 'wig_completed',
-      label: 'Wig completed',
-      statusLabel: wigCompletedEntry?.status || (wigCompletedEvidenceAt ? wigStatus || bundleStatus || 'Completed' : ''),
-      savedNote: wigCompletedEntry?.description || '',
-      evidenceAt: wigCompletedEvidenceAt,
-      entry: wigCompletedEntry || production?.wig || production?.bundle,
       parcelImages,
     },
     {
@@ -1695,9 +1851,12 @@ const resolveTimelineStages = ({
   const latestReachedIndex = reachedStageIndexes.length
     ? reachedStageIndexes[reachedStageIndexes.length - 1]
     : 0;
-  const resolvedCurrentIndex = isEventFlow && submission?.submission_id && latestReachedIndex === 0
-    ? Math.min(1, baseStages.length - 1)
-    : latestReachedIndex;
+  const hasConfirmedDonorShipment = !isEventFlow && !isWalkInFlow && Boolean(transitEvidenceAt);
+  const resolvedCurrentIndex = hasConfirmedDonorShipment
+    ? Math.min(latestReachedIndex + 1, baseStages.length - 1)
+    : (isEventFlow && submission?.submission_id && latestReachedIndex === 0
+      ? Math.min(1, baseStages.length - 1)
+      : latestReachedIndex);
   const isDonationCompleted = Boolean(
     receivedByPatientEvidenceAt
     || (!isEventFlow && (assignedToPatientEvidenceAt || wigCompletedEvidenceAt || bundlingEvidenceAt))
@@ -2159,14 +2318,6 @@ export const saveDonationQrPngToDevice = async ({
   }
 
   try {
-    const permission = await MediaLibrary.requestPermissionsAsync();
-    if (!permission.granted) {
-      return {
-        success: false,
-        error: 'Allow photo library access so Donivra can save the QR image to this device.',
-      };
-    }
-
     if (!FileSystem.cacheDirectory) {
       return { success: false, error: 'Device storage cache is not available right now.' };
     }
@@ -2178,12 +2329,45 @@ export const saveDonationQrPngToDevice = async ({
       targetUri
     );
 
-    const asset = await MediaLibrary.createAssetAsync(downloadResult.uri);
-    return {
-      success: true,
-      uri: asset?.uri || downloadResult.uri,
-      asset,
+    const shareQrImage = async () => {
+      const canShare = await Sharing.isAvailableAsync();
+      if (!canShare) {
+        return {
+          success: false,
+          error: 'Saving is unavailable on this device. Try Print QR instead.',
+        };
+      }
+
+      await Sharing.shareAsync(downloadResult.uri, {
+        mimeType: 'image/png',
+        dialogTitle: 'Save or share waybill QR',
+        UTI: 'public.png',
+      });
+      return { success: true, uri: downloadResult.uri, shared: true };
     };
+
+    // Expo Go cannot provide full Media Library access on recent Android
+    // versions. Use the native save/share sheet there instead.
+    if (Constants.executionEnvironment === ExecutionEnvironment.StoreClient) {
+      return await shareQrImage();
+    }
+
+    try {
+      const permission = await MediaLibrary.requestPermissionsAsync(true, ['photo']);
+      if (permission.granted) {
+        const asset = await MediaLibrary.createAssetAsync(downloadResult.uri);
+        return {
+          success: true,
+          uri: asset?.uri || downloadResult.uri,
+          asset,
+        };
+      }
+    } catch (_mediaLibraryError) {
+      // A native save may be unavailable in a preview client. The share sheet
+      // still lets the donor save the generated PNG without losing progress.
+    }
+
+    return await shareQrImage();
   } catch (error) {
     logAppError('donor_donations.qr.save_png', error, {
       fileName,
@@ -2267,6 +2451,41 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
   const activeFlowSubmissions = resolveCurrentFlowSubmissions({
     submissions,
   });
+  const independentFlowSubmissions = activeFlowSubmissions.filter(
+    (submission) => submission?.submission_id && !Number(submission?.donation_drive_id)
+  );
+  const submissionFlowRecords = await Promise.all(independentFlowSubmissions.map(async (submission) => {
+    const flowDetail = getLatestSubmissionDetail(submission);
+    const [
+      submissionLogisticsResult,
+      submissionAppointmentResult,
+      submissionTrackingResult,
+      submissionParcelImages,
+      submissionProductionResult,
+    ] = await Promise.all([
+      fetchHairSubmissionLogisticsBySubmissionId(submission.submission_id),
+      fetchSalonDonationAppointmentBySubmissionId(submission.submission_id),
+      flowDetail?.submission_detail_id
+        ? fetchHairBundleTrackingHistory({
+            submissionId: submission.submission_id,
+            submissionDetailId: flowDetail.submission_detail_id,
+            limit: 16,
+          })
+        : Promise.resolve({ data: [], error: null }),
+      flowDetail ? getParcelImagesWithUrls(flowDetail) : Promise.resolve([]),
+      submission?.bundle_id
+        ? fetchDonationTimelineProductionByBundleId(submission.bundle_id)
+        : Promise.resolve({ data: null, error: null }),
+    ]);
+    return {
+      submission_id: submission.submission_id,
+      logistics: submissionLogisticsResult.data || null,
+      appointment: submissionAppointmentResult.data || null,
+      trackingEntries: submissionTrackingResult.data || [],
+      parcelImages: submissionParcelImages || [],
+      production: submissionProductionResult.data || null,
+    };
+  }));
   const isAiEligible = Boolean(aiRecord?.qualification?.isQualified);
   const isManualQualified = Boolean(manualRecord?.qualification?.isQualified);
   const isDonationReady = Boolean(activeRecord?.qualification?.isQualified);
@@ -2282,9 +2501,11 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
   let parcelImages = [];
   let productionTimeline = null;
   let productionTimelineError = null;
+  let appointment = null;
+  let appointmentError = null;
 
   if (activeSubmission?.submission_id && activeDetail?.submission_detail_id) {
-    const [logisticsResult, trackingResult, parcelImagesResult] = await Promise.all([
+    const [logisticsResult, trackingResult, parcelImagesResult, appointmentResult] = await Promise.all([
       fetchHairSubmissionLogisticsBySubmissionId(activeSubmission.submission_id),
       fetchHairBundleTrackingHistory({
         submissionId: activeSubmission.submission_id,
@@ -2292,6 +2513,7 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
         limit: 16,
       }),
       getParcelImagesWithUrls(activeDetail),
+      fetchSalonDonationAppointmentBySubmissionId(activeSubmission.submission_id),
     ]);
 
     logistics = logisticsResult.data || null;
@@ -2299,6 +2521,8 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
     trackingEntries = trackingResult.data || [];
     trackingError = trackingResult.error;
     parcelImages = parcelImagesResult;
+    appointment = appointmentResult.data || null;
+    appointmentError = appointmentResult.error;
   }
 
   if (activeSubmission?.bundle_id) {
@@ -2365,6 +2589,7 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
   const hasIndependentFlow = Boolean(
     independentQrState?.reference
     || logistics
+    || appointment
     || parcelImages.length
     || hasMeaningfulTrackingEntries(trackingEntries)
   );
@@ -2383,11 +2608,42 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
         flowType: activeFlowType,
         registration: activeDrive?.registration || null,
         production: productionTimeline,
+        appointment,
       })
     : [];
   const timelineEvents = activeSubmission
     ? buildTimelineEvents({ logistics, trackingEntries, parcelImages, certificate, flowType: activeFlowType })
     : [];
+  const submissionFlowRecordsWithTimelines = submissionFlowRecords.map((record) => {
+    const flowSubmission = independentFlowSubmissions.find(
+      (submission) => Number(submission?.submission_id) === Number(record.submission_id)
+    );
+    return {
+      ...record,
+      timelineStages: resolveTimelineStages({
+        submission: flowSubmission,
+        logistics: record.logistics,
+        trackingEntries: record.trackingEntries,
+        parcelImages: record.parcelImages,
+        certificate: Number(certificate?.submission_id) === Number(record.submission_id)
+          ? certificate
+          : null,
+        flowType: 'independent',
+        registration: null,
+        production: record.production,
+        appointment: record.appointment,
+      }),
+      timelineEvents: buildTimelineEvents({
+        logistics: record.logistics,
+        trackingEntries: record.trackingEntries,
+        parcelImages: record.parcelImages,
+        certificate: Number(certificate?.submission_id) === Number(record.submission_id)
+          ? certificate
+          : null,
+        flowType: 'independent',
+      }),
+    };
+  });
   const latestStage = timelineStages[timelineStages.length - 1] || null;
 const hasCompletedDonation = Boolean(
     latestStage?.key === 'bundling' && latestStage?.state === 'completed'
@@ -2456,6 +2712,7 @@ const hasCompletedDonation = Boolean(
     latestManualDonation: manualRecord,
     latestSubmission: activeSubmission,
     activeSubmissions: activeFlowSubmissions,
+    submissionFlowRecords: submissionFlowRecordsWithTimelines,
     latestDetail: activeDetail,
     latestRecommendations: activeRecord?.recommendations || latestAnalysisEntry?.recommendations || [],
     activeQualificationSource: activeRecord?.source || '',
@@ -2480,6 +2737,7 @@ const hasCompletedDonation = Boolean(
     registeredDrives: registeredDrivesResult.data || [],
     completedEventDrives,
     logistics,
+    appointment,
     independentQrState,
     trackingEntries,
     parcelImages,
@@ -2490,6 +2748,7 @@ const hasCompletedDonation = Boolean(
       || drivesResult.error?.message
       || registeredDrivesResult.error?.message
       || logisticsError?.message
+      || appointmentError?.message
       || trackingError?.message
       || productionTimelineError?.message
       || activeDriveError?.message

@@ -1,6 +1,7 @@
 import React from 'react';
 import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import Constants from 'expo-constants';
 import * as WebBrowser from 'expo-web-browser';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useForm, Controller } from 'react-hook-form';
@@ -30,6 +31,10 @@ const SIGNUP_FILL_GRAD = [
 ];
 
 const resolvePdfViewer = () => {
+  if (Constants?.appOwnership === 'expo') {
+    return null;
+  }
+
   try {
     const pdfModule = require('react-native-pdf');
     return pdfModule?.default || pdfModule;

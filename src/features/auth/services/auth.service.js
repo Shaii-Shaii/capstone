@@ -643,16 +643,36 @@ export const getResolvedSystemTheme = async () => {
     ]);
 
     if (uiSettingsResult.error) {
-      logAppError('auth.theme.ui_settings_failed', uiSettingsResult.error, {
-        table: 'UI_Settings',
-      });
+      const isNetworkFailure = isNetworkErrorMessage(uiSettingsResult.error?.message);
+      if (isNetworkFailure) {
+        logAppEvent(
+          'auth.theme.ui_settings_unavailable',
+          'UI settings could not be reached. Using the local theme fallback.',
+          { table: 'UI_Settings' },
+          'warn'
+        );
+      } else {
+        logAppError('auth.theme.ui_settings_failed', uiSettingsResult.error, {
+          table: 'UI_Settings',
+        });
+      }
     }
 
     if (defaultPresetResult.error) {
-      logAppError('auth.theme.theme_preset_failed', defaultPresetResult.error, {
-        table: 'Theme_Presets',
-        filter: { Is_Default: true, Is_Deleted: false },
-      });
+      const isNetworkFailure = isNetworkErrorMessage(defaultPresetResult.error?.message);
+      if (isNetworkFailure) {
+        logAppEvent(
+          'auth.theme.theme_preset_unavailable',
+          'Theme presets could not be reached. Using the local theme fallback.',
+          { table: 'Theme_Presets' },
+          'warn'
+        );
+      } else {
+        logAppError('auth.theme.theme_preset_failed', defaultPresetResult.error, {
+          table: 'Theme_Presets',
+          filter: { Is_Default: true, Is_Deleted: false },
+        });
+      }
     }
 
     const branding = resolveVisualTheme({

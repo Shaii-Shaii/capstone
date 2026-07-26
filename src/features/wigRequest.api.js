@@ -12,6 +12,7 @@ const wigPhysicalSpecificationsTable = 'Wig_Specifications';
 const patientsTable = 'Patients';
 const hospitalsTable = 'Hospitals';
 const releaseSchedulesTable = 'Release_Schedules';
+const wigSafetyAssessmentsTable = 'patient_wig_safety_assessments';
 
 const wigRequestSelect = `
   req_id:Req_ID,
@@ -371,6 +372,68 @@ export const createWigRequest = async (payload) => {
 
   return {
     data: result.data ? normalizeWigRequest(result.data) : null,
+    error: result.error,
+  };
+};
+
+export const upsertPatientWigSafetyAssessment = async ({
+  reqId,
+  hasKnownAllergies,
+  allergyDetails = '',
+  hasSensitiveScalp,
+  hasScalpIrritation,
+  hasOpenScalpWounds,
+  hasMedicalRestriction,
+  medicalRestrictionDetails = '',
+  informationConfirmed,
+}) => {
+  const confirmedAt = informationConfirmed ? new Date().toISOString() : null;
+  const result = await supabase
+    .from(wigSafetyAssessmentsTable)
+    .upsert([{
+      req_id: reqId,
+      has_known_allergies: hasKnownAllergies,
+      allergy_details: hasKnownAllergies ? allergyDetails.trim() || null : null,
+      has_sensitive_scalp: hasSensitiveScalp,
+      has_scalp_irritation: hasScalpIrritation,
+      has_open_scalp_wounds: hasOpenScalpWounds,
+      has_medical_restriction: hasMedicalRestriction,
+      medical_restriction_details: hasMedicalRestriction
+        ? medicalRestrictionDetails.trim() || null
+        : null,
+      information_confirmed: Boolean(informationConfirmed),
+      confirmed_at: confirmedAt,
+      review_status: 'Pending',
+      reviewed_by: null,
+      reviewed_at: null,
+      updated_at: new Date().toISOString(),
+    }], {
+      onConflict: 'req_id',
+    })
+    .select('*')
+    .single();
+
+  return {
+    data: result.data || null,
+    error: result.error,
+  };
+};
+
+export const fetchPatientWigSafetyAssessmentByRequestId = async (reqId) => {
+  if (!reqId) return { data: null, error: null };
+
+  const result = await supabase
+    .from(wigSafetyAssessmentsTable)
+    .select('*')
+    .eq('req_id', reqId)
+    .maybeSingle();
+
+  if (isMissingRelationError(result.error)) {
+    return { data: null, error: null };
+  }
+
+  return {
+    data: result.data || null,
     error: result.error,
   };
 };

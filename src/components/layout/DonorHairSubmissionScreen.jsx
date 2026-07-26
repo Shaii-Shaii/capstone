@@ -1208,6 +1208,7 @@ function NativeLiveFaceCamera({ cameraRef, facing = 'front', flashMode = 'off', 
 function PreAnalysisPhotoReview({
   photos = [],
   requiredViews = [],
+  cardBackground,
   isAnalyzing = false,
   isSaving = false,
   isValidating = false,
@@ -1250,7 +1251,7 @@ function PreAnalysisPhotoReview({
         <View style={styles.resultHeaderButtonPlaceholder} />
       </View>
 
-      <View style={styles.preAnalysisReviewCard}>
+      <View style={[styles.preAnalysisReviewCard, { backgroundColor: cardBackground }]}>
         <View style={styles.preAnalysisStatusRow}>
           <View style={styles.preAnalysisStatusCopy}>
             <AppIcon
@@ -1295,7 +1296,10 @@ function PreAnalysisPhotoReview({
             const photo = photos[index];
             const canRetakePhoto = retakeSlotIndexes.has(index);
             return (
-              <View key={view?.key || view?.label || index} style={styles.preAnalysisPhotoCard}>
+              <View
+                key={view?.key || view?.label || index}
+                style={[styles.preAnalysisPhotoCard, { backgroundColor: cardBackground }]}
+              >
                 <Pressable
                   onPress={() => onPreview?.(photo?.uri)}
                   disabled={!photo?.uri}
@@ -4128,6 +4132,7 @@ export function DonorHairSubmissionScreen() {
             <PreAnalysisPhotoReview
               photos={photos}
               requiredViews={requiredViews}
+              cardBackground={resolvedTheme?.backgroundColor || theme.colors.backgroundPrimary}
               isAnalyzing={isAnalyzing || isAnalysisLaunching}
               isSaving={isSaving}
               isValidating={isPhotoPreflightRunning}
@@ -4207,6 +4212,7 @@ export function DonorHairSubmissionScreen() {
           <PreAnalysisPhotoReview
             photos={photos}
             requiredViews={requiredViews}
+            cardBackground={resolvedTheme?.backgroundColor || theme.colors.backgroundPrimary}
             isAnalyzing={isAnalyzing || isAnalysisLaunching}
             isSaving={isSaving}
             isValidating={isPhotoPreflightRunning}

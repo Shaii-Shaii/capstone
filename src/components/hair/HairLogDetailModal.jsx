@@ -160,12 +160,6 @@ const formatLengthLabel = (value) => {
   return `${inches.toFixed(1)} inches`;
 };
 
-const formatAffectedRegions = (regions = []) => (
-  Array.isArray(regions) && regions.length
-    ? regions.join(', ')
-    : 'No clear patchy area detected'
-);
-
 const formatDensityScore = (value) => {
   const score = Number(value);
   return Number.isFinite(score) ? `${Math.round(score)} / 100` : 'Not enough data';
@@ -243,9 +237,12 @@ export function HairLogDetailModal({
   entries = [],
   events = [],
   onClose,
+  pageMode = false,
 }) {
   const { resolvedTheme } = useAuth();
   const roles = resolveThemeRoles(resolvedTheme);
+  const primaryTextColor = resolvedTheme?.primaryTextColor || roles.headingText;
+  const pageColor = (fallback) => (pageMode ? primaryTextColor : fallback);
   const [activeEntryKey, setActiveEntryKey] = React.useState('');
   const [signedUrls, setSignedUrls] = React.useState({});
   const [isLoadingUrls, setIsLoadingUrls] = React.useState(false);
@@ -368,7 +365,9 @@ export function HairLogDetailModal({
   const photoUris = allImages
     .map((image) => signedUrls[image.image_id || image.file_path])
     .filter(Boolean);
-  const compactSummary = toCompactSummary(screening?.summary);
+  const compactSummary = pageMode
+    ? String(screening?.summary || '').replace(/\s+/g, ' ').trim()
+    : toCompactSummary(screening?.summary);
   const assessmentSummary = compactSummary
     || screening?.visible_damage_notes
     || screening?.scalp_coverage_notes
@@ -377,14 +376,9 @@ export function HairLogDetailModal({
       : 'Use this scan as a baseline and compare the next check for changes.');
   const assessmentMetrics = [
     { label: 'Condition', value: screening?.detected_condition || 'Not detected' },
-    { label: 'Color', value: screening?.detected_color || 'Not detected' },
-    { label: 'Texture', value: screening?.detected_texture || 'Not detected' },
-    { label: 'Density', value: screening?.detected_density || 'Not detected' },
     { label: 'Length', value: formatLengthLabel(screening?.estimated_length) },
-    { label: 'Scalp area', value: screening?.visible_scalp_area || 'Not detected' },
-    { label: 'Coverage score', value: formatDensityScore(screening?.hair_density_score) },
-    { label: 'Affected area', value: formatAffectedRegions(screening?.affected_regions) },
-    { label: 'Shedding', value: screening?.shedding_level || 'Not sure' },
+    { label: 'Density', value: screening?.detected_density || 'Not detected' },
+    { label: 'Score', value: formatDensityScore(screening?.hair_density_score) },
   ];
   const insightBullets = Array.from(new Set([
     screening?.scalp_coverage_notes,
@@ -395,13 +389,7 @@ export function HairLogDetailModal({
     .map((value) => String(value || '').trim())
     .filter(Boolean)))
     .filter((value) => value !== assessmentSummary)
-    .slice(0, 4);
-  const insightLead = assessment.needsCare
-    ? 'AI recommendations for this check:'
-    : 'Helpful follow-up notes:';
-  const insightNote = assessment.needsCare
-    ? 'Use these as general care tips and scan again for comparison.'
-    : 'Keep this scan as a baseline for your next check.';
+    .slice(0, 2);
   const modalEyebrow = hasScreening && events.length
     ? 'Hair check and events'
     : hasScreening
@@ -411,31 +399,40 @@ export function HairLogDetailModal({
     ? formatModalDateLabel(dateKey)
     : formatSavedDateTime(screening?.created_at || getEventActivityDate(events[0]) || new Date().toISOString());
 
-  return (
-    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
-      <View style={styles.overlay}>
-        <Pressable style={styles.backdrop} onPress={onClose} />
+  const content = (
+      <View style={[
+        styles.overlay,
+        pageMode && styles.pageOverlay,
+        pageMode && { backgroundColor: roles.pageBackground },
+      ]}>
+        {!pageMode ? <Pressable style={styles.backdrop} onPress={onClose} /> : null}
 
         <AppCard
-          variant="elevated"
+          variant={pageMode ? 'default' : 'elevated'}
           radius="md"
           padding="lg"
           style={[
             styles.card,
+            pageMode && styles.pageCard,
             {
               backgroundColor: roles.pageBackground,
-              borderColor: roles.defaultCardBorder,
+              borderColor: pageMode ? roles.pageBackground : roles.defaultCardBorder,
             },
           ]}
           contentStyle={styles.cardContent}
         >
-          <View style={styles.header}>
+          <View style={[styles.header, pageMode && styles.pageHeader]}>
             <View style={styles.headerCopy}>
-              <Text style={[styles.eyebrow, { color: roles.metaText }]}>{modalEyebrow}</Text>
-              <Text style={[styles.title, { color: roles.headingText }]}>{modalTitle}</Text>
+              <Text style={[styles.eyebrow, { color: pageColor(roles.metaText) }]}>{modalEyebrow}</Text>
+              <Text style={[styles.title, { color: pageColor(roles.headingText) }]}>{modalTitle}</Text>
             </View>
             <Pressable onPress={onClose} style={styles.closeButton} hitSlop={12}>
-              <AppIcon name="close" size="sm" state="muted" />
+              <AppIcon
+                name={pageMode ? 'arrowLeft' : 'close'}
+                size="sm"
+                state="muted"
+                color={pageColor(roles.metaText)}
+              />
             </Pressable>
           </View>
 
@@ -446,12 +443,12 @@ export function HairLogDetailModal({
             nestedScrollEnabled
           >
             {hasScreening ? (
-              <View style={[styles.statusCard, { backgroundColor: roles.pageBackground, borderColor: tone.dotColor + '3A' }]}>
+              <View style={[styles.statusCard, pageMode && styles.pageInnerCard, { backgroundColor: pageMode ? roles.pageBackground : roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
                 <View style={styles.statusRow}>
-                  <View style={[styles.statusDot, { backgroundColor: tone.dotColor }]} />
-                  <Text style={[styles.statusLabel, { color: tone.dotColor }]}>{assessment.label}</Text>
+                  <View style={[styles.statusDot, { backgroundColor: pageColor(tone.dotColor) }]} />
+                  <Text style={[styles.statusLabel, { color: pageColor(tone.dotColor) }]}>{assessment.label}</Text>
                 </View>
-                <Text style={[styles.statusSubtext, { color: roles.bodyText }]}>
+                <Text style={[styles.statusSubtext, { color: pageColor(roles.bodyText) }]}>
                   Saved {formatSavedDateTime(screening.created_at)}
                 </Text>
               </View>
@@ -462,9 +459,9 @@ export function HairLogDetailModal({
                 <SectionTitleRow
                   title="Entries"
                   icon="file-document-outline"
-                  color={roles.headingText}
-                  iconColor={roles.metaText}
-                  accentColor={roles.primaryActionBackground}
+                  color={pageColor(roles.headingText)}
+                  iconColor={pageColor(roles.metaText)}
+                  accentColor={pageColor(roles.primaryActionBackground)}
                   titleStyle={styles.sectionTitle}
                 />
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.entrySwitcherRow}>
@@ -503,9 +500,9 @@ export function HairLogDetailModal({
                 <SectionTitleRow
                   title={events.length === 1 ? 'Registered event' : 'Registered events'}
                   icon="calendar-check-outline"
-                  color={roles.headingText}
-                  iconColor={roles.metaText}
-                  accentColor={roles.primaryActionBackground}
+                  color={pageColor(roles.headingText)}
+                  iconColor={pageColor(roles.metaText)}
+                  accentColor={pageColor(roles.primaryActionBackground)}
                   titleStyle={styles.sectionTitle}
                 />
                 <View style={styles.eventList}>
@@ -578,14 +575,14 @@ export function HairLogDetailModal({
               </>
             ) : null}
 
-            {hasScreening ? (
+            {hasScreening && (isLoadingUrls || photoUris.length) ? (
               <>
                 <SectionTitleRow
                   title="Photos"
                   icon="file-document-outline"
-                  color={roles.headingText}
-                  iconColor={roles.metaText}
-                  accentColor={roles.primaryActionBackground}
+                  color={pageColor(roles.headingText)}
+                  iconColor={pageColor(roles.metaText)}
+                  accentColor={pageColor(roles.primaryActionBackground)}
                   titleStyle={styles.sectionTitle}
                 />
                 {isLoadingUrls ? (
@@ -598,9 +595,7 @@ export function HairLogDetailModal({
                       <Image key={uri} source={{ uri }} style={styles.photo} resizeMode="cover" />
                     ))}
                   </ScrollView>
-                ) : (
-                  <Text style={[styles.emptyText, { color: roles.metaText }]}>No photos saved for this check.</Text>
-                )}
+                ) : null}
               </>
             ) : null}
 
@@ -609,27 +604,27 @@ export function HairLogDetailModal({
                 <SectionTitleRow
                   title="Hair Assessment"
                   icon="file-document-outline"
-                  color={roles.headingText}
-                  iconColor={roles.metaText}
-                  accentColor={roles.primaryActionBackground}
+                  color={pageColor(roles.headingText)}
+                  iconColor={pageColor(roles.metaText)}
+                  accentColor={pageColor(roles.primaryActionBackground)}
                   titleStyle={styles.sectionTitle}
                 />
-                <View style={[styles.assessmentCard, { backgroundColor: roles.pageBackground, borderColor: roles.defaultCardBorder }]}>
-                  <Text style={[styles.assessmentSummary, { color: roles.bodyText }]}>
+                <View style={[styles.assessmentCard, pageMode && styles.pageInnerCard, { backgroundColor: pageMode ? roles.pageBackground : roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
+                  <Text style={[styles.assessmentSummary, { color: pageColor(roles.bodyText) }]} numberOfLines={pageMode ? undefined : 2}>
                     {assessmentSummary}
                   </Text>
                   <View style={styles.metricGrid}>
                     {assessmentMetrics.map((metric) => (
-                      <View key={metric.label} style={styles.metricItem}>
-                        <Text style={[styles.metaKey, { color: roles.metaText }]}>
+                      <View key={metric.label} style={[styles.metricItem, pageMode && metric.label === 'Condition' && styles.metricItemFull]}>
+                        <Text style={[styles.metaKey, { color: pageColor(roles.metaText) }]}>
                           {metric.label}
                         </Text>
                         <Text
                           style={[
                             styles.metaValue,
-                            { color: roles.headingText },
+                            { color: pageColor(roles.headingText) },
                             metric.label === 'Length' && metric.value === 'Not detected' ? styles.metricValueMuted : null,
-                            metric.label === 'Coverage score' ? styles.metricValueLarge : null,
+                            metric.label === 'Score' ? styles.metricValueLarge : null,
                           ]}
                         >
                           {metric.value}
@@ -642,21 +637,20 @@ export function HairLogDetailModal({
             ) : null}
 
             {hasScreening ? (
-              <View style={[styles.insightsCard, {
-                backgroundColor: roles.pageBackground,
+              <View style={[styles.insightsCard, pageMode && styles.pageInnerCard, {
+                backgroundColor: pageMode ? roles.pageBackground : roles.defaultCardBackground,
                 borderColor: roles.defaultCardBorder,
-                borderLeftColor: roles.primaryActionBackground,
               }]}>
                 <View style={styles.insightsHeader}>
-                  <View style={[styles.insightsIconWrap, { backgroundColor: roles.iconPrimarySurface }]}>
+                  <View style={[styles.insightsIconWrap, { backgroundColor: pageMode ? 'transparent' : roles.iconPrimarySurface }]}>
                     <MaterialCommunityIcons
                       name="lightbulb-on-outline"
                       size={16}
-                      color={roles.primaryActionBackground}
+                      color={pageColor(roles.primaryActionBackground)}
                     />
                   </View>
-                  <Text style={[styles.insightsTitle, { color: roles.primaryActionBackground }]}>
-                    AI Insights & Guidance
+                  <Text style={[styles.insightsTitle, { color: pageColor(roles.primaryActionBackground) }]}>
+                    Care guidance
                   </Text>
                 </View>
 
@@ -667,40 +661,37 @@ export function HairLogDetailModal({
                   />
                 ) : (
                   <View style={styles.insightsBody}>
-                    <Text style={[styles.insightsLead, { color: roles.bodyText }]}>
-                      {insightLead}
-                    </Text>
                     {insightBullets.length ? (
                       <View style={styles.bulletList}>
                         {insightBullets.map((bullet, index) => (
                           <View key={`${index}-${bullet.slice(0, 24)}`} style={styles.bulletRow}>
-                            <View style={[styles.bulletDot, { backgroundColor: roles.primaryActionBackground }]} />
-                            <Text style={[styles.bulletText, { color: roles.bodyText }]}>
+                            <View style={[styles.bulletDot, { backgroundColor: pageColor(roles.primaryActionBackground) }]} />
+                            <Text style={[styles.bulletText, { color: pageColor(roles.bodyText) }]} numberOfLines={pageMode ? undefined : 2}>
                               {bullet}
                             </Text>
                           </View>
                         ))}
                       </View>
                     ) : (
-                      <Text style={[styles.insightsText, { color: roles.bodyText }]}>
+                      <Text style={[styles.insightsText, { color: pageColor(roles.bodyText) }]}>
                         No additional recommendations were returned for this check.
                       </Text>
                     )}
                   </View>
                 )}
 
-                {insightNote && !isLoadingRecommendations ? (
-                  <View style={[styles.insightsNoteCard, { backgroundColor: roles.pageBackground, borderColor: roles.defaultCardBorder }]}>
-                    <Text style={[styles.insightsNoteText, { color: roles.bodyText }]}>
-                      {insightNote}
-                    </Text>
-                  </View>
-                ) : null}
               </View>
             ) : null}
           </ScrollView>
         </AppCard>
       </View>
+  );
+
+  if (pageMode) return content;
+
+  return (
+    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
+      {content}
     </Modal>
   );
 }
@@ -716,6 +707,11 @@ const styles = StyleSheet.create({
   backdrop: {
     ...StyleSheet.absoluteFillObject,
   },
+  pageOverlay: {
+    justifyContent: 'flex-start',
+    paddingHorizontal: 0,
+    paddingVertical: 0,
+  },
   card: {
     width: '100%',
     maxWidth: 440,
@@ -723,6 +719,24 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     overflow: 'hidden',
     flexShrink: 1,
+  },
+  pageCard: {
+    maxWidth: '100%',
+    maxHeight: '100%',
+    height: '100%',
+    borderWidth: 0,
+    borderRadius: 0,
+    shadowColor: 'transparent',
+    shadowOpacity: 0,
+    shadowRadius: 0,
+    elevation: 0,
+  },
+  pageHeader: {
+    flexDirection: 'row-reverse',
+    paddingBottom: theme.spacing.sm,
+  },
+  pageInnerCard: {
+    borderRadius: 6,
   },
   cardContent: {
     flexShrink: 1,
@@ -747,8 +761,9 @@ const styles = StyleSheet.create({
   },
   title: {
     fontFamily: theme.typography.fontFamilyDisplay,
-    fontSize: theme.typography.compact.titleLg,
-    lineHeight: theme.typography.compact.titleLg * theme.typography.lineHeights.tight,
+    fontSize: theme.typography.compact.titleSm,
+    lineHeight: theme.typography.compact.titleSm * theme.typography.lineHeights.snug,
+    fontWeight: theme.typography.weights.bold,
   },
   closeButton: {
     padding: theme.spacing.xs,
@@ -765,7 +780,7 @@ const styles = StyleSheet.create({
     paddingBottom: theme.spacing.xxxl,
   },
   statusCard: {
-    borderRadius: 16,
+    borderRadius: 6,
     borderWidth: 1,
     padding: theme.spacing.md,
     gap: theme.spacing.xs,
@@ -899,15 +914,15 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.compact.bodySm,
   },
   assessmentCard: {
-    borderRadius: 18,
+    borderRadius: 6,
     borderWidth: 1,
     padding: theme.spacing.md,
-    gap: theme.spacing.md,
+    gap: theme.spacing.lg,
   },
   assessmentSummary: {
     fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.compact.bodySm,
-    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+    fontSize: 12,
+    lineHeight: 18,
   },
   metricGrid: {
     flexDirection: 'row',
@@ -921,9 +936,11 @@ const styles = StyleSheet.create({
     minWidth: 0,
     gap: 2,
   },
+  metricItemFull: {
+    width: '100%',
+  },
   metricValueMuted: {
     fontStyle: 'italic',
-    color: theme.colors.textMuted,
   },
   metricValueLarge: {
     fontSize: theme.typography.compact.titleSm,
@@ -931,10 +948,9 @@ const styles = StyleSheet.create({
   },
   insightsCard: {
     borderWidth: 1,
-    borderRadius: 18,
+    borderRadius: 6,
     padding: theme.spacing.md,
     gap: theme.spacing.md,
-    borderLeftWidth: 4,
   },
   insightsHeader: {
     flexDirection: 'row',
@@ -979,8 +995,8 @@ const styles = StyleSheet.create({
   bulletText: {
     flex: 1,
     fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.compact.bodySm,
-    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+    fontSize: 12,
+    lineHeight: 18,
   },
   insightsText: {
     fontFamily: theme.typography.fontFamily,

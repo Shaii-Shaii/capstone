@@ -10,6 +10,7 @@ const DONOR_NAV_HIDDEN_PATHS = new Set([
   '/donor/notifications',
   '/donor/donation-history',
   '/donor/achievements',
+  '/donor/hair-check-details',
 ]);
 
 const shouldHideDonorNav = (pathname = '') => (

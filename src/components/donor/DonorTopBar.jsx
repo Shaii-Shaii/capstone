@@ -1,6 +1,6 @@
 import React from 'react';
 import { Image, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
-import { usePathname, useRouter } from 'expo-router';
+import { useRouter } from 'expo-router';
 import { AppIcon } from '../ui/AppIcon';
 import { AppCard } from '../ui/AppCard';
 import { AppButton } from '../ui/AppButton';
@@ -27,7 +27,6 @@ export function DonorTopBar({
 }) {
   const { resolvedTheme } = useAuth();
   const router = useRouter();
-  const pathname = usePathname();
   const { logout: fallbackLogout, isLoading: isFallbackLoggingOut } = useAuthActions();
   const roles = resolveThemeRoles(resolvedTheme);
   const [logoFailed, setLogoFailed] = React.useState(false);
@@ -35,7 +34,7 @@ export function DonorTopBar({
   const effectiveIsLoggingOut = Boolean(isLoggingOut || (!onLogoutPress && isFallbackLoggingOut));
   const appLogoSource = resolveBrandLogoSource(resolvedTheme, logoFailed);
   const headerIconColor = roles.primaryActionText || '#ffffff';
-  const shouldShowFeedbackAction = showFeedbackAction ?? String(pathname || '').startsWith('/donor');
+  const shouldShowFeedbackAction = showFeedbackAction ?? false;
 
   React.useEffect(() => {
     setLogoFailed(false);

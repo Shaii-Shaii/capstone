@@ -227,7 +227,9 @@ function DashboardTabBarComponent({ items, activeKey, onPress, variant = 'donor'
   const pillPathProps = useAnimatedProps(() => ({
     d: buildNotchedPillPath(pillWidth, DASHBOARD_TAB_BAR_HEIGHT, activeCenterXProgress.value),
   }), [pillWidth]);
-  const bottomOffset = Math.max(insets.bottom, 0);
+  const safeBottom = Math.max(insets.bottom, 0);
+  const isPatientNav = variant === 'patient';
+  const bottomOffset = isPatientNav ? -safeBottom : safeBottom;
 
   React.useEffect(() => {
     activeCenterXProgress.value = withSpring(activeCenterX ?? -1, SPRING_SLIDE);
@@ -236,7 +238,17 @@ function DashboardTabBarComponent({ items, activeKey, onPress, variant = 'donor'
   if (!numTabs) return null;
 
   return (
-    <View style={[styles.wrapper, { bottom: bottomOffset }]} pointerEvents="box-none">
+    <View
+      style={[
+        styles.wrapper,
+        {
+          bottom: bottomOffset,
+          height: DASHBOARD_TAB_BAR_HEIGHT + (isPatientNav ? safeBottom : 0),
+          backgroundColor: isPatientNav ? theme.colors.backgroundPrimary : 'transparent',
+        },
+      ]}
+      pointerEvents="box-none"
+    >
       <View style={styles.barShadow} pointerEvents="none" />
       <Svg
         width={pillWidth}

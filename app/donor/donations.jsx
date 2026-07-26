@@ -3,10 +3,8 @@ import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { AppCard } from '../../src/components/ui/AppCard';
-import { LatestHairLogResultCard } from '../../src/components/donor/LatestHairLogResultCard';
 import { DonorHairSubmissionScreen } from '../../src/components/layout/DonorHairSubmissionScreen';
 import { DashboardLayout } from '../../src/components/layout/DashboardLayout';
-import { HairLogDetailModal } from '../../src/components/hair/HairLogDetailModal';
 import { DonorTopBar } from '../../src/components/donor/DonorTopBar';
 import { AppIcon } from '../../src/components/ui/AppIcon';
 import { GradientActionButton } from '../../src/components/ui/GradientActionButton';
@@ -14,7 +12,11 @@ import { EmptyDataState } from '../../src/components/ui/EmptyDataState';
 import { SectionTitleRow } from '../../src/components/ui/SectionTitleRow';
 import { DonivraLoadingOverlay } from '../../src/components/ui/DonivraLoadingOverlay';
 import { donorDashboardNavItems } from '../../src/constants/dashboard';
-import { fetchHairSubmissionsByUserId } from '../../src/features/hairSubmission.api';
+import {
+  fetchHairSubmissionsByUserId,
+  fetchLatestDonationRequirement,
+} from '../../src/features/hairSubmission.api';
+import { evaluateAiDonationEligibility } from '../../src/features/donorDonations.service';
 import { buildProfileCompletionMeta } from '../../src/features/profile/services/profile.service';
 import { useNotifications } from '../../src/hooks/useNotifications';
 import { useAuth } from '../../src/providers/AuthProvider';
@@ -125,34 +127,6 @@ const formatRecentLogDate = (value) => {
 
 const WEEKLY_SCAN_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
 
-const getScreeningRecommendations = (entry = null) => (
-  Array.isArray(entry?.submission?.donor_recommendations)
-    ? entry.submission.donor_recommendations
-    : Array.isArray(entry?.submission?.recommendations)
-      ? entry.submission.recommendations
-      : []
-).filter((recommendation) => String(recommendation?.recommendation_text || '').trim());
-
-const CARE_SAFETY_NOTE = 'If you have allergies, scalp irritation, or sensitivity, consult a qualified hair or scalp care professional before trying new ingredients.';
-
-const cleanRecommendationText = (value = '') => {
-  const text = String(value || '')
-    .replace(/\s+/g, ' ')
-    .replace(/Philippine product options? to consider:.*?(?:\.|$)/gi, '')
-    .replace(/(?:neutral care|generic|local|country)?\s*product options? to consider:.*?(?:\.|$)/gi, '')
-    .replace(/\bPhilippine(?:s)?\b/gi, '')
-    .replace(/\b(?:country|locally|local)\s+(?:product|care)\s+options?\b/gi, '')
-    .replace(/\b[A-Z][a-z]+(?:n|ian|ese|ish|i)\s+(?:product|brand|care)\s+options?\b/g, '')
-    .replace(/Ingredient or product-type options to consider:.*?(?:\.|$)/gi, '')
-    .replace(/\b(Dove|Cream Silk|Human Nature|Vitress|Pantene(?:\s+Pro-V)?|Watsons|Lazada(?:\.ph)?|Shopee(?:\.ph)?)\b/gi, 'a suitable product type')
-    .trim();
-
-  if (/ingredients that may help/i.test(text) && !/consult a qualified hair or scalp care professional/i.test(text)) {
-    return `${text} ${CARE_SAFETY_NOTE}`;
-  }
-  return text;
-};
-
 const hasNegatedCareConcern = (text = '') => (
   /\b(no|not|without)\s+(?:visible\s+|significant\s+|major\s+)?(?:damage|dryness|frizz|breakage|split\s+ends?|issues?)\b/i.test(text)
   || /\bno\s+significant\s+damage\s+or\s+issues\b/i.test(text)
@@ -182,27 +156,25 @@ const screeningNeedsImprovement = (screening = null) => {
   );
 };
 
-const compactText = (value = '', limit = 140) => {
-  const normalized = String(value || '').replace(/\s+/g, ' ').trim();
-  if (normalized.length <= limit) return normalized;
-  return `${normalized.slice(0, limit - 3).trimEnd()}...`;
-};
-
-function HairConditionSummaryCard({ entry, onPress }) {
+function HairConditionSummaryCard({ entry, eligibility = null, onPress }) {
   const { resolvedTheme } = useAuth();
   const roles = resolveThemeRoles(resolvedTheme);
 
   if (!entry) return null;
 
   const score = getScoreFromScreening(entry);
-  const needsImprovement = screeningNeedsImprovement(entry);
-  const conditionLabel = entry.decision || entry.detected_condition || 'Hair check';
-  const statusLabel = needsImprovement ? 'Needs care' : 'Good result';
-  const statusColor = needsImprovement ? '#d89258' : '#65b96f';
-  const previewText = entry.summary
-    ? compactText(entry.summary, 150)
-    : compactText(entry.decision || 'Tap to open full submission details.', 150);
-
+  const isEligible = Boolean(eligibility?.isQualified);
+  const conditionLabel = isEligible ? 'Eligible for donation' : 'Not eligible for donation yet';
+  const currentLengthCm = Number(eligibility?.normalized_length_cm);
+  const minimumLengthCm = Number(eligibility?.minimum_length_cm);
+  const eligibilityNote = !isEligible
+    && Number.isFinite(currentLengthCm)
+    && Number.isFinite(minimumLengthCm)
+    && currentLengthCm > 0
+    && minimumLengthCm > 0
+    && currentLengthCm < minimumLengthCm
+    ? `${(currentLengthCm / 2.54).toFixed(1)} in measured · ${Math.round(minimumLengthCm / 2.54)} in required`
+    : '';
   return (
     <Pressable
       accessibilityRole="button"
@@ -211,8 +183,8 @@ function HairConditionSummaryCard({ entry, onPress }) {
       style={({ pressed }) => [pressed ? styles.cardPressed : null]}
     >
       <AppCard
-        variant="default"
-        radius="xl"
+        variant="outline"
+        radius="md"
         padding="md"
         style={[
           styles.hairConditionCard,
@@ -222,37 +194,34 @@ function HairConditionSummaryCard({ entry, onPress }) {
           },
         ]}
       >
-        <View style={styles.hairConditionHeader}>
-          <View style={styles.hairConditionHeaderCopy}>
-            <Text style={[styles.hairConditionEyebrow, { color: roles.metaText }]}>
-              Hair Condition of the Checking
-            </Text>
-            <Text style={[styles.hairConditionDate, { color: roles.metaText }]}>
-              {formatRecentLogDate(entry.created_at)}
-            </Text>
-          </View>
-          <View style={[styles.hairConditionStatus, { backgroundColor: `${statusColor}20` }]}>
-            <Text style={[styles.hairConditionStatusText, { color: statusColor }]}>
-              {statusLabel}
-            </Text>
-          </View>
-        </View>
-
-        <Text style={[styles.hairConditionTitle, { color: roles.headingText }]} numberOfLines={2}>
+        <Text style={[styles.hairConditionTitle, { color: roles.headingText }]}>
           {conditionLabel}
         </Text>
+        {eligibilityNote ? (
+          <Text style={[styles.hairConditionEligibilityNote, { color: roles.metaText }]}>
+            {eligibilityNote}
+          </Text>
+        ) : null}
 
-        <Text style={[styles.hairConditionSummary, { color: roles.bodyText }]} numberOfLines={2}>
-          {previewText}
-        </Text>
+        <View style={styles.hairConditionMetaRow}>
+          <Text style={[styles.hairConditionDate, { color: roles.metaText }]}>
+            {formatRecentLogDate(entry.created_at)}
+          </Text>
+          <Text style={[styles.hairConditionScoreInline, { color: roles.headingText }]}>
+            Score {Number.isFinite(score) ? score : '--'}
+          </Text>
+        </View>
+
+        <View style={[styles.hairConditionDivider, { backgroundColor: roles.defaultCardBorder }]} />
 
         <View style={styles.hairConditionFooter}>
-          <View style={styles.hairConditionScoreWrap}>
-            <Text style={[styles.hairConditionScore, { color: roles.primaryActionBackground }]}>
-              {Number.isFinite(score) ? score : '--'}
+          <View style={styles.hairConditionActionCopy}>
+            <Text style={[styles.hairConditionViewLabel, { color: roles.headingText }]}>View details</Text>
+            <Text style={[styles.hairConditionStatusText, { color: roles.metaText }]}>
+              {isEligible ? 'Eligible' : 'Review requirements'}
             </Text>
-            <Text style={[styles.hairConditionScoreLabel, { color: roles.metaText }]}>score</Text>
           </View>
+          <AppIcon name="chevronRight" size="sm" state="muted" color={roles.metaText} />
         </View>
       </AppCard>
     </Pressable>
@@ -295,8 +264,7 @@ function HairAnalysisHomeModule({ initialTab = 'overview' }) {
   const [isLoading, setIsLoading] = React.useState(!cacheMatchesUser);
   const [error, setError] = React.useState('');
   const [submissions, setSubmissions] = React.useState(cachedHome?.submissions || []);
-  const [logDetailDateKey, setLogDetailDateKey] = React.useState('');
-  const [logDetailEntries, setLogDetailEntries] = React.useState([]);
+  const [donationRequirement, setDonationRequirement] = React.useState(cachedHome?.donationRequirement || null);
   const [isFirstCheckPromptVisible, setIsFirstCheckPromptVisible] = React.useState(false);
   const [isProfileCompletionPromptVisible, setIsProfileCompletionPromptVisible] = React.useState(false);
   const [firstCheckPromptDismissed, setFirstCheckPromptDismissed] = React.useState(false);
@@ -369,7 +337,10 @@ function HairAnalysisHomeModule({ initialTab = 'overview' }) {
         setIsLoading(true);
       }
       setError('');
-      const result = await fetchHairSubmissionsByUserId(user.id, 30);
+      const [result, requirementResult] = await Promise.all([
+        fetchHairSubmissionsByUserId(user.id, 30),
+        fetchLatestDonationRequirement(),
+      ]);
 
       if (!mounted) return;
 
@@ -378,10 +349,12 @@ function HairAnalysisHomeModule({ initialTab = 'overview' }) {
       }
 
       const normalized = Array.isArray(result.data) ? result.data : [];
-      cachedHairAnalysisHomeData = { submissions: normalized };
+      const nextDonationRequirement = requirementResult.data || null;
+      cachedHairAnalysisHomeData = { submissions: normalized, donationRequirement: nextDonationRequirement };
       cachedHairAnalysisHomeUserId = user.id;
       submissionsRef.current = normalized;
       setSubmissions(normalized);
+      setDonationRequirement(nextDonationRequirement);
       setIsLoading(false);
     };
 
@@ -402,6 +375,20 @@ function HairAnalysisHomeModule({ initialTab = 'overview' }) {
   ), [submissions]);
 
   const latestScreening = screenings[0] || null;
+  const latestEligibility = React.useMemo(() => {
+    if (!latestScreening) return null;
+    const details = Array.isArray(latestScreening?.submission?.submission_details)
+      ? latestScreening.submission.submission_details
+      : [];
+    const latestDetail = [...details].sort(
+      (left, right) => new Date(right?.created_at || 0) - new Date(left?.created_at || 0)
+    )[0] || null;
+    return evaluateAiDonationEligibility({
+      screening: latestScreening,
+      detail: latestDetail,
+      donationRequirement,
+    });
+  }, [donationRequirement, latestScreening]);
   const recentLogs = React.useMemo(() => screenings.slice(0, 5), [screenings]);
   const olderLogs = React.useMemo(() => recentLogs.slice(1), [recentLogs]);
   const hasRecentLogs = recentLogs.length > 0;
@@ -428,10 +415,6 @@ function HairAnalysisHomeModule({ initialTab = 'overview' }) {
     }
     return rows;
   }, [calendarCells]);
-  const latestRecommendations = React.useMemo(
-    () => getScreeningRecommendations(latestScreening).slice(0, 3),
-    [latestScreening]
-  );
   const isProfileComplete = profileCompletionMeta.isComplete;
   const isFirstHairCheck = screenings.length === 0;
   const latestScreeningAtMs = latestScreening?.created_at ? new Date(latestScreening.created_at).getTime() : NaN;
@@ -471,19 +454,12 @@ function HairAnalysisHomeModule({ initialTab = 'overview' }) {
   };
 
   const openLogDetailsForEntry = (entry) => {
-    if (!entry?.created_at) return;
-    setLogDetailDateKey(toLocalDateKey(entry.created_at));
-    setLogDetailEntries([{
-      screening: entry,
-      submission: entry.submission,
-      recommendations: getScreeningRecommendations(entry),
-      images: (entry.submission?.submission_details || []).flatMap((detail) => detail.images || []),
-    }]);
-  };
-
-  const closeLogDetails = () => {
-    setLogDetailDateKey('');
-    setLogDetailEntries([]);
+    const screeningId = entry?.ai_screening_id || entry?.id;
+    if (!screeningId) return;
+    router.push({
+      pathname: '/donor/hair-check-details',
+      params: { screeningId: String(screeningId) },
+    });
   };
 
   const firstName = String(profile?.first_name || '').trim();
@@ -842,13 +818,9 @@ function HairAnalysisHomeModule({ initialTab = 'overview' }) {
               />
               {hasRecentLogs ? (
                 <View style={styles.recentLogFeed}>
-                  <LatestHairLogResultCard
-                    latestScreening={latestScreening}
-                    latestRecommendation={latestRecommendations[0] || null}
-                  />
-
                   <HairConditionSummaryCard
                     entry={latestScreening}
+                    eligibility={latestEligibility}
                     onPress={() => openLogDetailsForEntry(latestScreening)}
                   />
 
@@ -858,9 +830,6 @@ function HairAnalysisHomeModule({ initialTab = 'overview' }) {
                         {olderLogs.map((entry, index) => {
                       const score = getScoreFromScreening(entry);
                       const needsImprovement = screeningNeedsImprovement(entry);
-                      const recommendations = getScreeningRecommendations(entry);
-                      const primaryRecommendation = recommendations[0] || null;
-
                       return (
                         <Pressable
                           key={entry.ai_screening_id || entry.created_at || index}
@@ -891,15 +860,6 @@ function HairAnalysisHomeModule({ initialTab = 'overview' }) {
                             <Text style={[styles.recentLogCondition, { color: roles.headingText }]}>
                               {entry.detected_condition || entry.decision || 'Hair check'}
                             </Text>
-                            {needsImprovement && primaryRecommendation?.recommendation_text ? (
-                              <Text style={[styles.recentLogRecommendation, { color: roles.bodyText }]}>
-                                Do this: {compactText(cleanRecommendationText(primaryRecommendation.recommendation_text), 130)}
-                              </Text>
-                            ) : (
-                              <Text style={[styles.recentLogRecommendation, { color: roles.bodyText }]}>
-                                {entry.summary ? compactText(entry.summary, 130) : 'Tap to review this saved AI scan.'}
-                              </Text>
-                            )}
                           </View>
                           <View style={styles.recentLogScoreWrap}>
                             <Text style={[styles.recentLogScore, { color: roles.primaryActionBackground }]}>{score || '--'}</Text>
@@ -1003,12 +963,6 @@ function HairAnalysisHomeModule({ initialTab = 'overview' }) {
         </Modal>
       ) : null}
 
-      <HairLogDetailModal
-        visible={Boolean(logDetailDateKey && logDetailEntries.length)}
-        dateKey={logDetailDateKey}
-        entries={logDetailEntries}
-        onClose={closeLogDetails}
-      />
     </DashboardLayout>
   );
 }
@@ -1301,10 +1255,19 @@ const styles = StyleSheet.create({
   },
   recentLogCard: {
     gap: theme.spacing.sm,
+    borderRadius: theme.radius.sm,
+    shadowColor: 'transparent',
+    shadowOpacity: 0,
+    shadowRadius: 0,
+    elevation: 0,
   },
   hairConditionCard: {
-    gap: theme.spacing.sm,
+    gap: theme.spacing.xs,
     paddingVertical: theme.spacing.md,
+    shadowColor: 'transparent',
+    shadowOpacity: 0,
+    shadowRadius: 0,
+    elevation: 0,
   },
   hairConditionHeader: {
     flexDirection: 'row',
@@ -1346,7 +1309,15 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamilyDisplay,
     fontSize: theme.typography.semantic.bodyMd,
     fontWeight: theme.typography.weights.bold,
-    lineHeight: theme.typography.semantic.bodyMd * theme.typography.lineHeights.snug,
+    lineHeight: theme.typography.semantic.bodyMd * theme.typography.lineHeights.relaxed,
+    marginBottom: theme.spacing.sm,
+  },
+  hairConditionEligibilityNote: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 12,
+    lineHeight: 18,
+    marginTop: -theme.spacing.xs,
+    marginBottom: theme.spacing.xs,
   },
   hairConditionSummary: {
     fontFamily: theme.typography.fontFamily,
@@ -1355,9 +1326,32 @@ const styles = StyleSheet.create({
   },
   hairConditionFooter: {
     flexDirection: 'row',
-    alignItems: 'flex-end',
-    justifyContent: 'flex-end',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     gap: theme.spacing.sm,
+  },
+  hairConditionActionCopy: {
+    gap: 1,
+  },
+  hairConditionMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+  },
+  hairConditionScoreInline: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 12,
+    fontWeight: theme.typography.weights.bold,
+  },
+  hairConditionDivider: {
+    height: StyleSheet.hairlineWidth,
+    marginVertical: theme.spacing.sm,
+  },
+  hairConditionViewLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 12,
+    fontWeight: theme.typography.weights.semibold,
   },
   hairConditionScoreWrap: {
     alignItems: 'flex-end',
@@ -1462,7 +1456,7 @@ const styles = StyleSheet.create({
   },
   recentLogItem: {
     borderWidth: 1,
-    borderRadius: theme.radius.lg,
+    borderRadius: theme.radius.sm,
     padding: theme.spacing.sm,
     flexDirection: 'row',
     alignItems: 'center',

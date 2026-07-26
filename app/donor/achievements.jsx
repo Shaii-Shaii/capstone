@@ -13,7 +13,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Print from 'expo-print';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { DashboardLayout } from '../../src/components/layout/DashboardLayout';
 import { AppIcon } from '../../src/components/ui/AppIcon';
 import { EmptyDataState } from '../../src/components/ui/EmptyDataState';
@@ -504,6 +504,7 @@ function CertificateRow({ item, onView, onOpenStoredFile, colors, styles }) {
 
 export default function DonorAchievementsScreen() {
   const router = useRouter();
+  const { certificateId } = useLocalSearchParams();
   const { user, profile, resolvedTheme } = useAuth();
   const colors = useMemo(() => buildCertificateColors(resolvedTheme), [resolvedTheme]);
   const styles = useMemo(() => makeStyles(colors), [colors]);
@@ -519,6 +520,20 @@ export default function DonorAchievementsScreen() {
   const [isSharingAvailable, setIsSharingAvailable] = useState(false);
   const [activeSort, setActiveSort] = useState('recent');
   const [activeAchievementTab, setActiveAchievementTab] = useState('certificates');
+
+  useEffect(() => {
+    if (!certificateId || state.isLoading || selectedCertificate) return;
+
+    const requestedId = Array.isArray(certificateId) ? certificateId[0] : certificateId;
+    const matchingCertificate = state.certificates.find((item) => (
+      String(item.certificateId || item.id || '') === String(requestedId)
+    ));
+
+    if (matchingCertificate) {
+      setActiveAchievementTab('certificates');
+      setSelectedCertificate(matchingCertificate);
+    }
+  }, [certificateId, selectedCertificate, state.certificates, state.isLoading]);
 
   useEffect(() => {
     let cancelled = false;

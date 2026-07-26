@@ -185,11 +185,15 @@ export const getPatientWigRequestContext = async (userId) => {
       { data: requestHospital, error: hospitalError },
       { data: requestWig, error: requestWigError },
       { data: latestReleaseSchedule, error: releaseScheduleError },
+      { data: safetyAssessment, error: safetyAssessmentError },
     ] = await Promise.all([
       hospitalId ? WigRequestAPI.fetchHospitalById(hospitalId) : { data: null, error: null },
       selectedWigId ? WigRequestAPI.fetchWigDetailsById(selectedWigId) : { data: null, error: null },
       latestWigRequest?.req_id
         ? WigRequestAPI.fetchLatestReleaseScheduleByRequestId(latestWigRequest.req_id)
+        : { data: null, error: null },
+      latestWigRequest?.req_id
+        ? WigRequestAPI.fetchPatientWigSafetyAssessmentByRequestId(latestWigRequest.req_id)
         : { data: null, error: null },
     ]);
 
@@ -205,6 +209,10 @@ export const getPatientWigRequestContext = async (userId) => {
       throw new Error(releaseScheduleError.message || 'Unable to load the release schedule.');
     }
 
+    if (safetyAssessmentError) {
+      throw new Error(safetyAssessmentError.message || 'Unable to load the wig safety assessment.');
+    }
+
     return {
       patientDetails,
       latestWigRequest,
@@ -213,6 +221,7 @@ export const getPatientWigRequestContext = async (userId) => {
       requestHospital,
       requestWig,
       latestReleaseSchedule,
+      safetyAssessment,
       error: null,
     };
   } catch (error) {
@@ -224,6 +233,7 @@ export const getPatientWigRequestContext = async (userId) => {
       requestHospital: null,
       requestWig: null,
       latestReleaseSchedule: null,
+      safetyAssessment: null,
       error: error.message || 'Unable to load the patient wig request context.',
     };
   }

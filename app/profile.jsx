@@ -905,6 +905,13 @@ export default function ProfileScreen() {
           />
           <ProfileMoreRow
             roles={roles}
+            icon="message-alert-outline"
+            title="Feedback"
+            textColor={primaryTextColor}
+            onPress={() => router.navigate('/donor/feedback')}
+          />
+          <ProfileMoreRow
+            roles={roles}
             icon="help-circle-outline"
             title="Help"
             textColor={primaryTextColor}
@@ -1039,6 +1046,13 @@ export default function ProfileScreen() {
               icon="profile"
               title="Personal Information"
               onPress={() => setMode('edit')}
+              roles={roles}
+              textColor={primaryTextColor}
+            />
+            <PatientProfileRow
+              icon="feedback"
+              title="Feedback"
+              onPress={() => router.navigate('/patient/feedback')}
               roles={roles}
               textColor={primaryTextColor}
             />

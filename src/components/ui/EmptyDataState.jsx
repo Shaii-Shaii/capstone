@@ -75,7 +75,7 @@ export function EmptyStateIllustration({
     return (
       <View style={[styles.illustrationWrap, styles.analysisIllustrationWrap, { width, height }, style]} pointerEvents="none">
         <Animated.View style={[styles.illustrationLayer, { width, height }, fileAnimatedStyle]}>
-          <Svg width={width} height={height} viewBox="0 0 240 196" style={styles.illustrationLayer}>
+          <Svg width={width} height={height} viewBox="-8 -10 256 216" style={styles.illustrationLayer}>
             <Circle cx="120" cy="102" r="80" fill="#f1f3f8" opacity="0.84" />
             <Circle cx="120" cy="102" r="98" fill="none" stroke="#e8ebf0" strokeWidth="18" opacity="0.68" />
 
@@ -104,7 +104,7 @@ export function EmptyStateIllustration({
           </Svg>
         </Animated.View>
         <Animated.View style={[styles.illustrationLayer, { width, height }, badgeAnimatedStyle]}>
-          <Svg width={width} height={height} viewBox="0 0 240 196" style={styles.illustrationLayer}>
+          <Svg width={width} height={height} viewBox="-8 -10 256 216" style={styles.illustrationLayer}>
             <Circle cx="166" cy="130" r="38" fill="#ffffff" fillOpacity="0.8" stroke="#c8bebd" strokeWidth="2.6" />
             <Circle cx="166" cy="130" r="24" fill="none" stroke="#dcd4d4" strokeWidth="2.4" />
             <Line x1="191" y1="155" x2="207" y2="172" stroke="#c8bebd" strokeWidth="6.2" strokeLinecap="round" />

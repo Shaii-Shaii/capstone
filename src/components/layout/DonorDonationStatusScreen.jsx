@@ -296,6 +296,7 @@ const DONATION_MODULE_SCREEN = {
   RECIPIENT: 'recipient',
   QR_CODES: 'qrCodes',
   MY_DONATIONS: 'myDonations',
+  WALK_IN_SCHEDULE: 'walkInSchedule',
   DONATION_STATUS: 'donationStatus',
 };
 
@@ -413,18 +414,23 @@ const buildEventDonationTimelineStages = ({ item, fallbackStages = [], certifica
   );
   const productionFallback = findTimelineStage(
     fallbackStages,
-    ['wig_production', 'wigproduction', 'for_bundling', 'forbundling'],
-    ['wig production', 'for bundling'],
+    ['wig_production', 'wigproduction'],
+    ['wig production'],
   );
-  const hospitalFallback = findTimelineStage(
+  const qaFallback = findTimelineStage(
     fallbackStages,
-    ['wig_distribution_hospitals', 'wigdistributionhospitals', 'wig_completed', 'wigcompleted', 'assigned_to_patient'],
-    ['wig distribution hospital', 'wig completed', 'assigned to patient'],
+    ['qa_assessment', 'qaassessment'],
+    ['qa assessment', 'quality assessment'],
   );
-  const patientFallback = findTimelineStage(
+  const assignedFallback = findTimelineStage(
     fallbackStages,
-    ['distribution_to_patients', 'distributiontopatients', 'received_by_patient', 'receivedbypatient'],
-    ['distribution to patient', 'received by patient'],
+    ['assigned_to_patient', 'assignedtopatient'],
+    ['assigned to patient'],
+  );
+  const receivedFallback = findTimelineStage(
+    fallbackStages,
+    ['received_by_patient', 'receivedbypatient'],
+    ['received by patient'],
   );
 
   const cutFallbackEvidenceAt = normalizeTimelineKey(cutFallback?.key || '') === 'cutandship'
@@ -458,6 +464,13 @@ const buildEventDonationTimelineStages = ({ item, fallbackStages = [], certifica
       statusLabel: cutEvidenceAt ? 'Complete' : '',
     },
     {
+      key: 'qa_assessment',
+      label: 'QA Assessment',
+      savedNote: qaFallback?.savedNote || 'The donated hair is reviewed before wig production.',
+      evidenceAt: getTimelineEvidenceAt(qaFallback),
+      statusLabel: qaFallback?.statusLabel || '',
+    },
+    {
       key: 'wig_production',
       label: 'Wig Production',
       savedNote: productionFallback?.savedNote || 'Approved hair by the staff is used in the wig production process.',
@@ -465,18 +478,18 @@ const buildEventDonationTimelineStages = ({ item, fallbackStages = [], certifica
       statusLabel: productionFallback?.statusLabel || '',
     },
     {
-      key: 'wig_distribution_hospitals',
-      label: 'Wig Distribution for Hospital',
-      savedNote: hospitalFallback?.savedNote || 'The completed wig is prepared for hospital distribution.',
-      evidenceAt: getTimelineEvidenceAt(hospitalFallback),
-      statusLabel: hospitalFallback?.statusLabel || '',
+      key: 'assigned_to_patient',
+      label: 'Assigned to Patient',
+      savedNote: assignedFallback?.savedNote || 'The completed wig is assigned to a patient.',
+      evidenceAt: getTimelineEvidenceAt(assignedFallback),
+      statusLabel: assignedFallback?.statusLabel || '',
     },
     {
-      key: 'distribution_to_patients',
-      label: 'Distribution to Patients',
-      savedNote: patientFallback?.savedNote || 'The wig is distributed to patients.',
-      evidenceAt: getTimelineEvidenceAt(patientFallback),
-      statusLabel: patientFallback?.statusLabel || '',
+      key: 'received_by_patient',
+      label: 'Received by the Patient',
+      savedNote: receivedFallback?.savedNote || 'The patient confirms receipt of the wig.',
+      evidenceAt: getTimelineEvidenceAt(receivedFallback),
+      statusLabel: receivedFallback?.statusLabel || '',
     },
   ];
 
@@ -542,12 +555,6 @@ const buildWalkInDateOptions = (count = 5) => {
     cursor.setDate(cursor.getDate() + 1);
   }
   return options;
-};
-
-const formatQueueNumber = (value) => {
-  const number = Number(value);
-  if (!Number.isFinite(number) || number <= 0) return '';
-  return `#${String(number).padStart(3, '0')}`;
 };
 
 const getMainIneligibilityReason = (eligibility = null) => {
@@ -790,6 +797,9 @@ function ModalShell({
   footer,
   scrollContent = false,
   cardBackground = theme.colors.backgroundPrimary,
+  textColor = theme.colors.textPrimary,
+  borderColor = theme.colors.borderSubtle,
+  compact = false,
 }) {
   if (!visible) return null;
   return (
@@ -803,14 +813,26 @@ function ModalShell({
     >
       <View style={styles.modalOverlay}>
         <Pressable style={styles.modalBackdrop} onPress={onClose} />
-        <View style={[styles.modalCard, { backgroundColor: cardBackground }]}>
-          <View style={styles.modalHeader}>
+        <View style={[
+          styles.modalCard,
+          compact ? styles.modalCardCompact : null,
+          { backgroundColor: cardBackground, borderColor },
+        ]}>
+          <View style={[styles.modalHeader, compact ? styles.modalHeaderCompact : null]}>
             <View style={styles.modalHeaderCopy}>
-              <Text style={styles.modalTitle}>{title}</Text>
-              {subtitle ? <Text style={styles.modalSubtitle}>{subtitle}</Text> : null}
+              <Text style={[styles.modalTitle, compact ? styles.modalTitleCompact : null, { color: textColor }]}>
+                {title}
+              </Text>
+              {subtitle ? <Text style={[styles.modalSubtitle, { color: textColor }]}>{subtitle}</Text> : null}
             </View>
-            <Pressable onPress={onClose} style={styles.modalCloseBtn}>
-              <AppIcon name="close" state="muted" />
+            <Pressable
+              onPress={onClose}
+              style={[styles.modalCloseBtn, compact ? styles.modalCloseBtnCompact : null, {
+                backgroundColor: cardBackground,
+                borderColor,
+              }]}
+            >
+              <MaterialCommunityIcons name="close" size={compact ? 20 : 22} color={textColor} />
             </Pressable>
           </View>
           <View style={styles.modalBody}>
@@ -833,10 +855,19 @@ function ModalShell({
 }
 
 function ChoiceField({ label, value, options, onChange }) {
+  const { resolvedTheme } = useAuth();
+  const roles = resolveThemeRoles(resolvedTheme);
+  const textColor = resolvedTheme?.primaryTextColor || roles.headingText;
+  const fieldBackground = resolvedTheme?.backgroundColor || roles.pageBackground;
+
   return (
     <View style={styles.choiceField}>
-      <Text style={styles.choiceLabel}>{label}</Text>
-      <View style={styles.choiceChipRow}>
+      <Text style={[styles.choiceLabel, { color: textColor }]}>{label}</Text>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.choiceChipRow}
+      >
         {options.map((opt) => {
           const active = value === opt.value;
           const disabled = Boolean(opt.disabled);
@@ -849,12 +880,14 @@ function ChoiceField({ label, value, options, onChange }) {
               }}
               style={[
                 styles.choiceChip,
+                { backgroundColor: fieldBackground, borderColor: roles.defaultCardBorder },
                 active ? styles.choiceChipActive : null,
                 disabled ? styles.choiceChipDisabled : null,
               ]}
             >
               <Text style={[
                 styles.choiceChipText,
+                { color: textColor },
                 active ? styles.choiceChipTextActive : null,
                 disabled ? styles.choiceChipTextDisabled : null,
               ]}>
@@ -863,14 +896,14 @@ function ChoiceField({ label, value, options, onChange }) {
             </Pressable>
           );
         })}
-      </View>
+      </ScrollView>
     </View>
   );
 }
 
 function ManualSection({ icon, title, body, children, roles }) {
   return (
-    <View style={[styles.manualSectionCard, { backgroundColor: roles.pageBackground, borderColor: roles.defaultCardBorder }]}>
+    <View style={[styles.manualSectionCard, { borderBottomColor: roles.defaultCardBorder }]}>
       <View style={styles.manualSectionHeader}>
         <View style={[styles.manualSectionIconWrap, { backgroundColor: roles.iconPrimarySurface }]}>
           <AppIcon name={icon} size="sm" color={roles.iconPrimaryColor} />
@@ -1093,61 +1126,35 @@ function DonationFilterDropdown({
 function DonationEventCard({ roles, drive, onOpenDetails }) {
   const [imageFailed, setImageFailed] = React.useState(false);
   const imageUrl = drive?.event_image_url || drive?.organization_logo_url || '';
-  const visibilityLabel = isDonationDrivePublic(drive) ? 'PUBLIC' : 'PRIVATE';
   const driveDateLabel = getDriveDateLabel(drive);
-  const locationLabel = getDriveLocationLabel(drive);
 
   React.useEffect(() => {
     setImageFailed(false);
   }, [imageUrl]);
 
   const cardContent = (
-    <View style={[styles.myDonationCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
-      <View style={styles.myDonationCardTop}>
-        {imageUrl && !imageFailed ? (
-          <Image
-            source={{ uri: imageUrl }}
-            style={styles.myDonationImage}
-            resizeMode="cover"
-            onError={() => setImageFailed(true)}
-          />
-        ) : (
-          <View style={[styles.myDonationImage, styles.myDonationImageFallback, { backgroundColor: roles.iconPrimarySurface }]}>
-            <MaterialCommunityIcons name="calendar-heart" size={28} color={roles.iconPrimaryColor} />
-          </View>
-        )}
+    <View style={[styles.eventHistoryCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
+      {imageUrl && !imageFailed ? (
+        <Image
+          source={{ uri: imageUrl }}
+          style={styles.eventHistoryImage}
+          resizeMode="cover"
+          onError={() => setImageFailed(true)}
+        />
+      ) : (
+        <View style={[styles.eventHistoryImage, styles.myDonationImageFallback, { backgroundColor: roles.iconPrimarySurface }]}>
+          <MaterialCommunityIcons name="calendar-heart" size={26} color={roles.iconPrimaryColor} />
+        </View>
+      )}
 
-        <View style={styles.myDonationCardCopy}>
-          <View style={styles.myDonationTitleRow}>
-            <Text style={[styles.myDonationTitle, { color: roles.headingText }]} numberOfLines={2}>
-              {drive?.event_title || 'Donation drive'}
-            </Text>
-            <View style={[styles.myDonationStatusBadge, { backgroundColor: roles.supportCardBackground }]}>
-              <Text style={[styles.myDonationStatusText, { color: roles.bodyText }]} numberOfLines={1}>
-                {visibilityLabel}
-              </Text>
-            </View>
-          </View>
-          <Text style={[styles.flowMetaText, { color: roles.bodyText }]} numberOfLines={1}>
-            {drive?.organization_name || 'Community event'}
-          </Text>
-          <Text style={[styles.flowMetaText, { color: roles.metaText }]} numberOfLines={1}>
+      <View style={styles.eventHistoryCopy}>
+        <Text style={[styles.eventHistoryTitle, { color: roles.headingText }]} numberOfLines={2}>
+          {drive?.event_title || 'Donation event'}
+        </Text>
+        <View style={styles.eventHistoryDateRow}>
+          <MaterialCommunityIcons name="calendar-check-outline" size={16} color={roles.iconPrimaryColor} />
+          <Text style={[styles.eventHistoryDate, { color: roles.metaText }]} numberOfLines={1}>
             {driveDateLabel}
-          </Text>
-        </View>
-      </View>
-
-      <View style={[styles.myDonationInfoBox, { backgroundColor: roles.supportCardBackground }]}>
-        <View style={styles.myDonationInfoRow}>
-          <MaterialCommunityIcons name="map-marker-outline" size={18} color={roles.iconPrimaryColor} />
-          <Text style={[styles.flowMetaText, { color: roles.bodyText }]} numberOfLines={2}>
-            {locationLabel}
-          </Text>
-        </View>
-        <View style={styles.myDonationInfoRow}>
-          <MaterialCommunityIcons name="account-group-outline" size={18} color={roles.iconPrimaryColor} />
-          <Text style={[styles.flowMetaText, { color: roles.bodyText }]} numberOfLines={2}>
-            {isDonationDrivePublic(drive) ? 'Open to all donors' : 'Private event invite only'}
           </Text>
         </View>
       </View>
@@ -1897,35 +1904,60 @@ function ManualEntryModal({
   const roles = resolveThemeRoles(resolvedTheme, { isMobile: isMobileViewport });
   const isOtherPersonHair = form.donorType === 'different';
 
+  if (!visible) return null;
+
   return (
-    <ModalShell
-      visible={visible}
-      title={isEditing ? 'Edit hair details' : 'Hair details'}
-      subtitle={isEditing
-        ? 'Update this hair item before generating the final QR.'
-        : 'Enter the donor and hair measurements.'}
-      onClose={onClose}
-      cardBackground={roles.defaultCardBackground}
-      scrollContent
-      footer={(
-        <View style={styles.modalFooterActions}>
-          <View style={styles.modalFooterActionHalf}>
-            <AppButton title="Cancel" variant="outline" onPress={onClose} />
+    <View style={styles.manualEntryPage}>
+      <View style={styles.manualEntryPageHeader}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Back"
+          onPress={onClose}
+          style={[styles.manualEntryBackButton, { borderColor: roles.defaultCardBorder }]}
+        >
+          <MaterialCommunityIcons name="arrow-left" size={22} color={roles.headingText} />
+        </Pressable>
+        <View style={styles.manualEntryHeaderCopy}>
+          <Text style={[styles.manualEntryPageTitle, { color: roles.headingText }]}>
+            {isEditing ? 'Edit hair details' : 'Hair details'}
+          </Text>
+          <Text
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.82}
+            style={[styles.manualEntryPageSubtitle, { color: roles.bodyText }]}
+          >
+            {isEditing
+              ? 'Update the hair item before generating its QR.'
+              : 'Enter donor and hair measurements.'}
+          </Text>
+        </View>
+      </View>
+
+      {aiPrefilled ? (
+        <View style={[
+          styles.manualEntryNotice,
+          {
+            backgroundColor: resolvedTheme?.backgroundColor || roles.pageBackground,
+            borderColor: roles.defaultCardBorder,
+          },
+        ]}>
+          <View style={[styles.manualEntryNoticeIcon, { backgroundColor: roles.iconPrimarySurface }]}>
+            <MaterialCommunityIcons
+              name="shield-check-outline"
+              size={20}
+              color={resolvedTheme?.primaryTextColor || roles.headingText}
+            />
           </View>
-          <View style={styles.modalFooterActionHalf}>
-            <AppButton title={isSaving ? 'Saving...' : (isEditing ? 'Update hair' : 'Save hair')} onPress={onSave} loading={isSaving} />
+          <View style={styles.manualEntryNoticeCopy}>
+            <Text style={[styles.manualEntryNoticeTitle, { color: roles.headingText }]}>Notice</Text>
+            <Text style={[styles.manualEntryNoticeText, { color: roles.bodyText }]}>
+              {isOtherPersonHair
+                ? 'Latest scan values are used only to pre-fill this form.'
+                : 'Length was filled from your latest scan. Adjust if needed.'}
+            </Text>
           </View>
         </View>
-      )}
-    >
-      {aiPrefilled ? (
-        <StatusBanner
-          message={isOtherPersonHair
-            ? 'Recent AI screening is used only to pre-fill this donation form. It will not create a CheckHair log for this donor.'
-            : 'Length filled from your latest scan. Adjust if needed.'}
-          variant="info"
-          style={styles.bannerSpacing}
-        />
       ) : null}
       {feedback?.message ? (
         <StatusBanner message={feedback.message} variant={feedback.variant} style={styles.bannerSpacing} />
@@ -1957,6 +1989,10 @@ function ManualEntryModal({
               placeholder="Example: Sister"
               error={errors.donorName}
               helperText="Use the name of the person who owns this hair."
+              shellStyle={[
+                styles.manualEntryInputShell,
+                { backgroundColor: resolvedTheme?.backgroundColor || roles.pageBackground },
+              ]}
             />
             <AppInput
               label="Relationship to submitter"
@@ -1966,6 +2002,10 @@ function ManualEntryModal({
               placeholder="Example: Sister, parent, friend"
               error={errors.relationshipToSubmitter}
               helperText="Required when submitting another person's hair."
+              shellStyle={[
+                styles.manualEntryInputShell,
+                { backgroundColor: resolvedTheme?.backgroundColor || roles.pageBackground },
+              ]}
             />
             <Pressable
               onPress={() => onChangeField('consentConfirmed', !form.consentConfirmed)}
@@ -2000,6 +2040,10 @@ function ManualEntryModal({
           placeholder={minimumLengthPlaceholder || 'Length'}
           error={errors.lengthValue}
           helperText={minimumLengthHelperText}
+          shellStyle={[
+            styles.manualEntryInputShell,
+            { backgroundColor: resolvedTheme?.backgroundColor || roles.pageBackground },
+          ]}
         />
         <ChoiceField
           label="Unit"
@@ -2037,20 +2081,34 @@ function ManualEntryModal({
         roles={roles}
       >
         {photo?.uri ? (
-          <Image source={{ uri: photo.uri }} style={[styles.photoPreview, { backgroundColor: roles.defaultCardBackground }]} resizeMode="cover" />
+          <Image source={{ uri: photo.uri }} style={[styles.photoPreview, { backgroundColor: resolvedTheme?.backgroundColor || roles.pageBackground }]} resizeMode="cover" />
         ) : (
-          <View style={[styles.photoPlaceholder, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
+          <View style={[styles.photoPlaceholder, { backgroundColor: resolvedTheme?.backgroundColor || roles.pageBackground, borderColor: roles.defaultCardBorder }]}>
             <AppIcon name="camera" size="md" state="muted" />
             <Text style={styles.photoPlaceholderText}>No photo selected</Text>
           </View>
         )}
-        <View style={styles.rowActions}>
-          <AppButton title="Gallery" variant="outline" fullWidth={false} onPress={() => onPickPhoto('library')} />
-          <AppButton title="Camera" fullWidth={false} onPress={() => onPickPhoto('camera')} />
+        <View style={[styles.rowActions, styles.manualPhotoActions]}>
+          <AppButton title="Gallery" variant="outline" fullWidth={false} onPress={() => onPickPhoto('library')} style={styles.manualEntryButton} />
+          <AppButton title="Camera" fullWidth={false} onPress={() => onPickPhoto('camera')} style={styles.manualEntryButton} />
         </View>
         {errors.photo ? <Text style={styles.inputError}>{errors.photo}</Text> : null}
       </ManualSection>
-    </ModalShell>
+
+      <View style={styles.manualEntryPageActions}>
+        <View style={styles.modalFooterActionHalf}>
+          <AppButton title="Cancel" variant="outline" onPress={onClose} style={styles.manualEntryButton} />
+        </View>
+        <View style={styles.modalFooterActionHalf}>
+          <AppButton
+            title={isSaving ? 'Saving...' : (isEditing ? 'Update hair' : 'Save hair')}
+            onPress={onSave}
+            loading={isSaving}
+            style={styles.manualEntryButton}
+          />
+        </View>
+      </View>
+    </View>
   );
 }
 
@@ -2258,8 +2316,64 @@ function BundlePreviewPanel({
   printingQrKey = '',
   onSaveQr,
   savingQrKey = '',
+  compact = false,
 }) {
   if (!bundles.length) return null;
+
+  if (compact) {
+    return (
+      <View style={styles.compactQrList}>
+        {bundles.map((bundle, index) => (
+          <View
+            key={bundle.key}
+            style={[styles.compactQrCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}
+          >
+            <View style={styles.compactQrHeader}>
+              <View>
+                <Text style={[styles.compactQrTitle, { color: roles.headingText }]}>Waybill QR</Text>
+                <Text style={[styles.compactQrMeta, { color: roles.metaText }]}>
+                  {[bundle.lengthLabel, bundle.donationCode].filter(Boolean).join(' · ')}
+                </Text>
+              </View>
+              {bundles.length > 1 ? (
+                <Text style={[styles.compactQrCount, { color: roles.iconPrimaryColor, backgroundColor: roles.iconPrimarySurface }]}>
+                  {index + 1} of {bundles.length}
+                </Text>
+              ) : null}
+            </View>
+            <View style={[styles.compactQrImageFrame, { backgroundColor: roles.pageBackground }]}>
+              <Image
+                source={{ uri: buildQrImageUrl(bundle.qrPayload, 240) }}
+                style={styles.compactQrImage}
+                resizeMode="contain"
+              />
+            </View>
+            <View style={styles.previewQrActionRow}>
+              <AppButton
+                title={printingQrKey === bundle.key ? 'Printing...' : 'Print'}
+                variant="outline"
+                size="sm"
+                fullWidth={false}
+                onPress={() => onPrintQr?.(bundle)}
+                loading={printingQrKey === bundle.key}
+                disabled={printingQrKey === bundle.key || savingQrKey === bundle.key}
+                style={styles.previewQrActionButton}
+              />
+              <AppButton
+                title={savingQrKey === bundle.key ? 'Downloading...' : 'Download'}
+                size="sm"
+                fullWidth={false}
+                onPress={() => onSaveQr?.(bundle)}
+                loading={savingQrKey === bundle.key}
+                disabled={savingQrKey === bundle.key || printingQrKey === bundle.key}
+                style={styles.previewQrActionButton}
+              />
+            </View>
+          </View>
+        ))}
+      </View>
+    );
+  }
 
   return (
     <View style={styles.bundlePreviewPanel}>
@@ -2330,7 +2444,7 @@ function BundlePreviewPanel({
                     style={styles.previewQrActionButton}
                   />
                   <AppButton
-                    title={savingQrKey === bundle.key ? 'Saving...' : 'Save QR'}
+                    title={savingQrKey === bundle.key ? 'Downloading...' : 'Download QR'}
                     size="sm"
                     fullWidth={false}
                     onPress={() => onSaveQr?.(bundle)}
@@ -2571,7 +2685,7 @@ function DonationHairSummaryScreen({
         body="Review your hair donation details before choosing a recipient or generating QR codes."
         onBack={onBack}
       />
-      <View style={[styles.summaryCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
+      <View style={[styles.summaryCard, { backgroundColor: roles.pageBackground, borderColor: roles.defaultCardBorder }]}>
         <Text style={[styles.summarySectionTitle, { color: roles.headingText }]}>{drive?.donation_drive_id ? 'Event' : 'Logistic donation'}</Text>
         <Text style={[styles.summaryMainText, { color: roles.headingText }]}>
           {drive?.donation_drive_id ? drive?.event_title || 'Selected donation drive' : 'Independent hair donation'}
@@ -2583,7 +2697,7 @@ function DonationHairSummaryScreen({
           Recipient default: {drive?.donation_drive_id ? getDriveOrganizationLabel(drive) : 'Partner organization'}
         </Text>
       </View>
-      <View style={[styles.summaryCard, { backgroundColor: roles.supportCardBackground, borderColor: roles.defaultCardBorder }]}>
+      <View style={[styles.summaryCard, { backgroundColor: roles.pageBackground, borderColor: roles.defaultCardBorder }]}>
         <View style={styles.summaryHeaderRow}>
           <Text style={[styles.summarySectionTitle, { color: roles.headingText }]}>Initial screening</Text>
           <View style={[styles.summaryStatusChip, { backgroundColor: isEligible ? roles.iconPrimarySurface : roles.supportCardBackground }]}>
@@ -2615,7 +2729,7 @@ function DonationHairSummaryScreen({
       <View style={styles.flowCardList}>
         <Text style={[styles.summarySectionTitle, { color: roles.headingText }]}>Hair to donate</Text>
         {hairItems.length ? hairItems.map((item, index) => (
-          <View key={`summary-hair-${item.key || index}`} style={[styles.summaryHairRow, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
+          <View key={`summary-hair-${item.key || index}`} style={[styles.summaryHairRow, { backgroundColor: roles.pageBackground, borderColor: roles.defaultCardBorder }]}>
             <View style={styles.summaryHeaderRow}>
               <Text style={[styles.summaryMainText, { color: roles.headingText }]}>Hair {index + 1}</Text>
               <View style={styles.summaryHairActions}>
@@ -2639,10 +2753,15 @@ function DonationHairSummaryScreen({
                 ) : null}
               </View>
             </View>
-            {item.donorName ? <Text style={[styles.flowMetaText, { color: roles.bodyText }]}>Donor: {item.donorName}</Text> : null}
-            <Text style={[styles.flowMetaText, { color: roles.bodyText }]}>Length: {item.lengthLabel}</Text>
-            <Text style={[styles.flowMetaText, { color: roles.bodyText }]}>Condition: {item.condition || '-'}</Text>
-            <Text style={[styles.flowMetaText, { color: roles.bodyText }]}>Color: {item.color || '-'}  Density: {item.density || '-'}</Text>
+            {item.donorName && item.sourceLabel !== 'My hair' ? (
+              <Text style={[styles.flowMetaText, { color: roles.headingText }]}>{item.donorName}</Text>
+            ) : null}
+            <Text style={[styles.flowMetaText, { color: roles.headingText }]}>
+              {item.lengthLabel} · {item.condition || 'Condition pending'}
+            </Text>
+            <Text style={[styles.flowMetaText, { color: roles.headingText }]}>
+              {item.color || 'Color pending'} · {item.density || 'Density pending'}
+            </Text>
           </View>
         )) : (
           <View style={[styles.emptyDonationCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
@@ -2758,37 +2877,73 @@ function RecipientChoiceScreen({ roles, drive, patients = [], selectedRecipient,
 function DonationQrCodesScreen({
   roles,
   bundles = [],
+  logisticsSettings = null,
   feedback,
   printingQrKey,
   savingQrKey,
   onBack,
   onPrintQr,
   onSaveQr,
-  onDone,
   allowQrActions = false,
 }) {
+  const destinationLines = React.useMemo(
+    () => getLogisticsAddressLines(logisticsSettings),
+    [logisticsSettings]
+  );
+
   return (
     <View style={styles.flowScreen}>
-      <DonationStepHeader
-        roles={roles}
-        title={allowQrActions ? 'Your Hair QR Codes' : 'Donation Submitted'}
-        body={allowQrActions
-          ? 'For independent donation, attach this QR to your parcel before shipping.'
-          : 'Waybill QR is issued by staff from the website after verification.'}
-        onBack={onBack}
-      />
-      <View style={[styles.successBanner, { backgroundColor: roles.iconPrimarySurface, borderColor: roles.primaryActionBackground }]}>
-        <MaterialCommunityIcons name="check-circle-outline" size={22} color={roles.iconPrimaryColor} />
-        <Text style={[styles.successBannerText, { color: roles.iconPrimaryColor }]}>Donation submitted successfully.</Text>
-      </View>
-      <View style={[styles.summaryCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
-        <Text style={[styles.summarySectionTitle, { color: roles.headingText }]}>Next step</Text>
-        <Text style={[styles.flowMetaText, { color: roles.bodyText }]}>
-          {allowQrActions
-            ? 'Print or save this QR and attach it to your hair parcel. Staff will scan it during receiving and QA.'
-            : 'Staff will issue the waybill QR from the website and provide it to you for attachment.'}
-        </Text>
-      </View>
+      {onBack && !allowQrActions ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Back to donation timeline"
+          onPress={onBack}
+          hitSlop={10}
+          style={({ pressed }) => [
+            styles.qrBackButton,
+            pressed ? styles.cardPressed : null,
+          ]}
+        >
+          <View style={[styles.qrBackIcon, {
+            backgroundColor: roles.defaultCardBackground,
+            borderColor: roles.defaultCardBorder,
+          }]}>
+            <MaterialCommunityIcons name="chevron-left" size={22} color={roles.iconPrimaryColor} />
+          </View>
+          <Text style={[styles.qrBackText, { color: roles.metaText }]}>Back</Text>
+        </Pressable>
+      ) : null}
+      {allowQrActions ? (
+        <View style={styles.qrDestinationRow}>
+          {onBack ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Back to donation timeline"
+              onPress={onBack}
+              hitSlop={10}
+              style={({ pressed }) => [
+                styles.qrDestinationBack,
+                {
+                  backgroundColor: roles.defaultCardBackground,
+                  borderColor: roles.defaultCardBorder,
+                },
+                pressed ? styles.cardPressed : null,
+              ]}
+            >
+              <MaterialCommunityIcons name="chevron-left" size={21} color={roles.iconPrimaryColor} />
+            </Pressable>
+          ) : null}
+          <View style={[styles.qrDestinationCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
+            <MaterialCommunityIcons name="map-marker-outline" size={17} color={roles.iconPrimaryColor} />
+            <View style={styles.qrDestinationCopy}>
+              <Text style={[styles.qrDestinationLabel, { color: roles.metaText }]}>SEND TO</Text>
+              <Text style={[styles.qrDestinationValue, { color: roles.bodyText }]} numberOfLines={2}>
+                {destinationLines.length ? destinationLines.join(', ') : 'Organization address unavailable'}
+              </Text>
+            </View>
+          </View>
+        </View>
+      ) : null}
       {allowQrActions ? (
         <BundlePreviewPanel
           roles={roles}
@@ -2797,10 +2952,162 @@ function DonationQrCodesScreen({
           printingQrKey={printingQrKey}
           onSaveQr={onSaveQr}
           savingQrKey={savingQrKey}
+          compact
         />
       ) : null}
       {feedback?.message ? <StatusBanner message={feedback.message} variant={feedback.variant} /> : null}
-      <AppButton title="Done" onPress={onDone} />
+    </View>
+  );
+}
+
+function WalkInScheduleScreen({
+  roles,
+  submission,
+  appointment = null,
+  readOnly = false,
+  isScheduling = false,
+  onBack,
+  onSchedule,
+}) {
+  const savedDate = String(appointment?.appointment_start_at || '').slice(0, 10);
+  const savedWindow = React.useMemo(() => {
+    if (!appointment?.appointment_start_at || !appointment?.appointment_end_at) return '';
+    const formatTime = (value) => new Date(value).toLocaleTimeString('en-PH', {
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+    return `${formatTime(appointment.appointment_start_at)} - ${formatTime(appointment.appointment_end_at)}`;
+  }, [appointment?.appointment_end_at, appointment?.appointment_start_at]);
+  const dateOptions = React.useMemo(() => {
+    const options = buildWalkInDateOptions();
+    if (!savedDate || options.some((option) => option.value === savedDate)) return options;
+    return [{
+      value: savedDate,
+      label: new Date(`${savedDate}T00:00:00`).toLocaleDateString('en-PH', {
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+      }),
+    }, ...options];
+  }, [savedDate]);
+  const [selectedDate, setSelectedDate] = React.useState(() => savedDate || dateOptions[0]?.value || '');
+  const [selectedWindow, setSelectedWindow] = React.useState(
+    () => savedWindow || WALK_IN_DROPOFF_WINDOWS[0] || ''
+  );
+
+  return (
+    <View style={styles.flowScreen}>
+      <View style={styles.manualEntryPageHeader}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Back to hair details"
+          onPress={onBack}
+          style={[styles.manualEntryBackButton, { borderColor: roles.defaultCardBorder }]}
+        >
+          <MaterialCommunityIcons name="arrow-left" size={22} color={roles.headingText} />
+        </Pressable>
+        <View style={styles.manualEntryHeaderCopy}>
+          <Text style={[styles.manualEntryPageTitle, { color: roles.headingText }]}>Schedule drop-off</Text>
+          <Text style={[styles.manualEntryPageSubtitle, { color: roles.bodyText }]}>
+            {readOnly ? 'Your confirmed drop-off appointment.' : 'Choose when you will bring your donation.'}
+          </Text>
+        </View>
+      </View>
+
+      <View style={[styles.walkInPagePanel, { borderColor: roles.defaultCardBorder }]}>
+        {readOnly ? (
+          <View style={styles.walkInWindowGrid}>
+            <View style={[styles.walkInWindowChip, {
+              backgroundColor: roles.pageBackground,
+              borderColor: roles.defaultCardBorder,
+            }]}>
+              <Text style={[styles.walkInLabel, { color: roles.metaText }]}>Date</Text>
+              <Text style={[styles.walkInChipText, { color: roles.headingText }]}>
+                {selectedDate
+                  ? new Date(`${selectedDate}T00:00:00`).toLocaleDateString('en-PH', {
+                      weekday: 'long',
+                      month: 'long',
+                      day: 'numeric',
+                      year: 'numeric',
+                    })
+                  : 'Not scheduled'}
+              </Text>
+            </View>
+            <View style={[styles.walkInWindowChip, {
+              backgroundColor: roles.pageBackground,
+              borderColor: roles.defaultCardBorder,
+            }]}>
+              <Text style={[styles.walkInLabel, { color: roles.metaText }]}>Arrival time</Text>
+              <Text style={[styles.walkInChipText, { color: roles.headingText }]}>
+                {selectedWindow || 'Not scheduled'}
+              </Text>
+            </View>
+          </View>
+        ) : (
+          <>
+        <View style={styles.walkInChoiceGroup}>
+          <Text style={[styles.walkInLabel, { color: roles.headingText }]}>Date</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.walkInChipRow}>
+            {dateOptions.map((option) => {
+              const selected = selectedDate === option.value;
+              return (
+                <Pressable
+                  key={option.value}
+                  onPress={() => setSelectedDate(option.value)}
+                  style={[
+                    styles.walkInChip,
+                    {
+                      backgroundColor: selected ? roles.primaryActionBackground : roles.pageBackground,
+                      borderColor: selected ? roles.primaryActionBackground : roles.defaultCardBorder,
+                    },
+                  ]}
+                >
+                  <Text style={[styles.walkInChipText, { color: selected ? roles.primaryActionText : roles.headingText }]}>
+                    {option.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </View>
+
+        <View style={styles.walkInChoiceGroup}>
+          <Text style={[styles.walkInLabel, { color: roles.headingText }]}>Arrival time</Text>
+          <View style={styles.walkInWindowGrid}>
+            {WALK_IN_DROPOFF_WINDOWS.map((window) => {
+              const selected = selectedWindow === window;
+              return (
+                <Pressable
+                  key={window}
+                  onPress={() => setSelectedWindow(window)}
+                  style={[
+                    styles.walkInWindowChip,
+                    {
+                      backgroundColor: selected ? roles.primaryActionBackground : roles.pageBackground,
+                      borderColor: selected ? roles.primaryActionBackground : roles.defaultCardBorder,
+                    },
+                  ]}
+                >
+                  <Text style={[styles.walkInChipText, { color: selected ? roles.primaryActionText : roles.headingText }]}>
+                    {window}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
+
+        <AppButton
+          title={isScheduling
+            ? 'Saving appointment...'
+            : (appointment?.appointment_id ? 'Update appointment' : 'Confirm appointment')}
+          onPress={() => onSchedule?.({ submission, scheduleDate: selectedDate, timeWindow: selectedWindow })}
+          loading={isScheduling}
+          disabled={!submission?.submission_id || !selectedDate || !selectedWindow || isScheduling}
+        />
+          </>
+        )}
+      </View>
     </View>
   );
 }
@@ -2808,18 +3115,11 @@ function DonationQrCodesScreen({
 function MyJoinedDonationsScreen({
   roles,
   logisticsSettings = null,
-  activeSubmission = null,
-  logistics = null,
   donationItems = [],
   onViewDonation,
-  onScheduleDropoff,
-  isSchedulingDropoff = false,
 }) {
   const [sendOffMapFailed, setSendOffMapFailed] = React.useState(false);
   const [isSendOffExpanded, setIsSendOffExpanded] = React.useState(false);
-  const dateOptions = React.useMemo(() => buildWalkInDateOptions(), []);
-  const [selectedDropoffDate, setSelectedDropoffDate] = React.useState(() => dateOptions[0]?.value || '');
-  const [selectedDropoffWindow, setSelectedDropoffWindow] = React.useState(WALK_IN_DROPOFF_WINDOWS[0] || '');
   const shippingFeeNote = getShippingFeeNote();
   const sendOffAddressRows = React.useMemo(
     () => getLogisticsSummaryRows(logisticsSettings),
@@ -2833,18 +3133,10 @@ function MyJoinedDonationsScreen({
     (donationItems || []).filter((item) => (
       item?.submission?.submission_id
       && !Number(item?.submission?.donation_drive_id)
+      && item?.submission?.from_event !== true
       && !isClosedDonationStatus(item?.submission?.status)
     ))
   ), [donationItems]);
-  const hasSchedulableDonation = Boolean(
-    activeSubmission?.submission_id
-    && !Number(activeSubmission?.donation_drive_id)
-    && !isClosedDonationStatus(activeSubmission?.status)
-  );
-  const savedQueueNumber = formatQueueNumber(logistics?.queue_number);
-  const savedScheduleDate = logistics?.pickup_schedule_date || '';
-  const savedDropoffWindow = logistics?.dropoff_window || '';
-
   React.useEffect(() => {
     setSendOffMapFailed(false);
   }, [sendOffMapPreviewUrl]);
@@ -2919,100 +3211,6 @@ function MyJoinedDonationsScreen({
         ) : null}
       </View>
 
-      <View style={[styles.walkInCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
-        <View style={styles.summaryHeaderRow}>
-          <View style={styles.walkInHeaderCopy}>
-            <Text style={[styles.summarySectionTitle, { color: roles.headingText }]}>Walk-in drop-off</Text>
-            <Text style={[styles.flowMetaText, { color: roles.bodyText }]}>
-              Schedule when you will bring the hair donation to the send-off site.
-            </Text>
-          </View>
-          {savedQueueNumber ? (
-            <View style={[styles.summaryStatusChip, { backgroundColor: roles.iconPrimarySurface }]}>
-              <Text style={[styles.summaryStatusText, { color: roles.iconPrimaryColor }]}>{savedQueueNumber}</Text>
-            </View>
-          ) : null}
-        </View>
-
-        {savedScheduleDate ? (
-          <View style={[styles.walkInSavedRow, { backgroundColor: roles.supportCardBackground }]}>
-            <MaterialCommunityIcons name="calendar-check-outline" size={18} color={roles.iconPrimaryColor} />
-            <Text style={[styles.flowMetaText, { color: roles.bodyText }]}>
-              {formatDateLabel(`${savedScheduleDate}T00:00:00`)}{savedDropoffWindow ? `, ${savedDropoffWindow}` : ''}
-            </Text>
-          </View>
-        ) : null}
-
-        <View style={styles.walkInChoiceGroup}>
-          <Text style={[styles.walkInLabel, { color: roles.metaText }]}>Date</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.walkInChipRow}>
-            {dateOptions.map((option) => {
-              const isSelected = selectedDropoffDate === option.value;
-              return (
-                <Pressable
-                  key={option.value}
-                  accessibilityRole="button"
-                  onPress={() => setSelectedDropoffDate(option.value)}
-                  style={[
-                    styles.walkInChip,
-                    {
-                      backgroundColor: isSelected ? roles.primaryActionBackground : roles.supportCardBackground,
-                      borderColor: isSelected ? roles.primaryActionBackground : roles.defaultCardBorder,
-                    },
-                  ]}
-                >
-                  <Text style={[styles.walkInChipText, { color: isSelected ? roles.primaryActionText : roles.bodyText }]}>
-                    {option.label}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
-        </View>
-
-        <View style={styles.walkInChoiceGroup}>
-          <Text style={[styles.walkInLabel, { color: roles.metaText }]}>Time window</Text>
-          <View style={styles.walkInWindowGrid}>
-            {WALK_IN_DROPOFF_WINDOWS.map((window) => {
-              const isSelected = selectedDropoffWindow === window;
-              return (
-                <Pressable
-                  key={window}
-                  accessibilityRole="button"
-                  onPress={() => setSelectedDropoffWindow(window)}
-                  style={[
-                    styles.walkInWindowChip,
-                    {
-                      backgroundColor: isSelected ? roles.primaryActionBackground : roles.supportCardBackground,
-                      borderColor: isSelected ? roles.primaryActionBackground : roles.defaultCardBorder,
-                    },
-                  ]}
-                >
-                  <Text style={[styles.walkInChipText, { color: isSelected ? roles.primaryActionText : roles.bodyText }]}>
-                    {window}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
-        </View>
-
-        <AppButton
-          title={savedScheduleDate ? 'Update schedule' : 'Schedule drop-off'}
-          onPress={() => onScheduleDropoff?.({
-            scheduleDate: selectedDropoffDate,
-            timeWindow: selectedDropoffWindow,
-          })}
-          loading={isSchedulingDropoff}
-          disabled={!hasSchedulableDonation || isSchedulingDropoff}
-        />
-        {!hasSchedulableDonation ? (
-          <Text style={[styles.flowMetaText, { color: roles.metaText }]}>
-            Add a logistic donation first so the schedule can be linked to your QR.
-          </Text>
-        ) : null}
-      </View>
-
       {independentDonationItems.length ? (
       <View style={styles.flowCardList}>
         <Text style={[styles.summarySectionTitle, { color: roles.headingText }]}>Donation in progress</Text>
@@ -3038,6 +3236,9 @@ function MyJoinedDonationsScreen({
                   <Text style={[styles.summaryMainText, { color: roles.headingText }]} numberOfLines={2}>
                     {item.title || 'Independent hair donation'}
                   </Text>
+                  <Text style={[styles.flowMetaText, { color: roles.headingText }]}>
+                    {item.identifier}
+                  </Text>
                   <Text style={[styles.flowMetaText, { color: roles.bodyText }]}>
                     {item.hairCount || item.previewItems?.length || 1} hair item{(item.hairCount || item.previewItems?.length || 1) === 1 ? '' : 's'}
                   </Text>
@@ -3054,7 +3255,7 @@ function MyJoinedDonationsScreen({
                 </Text>
               ) : null}
               <Text style={[styles.flowMetaText, { color: roles.metaText }]}>
-                Tap to view timeline
+                {formatDateTimeLabel(item.updatedAt)}
               </Text>
             </Pressable>
           );
@@ -3373,9 +3574,10 @@ function DonationTimelineStatusScreen({
   timelineEvents = [],
   parcelImages = [],
   certificate,
-  accountDonorName,
   onBack,
   onViewDonationQr,
+  onViewAppointment,
+  onViewCertificate,
   onCancelDonation,
 }) {
   const primaryPreview = previewItems[0] || item?.previewItems?.[0] || null;
@@ -3393,15 +3595,7 @@ function DonationTimelineStatusScreen({
     timelineStages,
     timelineEvents,
   });
-  const recipientLabel = item?.recipientName || item?.organizationName || 'Donation drive';
   const isEventDonation = Boolean(item?.submission?.donation_drive_id || item?.drive?.donation_drive_id);
-  const hasHairPreview = Boolean(primaryPreview);
-  const heroTitle = hasHairPreview
-    ? `Hair #1 - ${primaryPreview?.donorName || accountDonorName || 'Donor'}`
-    : item?.title || item?.drive?.event_title || 'Hair donation';
-  const attendanceLabel = isRsvpCheckedIn(registration)
-    ? 'Marked present'
-    : (registration?.attendance_status || registration?.registration_status || item?.statusLabel || 'Not recorded');
   const canViewDonationQr = Boolean(
     !isEventDonation
     && isSubmittedDonationItem({ submission: item?.submission })
@@ -3413,51 +3607,124 @@ function DonationTimelineStatusScreen({
 
   return (
     <View style={styles.flowScreen}>
-      <DonationStepHeader
-        roles={roles}
-        title="Donation Status"
-        body="View donation details and progress."
-        onBack={onBack}
-      />
-
       <View style={[styles.timelineHero, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
-        <View style={styles.timelineHeroTop}>
-          <View style={styles.timelineHeroCopy}>
-            <Text style={[styles.timelineHeroTitle, { color: roles.headingText }]} numberOfLines={2}>
-              {heroTitle}
+        {onBack ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Back to donations"
+            onPress={onBack}
+            style={({ pressed }) => [
+              styles.timelineBackButton,
+              { backgroundColor: roles.iconPrimarySurface },
+              pressed ? styles.timelineBackButtonPressed : null,
+            ]}
+          >
+            <MaterialCommunityIcons name="arrow-left" size={20} color={roles.iconPrimaryColor} />
+          </Pressable>
+        ) : null}
+
+        <View style={styles.timelineHeroMetrics}>
+          <View style={styles.timelineMetricGridCompact}>
+            <View style={styles.timelineCompactMetric}>
+              <Text style={[styles.summaryMetricLabel, { color: roles.metaText }]}>Length</Text>
+              <Text style={[styles.summaryMetricValue, { color: roles.headingText }]}>{primaryPreview?.lengthLabel || 'Not recorded'}</Text>
+            </View>
+            <View style={[styles.timelineMetricDivider, { backgroundColor: roles.defaultCardBorder }]} />
+            <View style={styles.timelineCompactMetric}>
+              <Text style={[styles.summaryMetricLabel, { color: roles.metaText }]}>Submitted</Text>
+              <Text style={[styles.summaryMetricValue, { color: roles.headingText }]}>{submittedAt ? formatDateLabel(submittedAt) : 'Not submitted'}</Text>
+            </View>
+          </View>
+          {canViewDonationQr ? (
+            <AppButton
+              title="View Donation QR"
+              leading={<MaterialCommunityIcons name="qrcode-scan" size={18} color={roles.primaryActionText} />}
+              onPress={onViewDonationQr}
+            />
+          ) : null}
+        </View>
+      </View>
+
+      {isEventDonation ? (
+        <View style={[styles.timelineEventDetailsCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
+          <View style={[styles.timelineEventDetailsIcon, { backgroundColor: roles.iconPrimarySurface }]}>
+            <MaterialCommunityIcons name="calendar-heart" size={22} color={roles.iconPrimaryColor} />
+          </View>
+          <View style={styles.timelineEventDetailsCopy}>
+            <Text style={[styles.timelineEventDetailsTitle, { color: roles.headingText }]} numberOfLines={2}>
+              {item?.drive?.event_title || item?.title || 'Donation event'}
             </Text>
-            <View style={[styles.timelineHeroChip, { backgroundColor: roles.iconPrimarySurface }]}>
-              <Text style={[styles.timelineHeroChipText, { color: roles.iconPrimaryColor }]}>
-                {item?.statusLabel || 'Processing'}
+            <View style={styles.timelineEventDetailsRow}>
+              <MaterialCommunityIcons name="calendar-outline" size={16} color={roles.iconPrimaryColor} />
+              <Text style={[styles.timelineEventDetailsText, { color: roles.bodyText }]} numberOfLines={2}>
+                {item?.dateLabel || (submittedAt ? formatDateLabel(submittedAt) : 'Date unavailable')}
+              </Text>
+            </View>
+            <View style={styles.timelineEventDetailsRow}>
+              <MaterialCommunityIcons name="map-marker-outline" size={16} color={roles.iconPrimaryColor} />
+              <Text style={[styles.timelineEventDetailsText, { color: roles.bodyText }]} numberOfLines={3}>
+                {item?.locationLabel || getDriveLocationLabel(item?.drive)}
+              </Text>
+            </View>
+            <View style={styles.timelineEventDetailsRow}>
+              <MaterialCommunityIcons name="domain" size={16} color={roles.iconPrimaryColor} />
+              <Text style={[styles.timelineEventDetailsText, { color: roles.bodyText }]} numberOfLines={2}>
+                {item?.organizationName || getDriveOrganizationLabel(item?.drive)}
               </Text>
             </View>
           </View>
-          <View style={[styles.flowIconCircle, { backgroundColor: roles.iconPrimarySurface }]}>
-            <MaterialCommunityIcons name="content-cut" size={24} color={roles.iconPrimaryColor} />
-          </View>
         </View>
-        <View style={[styles.timelineMetricGrid, { borderTopColor: roles.defaultCardBorder }]}>
-          <View style={styles.timelineMetric}>
-            <Text style={[styles.summaryMetricLabel, { color: roles.metaText }]}>{hasHairPreview ? 'Length' : 'Attendance'}</Text>
-            <Text style={[styles.summaryMetricValue, { color: roles.headingText }]}>{hasHairPreview ? (primaryPreview?.lengthLabel || 'Not recorded') : attendanceLabel}</Text>
-          </View>
-          <View style={styles.timelineMetric}>
-            <Text style={[styles.summaryMetricLabel, { color: roles.metaText }]}>{hasHairPreview ? 'Submitted' : 'Event date'}</Text>
-            <Text style={[styles.summaryMetricValue, { color: roles.headingText }]}>{hasHairPreview ? (submittedAt ? formatDateLabel(submittedAt) : 'Not submitted') : (item?.dateLabel || (submittedAt ? formatDateLabel(submittedAt) : 'Not recorded'))}</Text>
-          </View>
-          <View style={styles.timelineMetric}>
-            <Text style={[styles.summaryMetricLabel, { color: roles.metaText }]}>Recipient</Text>
-            <Text style={[styles.summaryMetricValue, { color: roles.headingText }]} numberOfLines={2}>{recipientLabel}</Text>
-          </View>
+      ) : null}
+
+      {timelineEvents.length ? (
+        <View style={[styles.summaryCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
+          <Text style={[styles.summarySectionTitle, { color: roles.headingText }]}>Recent update</Text>
+          {timelineEvents.slice(0, 1).map((event) => {
+            const isCertificateEvent = certificate?.certificate_id
+              && String(event.key || '').startsWith('certificate-');
+
+            if (isCertificateEvent) {
+              return (
+                <View
+                  key={event.key}
+                  style={[styles.certificateUpdateRow, { backgroundColor: roles.supportCardBackground, borderColor: roles.supportCardBorder }]}
+                >
+                  <View style={[styles.certificateUpdateIcon, { backgroundColor: roles.iconPrimarySurface }]}>
+                    <MaterialCommunityIcons name="certificate-outline" size={22} color={roles.iconPrimaryColor} />
+                  </View>
+                  <View style={styles.certificateUpdateCopy}>
+                    <Text style={[styles.certificateUpdateTitle, { color: roles.headingText }]}>Certificate ready</Text>
+                    {event.timestamp ? (
+                      <Text style={[styles.certificateUpdateDate, { color: roles.metaText }]}>{event.timestamp}</Text>
+                    ) : null}
+                  </View>
+                  <AppButton
+                    title="View"
+                    size="sm"
+                    fullWidth={false}
+                    onPress={onViewCertificate}
+                  />
+                </View>
+              );
+            }
+
+            return (
+              <View key={event.key} style={styles.timelineEventRow}>
+                <Text style={[styles.summaryMainText, { color: roles.headingText }]}>{event.title}</Text>
+                <Text style={[styles.flowMetaText, { color: roles.bodyText }]}>{event.description}</Text>
+                {event.timestamp ? <Text style={[styles.flowMetaText, { color: roles.metaText }]}>{event.timestamp}</Text> : null}
+                {event.imageUrl ? (
+                  <Image
+                    source={{ uri: event.imageUrl }}
+                    style={styles.timelineEventImage}
+                    resizeMode="cover"
+                  />
+                ) : null}
+              </View>
+            );
+          })}
         </View>
-        {canViewDonationQr ? (
-          <AppButton
-            title="View Donation QR"
-            leading={<MaterialCommunityIcons name="qrcode-scan" size={18} color={roles.primaryActionText} />}
-            onPress={onViewDonationQr}
-          />
-        ) : null}
-      </View>
+      ) : null}
 
       <View style={styles.timelineSection}>
         <Text style={[styles.summarySectionTitle, { color: roles.headingText }]}>Journey Timeline</Text>
@@ -3466,6 +3733,12 @@ function DonationTimelineStatusScreen({
             const isCompleted = stage.state === 'completed';
             const isCurrent = stage.state === 'current';
             const isCancelled = stage.state === 'cancelled';
+            const canOpenWaybill = !isEventDonation
+              && stage.key === 'waybill_ready'
+              && Boolean(onViewDonationQr);
+            const isActionableStage = canOpenWaybill;
+            const stageAction = onViewDonationQr;
+            const TimelineStageCard = isActionableStage ? Pressable : View;
             const stageDisplayDate = stage.displayEvidenceAt || stage.completedAt || stage.evidenceAt || '';
             const markerColor = isCancelled ? roles.errorText : roles.primaryActionBackground;
             const stageImages = index === 0
@@ -3495,22 +3768,36 @@ function DonationTimelineStatusScreen({
                     <View style={[styles.timelineStageConnector, { backgroundColor: isCompleted ? roles.primaryActionBackground : roles.defaultCardBorder }]} />
                   ) : null}
                 </View>
-                <View style={[
-                  styles.timelineStageCard,
-                  {
-                    backgroundColor: isCurrent ? roles.iconPrimarySurface : roles.defaultCardBackground,
-                    borderColor: isCancelled ? roles.errorText : (isCurrent ? roles.primaryActionBackground : roles.defaultCardBorder),
-                  },
-                ]}>
+                <TimelineStageCard
+                  accessibilityRole={isActionableStage ? 'button' : undefined}
+                  accessibilityLabel={canOpenWaybill ? 'Open waybill QR' : undefined}
+                  onPress={isActionableStage ? stageAction : undefined}
+                  style={isActionableStage
+                    ? ({ pressed }) => [
+                        styles.timelineStageCard,
+                        {
+                          backgroundColor: isCurrent ? roles.heroBackground : roles.defaultCardBackground,
+                          borderColor: isCancelled ? roles.errorText : (isCurrent ? roles.heroBorder : roles.defaultCardBorder),
+                          opacity: pressed ? 0.78 : 1,
+                        },
+                      ]
+                    : [
+                        styles.timelineStageCard,
+                        {
+                          backgroundColor: isCurrent ? roles.heroBackground : roles.defaultCardBackground,
+                          borderColor: isCancelled ? roles.errorText : (isCurrent ? roles.heroBorder : roles.defaultCardBorder),
+                        },
+                      ]}
+                >
                   <View style={styles.timelineStageHeader}>
-                    <Text style={[styles.timelineStageTitle, { color: isCancelled ? roles.errorText : (isCurrent ? roles.iconPrimaryColor : roles.headingText) }]}>
+                    <Text style={[styles.timelineStageTitle, { color: isCancelled ? roles.errorText : (isCurrent ? roles.heroHeadingText : roles.headingText) }]}>
                       {stage.label || stage.title || 'Donation update'}
                     </Text>
-                    <Text style={[styles.timelineStageDate, { color: roles.metaText }]}>
+                    <Text style={[styles.timelineStageDate, { color: isCurrent ? roles.heroMetaText : roles.metaText }]}>
                       {stageDisplayDate ? formatDateTimeLabel(stageDisplayDate) : (stage.progressLabel || 'Waiting')}
                     </Text>
                   </View>
-                  <Text style={[styles.flowMetaText, { color: roles.bodyText }]}>{getTimelineStageDescription(stage)}</Text>
+                  <Text style={[styles.flowMetaText, { color: isCurrent ? roles.heroBodyText : roles.bodyText }]}>{getTimelineStageDescription(stage)}</Text>
                   {stageImages.length ? (
                     <ScrollView
                       horizontal
@@ -3535,9 +3822,17 @@ function DonationTimelineStatusScreen({
                     </ScrollView>
                   ) : null}
                   {stage.statusLabel ? (
-                    <Text style={[styles.timelineStageBadgeText, { color: isCancelled ? roles.errorText : roles.iconPrimaryColor }]}>{stage.statusLabel}</Text>
+                    <Text style={[styles.timelineStageBadgeText, { color: isCancelled ? roles.errorText : (isCurrent ? roles.heroHeadingText : roles.iconPrimaryColor) }]}>{stage.statusLabel}</Text>
                   ) : null}
-                </View>
+                  {isActionableStage ? (
+                    <View style={styles.timelineStageAction}>
+                      <Text style={[styles.timelineStageActionText, { color: roles.primaryActionBackground }]}>
+                        Open QR
+                      </Text>
+                      <MaterialCommunityIcons name="arrow-right" size={16} color={roles.primaryActionBackground} />
+                    </View>
+                  ) : null}
+                </TimelineStageCard>
               </View>
             );
           }) : (
@@ -3550,26 +3845,6 @@ function DonationTimelineStatusScreen({
           )}
         </View>
       </View>
-
-      {timelineEvents.length ? (
-        <View style={[styles.summaryCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
-          <Text style={[styles.summarySectionTitle, { color: roles.headingText }]}>Recent updates</Text>
-          {timelineEvents.slice(0, 4).map((event) => (
-            <View key={event.key} style={styles.timelineEventRow}>
-              <Text style={[styles.summaryMainText, { color: roles.headingText }]}>{event.title}</Text>
-              <Text style={[styles.flowMetaText, { color: roles.bodyText }]}>{event.description}</Text>
-              {event.timestamp ? <Text style={[styles.flowMetaText, { color: roles.metaText }]}>{event.timestamp}</Text> : null}
-              {event.imageUrl ? (
-                <Image
-                  source={{ uri: event.imageUrl }}
-                  style={styles.timelineEventImage}
-                  resizeMode="cover"
-                />
-              ) : null}
-            </View>
-          ))}
-        </View>
-      ) : null}
 
       {canCancel ? (
         <AppButton title="Cancel My Donation" variant="danger" onPress={onCancelDonation} />
@@ -3731,7 +4006,9 @@ function DonationSubmitPreviewModal({
     setSavingQrKey('');
     setPrintFeedback({
       message: result.success
-        ? 'QR image saved to this device. Attach it to the parcel or hair bundle before submitting at the donation site.'
+        ? (result.shared
+          ? 'Choose where to save or share the QR image, then attach it to the parcel.'
+          : 'QR image saved to this device. Attach it to the parcel or hair bundle before submitting at the donation site.')
         : (result.error || 'Unable to save the QR image right now.'),
       variant: result.success ? 'success' : 'error',
     });
@@ -3861,11 +4138,18 @@ export function DonorDonationStatusScreen() {
   const [isSavingBundle, setIsSavingBundle] = React.useState(false);
   const [isCancelModalOpen, setIsCancelModalOpen] = React.useState(false);
   const [isHairEligibilityPromptOpen, setIsHairEligibilityPromptOpen] = React.useState(false);
+  const [isDonationMethodModalOpen, setIsDonationMethodModalOpen] = React.useState(false);
+  const [selectedLogisticMethod, setSelectedLogisticMethod] = React.useState('');
+  const [pendingWalkInSubmission, setPendingWalkInSubmission] = React.useState(null);
+  const [walkInScheduleReturnScreen, setWalkInScheduleReturnScreen] = React.useState(
+    DONATION_MODULE_SCREEN.MY_DONATIONS
+  );
   const [isCancellingDonation, setIsCancellingDonation] = React.useState(false);
   const [, setIsSubmitPreviewOpen] = React.useState(false);
   const [isGeneratingEventRsvp, setIsGeneratingEventRsvp] = React.useState(false);
   const [selectedDriveForDonation, setSelectedDriveForDonation] = React.useState(null);
   const [donationModuleScreen, setDonationModuleScreen] = React.useState(DONATION_MODULE_SCREEN.EVENTS);
+  const [activeDonationTabKey, setActiveDonationTabKey] = React.useState('hair-event');
   const [recipientPatients, setRecipientPatients] = React.useState([]);
   const [selectedRecipient, setSelectedRecipient] = React.useState({ type: 'organization', patient: null });
   const [selectedDonationStatusItem, setSelectedDonationStatusItem] = React.useState(null);
@@ -3910,6 +4194,7 @@ export function DonorDonationStatusScreen() {
     setIsLoading(false);
     setIsRefreshing(false);
     if (result.error) setScreenError(getFriendlyDonationModuleError(result.error));
+    return mergedResult;
   }, [profile?.user_id, user?.id]);
 
   const handleRefreshModuleData = React.useCallback(async () => {
@@ -4036,17 +4321,6 @@ export function DonorDonationStatusScreen() {
     : `${getMainIneligibilityReason(moduleData?.latestAiEligibility)} Open Analysis to review your latest result.`;
   const hasOngoingDonation = Boolean(moduleData?.hasOngoingDonation);
   const effectiveDonationModuleScreen = donationModuleScreen;
-  const activeDonationTabKey = React.useMemo(() => (
-    [
-      DONATION_MODULE_SCREEN.EVENTS,
-      DONATION_MODULE_SCREEN.EVENT_DETAILS,
-      DONATION_MODULE_SCREEN.SUMMARY,
-      DONATION_MODULE_SCREEN.RECIPIENT,
-      DONATION_MODULE_SCREEN.QR_CODES,
-    ].includes(effectiveDonationModuleScreen)
-      ? 'hair-event'
-      : 'logistic'
-  ), [effectiveDonationModuleScreen]);
   const independentQrState = moduleData?.independentQrState || null;
   const hasGeneratedDonationQr = Boolean(independentQrState?.reference);
 
@@ -4080,19 +4354,16 @@ export function DonorDonationStatusScreen() {
     if (hasSubmittedDonationForRouteDrive) return;
 
     if (matchingDrive && donationModuleScreen === DONATION_MODULE_SCREEN.EVENTS && !hasSubmittedDonationForRouteDrive) {
+      setActiveDonationTabKey('hair-event');
       setSelectedDriveForDonation(matchingDrive);
       setDonationModuleScreen(DONATION_MODULE_SCREEN.EVENT_DETAILS);
-      return;
-    }
-
-    if (moduleData?.hasOngoingDonation) {
-      setDonationModuleScreen(DONATION_MODULE_SCREEN.MY_DONATIONS);
       return;
     }
 
     // Only auto-open event details from route when the module is still on the events list.
     // This prevents route-based state from overriding the next-step flow (summary/QR screens).
     if (matchingDrive && donationModuleScreen === DONATION_MODULE_SCREEN.EVENTS) {
+      setActiveDonationTabKey('hair-event');
       setSelectedDriveForDonation(matchingDrive);
       setDonationModuleScreen(DONATION_MODULE_SCREEN.EVENT_DETAILS);
     }
@@ -4100,8 +4371,8 @@ export function DonorDonationStatusScreen() {
     donationModuleScreen,
     moduleData?.activeSubmissions,
     moduleData?.drives,
-    moduleData?.hasOngoingDonation,
     moduleData?.latestSubmission,
+    moduleData?.appointment,
     routeParams.driveId,
   ]);
 
@@ -4327,11 +4598,29 @@ export function DonorDonationStatusScreen() {
             key: `${previewItem.key}-${item.qrPayload || index}`,
           }))
       ));
+      const flowRecord = (moduleData?.submissionFlowRecords || []).find(
+        (record) => Number(record?.submission_id) === Number(primarySubmission?.submission_id)
+      ) || null;
+      const itemLogistics = flowRecord?.logistics || (
+        Number(moduleData?.logistics?.submission_id) === Number(primarySubmission?.submission_id)
+          ? moduleData?.logistics
+          : null
+      );
+      const itemAppointment = flowRecord?.appointment || (
+        Number(moduleData?.appointment?.submission_id) === Number(primarySubmission?.submission_id)
+          ? moduleData?.appointment
+          : null
+      );
       const statusMeta = getDonationCardMeta({
         submission: primarySubmission,
         drive,
-        logistics: moduleData?.logistics || null,
+        logistics: itemLogistics,
       });
+      const isWalkInDonation = Boolean(itemAppointment?.appointment_id) || (
+        ['onsite_delivery', 'walk_in', 'walk-in', 'dropoff', 'drop-off']
+          .includes(String(itemLogistics?.logistics_type || '').trim().toLowerCase())
+      );
+      const identifierPrefix = isWalkInDonation ? 'DROP' : 'SHIP';
       const canCancel = canCancelDonationSubmission({
         submission: primarySubmission,
         registration: drive?.registration || null,
@@ -4348,7 +4637,9 @@ export function DonorDonationStatusScreen() {
         submissions,
         previewItems,
         drive,
-        title: drive?.event_title || 'Independent hair donation',
+        title: drive?.event_title || (isWalkInDonation ? 'Walk-in Drop Off' : 'Ship to Organization'),
+        identifier: `${identifierPrefix}-${String(primarySubmission.submission_id).padStart(5, '0')}`,
+        methodLabel: isWalkInDonation ? 'Walk-in Drop Off' : 'Ship to Organization',
         organizationName: drive ? getDriveOrganizationLabel(drive) : 'Partner organization',
         recipientName: selectedRecipient?.type === 'patient'
           ? selectedRecipient?.patient?.patient_name || ''
@@ -4411,6 +4702,8 @@ export function DonorDonationStatusScreen() {
     moduleData?.activeSubmissions,
     moduleData?.latestSubmission,
     moduleData?.logistics,
+    moduleData?.appointment,
+    moduleData?.submissionFlowRecords,
     moduleData?.timelineEvents,
     moduleData?.timelineStages,
     moduleData?.trackingEntries,
@@ -4424,8 +4717,89 @@ export function DonorDonationStatusScreen() {
     }
     return myDonationItems.find((item) => item.submission) || myDonationItems[0] || null;
   }, [myDonationItems, selectedDonationStatusItem]);
+  const qrScreenBundles = React.useMemo(() => {
+    const targetSubmission = selectedDonationTimelineItem?.submission
+      || moduleData?.latestSubmission
+      || null;
+    const targetSubmissionId = Number(targetSubmission?.submission_id || 0);
+    if (!targetSubmissionId) return [];
+
+    const selectedPreviewItems = selectedDonationTimelineItem?.previewItems || [];
+    const savedPreviewItems = selectedPreviewItems.length
+      ? selectedPreviewItems
+      : donationPreviewItems
+      .filter((item) => Number(item?.submission?.submission_id) === targetSubmissionId)
+      .slice(0, 1);
+    if (savedPreviewItems.length) return savedPreviewItems.slice(0, 1);
+
+    const targetDetail = getLatestPreviewDetail(targetSubmission)
+      || (Number(moduleData?.latestDetail?.submission_id) === targetSubmissionId
+        ? moduleData.latestDetail
+        : null);
+    if (!targetDetail) return [];
+
+    const qrPayload = buildDonationTrackingQrPayload({
+      submission: targetSubmission,
+      detail: targetDetail,
+      drive: Number(targetSubmission?.donation_drive_id) > 0
+        ? selectedDonationTimelineItem?.drive || null
+        : null,
+    });
+    return buildHairSubmissionPreviewItems(
+      targetSubmission,
+      targetDetail,
+      qrPayload,
+      accountDonorName
+    ).slice(0, 1);
+  }, [
+    accountDonorName,
+    donationPreviewItems,
+    moduleData?.latestDetail,
+    moduleData?.latestSubmission,
+    selectedDonationTimelineItem?.drive,
+    selectedDonationTimelineItem?.previewItems,
+    selectedDonationTimelineItem?.submission,
+  ]);
+  const selectedSubmissionFlowRecord = React.useMemo(() => {
+    const targetSubmissionId = Number(
+      selectedDonationTimelineItem?.submission?.submission_id
+      || pendingWalkInSubmission?.submission_id
+      || 0
+    );
+    if (!targetSubmissionId) return null;
+    return (moduleData?.submissionFlowRecords || []).find(
+      (record) => Number(record?.submission_id) === targetSubmissionId
+    ) || null;
+  }, [
+    moduleData?.submissionFlowRecords,
+    pendingWalkInSubmission?.submission_id,
+    selectedDonationTimelineItem?.submission?.submission_id,
+  ]);
+  const selectedWalkInAppointment = React.useMemo(() => {
+    const targetSubmissionId = Number(
+      pendingWalkInSubmission?.submission_id
+      || selectedDonationTimelineItem?.submission?.submission_id
+      || moduleData?.latestSubmission?.submission_id
+      || 0
+    );
+    const flowRecord = Number(selectedSubmissionFlowRecord?.submission_id) === targetSubmissionId
+      ? selectedSubmissionFlowRecord
+      : null;
+    if (flowRecord?.appointment) return flowRecord.appointment;
+    return Number(moduleData?.appointment?.submission_id) === targetSubmissionId
+      ? moduleData.appointment
+      : null;
+  }, [
+    moduleData?.appointment,
+    moduleData?.latestSubmission?.submission_id,
+    pendingWalkInSubmission?.submission_id,
+    selectedSubmissionFlowRecord,
+    selectedDonationTimelineItem?.submission?.submission_id,
+  ]);
   const handleOpenEventDonationDetails = React.useCallback((drive) => {
     if (!drive?.donation_drive_id) return;
+    hasManualDonationViewSelectionRef.current = true;
+    setActiveDonationTabKey('hair-event');
 
     const driveId = Number(drive.donation_drive_id);
     const matchingItem = myDonationItems.find((item) => (
@@ -4471,6 +4845,7 @@ export function DonorDonationStatusScreen() {
   }, [myDonationItems]);
   const handleOpenLogisticDonationDetails = React.useCallback((item) => {
     if (!item?.submission?.submission_id) return;
+    setActiveDonationTabKey('logistic');
     setSelectedDonationStatusItem({
       ...item,
       originScreen: DONATION_MODULE_SCREEN.MY_DONATIONS,
@@ -4479,12 +4854,15 @@ export function DonorDonationStatusScreen() {
   }, []);
   const handleShowHairEventTab = React.useCallback(() => {
     hasManualDonationViewSelectionRef.current = true;
+    setActiveDonationTabKey('hair-event');
     setSelectedDonationStatusItem(null);
     setDonationModuleScreen(DONATION_MODULE_SCREEN.EVENTS);
     setIsHairEligibilityPromptOpen(false);
   }, []);
   const handleShowLogisticTab = React.useCallback(() => {
     hasManualDonationViewSelectionRef.current = true;
+    setActiveDonationTabKey('logistic');
+    setSelectedDriveForDonation(null);
     setSelectedDonationStatusItem(null);
     setDonationModuleScreen(DONATION_MODULE_SCREEN.MY_DONATIONS);
     setIsHairEligibilityPromptOpen(false);
@@ -4508,9 +4886,28 @@ export function DonorDonationStatusScreen() {
     ));
     if (!matchingDonationItem) return;
 
-    setSelectedDonationStatusItem(matchingDonationItem);
+    setSelectedDonationStatusItem({
+      ...matchingDonationItem,
+      originScreen: DONATION_MODULE_SCREEN.EVENTS,
+    });
+    setActiveDonationTabKey('hair-event');
     setDonationModuleScreen(DONATION_MODULE_SCREEN.DONATION_STATUS);
   }, [donationModuleScreen, myDonationItems, routeParams.driveId]);
+
+  React.useEffect(() => {
+    if (donationModuleScreen !== DONATION_MODULE_SCREEN.DONATION_STATUS) return;
+
+    const displayedDriveId = Number(
+      selectedDonationStatusItem?.drive?.donation_drive_id
+      || selectedDonationStatusItem?.submission?.donation_drive_id
+    );
+    const isEventTimeline = selectedDonationStatusItem?.originScreen === DONATION_MODULE_SCREEN.EVENTS
+      || (Number.isFinite(displayedDriveId) && displayedDriveId > 0);
+
+    if (isEventTimeline && activeDonationTabKey !== 'hair-event') {
+      setActiveDonationTabKey('hair-event');
+    }
+  }, [activeDonationTabKey, donationModuleScreen, selectedDonationStatusItem]);
 
   const handleNavPress = React.useCallback((item) => {
     if (!item.route || item.route === '/donor/status') return;
@@ -4599,21 +4996,41 @@ export function DonorDonationStatusScreen() {
     setIsManualModalOpen(true);
   }, [hasHairScanLog, isAiEligible, isProfileComplete, moduleData?.latestScreening, router, selectedDriveForDonation]);
 
-  const handleAddLogisticDonation = React.useCallback(() => {
-    if (!hasHairScanLog || !isAiEligible) {
+  const handleAddLogisticDonation = React.useCallback(async () => {
+    const freshModuleData = await loadModuleData({ silent: true });
+    const freshHasHairScanLog = Boolean(
+      freshModuleData?.latestScreening && freshModuleData?.latestAnalysisEntry?.submission
+    );
+    const freshIsAiEligible = Boolean(freshModuleData?.isAiEligible);
+
+    if (!freshHasHairScanLog || !freshIsAiEligible) {
       setIsHairEligibilityPromptOpen(true);
       return;
     }
     hasManualDonationViewSelectionRef.current = true;
+    setActiveDonationTabKey('logistic');
     setIsHairEligibilityPromptOpen(false);
     setSelectedDriveForDonation(null);
     setSelectedRecipient({ type: 'organization', patient: null });
     setSelectedDonationStatusItem(null);
-    handleOpenManualModal();
-  }, [handleOpenManualModal, hasHairScanLog, isAiEligible]);
+    setIsDonationMethodModalOpen(true);
+  }, [loadModuleData]);
 
-  const handleScheduleWalkInDropoff = React.useCallback(async ({ scheduleDate = '', timeWindow = '' } = {}) => {
-    const activeSubmission = moduleData?.latestSubmission || null;
+  const handleChooseLogisticMethod = React.useCallback((method) => {
+    setSelectedLogisticMethod(method);
+    setIsDonationMethodModalOpen(false);
+    setSelectedDriveForDonation(null);
+    setSelectedRecipient({ type: 'organization', patient: null });
+    setSelectedDonationStatusItem(null);
+    handleOpenManualModal();
+  }, [handleOpenManualModal]);
+
+  const handleScheduleWalkInDropoff = React.useCallback(async ({
+    submission = null,
+    scheduleDate = '',
+    timeWindow = '',
+  } = {}) => {
+    const activeSubmission = submission || pendingWalkInSubmission || moduleData?.latestSubmission || null;
     if (!activeSubmission?.submission_id || Number(activeSubmission?.donation_drive_id)) {
       setModuleFeedback({
         message: 'Add a logistic donation first so this schedule can be linked to your QR.',
@@ -4629,6 +5046,9 @@ export function DonorDonationStatusScreen() {
       submission: activeSubmission,
       scheduleDate,
       timeWindow,
+      contactName: accountDonorName,
+      contactEmail: user?.email || profile?.email || '',
+      contactNumber: profile?.contact_number || profile?.phone || '',
     });
     setIsSchedulingDropoff(false);
 
@@ -4641,11 +5061,20 @@ export function DonorDonationStatusScreen() {
 
     if (result.success) {
       await loadModuleData({ silent: true });
+      setPendingWalkInSubmission(null);
+      setSelectedLogisticMethod('');
+      setDonationModuleScreen(DONATION_MODULE_SCREEN.MY_DONATIONS);
     }
   }, [
+    accountDonorName,
     loadModuleData,
     moduleData?.latestSubmission,
+    pendingWalkInSubmission,
+    profile?.contact_number,
+    profile?.email,
+    profile?.phone,
     profile?.user_id,
+    user?.email,
     user?.id,
   ]);
 
@@ -4791,7 +5220,13 @@ export function DonorDonationStatusScreen() {
       setIsManualModalOpen(false);
       setModuleFeedback({ message: 'Hair item added. Its QR is ready for printing.', variant: 'success' });
       await loadModuleData();
-      setDonationModuleScreen(DONATION_MODULE_SCREEN.SUMMARY);
+      if (selectedLogisticMethod === 'dropoff') {
+        setPendingWalkInSubmission(result.submission || activeIndependentDraft);
+        setWalkInScheduleReturnScreen(DONATION_MODULE_SCREEN.MY_DONATIONS);
+        setDonationModuleScreen(DONATION_MODULE_SCREEN.WALK_IN_SCHEDULE);
+      } else {
+        setDonationModuleScreen(DONATION_MODULE_SCREEN.SUMMARY);
+      }
       return;
     }
 
@@ -4843,6 +5278,7 @@ export function DonorDonationStatusScreen() {
     }
 
     setIsManualModalOpen(false);
+    let savedWalkInSubmission = null;
 
     if (result.canProceed && result.submission) {
       setModuleFeedback({ message: 'Hair details saved. Starting your donation flow...', variant: 'info' });
@@ -4856,10 +5292,16 @@ export function DonorDonationStatusScreen() {
       setIsGeneratingQr(false);
       setModuleFeedback({
         message: draftResult.success
-          ? 'Hair details saved. Continue to submit donation details for staff waybill issuance.'
+          ? selectedLogisticMethod === 'dropoff'
+            ? 'Hair details saved. Choose your drop-off appointment.'
+            : 'Hair details saved. Continue to submit donation details for staff waybill issuance.'
           : (draftResult.error || 'Details saved but donation flow could not be started.'),
         variant: draftResult.success ? 'success' : 'error',
       });
+      if (draftResult.success && selectedLogisticMethod === 'dropoff') {
+        savedWalkInSubmission = draftResult.submission || result.submission;
+        setPendingWalkInSubmission(savedWalkInSubmission);
+      }
     } else {
       setModuleFeedback({
         message: result.qualification?.reason || 'Details saved but do not meet donation requirements yet.',
@@ -4868,7 +5310,11 @@ export function DonorDonationStatusScreen() {
     }
 
     await loadModuleData();
-    setDonationModuleScreen(DONATION_MODULE_SCREEN.SUMMARY);
+    setDonationModuleScreen(
+      savedWalkInSubmission
+        ? DONATION_MODULE_SCREEN.WALK_IN_SCHEDULE
+        : DONATION_MODULE_SCREEN.SUMMARY
+    );
   }, [
     loadModuleData,
     manualForm,
@@ -4881,6 +5327,7 @@ export function DonorDonationStatusScreen() {
     selectedRecipient?.patient?.patient_id,
     selectedRecipient?.type,
     selectedDonationDriveId,
+    selectedLogisticMethod,
     user?.id,
   ]);
 
@@ -5344,7 +5791,11 @@ export function DonorDonationStatusScreen() {
         (item) => Number(item?.drive?.donation_drive_id || item?.submission?.donation_drive_id) === Number(refreshedDrive.donation_drive_id)
       ) || null;
       if (!timelineDriveItem?.submission) return;
-      setSelectedDonationStatusItem(timelineDriveItem);
+      setActiveDonationTabKey('hair-event');
+      setSelectedDonationStatusItem({
+        ...timelineDriveItem,
+        originScreen: DONATION_MODULE_SCREEN.EVENTS,
+      });
       setDonationModuleScreen(DONATION_MODULE_SCREEN.DONATION_STATUS);
     });
   }, [donationModuleScreen, myDonationItems, refreshDriveRegistrationFromTable, selectedDriveForDonation]);
@@ -5409,11 +5860,13 @@ export function DonorDonationStatusScreen() {
 
       setModuleFeedback({
         message: isSameActiveDrive
-          ? 'You already have an active donation for this event. Open it from My Donations.'
+          ? 'Opening your current donation for this event.'
           : 'You already have a donation in progress. Finish or cancel it before submitting hair for another event.',
         variant: 'info',
       });
-      setDonationModuleScreen(DONATION_MODULE_SCREEN.MY_DONATIONS);
+      if (isSameActiveDrive) {
+        handleOpenEventDonationDetails(freshSelectedDrive);
+      }
       return;
     }
 
@@ -5434,6 +5887,7 @@ export function DonorDonationStatusScreen() {
     setDonationModuleScreen(DONATION_MODULE_SCREEN.SUMMARY);
   }, [
     handleProceedWithHairLog,
+    handleOpenEventDonationDetails,
     activeDriveFromSubmission?.donation_drive_id,
     hairEligibilityMessage,
     hasOngoingDonation,
@@ -5488,7 +5942,9 @@ export function DonorDonationStatusScreen() {
     setSavingQrKey('');
     setQrActionFeedback({
       message: result.success
-        ? 'QR image saved to this device. Attach it to the parcel or hair bundle.'
+        ? (result.shared
+          ? 'Choose where to save or share the QR image, then attach it to the parcel.'
+          : 'QR image saved to this device. Attach it to the parcel or hair bundle.')
         : (result.error || 'Unable to save the QR image right now.'),
       variant: result.success ? 'success' : 'error',
     });
@@ -5646,23 +6102,31 @@ export function DonorDonationStatusScreen() {
     const submitMode = await handleConfirmGenerateDonationQr();
     if (submitMode) {
       if (submitMode === 'independent') {
+        setActiveDonationTabKey('logistic');
         setDonationModuleScreen(DONATION_MODULE_SCREEN.QR_CODES);
         return;
       }
-      const nextItem = myDonationItems.find((item) => item.submission && !isClosedDonationStatus(item.submission?.status))
-        || myDonationItems.find((item) => item.submission)
+      const selectedEventDriveId = Number(selectedDriveForDonation?.donation_drive_id);
+      const nextItem = myDonationItems.find((item) => (
+        item?.submission
+        && Number(item?.submission?.donation_drive_id || item?.drive?.donation_drive_id) === selectedEventDriveId
+        && !isClosedDonationStatus(item.submission?.status)
+      ))
+        || myDonationItems.find((item) => (
+          item?.submission
+          && Number(item?.submission?.donation_drive_id || item?.drive?.donation_drive_id) === selectedEventDriveId
+        ))
         || null;
       if (nextItem) {
-        setSelectedDonationStatusItem(nextItem);
+        setSelectedDonationStatusItem({
+          ...nextItem,
+          originScreen: DONATION_MODULE_SCREEN.EVENTS,
+        });
       }
+      setActiveDonationTabKey('hair-event');
       setDonationModuleScreen(DONATION_MODULE_SCREEN.DONATION_STATUS);
     }
-  }, [activeDonationQrItems.length, handleConfirmGenerateDonationQr, myDonationItems]);
-
-  const handleDoneFromQrCodes = React.useCallback(async () => {
-    await loadModuleData({ silent: true });
-    setDonationModuleScreen(DONATION_MODULE_SCREEN.MY_DONATIONS);
-  }, [loadModuleData]);
+  }, [activeDonationQrItems.length, handleConfirmGenerateDonationQr, myDonationItems, selectedDriveForDonation?.donation_drive_id]);
 
   const handleConfirmCancelDonation = React.useCallback(async () => {
     const selectedCancelItems = selectedDonationStatusItem?.submissions?.length
@@ -5775,7 +6239,9 @@ export function DonorDonationStatusScreen() {
       return (
         <DonationHomeOverview
           roles={roles}
-          completedDrives={moduleData?.completedEventDrives || []}
+          completedDrives={(moduleData?.completedEventDrives || []).filter((drive) => (
+            isRsvpCheckedIn(drive?.registration || null)
+          ))}
           onOpenDonationDetails={handleOpenEventDonationDetails}
         />
       );
@@ -5850,7 +6316,8 @@ export function DonorDonationStatusScreen() {
       return (
         <DonationQrCodesScreen
           roles={roles}
-          bundles={donationPreviewItems}
+          bundles={qrScreenBundles}
+          logisticsSettings={moduleData?.logisticsSettings || null}
           feedback={qrActionFeedback}
           printingQrKey={printingQrKey}
           savingQrKey={savingQrKey}
@@ -5859,8 +6326,24 @@ export function DonorDonationStatusScreen() {
           )}
           onPrintQr={handlePrintQrFromScreen}
           onSaveQr={handleSaveQrFromScreen}
-          onDone={handleDoneFromQrCodes}
           allowQrActions={!selectedDonationDriveId}
+        />
+      );
+    }
+
+    if (effectiveDonationModuleScreen === DONATION_MODULE_SCREEN.WALK_IN_SCHEDULE) {
+      return (
+        <WalkInScheduleScreen
+          roles={roles}
+          submission={pendingWalkInSubmission || moduleData?.latestSubmission || null}
+          appointment={selectedWalkInAppointment}
+          readOnly={walkInScheduleReturnScreen === DONATION_MODULE_SCREEN.DONATION_STATUS}
+          isScheduling={isSchedulingDropoff}
+          onBack={() => {
+            setPendingWalkInSubmission(null);
+            setDonationModuleScreen(walkInScheduleReturnScreen);
+          }}
+          onSchedule={handleScheduleWalkInDropoff}
         />
       );
     }
@@ -5882,9 +6365,9 @@ export function DonorDonationStatusScreen() {
           roles={roles}
           item={selectedDonationTimelineItem}
           previewItems={selectedDonationTimelineItem?.previewItems?.length ? selectedDonationTimelineItem.previewItems : donationPreviewItems}
-          timelineStages={moduleData?.timelineStages || []}
-          timelineEvents={moduleData?.timelineEvents || []}
-          parcelImages={moduleData?.parcelImages || []}
+          timelineStages={selectedSubmissionFlowRecord?.timelineStages || moduleData?.timelineStages || []}
+          timelineEvents={selectedSubmissionFlowRecord?.timelineEvents || moduleData?.timelineEvents || []}
+          parcelImages={selectedSubmissionFlowRecord?.parcelImages || moduleData?.parcelImages || []}
           certificate={certificate}
           accountDonorName={accountDonorName}
           onBack={() => setDonationModuleScreen(
@@ -5893,6 +6376,18 @@ export function DonorDonationStatusScreen() {
           onViewDonationQr={() => {
             if (selectedDonationTimelineItem?.submission?.donation_drive_id) return;
             setDonationModuleScreen(DONATION_MODULE_SCREEN.QR_CODES);
+          }}
+          onViewAppointment={() => {
+            setPendingWalkInSubmission(selectedDonationTimelineItem?.submission || null);
+            setWalkInScheduleReturnScreen(DONATION_MODULE_SCREEN.DONATION_STATUS);
+            setDonationModuleScreen(DONATION_MODULE_SCREEN.WALK_IN_SCHEDULE);
+          }}
+          onViewCertificate={() => {
+            if (!certificate?.certificate_id) return;
+            router.push({
+              pathname: '/donor/achievements',
+              params: { certificateId: String(certificate.certificate_id) },
+            });
           }}
           onCancelDonation={() => setIsCancelModalOpen(true)}
         />
@@ -5903,12 +6398,8 @@ export function DonorDonationStatusScreen() {
       <MyJoinedDonationsScreen
         roles={roles}
         logisticsSettings={moduleData?.logisticsSettings || null}
-        activeSubmission={moduleData?.latestSubmission || null}
-        logistics={moduleData?.logistics || null}
         donationItems={myDonationItems}
         onViewDonation={handleOpenLogisticDonationDetails}
-        onScheduleDropoff={handleScheduleWalkInDropoff}
-        isSchedulingDropoff={isSchedulingDropoff}
       />
     );
   }, [
@@ -5922,7 +6413,6 @@ export function DonorDonationStatusScreen() {
     handleOpenEventDonationDetails,
     handleOpenLogisticDonationDetails,
     handleRemoveSummaryHair,
-    handleDoneFromQrCodes,
     handlePrintQrFromScreen,
     handleSaveQrFromScreen,
     handleScheduleWalkInDropoff,
@@ -5938,7 +6428,6 @@ export function DonorDonationStatusScreen() {
     isProfileComplete,
     latestScreening,
     moduleData?.latestSubmission,
-    moduleData?.logistics,
     moduleData?.timelineEvents,
     moduleData?.timelineStages,
     moduleData?.parcelImages,
@@ -5946,8 +6435,10 @@ export function DonorDonationStatusScreen() {
     moduleData?.completedEventDrives,
     moduleData?.logisticsSettings,
     myDonationItems,
+    pendingWalkInSubmission,
     printingQrKey,
     qrActionFeedback,
+    qrScreenBundles,
     recipientPatients,
     removingHairKey,
     roles,
@@ -5955,8 +6446,13 @@ export function DonorDonationStatusScreen() {
     savingQrKey,
     selectedRecipient,
     selectedDonationTimelineItem,
+    selectedWalkInAppointment,
+    selectedSubmissionFlowRecord?.parcelImages,
+    selectedSubmissionFlowRecord?.timelineEvents,
+    selectedSubmissionFlowRecord?.timelineStages,
     selectedDonationStatusItem,
     selectedDonationDriveId,
+    walkInScheduleReturnScreen,
   ]);
   const logisticStickyAction = effectiveDonationModuleScreen === DONATION_MODULE_SCREEN.MY_DONATIONS ? (
     <View
@@ -5968,7 +6464,7 @@ export function DonorDonationStatusScreen() {
     >
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="Add logistic donation"
+        accessibilityLabel="Add donation"
         onPress={handleAddLogisticDonation}
         style={({ pressed }) => [
           styles.logisticFab,
@@ -5979,10 +6475,63 @@ export function DonorDonationStatusScreen() {
         ]}
       >
         <MaterialCommunityIcons name="plus" size={22} color={roles.primaryActionText} />
-        <Text style={[styles.logisticFabText, { color: roles.primaryActionText }]}>Add Logistic Donation</Text>
+        <Text style={[styles.logisticFabText, { color: roles.primaryActionText }]}>Add Donation</Text>
       </Pressable>
     </View>
   ) : null;
+
+  if (isManualModalOpen) {
+    return (
+      <DashboardLayout
+        navItems={donorDashboardNavItems}
+        activeNavKey="donations"
+        navVariant="donor"
+        onNavPress={handleNavPress}
+        screenVariant="default"
+        floatingOverlay={null}
+        header={(
+          <View style={[styles.dashboardHeaderSurface, { backgroundColor: headerPrimaryColor }]}>
+            <DonorTopBar
+              title={firstName || 'Donor'}
+              subtitle="Hair Donor"
+              avatarInitials={avatarInitials}
+              avatarUri={profile?.avatar_url || profile?.photo_path || ''}
+              unreadCount={unreadCount}
+              onNotificationsPress={() => router.navigate('/donor/notifications')}
+              onProfilePress={() => router.navigate('/profile')}
+              onLogoutPress={logout}
+              isLoggingOut={isLoggingOut}
+            />
+          </View>
+        )}
+      >
+        <ManualEntryModal
+          visible
+          form={manualForm}
+          errors={manualFormErrors}
+          photo={manualPhoto}
+          feedback={manualFeedback}
+          isSaving={isSavingManual}
+          isEditing={Boolean(manualEditTarget)}
+          minimumLengthPlaceholder={currentRequirementMinimumInches}
+          minimumLengthHelperText={currentRequirementHelperText}
+          aiPrefilled={Boolean(
+            moduleData?.latestScreening
+            && manualForm.lengthValue
+            && manualForm.lengthValue !== MANUAL_FORM_DEFAULTS.lengthValue
+          )}
+          onClose={() => {
+            setIsManualModalOpen(false);
+            setManualEditTarget(null);
+            setSelectedLogisticMethod('');
+          }}
+          onChangeField={updateManualField}
+          onPickPhoto={handlePickManualPhoto}
+          onSave={handleSaveManualDetails}
+        />
+      </DashboardLayout>
+    );
+  }
 
   return (
     <DashboardLayout
@@ -6133,11 +6682,75 @@ export function DonorDonationStatusScreen() {
         onClose={() => {
           setIsManualModalOpen(false);
           setManualEditTarget(null);
+          setSelectedLogisticMethod('');
         }}
         onChangeField={updateManualField}
         onPickPhoto={handlePickManualPhoto}
         onSave={handleSaveManualDetails}
       />
+
+      <ModalShell
+        visible={isDonationMethodModalOpen}
+        title="How will you send your donation?"
+        subtitle="Choose the option that works best for you."
+        onClose={() => setIsDonationMethodModalOpen(false)}
+        cardBackground={resolvedTheme?.backgroundColor || roles.pageBackground}
+        textColor={resolvedTheme?.primaryTextColor || roles.headingText}
+        borderColor={roles.defaultCardBorder}
+        compact
+      >
+        <View style={styles.donationMethodList}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Choose walk-in drop-off"
+            onPress={() => handleChooseLogisticMethod('dropoff')}
+            style={({ pressed }) => [
+              styles.donationMethodCard,
+              {
+                backgroundColor: resolvedTheme?.backgroundColor || roles.pageBackground,
+                borderColor: roles.defaultCardBorder,
+                opacity: pressed ? 0.78 : 1,
+              },
+            ]}
+          >
+            <View style={[styles.donationMethodIcon, { backgroundColor: roles.iconPrimarySurface }]}>
+              <MaterialCommunityIcons name="walk" size={21} color={resolvedTheme?.primaryTextColor || roles.headingText} />
+            </View>
+            <View style={styles.donationMethodCopy}>
+              <Text style={[styles.donationMethodTitle, { color: resolvedTheme?.primaryTextColor || roles.headingText }]}>Walk-in drop-off</Text>
+              <Text style={[styles.donationMethodBody, { color: resolvedTheme?.primaryTextColor || roles.headingText }]}>
+                Schedule a visit and bring your donation.
+              </Text>
+            </View>
+            <MaterialCommunityIcons name="chevron-right" size={20} color={resolvedTheme?.primaryTextColor || roles.headingText} />
+          </Pressable>
+
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Choose shipping"
+            onPress={() => handleChooseLogisticMethod('shipping')}
+            style={({ pressed }) => [
+              styles.donationMethodCard,
+              {
+                backgroundColor: resolvedTheme?.backgroundColor || roles.pageBackground,
+                borderColor: roles.defaultCardBorder,
+                opacity: pressed ? 0.78 : 1,
+              },
+            ]}
+          >
+            <View style={[styles.donationMethodIcon, { backgroundColor: roles.iconPrimarySurface }]}>
+              <MaterialCommunityIcons name="truck-delivery-outline" size={21} color={resolvedTheme?.primaryTextColor || roles.headingText} />
+            </View>
+            <View style={styles.donationMethodCopy}>
+              <Text style={[styles.donationMethodTitle, { color: resolvedTheme?.primaryTextColor || roles.headingText }]}>Ship to organization</Text>
+              <Text style={[styles.donationMethodBody, { color: resolvedTheme?.primaryTextColor || roles.headingText }]}>
+                Pack your donation and send it by courier.
+              </Text>
+            </View>
+            <MaterialCommunityIcons name="chevron-right" size={20} color={resolvedTheme?.primaryTextColor || roles.headingText} />
+          </Pressable>
+        </View>
+      </ModalShell>
 
       <HairEligibilityPromptModal
         visible={isHairEligibilityPromptOpen}
@@ -6402,10 +7015,9 @@ const styles = StyleSheet.create({
   },
   summaryCard: {
     borderWidth: 1,
-    borderRadius: 18,
-    padding: theme.spacing.lg,
-    gap: theme.spacing.md,
-    ...theme.shadows.soft,
+    borderRadius: 10,
+    padding: theme.spacing.md,
+    gap: theme.spacing.sm,
   },
   summaryHeaderRow: {
     flexDirection: 'row',
@@ -6415,7 +7027,7 @@ const styles = StyleSheet.create({
   },
   summarySectionTitle: {
     fontFamily: theme.typography.fontFamilyDisplay,
-    fontSize: theme.typography.semantic.bodyLg,
+    fontSize: theme.typography.semantic.body,
     fontWeight: theme.typography.weights.semibold,
   },
   summaryMainText: {
@@ -6424,9 +7036,9 @@ const styles = StyleSheet.create({
     fontWeight: theme.typography.weights.semibold,
   },
   summaryStatusChip: {
-    borderRadius: theme.radius.full,
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: 5,
+    borderRadius: 7,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: 4,
   },
   summaryStatusText: {
     fontFamily: theme.typography.fontFamily,
@@ -6440,9 +7052,10 @@ const styles = StyleSheet.create({
   },
   summaryMetric: {
     width: '48%',
-    borderRadius: 14,
-    backgroundColor: 'rgba(255,255,255,0.48)',
-    padding: theme.spacing.md,
+    borderRadius: 0,
+    backgroundColor: 'transparent',
+    paddingVertical: theme.spacing.xs,
+    paddingHorizontal: 0,
     gap: 3,
   },
   summaryMetricLabel: {
@@ -6458,9 +7071,9 @@ const styles = StyleSheet.create({
   },
   summaryHairRow: {
     borderWidth: 1,
-    borderRadius: 14,
-    padding: theme.spacing.lg,
-    gap: theme.spacing.xs,
+    borderRadius: 9,
+    padding: theme.spacing.md,
+    gap: 5,
   },
   summaryHairActions: {
     flexDirection: 'row',
@@ -6472,7 +7085,7 @@ const styles = StyleSheet.create({
   summaryRemoveButton: {
     minHeight: 30,
     borderWidth: 1,
-    borderRadius: theme.radius.pill,
+    borderRadius: 7,
     paddingHorizontal: theme.spacing.sm,
     paddingVertical: 4,
     flexDirection: 'row',
@@ -6747,6 +7360,42 @@ const styles = StyleSheet.create({
     gap: theme.spacing.md,
     ...theme.shadows.soft,
   },
+  eventHistoryCard: {
+    minHeight: 104,
+    borderWidth: 1,
+    borderRadius: 18,
+    padding: theme.spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.md,
+    ...theme.shadows.soft,
+  },
+  eventHistoryImage: {
+    width: 76,
+    height: 76,
+    borderRadius: theme.radius.lg,
+  },
+  eventHistoryCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: theme.spacing.sm,
+  },
+  eventHistoryTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    fontWeight: theme.typography.weights.semibold,
+    lineHeight: theme.typography.semantic.bodyLg * theme.typography.lineHeights.snug,
+  },
+  eventHistoryDateRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.xs,
+  },
+  eventHistoryDate: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+  },
   myDonationCardTop: {
     flexDirection: 'row',
     gap: theme.spacing.md,
@@ -6880,6 +7529,13 @@ const styles = StyleSheet.create({
     gap: theme.spacing.md,
     ...theme.shadows.soft,
   },
+  walkInPagePanel: {
+    marginHorizontal: theme.spacing.md,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    paddingVertical: theme.spacing.lg,
+    gap: theme.spacing.xl,
+  },
   walkInHeaderCopy: {
     flex: 1,
     minWidth: 0,
@@ -6957,9 +7613,27 @@ const styles = StyleSheet.create({
   timelineHero: {
     borderWidth: 1,
     borderRadius: 18,
-    padding: theme.spacing.lg,
-    gap: theme.spacing.lg,
+    padding: theme.spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
     ...theme.shadows.soft,
+  },
+  timelineHeroMetrics: {
+    flex: 1,
+    minWidth: 0,
+    gap: theme.spacing.md,
+  },
+  timelineBackButton: {
+    width: 40,
+    height: 40,
+    borderRadius: theme.radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  timelineBackButtonPressed: {
+    opacity: 0.72,
+    transform: [{ scale: 0.98 }],
   },
   timelineHeroTop: {
     flexDirection: 'row',
@@ -6996,10 +7670,64 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: theme.spacing.md,
   },
+  timelineMetricGridCompact: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: theme.spacing.md,
+  },
+  timelineCompactMetric: {
+    flex: 1,
+    minWidth: 0,
+    justifyContent: 'center',
+    gap: 4,
+  },
+  timelineMetricDivider: {
+    width: 1,
+    alignSelf: 'stretch',
+    minHeight: 44,
+  },
   timelineMetric: {
     flex: 1,
     minWidth: 120,
     gap: 3,
+  },
+  timelineEventDetailsCard: {
+    borderWidth: 1,
+    borderRadius: 18,
+    padding: theme.spacing.md,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.spacing.md,
+    ...theme.shadows.soft,
+  },
+  timelineEventDetailsIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  timelineEventDetailsCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: theme.spacing.sm,
+  },
+  timelineEventDetailsTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    fontWeight: theme.typography.weights.semibold,
+    lineHeight: theme.typography.semantic.bodyLg * theme.typography.lineHeights.snug,
+  },
+  timelineEventDetailsRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.spacing.xs,
+  },
+  timelineEventDetailsText: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
   },
   timelineSection: {
     gap: theme.spacing.lg,
@@ -7067,6 +7795,89 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.semantic.caption,
     fontWeight: theme.typography.weights.bold,
   },
+  timelineStageAction: {
+    paddingTop: theme.spacing.xs,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 4,
+  },
+  timelineStageActionText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  qrDestinationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  qrDestinationCard: {
+    flex: 1,
+    borderWidth: 1,
+    borderRadius: theme.radius.lg,
+    padding: theme.spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.spacing.xs,
+  },
+  qrDestinationBack: {
+    width: 38,
+    height: 38,
+    borderRadius: theme.radius.full,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  qrBackButton: {
+    alignSelf: 'flex-start',
+    minHeight: 36,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingRight: theme.spacing.xs,
+  },
+  qrBackIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: theme.radius.full,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  qrBackText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  qrDestinationCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  qrDestinationLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 10,
+    fontWeight: theme.typography.weights.bold,
+    letterSpacing: 0.8,
+  },
+  qrDestinationValue: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 12,
+    fontWeight: theme.typography.weights.medium,
+    lineHeight: 17,
+  },
+  qrShipmentActions: {
+    gap: theme.spacing.sm,
+  },
+  qrShipmentHint: {
+    paddingHorizontal: theme.spacing.xs,
+    textAlign: 'center',
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    lineHeight: theme.typography.semantic.caption * theme.typography.lineHeights.relaxed,
+  },
   timelinePhotoStrip: {
     gap: theme.spacing.sm,
     paddingVertical: theme.spacing.xs,
@@ -7090,6 +7901,35 @@ const styles = StyleSheet.create({
   timelineEventRow: {
     gap: theme.spacing.xs,
     paddingTop: theme.spacing.sm,
+  },
+  certificateUpdateRow: {
+    borderWidth: 1,
+    borderRadius: theme.radius.lg,
+    padding: theme.spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  certificateUpdateIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  certificateUpdateCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  certificateUpdateTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  certificateUpdateDate: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
   },
   timelineEventImage: {
     width: '100%',
@@ -7828,12 +8668,105 @@ const styles = StyleSheet.create({
     lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
   },
 
-  // Manual modal form
-  manualSectionCard: {
+  // Manual hair-details page
+  manualEntryPage: {
+    width: '100%',
+    maxWidth: theme.layout.contentMaxWidth,
+    alignSelf: 'center',
+    gap: 0,
+    paddingHorizontal: 0,
+    paddingTop: 0,
+    paddingBottom: 120,
+  },
+  manualEntryPageHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.md,
+    paddingTop: theme.spacing.md,
+    paddingBottom: theme.spacing.lg,
+  },
+  manualEntryBackButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
     borderWidth: 1,
-    borderRadius: 14,
-    padding: theme.spacing.md,
-    gap: theme.spacing.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  manualEntryHeaderCopy: {
+    flex: 1,
+    gap: 3,
+  },
+  manualEntryPageTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    fontWeight: theme.typography.weights.bold,
+  },
+  manualEntryPageSubtitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    lineHeight: theme.typography.semantic.caption * theme.typography.lineHeights.relaxed,
+  },
+  manualEntryNotice: {
+    marginHorizontal: theme.spacing.md,
+    marginBottom: theme.spacing.sm,
+    padding: theme.spacing.sm,
+    borderWidth: 1,
+    borderRadius: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  manualEntryNoticeIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  manualEntryNoticeCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  manualEntryNoticeTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  manualEntryNoticeText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    lineHeight: theme.typography.semantic.caption * theme.typography.lineHeights.relaxed,
+  },
+  manualEntryPageActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.md,
+    paddingTop: theme.spacing.lg,
+  },
+  manualEntryInputShell: {
+    borderRadius: 10,
+    elevation: 0,
+    shadowOpacity: 0,
+    shadowRadius: 0,
+  },
+  manualEntryButton: {
+    borderRadius: 9,
+    elevation: 0,
+    shadowOpacity: 0,
+    shadowRadius: 0,
+  },
+  manualSectionCard: {
+    borderWidth: 0,
+    borderBottomWidth: 1,
+    borderRadius: 0,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.lg,
+    gap: theme.spacing.sm,
   },
   manualSectionHeader: {
     flexDirection: 'row',
@@ -7843,7 +8776,7 @@ const styles = StyleSheet.create({
   manualSectionIconWrap: {
     width: 34,
     height: 34,
-    borderRadius: theme.radius.lg,
+    borderRadius: 9,
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
@@ -7893,9 +8826,44 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
   },
-  manualChoiceGrid: {
+  donationMethodList: {
+    gap: theme.spacing.sm,
+    paddingBottom: theme.spacing.lg,
+  },
+  donationMethodCard: {
+    minHeight: 78,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
     flexDirection: 'row',
-    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  donationMethodIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  donationMethodCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 3,
+  },
+  donationMethodTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  donationMethodBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    lineHeight: theme.typography.semantic.caption * theme.typography.lineHeights.relaxed,
+  },
+  manualChoiceGrid: {
+    flexDirection: 'column',
     gap: theme.spacing.sm,
   },
   choiceLabel: {
@@ -7906,13 +8874,14 @@ const styles = StyleSheet.create({
   },
   choiceChipRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
+    flexWrap: 'nowrap',
     gap: theme.spacing.xs,
+    paddingRight: theme.spacing.md,
   },
   choiceChip: {
     paddingHorizontal: theme.spacing.md,
     paddingVertical: theme.spacing.sm,
-    borderRadius: theme.radius.pill,
+    borderRadius: 9,
     borderWidth: 1,
     borderColor: theme.colors.borderSubtle,
     backgroundColor: theme.colors.backgroundPrimary,
@@ -7965,12 +8934,12 @@ const styles = StyleSheet.create({
   photoPreview: {
     width: '100%',
     height: 228,
-    borderRadius: 14,
+    borderRadius: 8,
     backgroundColor: theme.colors.backgroundPrimary,
   },
   photoPlaceholder: {
     minHeight: 168,
-    borderRadius: 14,
+    borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
     gap: theme.spacing.sm,
@@ -8231,6 +9200,53 @@ const styles = StyleSheet.create({
   bundlePreviewPanel: {
     gap: theme.spacing.xs,
   },
+  compactQrList: {
+    gap: theme.spacing.md,
+  },
+  compactQrCard: {
+    borderWidth: 1,
+    borderRadius: 18,
+    padding: theme.spacing.md,
+    gap: theme.spacing.md,
+    ...theme.shadows.soft,
+  },
+  compactQrHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+  },
+  compactQrTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  compactQrMeta: {
+    marginTop: 2,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+  },
+  compactQrCount: {
+    overflow: 'hidden',
+    borderRadius: theme.radius.full,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: 4,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  compactQrImageFrame: {
+    alignSelf: 'center',
+    width: 240,
+    maxWidth: '100%',
+    aspectRatio: 1,
+    borderRadius: theme.radius.lg,
+    padding: theme.spacing.sm,
+  },
+  compactQrImage: {
+    width: '100%',
+    height: '100%',
+  },
   bundlePreviewTitle: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.body,
@@ -8331,6 +9347,9 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: theme.spacing.sm,
     justifyContent: 'flex-start',
+  },
+  manualPhotoActions: {
+    justifyContent: 'center',
   },
   modalFooterActions: {
     flexDirection: 'row',
@@ -8454,12 +9473,22 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     overflow: 'hidden',
   },
+  modalCardCompact: {
+    borderTopLeftRadius: 14,
+    borderTopRightRadius: 14,
+    paddingTop: theme.spacing.sm,
+  },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     gap: theme.spacing.sm,
     marginBottom: theme.spacing.sm,
     paddingHorizontal: theme.spacing.md,
+  },
+  modalHeaderCompact: {
+    alignItems: 'flex-start',
+    marginBottom: theme.spacing.md,
+    paddingTop: theme.spacing.xs,
   },
   modalHeaderCopy: {
     flex: 1,
@@ -8470,6 +9499,9 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.semantic.bodyLg,
     fontWeight: theme.typography.weights.semibold,
     color: theme.colors.textPrimary,
+  },
+  modalTitleCompact: {
+    fontSize: theme.typography.semantic.bodyMd,
   },
   modalSubtitle: {
     fontFamily: theme.typography.fontFamily,
@@ -8486,6 +9518,11 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.surfaceSoft,
     borderWidth: 1,
     borderColor: theme.colors.borderSubtle,
+  },
+  modalCloseBtnCompact: {
+    width: 34,
+    height: 34,
+    borderRadius: 9,
   },
   modalBody: {
     flexShrink: 1,

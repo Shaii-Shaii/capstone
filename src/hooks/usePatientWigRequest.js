@@ -283,6 +283,7 @@ export const usePatientWigRequest = ({ userId }) => {
     requestHospital: null,
     requestWig: null,
     latestReleaseSchedule: null,
+    safetyAssessment: null,
   });
   const [error, setError] = useState(null);
   const [successMessage, setSuccessMessage] = useState('');
@@ -329,6 +330,7 @@ export const usePatientWigRequest = ({ userId }) => {
       requestHospital: result.requestHospital,
       requestWig: result.requestWig,
       latestReleaseSchedule: result.latestReleaseSchedule,
+      safetyAssessment: result.safetyAssessment,
     });
 
     if (isOngoingWigRequest(result.latestWigRequest) && result.latestWigSpecification?.patient_picture) {
@@ -638,6 +640,7 @@ export const usePatientWigRequest = ({ userId }) => {
     requestHospital: context.requestHospital,
     requestWig: context.requestWig,
     latestReleaseSchedule: context.latestReleaseSchedule,
+    safetyAssessment: context.safetyAssessment,
     hasSubmittedRequest,
     referenceImage,
     preview,
