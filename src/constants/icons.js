@@ -42,6 +42,7 @@ export const appIconMap = {
   eye: 'eye-outline',
   eyeOff: 'eye-off-outline',
   search: 'magnify',
+  info: 'information-outline',
   filter: 'tune-variant',
   favorite: 'heart-outline',
   sparkle: 'star-four-points-outline',

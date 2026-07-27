@@ -103,38 +103,75 @@ const toNumberOrDefault = (value, fallback) => {
   return Number.isFinite(parsed) ? parsed : fallback;
 };
 
-const normalizeAnalysis = (data) => ({
-  is_hair_detected: data?.is_hair_detected !== false,
-  invalid_image_reason: data?.invalid_image_reason || '',
-  missing_views: Array.isArray(data?.missing_views) ? data.missing_views : [],
-  per_view_notes: normalizeViewNotes(data?.per_view_notes || []),
-  estimated_length: toNumberOrDefault(data?.estimated_length, 0),
-  detected_color: data?.detected_color || 'Black',
-  detected_texture: data?.detected_texture || 'Straight',
-  detected_density: data?.detected_density || 'Medium',
-  detected_condition: data?.detected_condition || 'Needs manual hair review',
-  visible_damage_notes: data?.visible_damage_notes || 'No visible damage notes reported.',
-  confidence_score: toNumberOrDefault(data?.confidence_score, 0),
-  shine_level: toNumberOrDefault(data?.shine_level, 5),
-  frizz_level: toNumberOrDefault(data?.frizz_level, 5),
-  dryness_level: toNumberOrDefault(data?.dryness_level, 5),
-  oiliness_level: toNumberOrDefault(data?.oiliness_level, 5),
-  damage_level: toNumberOrDefault(data?.damage_level, 5),
-  bald_spots_present: data?.bald_spots_present === true,
-  affected_regions: normalizeStringArray(data?.affected_regions || []),
-  hair_density_score: toNumberOrDefault(data?.hair_density_score, 50),
-  shedding_level: data?.shedding_level || 'mild',
-  visible_scalp_area: data?.visible_scalp_area || 'low',
-  scalp_coverage_notes: data?.scalp_coverage_notes || 'No clear scalp coverage issue was reported.',
-  improvement_tracking_status: data?.improvement_tracking_status || 'Needs improvement tracking',
-  improvement_recommendation: data?.improvement_recommendation || 'Keep tracking hair length and condition with future CheckHair scans before donating.',
-  decision: data?.decision || 'Improve hair condition',
-  summary: data?.summary || 'Hair analysis completed with limited details. Final screening requires manual review.',
-  length_assessment: data?.length_assessment || '',
-  donation_readiness_note: data?.donation_readiness_note || '',
-  history_assessment: data?.history_assessment || '',
-  recommendations: normalizeRecommendations(data?.recommendations || []),
-});
+const hasVisibleDandruffEvidence = (value = '') => {
+  const normalized = String(value || '').toLowerCase();
+  if (!normalized) return false;
+  if (/\b(no|not|without)\s+(?:visible\s+)?(?:dandruff|flakes?|flaking|white particles?|yellow particles?|buildup)\b/i.test(normalized)) {
+    return false;
+  }
+  return /\b(dandruff|flakes?|flaking|white particles?|yellow particles?|flake-like|dandruff-like|scaly|buildup)\b/i.test(normalized);
+};
+
+const normalizeAnalysis = (data) => {
+  const perViewNotes = normalizeViewNotes(data?.per_view_notes || []);
+  const scalpCoverageNotes = data?.scalp_coverage_notes || 'No clear scalp coverage issue was reported.';
+  const scalpFindingEvidenceText = [
+    data?.summary,
+    data?.visible_damage_notes,
+    scalpCoverageNotes,
+    ...perViewNotes
+      .filter((item) => String(item?.view || '').toLowerCase().includes('scalp'))
+      .map((item) => item.notes),
+  ].filter(Boolean).join(' ');
+  const dandruffDetected = data?.dandruff_detected === true || hasVisibleDandruffEvidence(scalpFindingEvidenceText);
+
+  return {
+    is_hair_detected: data?.is_hair_detected !== false,
+    invalid_image_reason: data?.invalid_image_reason || '',
+    missing_views: Array.isArray(data?.missing_views) ? data.missing_views : [],
+    per_view_notes: perViewNotes,
+    estimated_length: toNumberOrDefault(data?.estimated_length, 0),
+    detected_color: data?.detected_color || 'Black',
+    detected_texture: data?.detected_texture || 'Straight',
+    detected_density: data?.detected_density || 'Medium',
+    detected_condition: data?.detected_condition || 'Needs manual hair review',
+    visible_damage_notes: data?.visible_damage_notes || 'No visible damage notes reported.',
+    confidence_score: toNumberOrDefault(data?.confidence_score, 0),
+    shine_level: toNumberOrDefault(data?.shine_level, 5),
+    frizz_level: toNumberOrDefault(data?.frizz_level, 5),
+    dryness_level: toNumberOrDefault(data?.dryness_level, 5),
+    oiliness_level: toNumberOrDefault(data?.oiliness_level, 5),
+    damage_level: toNumberOrDefault(data?.damage_level, 5),
+    bald_spots_present: data?.bald_spots_present === true,
+    affected_regions: normalizeStringArray(data?.affected_regions || []),
+    hair_density_score: toNumberOrDefault(data?.hair_density_score, 50),
+    shedding_level: data?.shedding_level || 'mild',
+    visible_scalp_area: data?.visible_scalp_area || 'low',
+    scalp_coverage_notes: scalpCoverageNotes,
+    dandruff_detected: dandruffDetected,
+    dandruff_severity: data?.dandruff_severity || (dandruffDetected ? 'mild' : 'none'),
+    dandruff_notes: data?.dandruff_notes || (
+      dandruffDetected
+        ? 'Dandruff-like flakes were observed in the uploaded scalp or root views.'
+        : 'No visible dandruff-like flakes were observed in the uploaded views.'
+    ),
+    lice_detected: data?.lice_detected === true,
+    lice_confidence: data?.lice_confidence || (data?.lice_detected === true ? 'medium' : 'none'),
+    lice_notes: data?.lice_notes || (
+      data?.lice_detected === true
+        ? 'Visible lice or nit-like signs were observed; this screening is not a medical diagnosis.'
+        : 'No visible lice or nit-like signs were observed in the uploaded views.'
+    ),
+    improvement_tracking_status: data?.improvement_tracking_status || 'Needs improvement tracking',
+    improvement_recommendation: data?.improvement_recommendation || 'Keep tracking hair length and condition with future CheckHair scans before donating.',
+    decision: data?.decision || 'Improve hair condition',
+    summary: data?.summary || 'Hair analysis completed with limited details. Final screening requires manual review.',
+    length_assessment: data?.length_assessment || '',
+    donation_readiness_note: data?.donation_readiness_note || '',
+    history_assessment: data?.history_assessment || '',
+    recommendations: normalizeRecommendations(data?.recommendations || []),
+  };
+};
 
 const hasStructuredAnalysisContent = (analysis) => Boolean(
   analysis?.summary
@@ -339,6 +376,12 @@ const buildLowConfidenceFallbackAnalysis = ({ images = [], message = '' } = {}) 
     shedding_level: 'mild',
     visible_scalp_area: 'low',
     scalp_coverage_notes: 'Hair and scalp view were submitted; coverage should be tracked again in the next scan for a stronger comparison.',
+    dandruff_detected: false,
+    dandruff_severity: 'none',
+    dandruff_notes: 'No visible dandruff-like flakes were confirmed in this low-confidence fallback.',
+    lice_detected: false,
+    lice_confidence: 'none',
+    lice_notes: 'No visible lice or nit-like signs were confirmed in this low-confidence fallback.',
     improvement_tracking_status: 'Needs improvement tracking',
     improvement_recommendation: 'Focus on gentle hair care, scalp comfort, and length retention. Keep tracking changes over time before deciding on donation readiness.',
     decision: 'Not eligible for donation yet',

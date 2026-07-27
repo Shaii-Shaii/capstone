@@ -1618,7 +1618,13 @@ const scoreWigRecommendation = (wig, values = {}) => {
   const selectedFields = fields.filter((fieldName) =>
     normalizePreferenceMatchValue(values?.[fieldName], fieldName),
   );
-  const stockScore = Number(wig?.stock_count || 0) > 0 ? 0.1 : 0;
+  const hasPreviewAsset = Boolean(
+    wig?.layer_full_wig_url ||
+      wig?.layer_front_bangs_url ||
+      wig?.layer_back_hair_url ||
+      wig?.thumbnail_url,
+  );
+  const stockScore = Number(wig?.stock_count || 0) > 0 ? 0.1 : hasPreviewAsset ? 0.05 : 0;
 
   if (!selectedFields.length) return stockScore;
 
@@ -3971,7 +3977,7 @@ function RequestFlowModal({
                         { color: roles.headingText },
                       ]}
                     >
-                      No stock wig is available right now.
+                      No wig preview is available right now.
                     </Text>
                     <Text style={[styles.flowBody, { color: roles.bodyText }]}>
                       Request a custom wig specification instead.
@@ -4624,8 +4630,12 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
   void requestedWigCode;
   void requestedWigStatus;
   void requestedWigSummary;
-  const availableStockWigs = useMemo(
-    () => availableWigs.filter((wig) => Number(wig?.stock_count || 0) > 0),
+  const availablePreviewWigs = useMemo(
+    () =>
+      availableWigs.filter((wig) =>
+        wig?.is_active !== false &&
+        Boolean(getPrimaryTryOnImageUrl(wig) || getWigPreviewImageUrl(wig)),
+      ),
     [availableWigs],
   );
   const recommendationOptions = useMemo(
@@ -4651,10 +4661,10 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
     "";
   const hasGeneratedPreview = Boolean(preview);
   const aiRecommendedWig = useMemo(() => {
-    if (!availableStockWigs.length) return null;
+    if (!availablePreviewWigs.length) return null;
 
     return (
-      availableStockWigs.reduce((best, wig) => {
+      availablePreviewWigs.reduce((best, wig) => {
         const score = scoreWigRecommendation(wig, draftValues);
         if (!best) return { wig, score };
         if (score > best.score) return { wig, score };
@@ -4665,10 +4675,10 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
 
         return best;
       }, null)?.wig ||
-      availableStockWigs[0] ||
+      availablePreviewWigs[0] ||
       null
     );
-  }, [availableStockWigs, draftValues]);
+  }, [availablePreviewWigs, draftValues]);
   const recommendedPreferenceOptions = useMemo(
     () => ({
       preferredLength: [
@@ -4694,8 +4704,8 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
   );
   const selectedWig = useMemo(
     () =>
-      availableStockWigs.find((wig) => wig.id === selectedWigFilterId) || null,
-    [availableStockWigs, selectedWigFilterId],
+      availablePreviewWigs.find((wig) => wig.id === selectedWigFilterId) || null,
+    [availablePreviewWigs, selectedWigFilterId],
   );
   useEffect(() => {
     setSelectedOptionId(recommendationOptions[0]?.id || "");
@@ -4706,17 +4716,17 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
   ]);
 
   useEffect(() => {
-    if (!availableStockWigs.length) {
+    if (!availablePreviewWigs.length) {
       setSelectedWigFilterId("");
       return;
     }
 
     setSelectedWigFilterId((current) => {
-      if (current && availableStockWigs.some((wig) => wig.id === current))
+      if (current && availablePreviewWigs.some((wig) => wig.id === current))
         return current;
       return "";
     });
-  }, [availableStockWigs]);
+  }, [availablePreviewWigs]);
 
   const handleNavPress = (item) => {
     if (!item.route || item.route === "/patient/requests") return;
@@ -5083,8 +5093,8 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
       };
     }
 
-    setRequestMode(availableStockWigs.length ? "selected" : "custom");
-    setFlowStep(availableStockWigs.length ? "photo" : "customSpec");
+    setRequestMode(availablePreviewWigs.length ? "selected" : "custom");
+    setFlowStep(availablePreviewWigs.length ? "photo" : "customSpec");
     return { success: true };
   });
 
@@ -5366,7 +5376,7 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
         patientCode={patientCode}
         hospitalName={hospitalName}
         medicalCondition={medicalCondition}
-        availableWigs={availableStockWigs}
+        availableWigs={availablePreviewWigs}
         referenceImage={referenceImage}
         selectedWig={selectedWig}
         recommendedPreferenceOptions={recommendedPreferenceOptions}

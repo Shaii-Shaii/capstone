@@ -165,6 +165,8 @@ const formatDensityScore = (value) => {
   return Number.isFinite(score) ? `${Math.round(score)} / 100` : 'Not enough data';
 };
 
+const formatDetectedLabel = (value) => (value === true ? 'Detected' : 'Not detected');
+
 const toCompactSummary = (value = '') => {
   const normalized = String(value || '').replace(/\s+/g, ' ').trim();
   if (!normalized) return '';
@@ -359,6 +361,8 @@ export function HairLogDetailModal({
     || screening?.visible_scalp_area
     || screening?.shedding_level
     || screening?.scalp_coverage_notes
+    || screening?.dandruff_notes
+    || screening?.lice_notes
     || screening?.summary
     || screening?.visible_damage_notes
   );
@@ -379,8 +383,12 @@ export function HairLogDetailModal({
     { label: 'Length', value: formatLengthLabel(screening?.estimated_length) },
     { label: 'Density', value: screening?.detected_density || 'Not detected' },
     { label: 'Score', value: formatDensityScore(screening?.hair_density_score) },
+    { label: 'Dandruff', value: formatDetectedLabel(screening?.dandruff_detected) },
+    { label: 'Lice / nits', value: formatDetectedLabel(screening?.lice_detected) },
   ];
   const insightBullets = Array.from(new Set([
+    screening?.dandruff_notes,
+    screening?.lice_notes,
     screening?.scalp_coverage_notes,
     screening?.improvement_recommendation,
     screening?.visible_damage_notes,

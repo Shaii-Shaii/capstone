@@ -36,6 +36,8 @@ import {
   ensureIndependentDonationQr,
   submitDonationForStaffWaybill,
   scheduleWalkInDropoff,
+  getWalkInDropoffAvailability,
+  discardUnscheduledWalkInDonationDraft,
   linkDonationRecipient,
   cancelDonorDonation,
 } from '../../features/donorDonations.service';
@@ -83,7 +85,6 @@ const LENGTH_UNIT_OPTIONS = [
   { label: 'Inches', value: 'in' },
 ];
 const DONATION_REALTIME_DEBOUNCE_MS = 420;
-const WALK_IN_DROPOFF_WINDOWS = ['9:00 AM - 11:00 AM', '1:00 PM - 3:00 PM', '3:00 PM - 5:00 PM'];
 let cachedDonorDonationModuleData = null;
 let cachedDonorDonationModuleUserId = '';
 
@@ -459,7 +460,7 @@ const buildEventDonationTimelineStages = ({ item, fallbackStages = [], certifica
     {
       key: 'cut_and_ship',
       label: 'Cut & Ship',
-      savedNote: 'The user has a hair ready to be delivered to the organization.',
+      savedNote: 'Hair donation was scanned and accepted for organization handling.',
       evidenceAt: cutEvidenceAt,
       statusLabel: cutEvidenceAt ? 'Complete' : '',
     },
@@ -531,30 +532,6 @@ const formatDateTimeLabel = (dateString) => {
   } catch {
     return String(dateString || '');
   }
-};
-
-const toLocalDateKey = (date) => {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-};
-
-const buildWalkInDateOptions = (count = 5) => {
-  const options = [];
-  const cursor = new Date();
-  while (options.length < count) {
-    const day = cursor.getDay();
-    if (day !== 0) {
-      const value = toLocalDateKey(cursor);
-      options.push({
-        value,
-        label: options.length === 0 ? 'Today' : cursor.toLocaleDateString('en-PH', { weekday: 'short', month: 'short', day: 'numeric' }),
-      });
-    }
-    cursor.setDate(cursor.getDate() + 1);
-  }
-  return options;
 };
 
 const getMainIneligibilityReason = (eligibility = null) => {
@@ -691,6 +668,9 @@ const isRsvpCheckedIn = (registration = null) => {
 const getDonationCardMeta = ({ submission = null, drive = null, logistics = null } = {}) => {
   const rawStatus = String(logistics?.shipment_status || submission?.status || '').trim();
   const normalized = rawStatus.toLowerCase();
+  const logisticsType = String(logistics?.logistics_type || '').trim().toLowerCase();
+  const isWalkInLogistics = ['onsite_delivery', 'walk_in', 'walk-in', 'dropoff', 'drop-off']
+    .includes(logisticsType);
 
   if (isClosedDonationStatus(rawStatus)) {
     return {
@@ -701,6 +681,10 @@ const getDonationCardMeta = ({ submission = null, drive = null, logistics = null
   }
 
   if (submission?.submission_id) {
+    if (isWalkInLogistics && !logistics?.dropoff_window) {
+      return { label: 'Schedule required', category: 'active', icon: 'calendar-clock-outline' };
+    }
+
     if (
       normalized.includes('submitted')
       || normalized === 'cut'
@@ -2964,6 +2948,9 @@ function WalkInScheduleScreen({
   roles,
   submission,
   appointment = null,
+  availability = [],
+  availabilityError = '',
+  isLoadingAvailability = false,
   readOnly = false,
   isScheduling = false,
   onBack,
@@ -2979,7 +2966,7 @@ function WalkInScheduleScreen({
     return `${formatTime(appointment.appointment_start_at)} - ${formatTime(appointment.appointment_end_at)}`;
   }, [appointment?.appointment_end_at, appointment?.appointment_start_at]);
   const dateOptions = React.useMemo(() => {
-    const options = buildWalkInDateOptions();
+    const options = Array.isArray(availability) ? availability : [];
     if (!savedDate || options.some((option) => option.value === savedDate)) return options;
     return [{
       value: savedDate,
@@ -2988,12 +2975,30 @@ function WalkInScheduleScreen({
         month: 'short',
         day: 'numeric',
       }),
+      windows: savedWindow ? [{ value: savedWindow, label: savedWindow }] : [],
     }, ...options];
-  }, [savedDate]);
+  }, [availability, savedDate, savedWindow]);
   const [selectedDate, setSelectedDate] = React.useState(() => savedDate || dateOptions[0]?.value || '');
-  const [selectedWindow, setSelectedWindow] = React.useState(
-    () => savedWindow || WALK_IN_DROPOFF_WINDOWS[0] || ''
+  const selectedDateOption = dateOptions.find((option) => option.value === selectedDate) || dateOptions[0] || null;
+  const timeOptions = React.useMemo(
+    () => selectedDateOption?.windows || [],
+    [selectedDateOption?.windows]
   );
+  const [selectedWindow, setSelectedWindow] = React.useState(() => savedWindow || timeOptions[0]?.value || '');
+
+  React.useEffect(() => {
+    if (selectedDate && dateOptions.some((option) => option.value === selectedDate)) return;
+    setSelectedDate(savedDate || dateOptions[0]?.value || '');
+  }, [dateOptions, savedDate, selectedDate]);
+
+  React.useEffect(() => {
+    if (savedWindow && selectedDate === savedDate) {
+      setSelectedWindow(savedWindow);
+      return;
+    }
+    if (timeOptions.some((option) => option.value === selectedWindow)) return;
+    setSelectedWindow(timeOptions[0]?.value || '');
+  }, [savedDate, savedWindow, selectedDate, selectedWindow, timeOptions]);
 
   return (
     <View style={styles.flowScreen}>
@@ -3045,6 +3050,14 @@ function WalkInScheduleScreen({
           </View>
         ) : (
           <>
+        {isLoadingAvailability ? (
+          <StatusBanner message="Loading available drop-off schedules..." variant="info" />
+        ) : availabilityError ? (
+          <StatusBanner message={availabilityError} variant="error" />
+        ) : !dateOptions.length ? (
+          <StatusBanner message="No drop-off schedules are available right now. Please check again later." variant="info" />
+        ) : null}
+
         <View style={styles.walkInChoiceGroup}>
           <Text style={[styles.walkInLabel, { color: roles.headingText }]}>Date</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.walkInChipRow}>
@@ -3074,12 +3087,12 @@ function WalkInScheduleScreen({
         <View style={styles.walkInChoiceGroup}>
           <Text style={[styles.walkInLabel, { color: roles.headingText }]}>Arrival time</Text>
           <View style={styles.walkInWindowGrid}>
-            {WALK_IN_DROPOFF_WINDOWS.map((window) => {
-              const selected = selectedWindow === window;
+            {timeOptions.map((window) => {
+              const selected = selectedWindow === window.value;
               return (
                 <Pressable
-                  key={window}
-                  onPress={() => setSelectedWindow(window)}
+                  key={window.value}
+                  onPress={() => setSelectedWindow(window.value)}
                   style={[
                     styles.walkInWindowChip,
                     {
@@ -3089,11 +3102,16 @@ function WalkInScheduleScreen({
                   ]}
                 >
                   <Text style={[styles.walkInChipText, { color: selected ? roles.primaryActionText : roles.headingText }]}>
-                    {window}
+                    {window.label || window.value}
                   </Text>
                 </Pressable>
               );
             })}
+            {!timeOptions.length && !isLoadingAvailability ? (
+              <Text style={[styles.walkInEmptyText, { color: roles.bodyText }]}>
+                No available arrival times for this date.
+              </Text>
+            ) : null}
           </View>
         </View>
 
@@ -3103,7 +3121,7 @@ function WalkInScheduleScreen({
             : (appointment?.appointment_id ? 'Update appointment' : 'Confirm appointment')}
           onPress={() => onSchedule?.({ submission, scheduleDate: selectedDate, timeWindow: selectedWindow })}
           loading={isScheduling}
-          disabled={!submission?.submission_id || !selectedDate || !selectedWindow || isScheduling}
+          disabled={!submission?.submission_id || !selectedDate || !selectedWindow || isScheduling || isLoadingAvailability}
         />
           </>
         )}
@@ -3531,14 +3549,14 @@ const buildEventDonationTimelineStages = ({ item, fallbackStages = [], certifica
     },
     {
       key: 'wig_distribution_hospitals',
-      label: 'Wig Distribution for Hospital',
+      label: 'Hospital Distribution',
       savedNote: hospitalFallback?.savedNote || 'The completed wig is prepared for hospital distribution.',
       evidenceAt: getTimelineEvidenceAt(hospitalFallback),
       statusLabel: hospitalFallback?.statusLabel || '',
     },
     {
       key: 'distribution_to_patients',
-      label: 'Distribution to Patients',
+      label: 'Patient Distribution',
       savedNote: patientFallback?.savedNote || 'The wig is distributed to patients.',
       evidenceAt: getTimelineEvidenceAt(patientFallback),
       statusLabel: patientFallback?.statusLabel || '',
@@ -4157,6 +4175,9 @@ export function DonorDonationStatusScreen() {
   const [printingQrKey, setPrintingQrKey] = React.useState('');
   const [savingQrKey, setSavingQrKey] = React.useState('');
   const [isSchedulingDropoff, setIsSchedulingDropoff] = React.useState(false);
+  const [walkInAvailability, setWalkInAvailability] = React.useState([]);
+  const [walkInAvailabilityError, setWalkInAvailabilityError] = React.useState('');
+  const [isLoadingWalkInAvailability, setIsLoadingWalkInAvailability] = React.useState(false);
   // When the user picks a view manually, stop auto-routing away from it.
   const hasManualDonationViewSelectionRef = React.useRef(false);
 
@@ -4215,6 +4236,26 @@ export function DonorDonationStatusScreen() {
   }, [loadModuleData]);
 
   React.useEffect(() => { loadModuleData(); }, [loadModuleData]);
+
+  React.useEffect(() => {
+    let isMounted = true;
+
+    const loadWalkInAvailability = async () => {
+      if (donationModuleScreen !== DONATION_MODULE_SCREEN.WALK_IN_SCHEDULE) return;
+      setIsLoadingWalkInAvailability(true);
+      setWalkInAvailabilityError('');
+      const result = await getWalkInDropoffAvailability();
+      if (!isMounted) return;
+      setWalkInAvailability(result.data || []);
+      setWalkInAvailabilityError(result.error || '');
+      setIsLoadingWalkInAvailability(false);
+    };
+
+    void loadWalkInAvailability();
+    return () => {
+      isMounted = false;
+    };
+  }, [donationModuleScreen]);
 
   React.useEffect(() => () => {
     if (donationRealtimeRefreshRef.current) {
@@ -4384,7 +4425,27 @@ export function DonorDonationStatusScreen() {
   ) || null;
   const selectedFlowDrive = selectedDriveFromList || selectedDriveForDonation || displayDrive;
   const selectedDonationDriveId = selectedDriveForDonation?.donation_drive_id || null;
-  const trackedSubmissionId = moduleData?.latestSubmission?.submission_id || null;
+  const trackedSubmissionIds = React.useMemo(() => {
+    const activeSubmissions = Array.isArray(moduleData?.activeSubmissions)
+      ? moduleData.activeSubmissions
+      : [];
+    return [...new Set([
+      ...activeSubmissions,
+      moduleData?.latestSubmission,
+      selectedDonationTimelineItem?.submission,
+    ]
+      .filter(Boolean)
+      .map((submission) => Number(submission?.submission_id))
+      .filter((value) => Number.isFinite(value) && value > 0))];
+  }, [
+    moduleData?.activeSubmissions,
+    moduleData?.latestSubmission,
+    selectedDonationTimelineItem?.submission,
+  ]);
+  const trackedSubmissionIdsKey = React.useMemo(
+    () => trackedSubmissionIds.join(','),
+    [trackedSubmissionIds]
+  );
   const trackedDetailIds = React.useMemo(() => {
     const activeSubmissions = Array.isArray(moduleData?.activeSubmissions)
       ? moduleData.activeSubmissions
@@ -4450,33 +4511,33 @@ export function DonorDonationStatusScreen() {
         filter: `User_ID=eq.${profile.user_id}`,
       }, onCertificateRealtimeEvent);
 
-    if (trackedSubmissionId) {
+    trackedSubmissionIds.forEach((submissionId) => {
       channel
         .on('postgres_changes', {
           event: '*',
           schema: 'public',
           table: 'Hair_Submission_Details',
-          filter: `Submission_ID=eq.${trackedSubmissionId}`,
+          filter: `Submission_ID=eq.${submissionId}`,
         }, onRealtimeEvent)
         .on('postgres_changes', {
           event: '*',
           schema: 'public',
           table: 'Hair_Submission_Logistics',
-          filter: `Submission_ID=eq.${trackedSubmissionId}`,
+          filter: `Submission_ID=eq.${submissionId}`,
         }, onRealtimeEvent)
         .on('postgres_changes', {
           event: '*',
           schema: 'public',
           table: 'Hair_Bundle_Tracking_History',
-          filter: `Submission_ID=eq.${trackedSubmissionId}`,
+          filter: `Submission_ID=eq.${submissionId}`,
         }, onRealtimeEvent)
         .on('postgres_changes', {
           event: '*',
           schema: 'public',
           table: 'Donation_Certificates',
-          filter: `Submission_ID=eq.${trackedSubmissionId}`,
+          filter: `Submission_ID=eq.${submissionId}`,
         }, onCertificateRealtimeEvent);
-    }
+    });
 
     trackedDetailIds.forEach((detailId) => {
       channel.on('postgres_changes', {
@@ -4497,7 +4558,8 @@ export function DonorDonationStatusScreen() {
     scheduleDonationRealtimeRefresh,
     trackedDetailIds,
     trackedDetailIdsKey,
-    trackedSubmissionId,
+    trackedSubmissionIds,
+    trackedSubmissionIdsKey,
     user?.id,
   ]);
 
@@ -4952,6 +5014,7 @@ export function DonorDonationStatusScreen() {
       submission: aiDonation.submission,
       databaseUserId: profile?.user_id || null,
       donationDriveId: selectedDonationDriveId,
+      logisticsMethod: selectedLogisticMethod,
     });
     setIsGeneratingQr(false);
     setModuleFeedback({
@@ -4969,6 +5032,7 @@ export function DonorDonationStatusScreen() {
     profile?.user_id,
     guardDonationPermission,
     selectedDonationDriveId,
+    selectedLogisticMethod,
     user?.id,
   ]);
 
@@ -5076,6 +5140,33 @@ export function DonorDonationStatusScreen() {
     profile?.user_id,
     user?.email,
     user?.id,
+  ]);
+
+  const handleBackFromWalkInSchedule = React.useCallback(async () => {
+    const draftSubmission = pendingWalkInSubmission || moduleData?.latestSubmission || null;
+    if (draftSubmission?.submission_id && !selectedWalkInAppointment?.appointment_id) {
+      const discardResult = await discardUnscheduledWalkInDonationDraft({
+        submission: draftSubmission,
+        userId: user?.id || null,
+      });
+      if (!discardResult.success) {
+        setModuleFeedback({
+          message: discardResult.error || 'Unable to remove the unscheduled drop-off draft.',
+          variant: 'error',
+        });
+      } else if (discardResult.deleted) {
+        await loadModuleData({ silent: true });
+      }
+    }
+    setPendingWalkInSubmission(null);
+    setDonationModuleScreen(walkInScheduleReturnScreen);
+  }, [
+    loadModuleData,
+    moduleData?.latestSubmission,
+    pendingWalkInSubmission,
+    selectedWalkInAppointment?.appointment_id,
+    user?.id,
+    walkInScheduleReturnScreen,
   ]);
 
   const updateManualField = React.useCallback((field, value) => {
@@ -5288,6 +5379,7 @@ export function DonorDonationStatusScreen() {
         submission: result.submission,
         databaseUserId: profile?.user_id || null,
         donationDriveId: selectedDonationDriveId,
+        logisticsMethod: selectedLogisticMethod,
       });
       setIsGeneratingQr(false);
       setModuleFeedback({
@@ -6046,15 +6138,15 @@ export function DonorDonationStatusScreen() {
               ...current,
               hasOngoingDonation: true,
               activeSubmission: current.activeSubmission && submittedIds.has(Number(current.activeSubmission.submission_id))
-                ? { ...current.activeSubmission, status: 'Submitted' }
+                ? { ...current.activeSubmission, status: hasEventLinkedSubmission ? 'Submitted' : 'Cut' }
                 : current.activeSubmission,
               latestSubmission: current.latestSubmission && submittedIds.has(Number(current.latestSubmission.submission_id))
-                ? { ...current.latestSubmission, status: 'Submitted' }
+                ? { ...current.latestSubmission, status: hasEventLinkedSubmission ? 'Submitted' : 'Cut' }
                 : current.latestSubmission,
               activeSubmissions: Array.isArray(current.activeSubmissions)
                 ? current.activeSubmissions.map((submission) => (
                     submittedIds.has(Number(submission?.submission_id))
-                      ? { ...submission, status: 'Submitted' }
+                      ? { ...submission, status: hasEventLinkedSubmission ? 'Submitted' : 'Cut' }
                       : submission
                   ))
                 : current.activeSubmissions,
@@ -6337,12 +6429,12 @@ export function DonorDonationStatusScreen() {
           roles={roles}
           submission={pendingWalkInSubmission || moduleData?.latestSubmission || null}
           appointment={selectedWalkInAppointment}
+          availability={walkInAvailability}
+          availabilityError={walkInAvailabilityError}
+          isLoadingAvailability={isLoadingWalkInAvailability}
           readOnly={walkInScheduleReturnScreen === DONATION_MODULE_SCREEN.DONATION_STATUS}
           isScheduling={isSchedulingDropoff}
-          onBack={() => {
-            setPendingWalkInSubmission(null);
-            setDonationModuleScreen(walkInScheduleReturnScreen);
-          }}
+          onBack={handleBackFromWalkInSchedule}
           onSchedule={handleScheduleWalkInDropoff}
         />
       );
@@ -6415,6 +6507,7 @@ export function DonorDonationStatusScreen() {
     handleRemoveSummaryHair,
     handlePrintQrFromScreen,
     handleSaveQrFromScreen,
+    handleBackFromWalkInSchedule,
     handleScheduleWalkInDropoff,
     handleSubmitDonationAndShowQr,
     handleSubmitSelectedEventDonation,
@@ -6424,6 +6517,7 @@ export function DonorDonationStatusScreen() {
     isAiEligible,
     isGeneratingEventRsvp,
     isGeneratingQr,
+    isLoadingWalkInAvailability,
     isSchedulingDropoff,
     isProfileComplete,
     latestScreening,
@@ -6452,6 +6546,8 @@ export function DonorDonationStatusScreen() {
     selectedSubmissionFlowRecord?.timelineStages,
     selectedDonationStatusItem,
     selectedDonationDriveId,
+    walkInAvailability,
+    walkInAvailabilityError,
     walkInScheduleReturnScreen,
   ]);
   const logisticStickyAction = effectiveDonationModuleScreen === DONATION_MODULE_SCREEN.MY_DONATIONS ? (
@@ -7585,6 +7681,11 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.bodySm,
     fontWeight: theme.typography.weights.semibold,
+  },
+  walkInEmptyText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
   },
   logisticFabOverlay: {
     position: 'absolute',

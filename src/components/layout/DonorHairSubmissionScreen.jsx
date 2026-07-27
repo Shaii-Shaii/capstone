@@ -519,6 +519,15 @@ const hasScalpCoverageTracking = (analysis = {}) => Boolean(
   || analysis?.improvement_recommendation
 );
 
+const hasScalpFindingTracking = (analysis = {}) => Boolean(
+  analysis?.dandruff_detected === true
+  || analysis?.dandruff_severity
+  || analysis?.dandruff_notes
+  || analysis?.lice_detected === true
+  || analysis?.lice_confidence
+  || analysis?.lice_notes
+);
+
 const hasScalpCoverageConcern = (analysis = {}) => (
   analysis?.bald_spots_present === true
   || ['moderate', 'high'].includes(String(analysis?.visible_scalp_area || '').toLowerCase())
@@ -546,6 +555,8 @@ const formatAffectedRegions = (regions = []) => (
     ? regions.join(', ')
     : 'none'
 );
+
+const formatDetectedLabel = (value) => (value === true ? 'Detected' : 'Not detected');
 
 const formatDensityScore = (value) => {
   const score = Number(value);
@@ -751,11 +762,9 @@ const getHairImprovementRecommendation = (analysis = {}) => {
   return rawText;
 };
 
-const buildFinalAiResultNote = (values = {}) => {
-  const detailNote = String(values?.detailNotes || '').trim();
-  const caveat = 'Initial AI assessment only. Final donation eligibility should still be reviewed by a qualified staff member or professional.';
-  return detailNote ? `${detailNote} ${caveat}` : caveat;
-};
+const buildFinalAiResultNote = () => (
+  'Final donation eligibility should still be reviewed by a qualified staff member or professional.'
+);
 
 const normalizeReviewOption = (value = '', options = []) => {
   const normalized = String(value || '').trim().toLowerCase();
@@ -2349,6 +2358,8 @@ export function DonorHairSubmissionScreen() {
   const [cameraFacing, setCameraFacing] = useState('front');
   const [flashMode, setFlashMode] = useState('off');
   const [previewImageUri, setPreviewImageUri] = useState('');
+  const [previewImageUris, setPreviewImageUris] = useState([]);
+  const [previewImageIndex, setPreviewImageIndex] = useState(0);
   const [liveFaceStatus, setLiveFaceStatus] = useState(getInitialLiveFaceStatus);
   const [liveFrameBrightness, setLiveFrameBrightness] = useState(-1);
   const lastLiveFaceStatusKeyRef = useRef('');
@@ -2377,6 +2388,7 @@ export function DonorHairSubmissionScreen() {
   const [analysisReviewValues, setAnalysisReviewValues] = useState(() => buildHairReviewDefaultValues(null));
   const [isEditingAnalysisReview, setIsEditingAnalysisReview] = useState(false);
   const { user, profile, resolvedTheme } = useAuth();
+  const { width: viewportWidth } = useWindowDimensions();
   const roles = resolveThemeRoles(resolvedTheme);
   const { logout, isLoading: isLoggingOut } = useAuthActions();
   const {
@@ -2790,15 +2802,34 @@ export function DonorHairSubmissionScreen() {
     router.replace('/donor/donations');
   }, [router]);
 
-  const openScanImagePreview = React.useCallback((uri) => {
+  const openScanImagePreview = React.useCallback((uri, galleryPhotos = []) => {
     if (!uri) return;
+    const fallbackGallery = photos
+      .map((photo, index) => ({
+        uri: photo?.uri || '',
+        label: requiredViews[index]?.label || photo?.viewLabel || `Photo ${index + 1}`,
+      }))
+      .filter((photo) => photo.uri);
+    const gallery = (Array.isArray(galleryPhotos) && galleryPhotos.length ? galleryPhotos : fallbackGallery)
+      .map((photo, index) => ({
+        uri: typeof photo === 'string' ? photo : photo?.uri || '',
+        label: typeof photo === 'string'
+          ? `Photo ${index + 1}`
+          : photo?.label || photo?.viewLabel || requiredViews[index]?.label || `Photo ${index + 1}`,
+      }))
+      .filter((photo) => photo.uri);
+    const galleryIndex = Math.max(0, gallery.findIndex((photo) => photo.uri === uri));
 
     logAppEvent('donor_hair_submission.scan_preview', 'Full scan image preview opened from analysis result.', {
       userId: user?.id || null,
       hasUri: Boolean(uri),
+      galleryCount: gallery.length || 1,
+      galleryIndex: galleryIndex >= 0 ? galleryIndex : 0,
     });
+    setPreviewImageUris(gallery.length ? gallery : [{ uri, label: 'Photo 1' }]);
+    setPreviewImageIndex(galleryIndex >= 0 ? galleryIndex : 0);
     setPreviewImageUri(uri);
-  }, [user?.id]);
+  }, [photos, requiredViews, user?.id]);
 
   useEffect(() => {
     logAppEvent('donor_hair_submission.flow', 'Donor screening flow initialized without intro wizard steps.', {
@@ -3703,6 +3734,12 @@ export function DonorHairSubmissionScreen() {
                   <Text style={styles.tipText} numberOfLines={2}>{item}</Text>
                 </View>
               ))}
+              <View style={styles.aiAssessmentNotice}>
+                <AppIcon name="info" size="md" state="active" />
+                <Text style={styles.aiAssessmentNoticeText}>
+                  Photo quality may affect AI analysis accuracy. Blurry or low-quality photos may miss details.
+                </Text>
+              </View>
             </View>
 
             <AppButton
@@ -3806,6 +3843,12 @@ export function DonorHairSubmissionScreen() {
             : photos[frontViewIndex]?.uri
               ? photos[frontViewIndex]
               : photos.find((photo) => photo?.uri);
+          const resultPhotoGallery = photos
+            .map((photo, index) => ({
+              uri: photo?.uri || '',
+              label: requiredViews[index]?.label || photo?.viewLabel || `Photo ${index + 1}`,
+            }))
+            .filter((photo) => photo.uri);
           const hairRecommendations = buildVisibleHairRecommendations({
             analysis,
             donationAssessment,
@@ -3827,7 +3870,7 @@ export function DonorHairSubmissionScreen() {
 
               <View style={styles.donationAssessmentCard}>
                 <Pressable
-                  onPress={() => openScanImagePreview(scanPhoto?.uri)}
+                  onPress={() => openScanImagePreview(scanPhoto?.uri, resultPhotoGallery)}
                   disabled={!scanPhoto?.uri}
                   style={({ pressed }) => [
                     styles.cutLineImageWrap,
@@ -3904,6 +3947,13 @@ export function DonorHairSubmissionScreen() {
                     <Text style={styles.assessmentNoteText} numberOfLines={2}>{donationAssessment.summary}</Text>
                   </View>
                 </View>
+              </View>
+
+              <View style={styles.aiAssessmentNotice}>
+                <AppIcon name="info" size="md" state="active" />
+                <Text style={styles.aiAssessmentNoticeText}>
+                  AI results are guidance only and may not be fully accurate. For hair health concerns, consult a hair specialist.
+                </Text>
               </View>
 
               <View style={styles.resultInlineSection}>
@@ -4039,6 +4089,46 @@ export function DonorHairSubmissionScreen() {
                     <AppIcon name="chart-line" size="md" state="active" />
                     <Text style={styles.assessmentNoteText} numberOfLines={2}>
                       {displayAnalysis.scalp_coverage_notes || 'This check tracks visible scalp coverage for progress monitoring only.'}
+                    </Text>
+                  </View>
+                </View>
+              ) : null}
+
+              {hasScalpFindingTracking(displayAnalysis) ? (
+                <View style={styles.resultInlineSection}>
+                  <View style={styles.resultSectionHeader}>
+                    <Text style={styles.resultSectionTitle}>Scalp findings</Text>
+                    <View style={styles.conditionBadge}>
+                      <View style={styles.conditionBadgeDot} />
+                      <Text style={styles.conditionBadgeText}>VISIBLE CHECK</Text>
+                    </View>
+                  </View>
+                  <View style={styles.assessmentRows}>
+                    <View style={styles.assessmentRow}>
+                      <Text style={styles.assessmentLabel}>Dandruff / flakes</Text>
+                      <Text style={styles.assessmentValue}>
+                        {formatDetectedLabel(displayAnalysis.dandruff_detected)}
+                      </Text>
+                    </View>
+                    <View style={styles.assessmentRow}>
+                      <Text style={styles.assessmentLabel}>Dandruff severity</Text>
+                      <Text style={styles.assessmentValue}>{displayAnalysis.dandruff_severity || 'none'}</Text>
+                    </View>
+                    <View style={styles.assessmentRow}>
+                      <Text style={styles.assessmentLabel}>Lice / nits</Text>
+                      <Text style={styles.assessmentValue}>
+                        {formatDetectedLabel(displayAnalysis.lice_detected)}
+                      </Text>
+                    </View>
+                    <View style={styles.assessmentRow}>
+                      <Text style={styles.assessmentLabel}>Lice confidence</Text>
+                      <Text style={styles.assessmentValue}>{displayAnalysis.lice_confidence || 'none'}</Text>
+                    </View>
+                  </View>
+                  <View style={styles.assessmentNote}>
+                    <AppIcon name="info" size="md" state="active" />
+                    <Text style={styles.assessmentNoteText} numberOfLines={3}>
+                      {[displayAnalysis.dandruff_notes, displayAnalysis.lice_notes].filter(Boolean).join(' ')}
                     </Text>
                   </View>
                 </View>
@@ -4233,6 +4323,17 @@ export function DonorHairSubmissionScreen() {
     }
   };
 
+  const previewGallery = previewImageUris.length
+    ? previewImageUris
+    : previewImageUri
+      ? [{ uri: previewImageUri, label: 'Photo Preview' }]
+      : [];
+  const previewPageWidth = Math.max(1, viewportWidth - theme.spacing.md * 2);
+  const closeImagePreview = () => {
+    setPreviewImageUri('');
+    setPreviewImageUris([]);
+    setPreviewImageIndex(0);
+  };
   const previewImageModal = (
     <Modal
       transparent
@@ -4240,15 +4341,24 @@ export function DonorHairSubmissionScreen() {
       animationType="fade"
       presentationStyle="overFullScreen"
       statusBarTranslucent
-      onRequestClose={() => setPreviewImageUri('')}
+      onRequestClose={closeImagePreview}
     >
       <View style={styles.imagePreviewOverlay}>
-        <Pressable style={styles.imagePreviewBackdrop} onPress={() => setPreviewImageUri('')} />
+        <Pressable style={styles.imagePreviewBackdrop} onPress={closeImagePreview} />
         <View style={styles.imagePreviewCard}>
           <View style={styles.imagePreviewHeader}>
-            <Text style={styles.imagePreviewTitle}>Photo Preview</Text>
+            <View style={styles.imagePreviewHeaderCopy}>
+              <Text style={styles.imagePreviewTitle}>
+                {previewGallery[previewImageIndex]?.label || 'Photo Preview'}
+              </Text>
+              {previewGallery.length > 1 ? (
+                <Text style={styles.imagePreviewMeta}>
+                  {previewImageIndex + 1} of {previewGallery.length}
+                </Text>
+              ) : null}
+            </View>
             <Pressable
-              onPress={() => setPreviewImageUri('')}
+              onPress={closeImagePreview}
               style={({ pressed }) => [styles.imagePreviewClose, pressed ? styles.pressedMuted : null]}
               accessibilityRole="button"
               accessibilityLabel="Close photo preview"
@@ -4256,8 +4366,41 @@ export function DonorHairSubmissionScreen() {
               <AppIcon name="close" size="sm" state="inverse" />
             </Pressable>
           </View>
-          {previewImageUri ? (
-            <Image source={{ uri: previewImageUri }} style={styles.imagePreviewImage} resizeMode="contain" />
+          {previewGallery.length ? (
+            <>
+              <ScrollView
+                horizontal
+                pagingEnabled
+                showsHorizontalScrollIndicator={false}
+                contentOffset={{ x: previewPageWidth * previewImageIndex, y: 0 }}
+                onMomentumScrollEnd={(event) => {
+                  const nextIndex = Math.round(event.nativeEvent.contentOffset.x / previewPageWidth);
+                  const boundedIndex = Math.max(0, Math.min(previewGallery.length - 1, nextIndex));
+                  setPreviewImageIndex(boundedIndex);
+                  setPreviewImageUri(previewGallery[boundedIndex]?.uri || '');
+                }}
+                style={styles.imagePreviewPager}
+              >
+                {previewGallery.map((photo, index) => (
+                  <View key={`${photo.uri}-${index}`} style={[styles.imagePreviewPage, { width: previewPageWidth }]}>
+                    <Image source={{ uri: photo.uri }} style={styles.imagePreviewImage} resizeMode="contain" />
+                  </View>
+                ))}
+              </ScrollView>
+              {previewGallery.length > 1 ? (
+                <View style={styles.imagePreviewDots}>
+                  {previewGallery.map((photo, index) => (
+                    <View
+                      key={`${photo.uri}-dot`}
+                      style={[
+                        styles.imagePreviewDot,
+                        index === previewImageIndex ? styles.imagePreviewDotActive : null,
+                      ]}
+                    />
+                  ))}
+                </View>
+              ) : null}
+            </>
           ) : null}
         </View>
       </View>
@@ -6759,11 +6902,22 @@ const styles = StyleSheet.create({
     paddingHorizontal: theme.spacing.sm,
     paddingBottom: theme.spacing.sm,
   },
+  imagePreviewHeaderCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
   imagePreviewTitle: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.body,
     fontWeight: theme.typography.weights.semibold,
     color: theme.colors.textInverse,
+  },
+  imagePreviewMeta: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    color: theme.colors.textInverse,
+    opacity: 0.78,
   },
   imagePreviewClose: {
     width: 40,
@@ -6777,6 +6931,32 @@ const styles = StyleSheet.create({
     flex: 1,
     width: '100%',
     height: '100%',
+  },
+  imagePreviewPager: {
+    flex: 1,
+  },
+  imagePreviewPage: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  imagePreviewDots: {
+    minHeight: 30,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    paddingBottom: theme.spacing.xs,
+  },
+  imagePreviewDot: {
+    width: 7,
+    height: 7,
+    borderRadius: theme.radius.full,
+    backgroundColor: 'rgba(255, 255, 255, 0.36)',
+  },
+  imagePreviewDotActive: {
+    width: 18,
+    backgroundColor: theme.colors.textInverse,
   },
   assessmentRows: {
     gap: theme.spacing.xs,

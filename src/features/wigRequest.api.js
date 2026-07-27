@@ -691,11 +691,19 @@ export const fetchActiveWigAiFilters = async () => {
     ],
   });
 
-  const result = await supabase
+  let result = await supabase
     .from(wigAiFiltersTable)
     .select('Filter_ID, Wig_ID, Version, Status, Is_Active, Fit_Settings, Thumbnail_Path, Layer_Full_Wig_Path, Layer_Back_Hair_Path, Layer_Face_Mask_Path, Layer_Front_Bangs_Path, Layer_Hair_Mask_Path, Pending_Wig_Name, Pending_Wig_Code, Pending_Hair_Length, Pending_Hair_Color, Pending_Hair_Texture, Pending_Hair_Density, Pending_Cap_Size, Pending_Style, Wigs:Wig_ID(Wig_Name, Wig_Code, Stock_Count)')
     .eq('Is_Active', true)
     .order('Filter_ID', { ascending: false });
+
+  if (isMissingRelationError(result.error)) {
+    result = await supabase
+      .from(wigAiFiltersTable)
+      .select('Filter_ID, Wig_ID, Version, Status, Is_Active, Fit_Settings, Thumbnail_Path, Layer_Full_Wig_Path, Layer_Back_Hair_Path, Layer_Face_Mask_Path, Layer_Front_Bangs_Path, Layer_Hair_Mask_Path, Pending_Wig_Name, Pending_Wig_Code, Pending_Hair_Length, Pending_Hair_Color, Pending_Hair_Texture, Pending_Hair_Density, Pending_Cap_Size, Pending_Style')
+      .eq('Is_Active', true)
+      .order('Filter_ID', { ascending: false });
+  }
 
   return {
     data: Array.isArray(result.data) ? result.data.map(normalizeWigAiFilter) : [],

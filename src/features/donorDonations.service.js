@@ -19,11 +19,20 @@ import {
     createHairSubmissionImages,
     createHairSubmissionLogistics,
     createHairSubmissionLogisticsItems,
+    deleteAiScreeningsBySubmissionId,
+    deleteDonorRecommendationsBySubmissionId,
+    deleteHairBundleTrackingHistoryBySubmissionId,
+    deleteHairSubmissionById,
+    deleteHairSubmissionDetailsBySubmissionId,
+    deleteHairSubmissionImagesByDetailIds,
+    deleteHairSubmissionLogisticsBySubmissionId,
+    deleteSalonDonationAppointmentsBySubmissionId,
     fetchHairBundleTrackingHistory,
     fetchHairSubmissionById,
     fetchHairSubmissionDetailById,
     fetchHairSubmissionDetailByQrToken,
     fetchHairSubmissionDetailsBySubmissionId,
+    fetchHairSubmissionImagesByDetailIds,
     fetchHairSubmissionLogisticsBySubmissionId,
     fetchHairSubmissionsByUserId,
     fetchDonationCertificateBySubmissionId,
@@ -31,7 +40,12 @@ import {
     fetchLatestDonationCertificateByUserId,
     fetchLatestDonationRequirement,
     fetchSalonDonationAppointmentBySubmissionId,
+    fetchSalonAppointmentStatusHistoryByAppointmentIds,
+    fetchSalonDonationAppointmentsInRange,
+    fetchSalonOperatingHours,
+    fetchSalonScheduleOverrides,
     getHairSubmissionImageSignedUrl,
+    removeHairSubmissionImagesFromStorage,
     updateHairSubmissionDetailById,
     updateHairSubmissionById,
     updateHairSubmissionLogisticsById,
@@ -782,6 +796,329 @@ const upsertSubmissionLogistics = async ({
     : await createHairSubmissionLogistics(payload);
 };
 
+const getRowValue = (row = {}, keys = []) => {
+  for (const key of keys) {
+    if (row?.[key] !== undefined && row?.[key] !== null && row?.[key] !== '') return row[key];
+  }
+  return null;
+};
+
+const normalizeDateKey = (value = '') => {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) return '';
+  const year = parsed.getFullYear();
+  const month = String(parsed.getMonth() + 1).padStart(2, '0');
+  const day = String(parsed.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const normalizeTimeValue = (value = '') => {
+  const text = String(value || '').trim();
+  const match24 = text.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (match24) {
+    return `${String(Number(match24[1])).padStart(2, '0')}:${match24[2]}`;
+  }
+
+  const match12 = text.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+  if (match12) {
+    const baseHour = Number(match12[1]) % 12;
+    const hour = baseHour + (match12[3].toUpperCase() === 'PM' ? 12 : 0);
+    return `${String(hour).padStart(2, '0')}:${match12[2]}`;
+  }
+
+  return '';
+};
+
+const timeToMinutes = (value = '') => {
+  const time = normalizeTimeValue(value);
+  if (!time) return null;
+  const [hour, minute] = time.split(':').map(Number);
+  return hour * 60 + minute;
+};
+
+const minutesToTime = (value = 0) => {
+  const bounded = Math.max(0, Number(value) || 0);
+  const hour = Math.floor(bounded / 60);
+  const minute = bounded % 60;
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+};
+
+const formatTimeWindowLabel = (start = '', end = '') => {
+  const formatTime = (value) => {
+    const minutes = timeToMinutes(value);
+    if (minutes == null) return '';
+    const hour24 = Math.floor(minutes / 60);
+    const minute = minutes % 60;
+    const meridiem = hour24 >= 12 ? 'PM' : 'AM';
+    const hour12 = hour24 % 12 || 12;
+    return `${hour12}:${String(minute).padStart(2, '0')} ${meridiem}`;
+  };
+  return [formatTime(start), formatTime(end)].filter(Boolean).join(' - ');
+};
+
+const getDateKeyFromRow = (row = {}) => normalizeDateKey(getRowValue(row, [
+  'Override_Date',
+  'Schedule_Date',
+  'Date',
+  'date',
+  'override_date',
+  'schedule_date',
+]));
+
+const getDayTokenFromRow = (row = {}) => String(getRowValue(row, [
+  'Day_Of_Week',
+  'Weekday',
+  'Day',
+  'day_of_week',
+  'weekday',
+  'day',
+]) || '').trim().toLowerCase();
+
+const rowMatchesDate = (row = {}, date = new Date()) => {
+  const token = getDayTokenFromRow(row);
+  if (!token) return false;
+  const dayIndex = date.getDay();
+  const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+  const shortNames = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+  const numeric = Number(token);
+  if (Number.isFinite(numeric)) {
+    return numeric === dayIndex || numeric === dayIndex + 1;
+  }
+  return token === dayNames[dayIndex] || token === shortNames[dayIndex];
+};
+
+const isClosedScheduleRow = (row = {}) => {
+  const openValue = getRowValue(row, ['Is_Open', 'Open', 'is_open', 'open']);
+  const closedValue = getRowValue(row, ['Is_Closed', 'Closed', 'is_closed', 'closed']);
+  const status = String(getRowValue(row, ['Status', 'status']) || '').trim().toLowerCase();
+  return openValue === false
+    || String(openValue).toLowerCase() === 'false'
+    || closedValue === true
+    || String(closedValue).toLowerCase() === 'true'
+    || ['closed', 'unavailable', 'disabled', 'inactive'].includes(status);
+};
+
+const getScheduleStartTime = (row = {}) => normalizeTimeValue(getRowValue(row, [
+  'Start_Time',
+  'Open_Time',
+  'Opening_Time',
+  'start_time',
+  'open_time',
+  'opening_time',
+]));
+
+const getScheduleEndTime = (row = {}) => normalizeTimeValue(getRowValue(row, [
+  'End_Time',
+  'Close_Time',
+  'Closing_Time',
+  'end_time',
+  'close_time',
+  'closing_time',
+]));
+
+const getSlotDurationMinutes = (row = {}) => {
+  const parsed = Number(getRowValue(row, [
+    'Slot_Duration_Minutes',
+    'Appointment_Duration_Minutes',
+    'Duration_Minutes',
+    'slot_duration_minutes',
+    'appointment_duration_minutes',
+    'duration_minutes',
+  ]));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+};
+
+const getSlotCapacity = (row = {}) => {
+  const parsed = Number(getRowValue(row, [
+    'Max_Appointments',
+    'Slot_Capacity',
+    'Capacity',
+    'Max_Donors',
+    'max_appointments',
+    'slot_capacity',
+    'capacity',
+    'max_donors',
+  ]));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+};
+
+const getAppointmentId = (row = {}) => Number(getRowValue(row, ['Appointment_ID', 'appointment_id', 'id'])) || null;
+
+const getAppointmentStatus = (row = {}) => String(getRowValue(row, ['Status', 'status']) || '').trim();
+
+const isInactiveAppointmentStatus = (status = '') => (
+  ['cancelled', 'canceled', 'rejected', 'completed', 'no show', 'no_show']
+    .includes(String(status || '').trim().toLowerCase())
+);
+
+const getLatestStatusesByAppointmentId = (historyRows = []) => {
+  const rowsByAppointment = new Map();
+  (historyRows || []).forEach((row) => {
+    const appointmentId = getAppointmentId(row);
+    if (!appointmentId) return;
+    const current = rowsByAppointment.get(appointmentId);
+    const currentDate = new Date(current?.Created_At || current?.created_at || current?.Changed_At || 0);
+    const rowDate = new Date(row?.Created_At || row?.created_at || row?.Changed_At || 0);
+    if (!current || rowDate >= currentDate) {
+      rowsByAppointment.set(appointmentId, row);
+    }
+  });
+
+  const statusByAppointment = new Map();
+  rowsByAppointment.forEach((row, appointmentId) => {
+    statusByAppointment.set(appointmentId, getAppointmentStatus(row));
+  });
+  return statusByAppointment;
+};
+
+const buildScheduleSlotsFromRow = (row = {}) => {
+  if (!row || isClosedScheduleRow(row)) return [];
+
+  const explicitSlots = getRowValue(row, [
+    'Time_Slots',
+    'Slots',
+    'Available_Slots',
+    'time_slots',
+    'slots',
+    'available_slots',
+  ]);
+  if (Array.isArray(explicitSlots)) {
+    return explicitSlots
+      .map((slot) => ({
+        start_time: normalizeTimeValue(slot?.start_time || slot?.Start_Time || slot?.start || slot?.from),
+        end_time: normalizeTimeValue(slot?.end_time || slot?.End_Time || slot?.end || slot?.to),
+        capacity: Number(slot?.capacity || slot?.Capacity) || getSlotCapacity(row),
+      }))
+      .filter((slot) => slot.start_time && slot.end_time);
+  }
+
+  const startTime = getScheduleStartTime(row);
+  const endTime = getScheduleEndTime(row);
+  const startMinutes = timeToMinutes(startTime);
+  const endMinutes = timeToMinutes(endTime);
+  if (startMinutes == null || endMinutes == null || endMinutes <= startMinutes) return [];
+
+  const duration = getSlotDurationMinutes(row);
+  if (!duration) {
+    return [{
+      start_time: startTime,
+      end_time: endTime,
+      capacity: getSlotCapacity(row),
+    }];
+  }
+
+  const slots = [];
+  for (let cursor = startMinutes; cursor + duration <= endMinutes; cursor += duration) {
+    slots.push({
+      start_time: minutesToTime(cursor),
+      end_time: minutesToTime(cursor + duration),
+      capacity: getSlotCapacity(row),
+    });
+  }
+  return slots;
+};
+
+export const getWalkInDropoffAvailability = async ({ daysAhead = 21 } = {}) => {
+  const today = new Date();
+  const startDate = normalizeDateKey(today);
+  const endDateObject = new Date(today);
+  endDateObject.setDate(endDateObject.getDate() + Math.max(1, Number(daysAhead) || 21));
+  const endDate = normalizeDateKey(endDateObject);
+
+  const [
+    operatingHoursResult,
+    overridesResult,
+    appointmentsResult,
+  ] = await Promise.all([
+    fetchSalonOperatingHours(),
+    fetchSalonScheduleOverrides({ startDate, endDate }),
+    fetchSalonDonationAppointmentsInRange({
+      startAt: `${startDate}T00:00:00`,
+      endAt: `${endDate}T23:59:59`,
+    }),
+  ]);
+
+  if (operatingHoursResult.error) {
+    return { data: [], error: operatingHoursResult.error.message || 'Unable to load salon operating hours.' };
+  }
+  if (overridesResult.error) {
+    return { data: [], error: overridesResult.error.message || 'Unable to load salon schedule overrides.' };
+  }
+  if (appointmentsResult.error) {
+    return { data: [], error: appointmentsResult.error.message || 'Unable to load salon appointments.' };
+  }
+
+  const appointmentRows = appointmentsResult.data || [];
+  const historyResult = await fetchSalonAppointmentStatusHistoryByAppointmentIds(
+    appointmentRows.map(getAppointmentId).filter(Boolean)
+  );
+  if (historyResult.error) {
+    return { data: [], error: historyResult.error.message || 'Unable to load salon appointment status history.' };
+  }
+
+  const latestStatusByAppointment = getLatestStatusesByAppointmentId(historyResult.data || []);
+  const activeAppointments = appointmentRows.filter((appointment) => {
+    const appointmentId = getAppointmentId(appointment);
+    const latestStatus = latestStatusByAppointment.get(appointmentId) || getAppointmentStatus(appointment);
+    return !isInactiveAppointmentStatus(latestStatus);
+  });
+
+  const overrideByDate = new Map();
+  (overridesResult.data || []).forEach((override) => {
+    const dateKey = getDateKeyFromRow(override);
+    if (dateKey) overrideByDate.set(dateKey, override);
+  });
+
+  const availability = [];
+  for (let offset = 0; offset <= Math.max(1, Number(daysAhead) || 21); offset += 1) {
+    const date = new Date(today);
+    date.setDate(today.getDate() + offset);
+    const dateKey = normalizeDateKey(date);
+    const override = overrideByDate.get(dateKey);
+    const scheduleSource = override || (operatingHoursResult.data || []).find((row) => rowMatchesDate(row, date));
+    const slots = buildScheduleSlotsFromRow(scheduleSource);
+    if (!slots.length) continue;
+
+    const availableSlots = slots
+      .map((slot) => {
+        const startAt = `${dateKey}T${slot.start_time}:00`;
+        const endAt = `${dateKey}T${slot.end_time}:00`;
+        const bookedCount = activeAppointments.filter((appointment) => {
+          const appointmentStart = String(getRowValue(appointment, ['Appointment_Start_At', 'appointment_start_at']) || '');
+          return appointmentStart >= startAt && appointmentStart < endAt;
+        }).length;
+        const remainingCapacity = Math.max(0, Number(slot.capacity || 1) - bookedCount);
+        return {
+          value: formatTimeWindowLabel(slot.start_time, slot.end_time),
+          label: formatTimeWindowLabel(slot.start_time, slot.end_time),
+          start_at: startAt,
+          end_at: endAt,
+          remaining_capacity: remainingCapacity,
+        };
+      })
+      .filter((slot) => slot.remaining_capacity > 0);
+
+    if (!availableSlots.length) continue;
+
+    availability.push({
+      value: dateKey,
+      label: offset === 0 ? 'Today' : date.toLocaleDateString('en-PH', { weekday: 'short', month: 'short', day: 'numeric' }),
+      full_label: date.toLocaleDateString('en-PH', {
+        weekday: 'long',
+        month: 'long',
+        day: 'numeric',
+        year: 'numeric',
+      }),
+      windows: availableSlots,
+    });
+  }
+
+  return { data: availability, error: null };
+};
+
 export const scheduleWalkInDropoff = async ({
   userId = null,
   submission,
@@ -889,6 +1226,81 @@ export const scheduleWalkInDropoff = async ({
     appointment: appointmentResult.data,
     logistics: logisticsResult.data,
   };
+};
+
+export const discardUnscheduledWalkInDonationDraft = async ({
+  submission = null,
+  userId = null,
+} = {}) => {
+  if (!submission?.submission_id || Number(submission?.donation_drive_id)) {
+    return { success: true, skipped: true };
+  }
+
+  const submissionId = submission.submission_id;
+
+  const [logisticsResult, appointmentResult] = await Promise.all([
+    fetchHairSubmissionLogisticsBySubmissionId(submissionId),
+    fetchSalonDonationAppointmentBySubmissionId(submissionId),
+  ]);
+
+  if (logisticsResult.error) {
+    return { success: false, error: logisticsResult.error.message || 'Unable to verify drop-off draft logistics.' };
+  }
+  if (appointmentResult.error) {
+    return { success: false, error: appointmentResult.error.message || 'Unable to verify drop-off draft schedule.' };
+  }
+
+  const logistics = logisticsResult.data || null;
+  const isUnscheduledWalkInDonation = matchesAnyToken(logistics?.logistics_type, ['onsite_delivery', 'walk_in', 'walk-in', 'dropoff', 'drop-off']);
+  const hasSchedule = Boolean(
+    appointmentResult.data?.appointment_id
+    || logistics?.dropoff_window
+    || logistics?.pickup_schedule_date
+    || logistics?.pickup_scheduled_at
+  );
+
+  if (!isUnscheduledWalkInDonation || hasSchedule) {
+    return { success: true, skipped: true };
+  }
+
+  const detailsResult = await fetchHairSubmissionDetailsBySubmissionId(submissionId);
+  if (detailsResult.error) {
+    return { success: false, error: detailsResult.error.message || 'Unable to load drop-off draft details.' };
+  }
+
+  const detailIds = (detailsResult.data || [])
+    .map((detail) => detail?.submission_detail_id)
+    .filter(Boolean);
+  const imagesResult = await fetchHairSubmissionImagesByDetailIds(detailIds);
+  if (imagesResult.error) {
+    return { success: false, error: imagesResult.error.message || 'Unable to load drop-off draft photos.' };
+  }
+
+  const imagePaths = (imagesResult.data || []).map((image) => image?.file_path).filter(Boolean);
+  const deleteSteps = [
+    async () => deleteDonorRecommendationsBySubmissionId(submissionId),
+    async () => deleteAiScreeningsBySubmissionId(submissionId),
+    async () => deleteHairBundleTrackingHistoryBySubmissionId(submissionId),
+    async () => deleteSalonDonationAppointmentsBySubmissionId(submissionId),
+    async () => deleteHairSubmissionLogisticsBySubmissionId(submissionId),
+    async () => deleteHairSubmissionImagesByDetailIds(detailIds),
+    async () => imagePaths.length ? removeHairSubmissionImagesFromStorage({ paths: imagePaths }) : { error: null },
+    async () => deleteHairSubmissionDetailsBySubmissionId(submissionId),
+    async () => deleteHairSubmissionById(submissionId),
+  ];
+
+  for (const deleteStep of deleteSteps) {
+    const result = await deleteStep();
+    if (result?.error) {
+      logAppError('donor_donation.discard_unscheduled_walkin', result.error, {
+        userId,
+        submissionId,
+      });
+      return { success: false, error: result.error.message || 'Unable to delete the unscheduled drop-off draft.' };
+    }
+  }
+
+  return { success: true, deleted: true };
 };
 
 export const markDonationShippedByDonor = async ({
@@ -1019,6 +1431,7 @@ const syncIndependentDonationSubmission = async ({
   shouldTrack = false,
   shouldNotify = false,
   donationDriveId = null,
+  logisticsType = 'shipping',
   qrStatus = undefined,
   qrGeneratedAt = undefined,
 }) => {
@@ -1050,7 +1463,7 @@ const syncIndependentDonationSubmission = async ({
 
   const logisticsResult = await upsertSubmissionLogistics({
     submissionId: submissionResult.data.submission_id,
-    logisticsType: 'shipping',
+    logisticsType,
     shipmentStatus: logisticsStatus,
     notes: logisticsNotes,
   });
@@ -1574,36 +1987,54 @@ const resolveTimelineStages = ({
     Boolean(appointment?.appointment_id)
     || matchesAnyToken(logistics?.logistics_type, ['onsite', 'walk-in', 'walk in', 'dropoff', 'drop-off'])
   );
+  const hasWalkInSchedule = isWalkInFlow && Boolean(
+    appointment?.appointment_id
+    || appointment?.appointment_start_at
+    || logistics?.dropoff_window
+    || logistics?.pickup_schedule_date
+    || logistics?.pickup_scheduled_at
+  );
   const donationSubmittedEvidenceAt = submission?.submitted_at || submission?.updated_at || submission?.created_at || null;
   const hasCutStatus = isCutAndShipCompletedStatus(submission?.status);
   const cutAndShipApprovedAt = submission?.cut_at
     || (hasCutStatus ? submission?.updated_at || submission?.created_at || null : null);
+  const latestDetail = getLatestSubmissionDetailSnapshot(submission);
+  const detailTrackingText = `${latestDetail?.status || ''} ${latestDetail?.current_tracking_status || ''} ${latestDetail?.qr_status || ''}`;
+  const detailUpdatedAt = latestDetail?.updated_at || latestDetail?.created_at || null;
   const waybillEvidenceAt = submission?.qr_generated_at
+    || latestDetail?.qr_generated_at
     || (submission?.donation_reference ? submission?.updated_at || submission?.created_at || null : null);
   const readyEntry = findTimelineMatch(trackingEntries, (entry) => (
     matchesAnyToken(entry?.status, ['ready for shipment', 'parcel logged', 'parcel prepared'])
     || matchesAnyToken(entry?.title, ['ready for shipment', 'parcel logged', 'parcel prepared'])
     || matchesAnyToken(entry?.description, ['ready for shipment', 'parcel logged', 'parcel prepared'])
   ));
-  const readyEvidenceAt = parcelImages[0]?.uploaded_at || readyEntry?.updated_at || logistics?.created_at || null;
+  const readyEvidenceAt = parcelImages[0]?.uploaded_at
+    || readyEntry?.updated_at
+    || (matchesAnyToken(detailTrackingText, ['qr generated', 'generated', 'ready for shipping', 'waybill ready']) ? detailUpdatedAt : null)
+    || logistics?.created_at
+    || null;
   const transitEntry = findTimelineMatch(trackingEntries, (entry) => (
     matchesAnyToken(entry?.status, ['transit', 'shipped', 'shipping', 'cut & shipped', 'cut and shipped', 'cut shipped'])
     || matchesAnyToken(entry?.title, ['transit', 'shipped', 'shipping', 'cut & shipped', 'cut and shipped', 'cut shipped'])
   ));
   const transitEvidenceAt = transitEntry?.updated_at
+    || (matchesAnyToken(detailTrackingText, ['transit', 'shipped', 'shipping', 'cut & shipped', 'cut and shipped', 'cut shipped']) ? detailUpdatedAt : null)
     || (matchesAnyToken(logistics?.shipment_status, ['transit', 'shipped', 'received', 'quality']) ? logistics?.created_at || null : null);
   const receivedOrgEntry = findTimelineMatch(trackingEntries, isReceivedByOrganizationEntry);
   const receivedOrgEvidenceAt = receivedOrgEntry?.updated_at
     || logistics?.received_at
+    || (matchesAnyToken(detailTrackingText, ['received by the organization', 'organization received', 'received']) ? detailUpdatedAt : null)
     || (matchesAnyToken(logistics?.shipment_status, ['received by the organization', 'organization received', 'received', 'quality']) ? logistics?.created_at || null : null);
-  const latestDetail = getLatestSubmissionDetailSnapshot(submission);
   const latestScreening = [...(submission?.ai_screenings || [])]
     .sort((left, right) => new Date(right?.created_at || 0).getTime() - new Date(left?.created_at || 0).getTime())[0] || null;
   const qualityEntry = findTimelineMatch(trackingEntries, isQualityAssessmentEntry);
   const detailStatus = latestDetail?.status || '';
   const screeningDecision = latestScreening?.decision || '';
   const hasQualityDbStatus = Boolean(detailStatus || screeningDecision);
-  const qualityEvidenceAt = qualityEntry?.updated_at || null;
+  const qualityEvidenceAt = qualityEntry?.updated_at
+    || (matchesAnyToken(detailTrackingText, ['qa', 'quality', 'under review', 'under qa review', 'accepted', 'approved', 'rejected']) ? detailUpdatedAt : null)
+    || null;
   const bundlingEntry = findTimelineMatch(trackingEntries, (entry) => (
     matchesAnyToken(entry?.status, ['bundle', 'bundling', 'bundled', 'in production', 'wig production'])
     || matchesAnyToken(entry?.title, ['bundle', 'bundling', 'bundled', 'in production', 'wig production'])
@@ -1703,18 +2134,18 @@ const resolveTimelineStages = ({
     },
   ] : null;
 
-  const walkInStageEntries = isWalkInFlow ? [
+  const walkInStageEntries = isWalkInFlow ? (hasWalkInSchedule ? [
     {
       key: 'donation_submitted',
-      label: 'Donation Submitted',
+      label: 'Donation Confirmed',
       statusLabel: submission?.status || '',
-      savedNote: 'Your walk-in donation record has been submitted.',
+      savedNote: 'Your walk-in donation record is linked to a confirmed drop-off schedule.',
       evidenceAt: donationSubmittedEvidenceAt,
       entry: submission,
     },
     {
       key: 'waybill_ready',
-      label: 'Waybill QR Ready',
+      label: 'Donation QR Ready',
       statusLabel: submission?.qr_status || readyEntry?.status || '',
       savedNote: readyEntry?.description || 'Open the QR and bring it with your hair donation.',
       evidenceAt: waybillEvidenceAt || readyEvidenceAt,
@@ -1722,7 +2153,7 @@ const resolveTimelineStages = ({
     },
     {
       key: 'dropoff_scheduled',
-      label: 'Drop Off Wig',
+      label: 'Drop-off Visit',
       statusLabel: appointment?.checked_in_at ? 'Dropped off' : (appointment?.status || logistics?.dropoff_status || 'Scheduled'),
       savedNote: appointment?.appointment_start_at
         ? `Scheduled arrival: ${formatDateTime(appointment.appointment_start_at)}`
@@ -1770,12 +2201,85 @@ const resolveTimelineStages = ({
       evidenceAt: receivedByPatientEvidenceAt,
       entry: receivedByPatientEntry || production?.allocation,
     },
-  ] : null;
+  ] : [
+    {
+      key: 'dropoff_schedule_required',
+      label: 'Schedule Drop-off',
+      statusLabel: 'Schedule required',
+      savedNote: 'Confirm a salon drop-off appointment before submitting this donation.',
+      evidenceAt: null,
+      entry: logistics || submission,
+    },
+    {
+      key: 'donation_submitted',
+      label: 'Donation Submitted',
+      statusLabel: '',
+      savedNote: 'Your walk-in donation will be submitted after an appointment is confirmed.',
+      evidenceAt: null,
+      entry: submission,
+    },
+    {
+      key: 'waybill_ready',
+      label: 'Donation QR Ready',
+      statusLabel: '',
+      savedNote: 'Bring the QR with your hair donation after scheduling.',
+      evidenceAt: null,
+      entry: submission,
+    },
+    {
+      key: 'dropoff_scheduled',
+      label: 'Drop-off Visit',
+      statusLabel: '',
+      savedNote: 'Bring your donation during your selected salon schedule.',
+      evidenceAt: null,
+      entry: logistics,
+    },
+    {
+      key: 'received_by_company',
+      label: 'Received by Hair for Hope',
+      statusLabel: '',
+      savedNote: 'The organization confirms receipt of your hair donation.',
+      evidenceAt: null,
+      entry: logistics,
+    },
+    {
+      key: 'qa_assessment',
+      label: 'QA Assessment',
+      statusLabel: '',
+      savedNote: 'Your donated hair will be reviewed after drop-off.',
+      evidenceAt: null,
+      entry: qualityEntry,
+    },
+    {
+      key: 'wig_production',
+      label: 'Wig Production',
+      statusLabel: '',
+      savedNote: 'The approved hair bundle is made into a wig.',
+      evidenceAt: null,
+      entry: production?.wig,
+    },
+    {
+      key: 'assigned_to_patient',
+      label: 'Assigned to Patient',
+      statusLabel: '',
+      savedNote: 'The completed wig is assigned to a patient.',
+      evidenceAt: null,
+      entry: production?.allocation,
+    },
+    {
+      key: 'received_by_patient',
+      label: 'Received by the Patient',
+      statusLabel: '',
+      savedNote: 'The patient receives the completed wig.',
+      evidenceAt: null,
+      entry: production?.allocation,
+    },
+  ]) : null;
 
   const baseStages = eventStageEntries || walkInStageEntries || [
     {
       key: 'donation_submitted',
-      label: 'Donation submitted',
+      label: 'Donation Submitted',
       statusLabel: submission?.status || '',
       savedNote: 'Donation record is saved for independent shipment.',
       evidenceAt: donationSubmittedEvidenceAt,
@@ -1783,7 +2287,7 @@ const resolveTimelineStages = ({
     },
     {
       key: 'waybill_ready',
-      label: 'Waybill QR ready',
+      label: 'Waybill QR Ready',
       statusLabel: submission?.qr_status || readyEntry?.status || '',
       savedNote: readyEntry?.description || 'Print the waybill QR and attach it to the parcel or hair bundle.',
       evidenceAt: waybillEvidenceAt || readyEvidenceAt,
@@ -1791,7 +2295,7 @@ const resolveTimelineStages = ({
     },
     {
       key: 'sent_by_donor',
-      label: 'Sent by donor',
+      label: 'Sent by Donor',
       statusLabel: transitEntry?.status || (matchesAnyToken(logistics?.shipment_status, ['transit', 'shipped']) ? logistics?.shipment_status : ''),
       savedNote: transitEntry?.description || 'The hair parcel was sent with the printed waybill attached.',
       evidenceAt: transitEvidenceAt,
@@ -2425,7 +2929,7 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
     };
   }
 
-  const submissions = submissionsResult.data || [];
+  let submissions = submissionsResult.data || [];
   const sortedEntries = sortScreeningEntries(flattenScreeningEntries(submissions));
   const latestAnalysisEntry = sortedEntries[0] || null;
   const latestScreening = latestAnalysisEntry?.screening || null;
@@ -2440,21 +2944,21 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
     donationRequirement: donationRequirementResult.data || null,
   });
   const latestQualifiedRecord = resolveActiveDonationRecord({ aiRecord, manualRecord });
-  const activeRecord = resolveCurrentDonationRecord({
+  let activeRecord = resolveCurrentDonationRecord({
     submissions,
     donationRequirement: donationRequirementResult.data || null,
     fallbackRecord: latestQualifiedRecord,
   });
-  const activeFlowSubmission = resolveCurrentFlowSubmission({
+  let activeFlowSubmission = resolveCurrentFlowSubmission({
     submissions,
   });
-  const activeFlowSubmissions = resolveCurrentFlowSubmissions({
+  let activeFlowSubmissions = resolveCurrentFlowSubmissions({
     submissions,
   });
-  const independentFlowSubmissions = activeFlowSubmissions.filter(
+  let independentFlowSubmissions = activeFlowSubmissions.filter(
     (submission) => submission?.submission_id && !Number(submission?.donation_drive_id)
   );
-  const submissionFlowRecords = await Promise.all(independentFlowSubmissions.map(async (submission) => {
+  let submissionFlowRecords = await Promise.all(independentFlowSubmissions.map(async (submission) => {
     const flowDetail = getLatestSubmissionDetail(submission);
     const [
       submissionLogisticsResult,
@@ -2486,6 +2990,42 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
       production: submissionProductionResult.data || null,
     };
   }));
+  const unscheduledWalkInDonationIds = submissionFlowRecords
+    .filter((record) => {
+      const isUnscheduledWalkInDonation = matchesAnyToken(record.logistics?.logistics_type, ['onsite_delivery', 'walk_in', 'walk-in', 'dropoff', 'drop-off']);
+      const hasSchedule = Boolean(
+        record.appointment?.appointment_id
+        || record.logistics?.dropoff_window
+        || record.logistics?.pickup_schedule_date
+        || record.logistics?.pickup_scheduled_at
+      );
+      return isUnscheduledWalkInDonation && !hasSchedule;
+    })
+    .map((record) => Number(record.submission_id))
+    .filter(Boolean);
+
+  if (unscheduledWalkInDonationIds.length) {
+    const cleanupResults = await Promise.all(unscheduledWalkInDonationIds.map((submissionId) => {
+      const draftSubmission = independentFlowSubmissions.find(
+        (submission) => Number(submission?.submission_id) === Number(submissionId)
+      );
+      return discardUnscheduledWalkInDonationDraft({ submission: draftSubmission, userId });
+    }));
+    const deletedIds = new Set(cleanupResults
+      .map((result, index) => result?.deleted ? unscheduledWalkInDonationIds[index] : null)
+      .filter(Boolean));
+
+    if (deletedIds.size) {
+      submissions = submissions.filter((submission) => !deletedIds.has(Number(submission?.submission_id)));
+      activeFlowSubmissions = activeFlowSubmissions.filter((submission) => !deletedIds.has(Number(submission?.submission_id)));
+      independentFlowSubmissions = independentFlowSubmissions.filter((submission) => !deletedIds.has(Number(submission?.submission_id)));
+      submissionFlowRecords = submissionFlowRecords.filter((record) => !deletedIds.has(Number(record.submission_id)));
+      activeFlowSubmission = resolveCurrentFlowSubmission({ submissions: activeFlowSubmissions });
+      if (deletedIds.has(Number(activeRecord?.submission?.submission_id))) {
+        activeRecord = null;
+      }
+    }
+  }
   const isAiEligible = Boolean(aiRecord?.qualification?.isQualified);
   const isManualQualified = Boolean(manualRecord?.qualification?.isQualified);
   const isDonationReady = Boolean(activeRecord?.qualification?.isQualified);
@@ -2923,7 +3463,7 @@ export const saveIndependentDonationParcelLog = async ({
     ),
     qr_status: qrState.is_activated ? 'Scanned' : (submission?.qr_status || 'Generated'),
     qr_generated_at: submission?.qr_generated_at || qrState.generated_at || new Date().toISOString(),
-    status: 'Pending',
+    status: 'Cut',
   });
 
   if (submissionUpdateResult.error) {
@@ -3173,7 +3713,7 @@ export const generateIndependentDonationQrFast = async ({
       userId,
       databaseUserId,
       submission,
-      status: 'Pending',
+      status: 'Cut',
       logisticsStatus: 'Pending',
       logisticsNotes: 'Your donation QR is saved and inactive until you scan it to activate donation tracking.',
       trackingStatus: 'waybill_ready',
@@ -3274,6 +3814,19 @@ export const ensureIndependentDonationQr = async ({
   }
 
   if (!Number(donationDriveId || submission?.donation_drive_id || 0)) {
+    const logisticsResult = await fetchHairSubmissionLogisticsBySubmissionId(submission.submission_id);
+    const logistics = logisticsResult.data || null;
+    const isWalkInDonation = matchesAnyToken(logistics?.logistics_type, ['onsite_delivery', 'walk_in', 'walk-in', 'dropoff', 'drop-off']);
+    if (isWalkInDonation) {
+      const appointmentResult = await fetchSalonDonationAppointmentBySubmissionId(submission.submission_id);
+      if (appointmentResult.error) {
+        return { success: false, error: appointmentResult.error.message || 'Unable to verify your drop-off appointment.' };
+      }
+      if (!appointmentResult.data?.appointment_id) {
+        return { success: false, error: 'Confirm your drop-off appointment before submitting this donation.' };
+      }
+    }
+
     const detailsResult = await fetchHairSubmissionDetailsBySubmissionId(submission.submission_id);
     if (detailsResult.error) {
       return { success: false, error: detailsResult.error.message || 'Unable to load donation hair items.' };
@@ -3309,7 +3862,7 @@ export const ensureIndependentDonationQr = async ({
 
     const submittedAt = new Date().toISOString();
     const submissionResult = await updateHairSubmissionById(submission.submission_id, {
-      status: 'Submitted',
+      status: 'Cut',
       submitted_at: submittedAt,
       qr_status: 'Generated',
       qr_generated_at: submittedAt,
@@ -3509,6 +4062,7 @@ export const startIndependentDonationDraft = async ({
   submission,
   databaseUserId,
   donationDriveId = null,
+  logisticsMethod = 'shipping',
 }) => {
   if (!submission?.submission_id) {
     if (!userId || !databaseUserId) {
@@ -3551,19 +4105,25 @@ export const startIndependentDonationDraft = async ({
     };
   }
 
+  const isDropoffDraft = String(logisticsMethod || '').trim().toLowerCase() === 'dropoff';
   const syncedResult = await syncIndependentDonationSubmission({
     userId,
     databaseUserId,
     submission,
     status: 'Draft',
-    logisticsStatus: 'Pending',
-    logisticsNotes: 'Independent donation draft saved. Add hair items and generate each QR before submitting.',
+    logisticsStatus: isDropoffDraft ? 'Pending drop-off schedule' : 'Pending',
+    logisticsNotes: isDropoffDraft
+      ? 'Walk-in drop-off draft saved. Confirm a salon drop-off appointment before submitting.'
+      : 'Independent donation draft saved. Add hair items and generate each QR before submitting.',
     trackingStatus: 'Draft',
-    trackingTitle: 'Independent donation draft saved',
-    trackingDescription: 'The donor started an independent donation transaction.',
+    trackingTitle: isDropoffDraft ? 'Walk-in drop-off draft saved' : 'Independent donation draft saved',
+    trackingDescription: isDropoffDraft
+      ? 'The donor started a walk-in drop-off donation and still needs to confirm an appointment.'
+      : 'The donor started an independent donation transaction.',
     shouldTrack: true,
     shouldNotify: false,
     donationDriveId: donationDriveId || null,
+    logisticsType: isDropoffDraft ? 'onsite_delivery' : 'shipping',
   });
 
   if (!syncedResult.success) {
@@ -3608,7 +4168,7 @@ export const activateIndependentDonationQr = async ({
     userId,
     databaseUserId,
     submission,
-    status: 'Pending',
+    status: 'Cut',
     logisticsStatus: 'Pending',
     logisticsNotes: 'Your donation QR is active and ready for shipment tracking.',
     trackingStatus: 'waybill_ready',

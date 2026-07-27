@@ -17,6 +17,9 @@ const wigsTable = 'Wigs';
 const wigAllocationsTable = 'Wig_Allocations';
 const hairSubmissionBundlesTable = 'Hair_Submission_Bundles';
 const salonDonationAppointmentsTable = 'Salon_Donation_Appointments';
+const salonOperatingHoursTable = 'Salon_Operating_Hours';
+const salonScheduleOverridesTable = 'Salon_Schedule_Overrides';
+const salonAppointmentStatusHistoryTable = 'Salon_Appointment_Status_History';
 const CM_PER_INCH = 2.54;
 
 const hairSubmissionSelect = `
@@ -83,6 +86,12 @@ const aiScreeningSelect = `
   shedding_level:Shedding_Level,
   visible_scalp_area:Visible_Scalp_Area,
   scalp_coverage_notes:Scalp_Coverage_Notes,
+  dandruff_detected:Dandruff_Detected,
+  dandruff_severity:Dandruff_Severity,
+  dandruff_notes:Dandruff_Notes,
+  lice_detected:Lice_Detected,
+  lice_confidence:Lice_Confidence,
+  lice_notes:Lice_Notes,
   improvement_tracking_status:Improvement_Tracking_Status,
   improvement_recommendation:Improvement_Recommendation,
   decision:Decision,
@@ -437,6 +446,12 @@ const normalizeAiScreening = (row) => ({
   shedding_level: row?.shedding_level || '',
   visible_scalp_area: row?.visible_scalp_area || '',
   scalp_coverage_notes: row?.scalp_coverage_notes || '',
+  dandruff_detected: row?.dandruff_detected === true,
+  dandruff_severity: row?.dandruff_severity || '',
+  dandruff_notes: row?.dandruff_notes || '',
+  lice_detected: row?.lice_detected === true,
+  lice_confidence: row?.lice_confidence || '',
+  lice_notes: row?.lice_notes || '',
   improvement_tracking_status: row?.improvement_tracking_status || '',
   improvement_recommendation: row?.improvement_recommendation || '',
   decision: row?.decision || '',
@@ -803,7 +818,7 @@ export const createAiScreening = async (payload) => {
     table: aiScreeningsTable,
     phase: 'create',
     filters: { Submission_ID: payload?.submission_id },
-    columns: ['Submission_ID', 'Estimated_Length', 'Detected_Color', 'Detected_Texture', 'Detected_Density', 'Detected_Condition', 'Visible_Damage_Notes', 'Confidence_Score', 'Shine_Level', 'Frizz_Level', 'Dryness_Level', 'Oiliness_Level', 'Damage_Level', 'Bald_Spots_Present', 'Affected_Regions', 'Hair_Density_Score', 'Shedding_Level', 'Visible_Scalp_Area', 'Scalp_Coverage_Notes', 'Improvement_Tracking_Status', 'Improvement_Recommendation', 'Decision', 'Summary'],
+    columns: ['Submission_ID', 'Estimated_Length', 'Detected_Color', 'Detected_Texture', 'Detected_Density', 'Detected_Condition', 'Visible_Damage_Notes', 'Confidence_Score', 'Shine_Level', 'Frizz_Level', 'Dryness_Level', 'Oiliness_Level', 'Damage_Level', 'Bald_Spots_Present', 'Affected_Regions', 'Hair_Density_Score', 'Shedding_Level', 'Visible_Scalp_Area', 'Scalp_Coverage_Notes', 'Dandruff_Detected', 'Dandruff_Severity', 'Dandruff_Notes', 'Lice_Detected', 'Lice_Confidence', 'Lice_Notes', 'Improvement_Tracking_Status', 'Improvement_Recommendation', 'Decision', 'Summary'],
   });
 
   const result = await supabase
@@ -828,6 +843,16 @@ export const createAiScreening = async (payload) => {
       Shedding_Level: screeningPayload.shedding_level,
       Visible_Scalp_Area: screeningPayload.visible_scalp_area,
       Scalp_Coverage_Notes: nonEmptyString(payload?.scalp_coverage_notes, 'No clear scalp coverage issue was reported.'),
+      Dandruff_Detected: payload?.dandruff_detected === true,
+      Dandruff_Severity: screeningStringOrDefault(payload?.dandruff_severity, payload?.dandruff_detected === true ? 'mild' : 'none'),
+      Dandruff_Notes: nonEmptyString(payload?.dandruff_notes, payload?.dandruff_detected === true
+        ? 'Dandruff-like flakes were observed in the uploaded scalp or root views.'
+        : 'No visible dandruff-like flakes were observed in the uploaded views.'),
+      Lice_Detected: payload?.lice_detected === true,
+      Lice_Confidence: screeningStringOrDefault(payload?.lice_confidence, payload?.lice_detected === true ? 'medium' : 'none'),
+      Lice_Notes: nonEmptyString(payload?.lice_notes, payload?.lice_detected === true
+        ? 'Visible lice or nit-like signs were observed; this screening is not a medical diagnosis.'
+        : 'No visible lice or nit-like signs were observed in the uploaded views.'),
       Improvement_Tracking_Status: nonEmptyString(payload?.improvement_tracking_status, 'Needs improvement tracking'),
       Improvement_Recommendation: nonEmptyString(payload?.improvement_recommendation, 'Keep tracking hair length and condition with future CheckHair scans before donating.'),
       Decision: nonEmptyString(payload?.decision, 'Improve hair condition'),
@@ -1833,6 +1858,59 @@ export const fetchSalonDonationAppointmentBySubmissionId = async (submissionId) 
   return { data: result.data || null, error: result.error };
 };
 
+export const fetchSalonOperatingHours = async () => {
+  const result = await supabase
+    .from(salonOperatingHoursTable)
+    .select('*');
+
+  return {
+    data: result.data || [],
+    error: result.error,
+  };
+};
+
+export const fetchSalonScheduleOverrides = async () => {
+  const result = await supabase
+    .from(salonScheduleOverridesTable)
+    .select('*');
+
+  return {
+    data: result.data || [],
+    error: result.error,
+  };
+};
+
+export const fetchSalonDonationAppointmentsInRange = async ({ startAt = '', endAt = '' } = {}) => {
+  let query = supabase
+    .from(salonDonationAppointmentsTable)
+    .select('*');
+
+  if (startAt) query = query.gte('Appointment_Start_At', startAt);
+  if (endAt) query = query.lt('Appointment_Start_At', endAt);
+
+  const result = await query;
+
+  return {
+    data: result.data || [],
+    error: result.error,
+  };
+};
+
+export const fetchSalonAppointmentStatusHistoryByAppointmentIds = async (appointmentIds = []) => {
+  const ids = (appointmentIds || []).map(Number).filter(Boolean);
+  if (!ids.length) return { data: [], error: null };
+
+  const result = await supabase
+    .from(salonAppointmentStatusHistoryTable)
+    .select('*')
+    .in('Appointment_ID', ids);
+
+  return {
+    data: result.data || [],
+    error: result.error,
+  };
+};
+
 export const createHairSubmissionLogisticsItems = async (rows = []) => {
   logHairQuery('createHairSubmissionLogisticsItems', {
     table: 'Hair_Submission_Logistics',
@@ -2064,6 +2142,31 @@ export const deleteHairSubmissionImagesByDetailId = async (submissionDetailId) =
     .eq('Submission_Detail_ID', submissionDetailId)
 );
 
+export const fetchHairSubmissionImagesByDetailIds = async (submissionDetailIds = []) => {
+  const detailIds = (submissionDetailIds || []).filter(Boolean);
+  if (!detailIds.length) return { data: [], error: null };
+
+  const result = await supabase
+    .from(hairSubmissionImagesTable)
+    .select(hairSubmissionImageSelect)
+    .in('Submission_Detail_ID', detailIds);
+
+  return {
+    data: (result.data || []).map(normalizeHairSubmissionImage),
+    error: result.error,
+  };
+};
+
+export const deleteHairSubmissionImagesByDetailIds = async (submissionDetailIds = []) => {
+  const detailIds = (submissionDetailIds || []).filter(Boolean);
+  if (!detailIds.length) return { data: [], error: null };
+
+  return await supabase
+    .from(hairSubmissionImagesTable)
+    .delete()
+    .in('Submission_Detail_ID', detailIds);
+};
+
 export const deleteDonorRecommendationsBySubmissionId = async (submissionId) => (
   await supabase
     .from(donorRecommendationsTable)
@@ -2085,11 +2188,32 @@ export const deleteHairSubmissionLogisticsBySubmissionId = async (submissionId) 
     .eq('Submission_ID', submissionId)
 );
 
+export const deleteHairBundleTrackingHistoryBySubmissionId = async (submissionId) => (
+  await supabase
+    .from(hairBundleTrackingHistoryTable)
+    .delete()
+    .eq('Submission_ID', submissionId)
+);
+
+export const deleteSalonDonationAppointmentsBySubmissionId = async (submissionId) => (
+  await supabase
+    .from(salonDonationAppointmentsTable)
+    .delete()
+    .eq('Hair_Submission_ID', submissionId)
+);
+
 export const deleteHairSubmissionDetailById = async (submissionDetailId) => (
   await supabase
     .from(hairSubmissionDetailsTable)
     .delete()
     .eq('Submission_Detail_ID', submissionDetailId)
+);
+
+export const deleteHairSubmissionDetailsBySubmissionId = async (submissionId) => (
+  await supabase
+    .from(hairSubmissionDetailsTable)
+    .delete()
+    .eq('Submission_ID', submissionId)
 );
 
 export const deleteHairSubmissionById = async (submissionId) => (

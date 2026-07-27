@@ -95,6 +95,24 @@ const analysisSchema = {
         scalp_coverage_notes: {
           type: 'string',
         },
+        dandruff_detected: {
+          type: 'boolean',
+        },
+        dandruff_severity: {
+          type: 'string',
+        },
+        dandruff_notes: {
+          type: 'string',
+        },
+        lice_detected: {
+          type: 'boolean',
+        },
+        lice_confidence: {
+          type: 'string',
+        },
+        lice_notes: {
+          type: 'string',
+        },
         improvement_tracking_status: {
           type: 'string',
         },
@@ -158,6 +176,12 @@ const analysisSchema = {
         'shedding_level',
         'visible_scalp_area',
         'scalp_coverage_notes',
+        'dandruff_detected',
+        'dandruff_severity',
+        'dandruff_notes',
+        'lice_detected',
+        'lice_confidence',
+        'lice_notes',
         'improvement_tracking_status',
         'improvement_recommendation',
         'decision',
@@ -250,6 +274,12 @@ const coreAnalysisSchema = {
         shedding_level: { type: 'string' },
         visible_scalp_area: { type: 'string' },
         scalp_coverage_notes: { type: 'string' },
+        dandruff_detected: { type: 'boolean' },
+        dandruff_severity: { type: 'string' },
+        dandruff_notes: { type: 'string' },
+        lice_detected: { type: 'boolean' },
+        lice_confidence: { type: 'string' },
+        lice_notes: { type: 'string' },
         improvement_tracking_status: { type: 'string' },
         improvement_recommendation: { type: 'string' },
         decision: { type: 'string' },
@@ -468,7 +498,7 @@ const instructions = [
   'CRITICAL RULE 3: Every recommendation MUST be based on VISIBLE observations from the photos, not generic hair care advice.',
   '',
   'OBSERVATION CHECKLIST — examine each photo for:',
-  '1. SCALP: Is the scalp visible? Is it oily (shiny, greasy appearance)? Dry (flaky, tight)? Clean? Any visible flaking or buildup?',
+  '1. SCALP: Is the scalp visible? Is it oily (shiny, greasy appearance)? Dry (flaky, tight)? Clean? Any visible flaking, dandruff-like flakes, buildup, or visible lice/nits attached to hair shafts near the scalp?',
   '2. ROOTS: Are the roots oily or dry? Any product buildup visible?',
   '3. HAIR SHAFT: Does the hair look shiny and lustrous, or dull and matte? Any visible frizz along the shaft? Signs of chemical processing (uneven color, texture changes)?',
   '4. TEXTURE: Straight, wavy, curly, coily, or mixed? Is the texture consistent or uneven?',
@@ -477,6 +507,10 @@ const instructions = [
   '7. OVERALL HEALTH: Does the hair look healthy and well-maintained, or does it show signs of damage, dryness, or neglect?',
   '8. SPECIFIC DAMAGE SIGNS: Breakage, thinning, brittleness, excessive frizz, uneven texture, color damage?',
   '9. SCALP COVERAGE: Note visible bald spots, patchy areas, thinning-looking regions, widened part line, or areas with more visible scalp. Treat this as wellness/progress tracking only, not a medical diagnosis.',
+  '10. SCALP FINDINGS: Check the scalp/crown and root views for dandruff-like flakes and visible lice or nits. This is a visible screening only, not a diagnosis.',
+  'MANDATORY SCALP INSPECTION PASS: Before returning the final JSON, re-check the Hair Scalp photo specifically along the part line, crown, roots, and visible hair shafts. Decide dandruff_detected, dandruff_severity, dandruff_notes, lice_detected, lice_confidence, and lice_notes from that close scalp review.',
+  'The Hair Scalp per_view_notes entry must explicitly mention all three scalp finding categories: dandruff/flakes, lice, and nits. If none are visible, say none are visible. Do not omit these categories.',
+  'DISTINGUISH SCALP FINDINGS CAREFULLY: dandruff/flakes are loose or scattered white/yellow particles on the scalp, roots, or part line and may look irregular. Nits are more uniform oval particles attached to individual hair shafts, often close to the scalp. Lice are visible insects. Do not label flakes or product buildup as lice/nits.',
   '',
   // Smart capture quality and environment detection
   'SMART CAPTURE QUALITY DETECTION — check BEFORE analysis:',
@@ -506,7 +540,7 @@ const instructions = [
   'For each provided photo view, write a detailed per_view_notes entry describing WHAT YOU SEE:',
   '- Front View: scalp condition, root oiliness/dryness, overall hair appearance, texture, density',
   '- Side Profile and Right Side Photo: confirm each side angle, then describe hair length visibility, shaft condition, shine or dullness, texture consistency',
-  '- Hair Scalp: visible scalp coverage, part line/crown density, flakes, oiliness, buildup, and root/scalp condition',
+  '- Hair Scalp: visible scalp coverage, part line/crown density, flakes or dandruff-like particles, oiliness, buildup, visible lice/nits if clearly seen, and root/scalp condition. This note must explicitly state whether dandruff/flakes, lice, and nits are visible or not visible.',
   '- Hair Ends Close-Up: visible split ends, fraying, dryness, roughness, frizz, or sealed healthy ends',
   '- Back Hair Photo: back-side length, lowest visible ends, fullness, texture pattern, and any visible dryness, frizz, or damage',
   'Use missing_views only when a required view is genuinely absent or completely unusable.',
@@ -529,6 +563,18 @@ const instructions = [
   'shedding_level: use none, mild, moderate, or severe. Do not return "not sure"; choose the closest hair-focused value from the photos and questionnaire.',
   'visible_scalp_area: use none, low, moderate, or high. Do not return "unclear"; choose the closest visible scalp coverage level.',
   'scalp_coverage_notes: one concise, non-medical observation about visible scalp coverage, thinning-looking areas, bald spots, or why it cannot be assessed.',
+  'dandruff_detected: true only when white/yellow flakes or dandruff-like particles are visibly present on scalp or roots; false when absent or uncertain.',
+  'If the Hair Scalp view shows scattered white flake-like particles along the part line/crown/root area, set dandruff_detected=true even when the finding is mild. If unsure whether it is dandruff or product buildup, still mark dandruff_detected=true and explain "flake/buildup-like particles" in dandruff_notes.',
+  'Dandruff-like particles are usually loose, scattered, irregularly shaped, and visible on the scalp surface or part line. They are not the same as lice or nits.',
+  'dandruff_severity: use none, mild, moderate, or heavy based only on visible flakes plus questionnaire support. Use none when dandruff_detected is false.',
+  'dandruff_notes: one concise observation about visible flakes/buildup, or "No visible dandruff-like flakes were observed."',
+  'lice_detected: true only when lice or nits are clearly visible as small insects or attached oval particles on hair shafts near the scalp; false when absent or uncertain.',
+  'Do not confuse loose white flakes, dandruff, or scalp/product buildup with lice/nits. Lice/nits require clear attached oval particles on individual shafts or visible insects.',
+  'If the visible particles sit on the scalp/part line rather than being attached to hair shafts, classify them as dandruff/flakes or buildup, not lice/nits.',
+  'Only set lice_detected=true when the evidence is stronger than dandruff evidence: attached oval nit-like particles on multiple hair shafts, or visible insect-like bodies. Otherwise keep lice_detected=false.',
+  'If possible lice/nit-like particles are visible but not clear enough to confirm, keep lice_detected=false, set lice_confidence=low, and explain the uncertainty in lice_notes.',
+  'lice_confidence: use none, low, medium, or high. Use high only when visible evidence is clear; use low when the image is unclear or only questionnaire context suggests concern.',
+  'lice_notes: one concise visible-screening note. Do not diagnose infestation; say whether visible lice/nit-like signs were or were not observed.',
   'improvement_tracking_status: use one of: Ready for donation, Not eligible for donation yet, Needs improvement tracking.',
   'improvement_recommendation: one practical, non-medical wellness/progress tracking recommendation. If coverage concerns are visible, suggest tracking the same views over time and gentle scalp/hair care; do not name diseases or diagnoses.',
   'detected_condition: use one precise label based on the MOST PROMINENT VISIBLE condition you observe:',
@@ -571,7 +617,8 @@ const instructions = [
   '4. If you observed FRIZZ → recommend anti-frizz products, microfiber towel, humidity protection',
   '5. If you observed HEALTHY HAIR → recommend maintenance routine, protective measures, monthly treatments',
   '6. If you observed CHEMICAL DAMAGE → recommend color-safe products, protein-moisture balance, recovery treatments',
-  '7. If you observed SCALP FLAKING → recommend anti-dandruff products, scalp exfoliation, gentle cleansing',
+  '7. If you observed SCALP FLAKING → recommend gentle scalp cleansing and neutral anti-dandruff ingredients where appropriate',
+  '8. If visible lice or nit-like signs are clearly observed → recommend pausing donation and consulting a qualified health or scalp care professional before donation; do not suggest home diagnosis.',
   '',
   'Each recommendation must have:',
   '- title: short, specific label (e.g., "Address Visible Split Ends" not "Hair Care")',
@@ -618,8 +665,8 @@ const analysisInstructions = [
   'Each per_view_notes entry must describe actual visible evidence from that specific image, not generic statements.',
   'Analyze visible hair condition, visible hair assessment, visible hair color, visible hair length estimate, donation suitability, and improvement recommendations.',
   'Be practical, honest, and evidence-based. Do not invent certainty when the image evidence is weak.',
-  'Analyze visible clues such as dryness, oiliness, flakes if visible, frizz, roughness, split or damaged ends, shine or dullness, density appearance, texture appearance, scalp visibility, visible color, and overall healthy or unhealthy appearance.',
-  'Also analyze visible scalp coverage and user-reported hair fall for wellness/progress tracking: bald_spots_present, affected_regions, hair_density_score, shedding_level, visible_scalp_area, scalp_coverage_notes, improvement_tracking_status, and improvement_recommendation.',
+  'Analyze visible clues such as dryness, oiliness, dandruff-like flakes if visible, visible lice or nit-like signs if clearly visible, frizz, roughness, split or damaged ends, shine or dullness, density appearance, texture appearance, scalp visibility, visible color, and overall healthy or unhealthy appearance.',
+  'Also analyze visible scalp coverage, dandruff-like flakes, lice/nit-like signs, and user-reported hair fall for wellness/progress tracking: bald_spots_present, affected_regions, hair_density_score, shedding_level, visible_scalp_area, scalp_coverage_notes, dandruff_detected, dandruff_severity, dandruff_notes, lice_detected, lice_confidence, lice_notes, improvement_tracking_status, and improvement_recommendation.',
   'Do not give generic repeated recommendations unless the visible evidence truly supports them.',
   'Do not let the final result mainly focus on retaking photos, improving lighting, or capture quality. Mention those only briefly when they materially limit confidence.',
   'Use per_view_notes for factual view-specific observations that describe what is actually visible.',
@@ -665,6 +712,15 @@ const analysisInstructions = [
 const normalizeString = (value: unknown) => (
   typeof value === 'string' ? value.trim() : ''
 );
+
+const hasVisibleDandruffEvidence = (value = '') => {
+  const normalized = String(value || '').toLowerCase();
+  if (!normalized) return false;
+  if (/\b(no|not|without)\s+(?:visible\s+)?(?:dandruff|flakes?|flaking|white particles?|yellow particles?|buildup)\b/i.test(normalized)) {
+    return false;
+  }
+  return /\b(dandruff|flakes?|flaking|white particles?|yellow particles?|flake-like|dandruff-like|scaly|buildup)\b/i.test(normalized);
+};
 
 const removeAdvertisedNames = (value: string) => {
   let cleaned = normalizeString(value);
@@ -1355,6 +1411,12 @@ const runFocusedLengthFallback = async ({
       shedding_level: 'mild',
       visible_scalp_area: 'low',
       scalp_coverage_notes: 'Hair and scalp view were submitted; coverage should be tracked again in the next scan for a stronger comparison.',
+      dandruff_detected: false,
+      dandruff_severity: 'none',
+      dandruff_notes: 'No visible dandruff-like flakes were confirmed in this low-confidence fallback.',
+      lice_detected: false,
+      lice_confidence: 'none',
+      lice_notes: 'No visible lice or nit-like signs were confirmed in this low-confidence fallback.',
       improvement_tracking_status: 'Needs improvement tracking',
       improvement_recommendation: 'Track scalp coverage and hair density over time, and use gentle care that avoids tight pulling or harsh handling.',
       decision: IMPROVE_STATUS,
@@ -1670,10 +1732,26 @@ const normalizeAnalysisPayload = (
   );
   const visibleScalpArea = normalizeString(analysis?.visible_scalp_area) || (baldSpotsPresent ? 'moderate' : 'none');
   const scalpCoverageNotes = normalizeString(analysis?.scalp_coverage_notes);
+  const scalpFindingEvidenceText = [
+    normalizeString(analysis?.summary),
+    normalizeString(analysis?.visible_damage_notes),
+    scalpCoverageNotes,
+    ...normalizedViewNotes
+      .filter((item) => String(item?.view || '').toLowerCase().includes('scalp'))
+      .map((item) => item.notes),
+  ].join(' ');
+  const hasDandruffTextEvidence = hasVisibleDandruffEvidence(scalpFindingEvidenceText);
+  const dandruffDetected = analysis?.dandruff_detected === true || hasDandruffTextEvidence;
+  const dandruffSeverity = normalizeString(analysis?.dandruff_severity) || (dandruffDetected ? 'mild' : 'none');
+  const dandruffNotes = normalizeString(analysis?.dandruff_notes);
+  const liceDetected = analysis?.lice_detected === true;
+  const liceConfidence = normalizeString(analysis?.lice_confidence) || (liceDetected ? 'medium' : 'none');
+  const liceNotes = normalizeString(analysis?.lice_notes);
   const hasCoverageConcern = baldSpotsPresent
     || ['moderate', 'high'].includes(visibleScalpArea.toLowerCase())
     || ['moderate', 'severe'].includes(sheddingLevel.toLowerCase())
     || (hairDensityScore != null && hairDensityScore < 45);
+  const hasScalpFindingConcern = dandruffDetected || liceDetected;
 
   // Correct level values that contradict the AI's own text observations
   const combinedText = [
@@ -1733,7 +1811,7 @@ const normalizeAnalysisPayload = (
   let decision = normalizeString(analysis?.decision) === ELIGIBLE_STATUS
     ? ELIGIBLE_STATUS
     : IMPROVE_STATUS;
-  if (!hasDonationRequirement || !hasClearEnoughEvidence || !meetsLengthRule || !conditionAcceptable || treatmentConflict || hasCoverageConcern) {
+  if (!hasDonationRequirement || !hasClearEnoughEvidence || !meetsLengthRule || !conditionAcceptable || treatmentConflict || hasCoverageConcern || hasScalpFindingConcern) {
     decision = IMPROVE_STATUS;
   } else if (concernType === 'donation_eligibility') {
     decision = ELIGIBLE_STATUS;
@@ -1759,6 +1837,15 @@ const normalizeAnalysisPayload = (
   });
   const finalIsHairDetected = true;
   const finalInvalidImageReason = '';
+  const improvementRecommendation = normalizeString(analysis?.improvement_recommendation) || (
+    liceDetected
+      ? 'Pause donation plans and consult a qualified health or scalp care professional before donating.'
+      : dandruffDetected
+        ? 'Use gentle scalp care and track whether visible flakes improve before donation.'
+        : hasCoverageConcern
+          ? 'Repeat the same photo views over time to track visible scalp coverage and density changes, and use gentle scalp and hair care while monitoring progress.'
+          : 'Keep tracking hair length and condition with future CheckHair scans before donating.'
+  );
 
   return {
     is_hair_detected: finalIsHairDetected,
@@ -1787,18 +1874,28 @@ const normalizeAnalysisPayload = (
         ? 'This check suggests visible scalp coverage or shedding concerns that are better tracked over time.'
         : 'No clear bald spots or patchy low-coverage areas were observed in the uploaded views.'
     ),
+    dandruff_detected: dandruffDetected,
+    dandruff_severity: dandruffSeverity,
+    dandruff_notes: dandruffNotes || (
+      dandruffDetected
+        ? 'Dandruff-like flakes were observed in the uploaded scalp or root views.'
+        : 'No visible dandruff-like flakes were observed in the uploaded views.'
+    ),
+    lice_detected: liceDetected,
+    lice_confidence: liceConfidence,
+    lice_notes: liceNotes || (
+      liceDetected
+        ? 'Visible lice or nit-like signs were observed; this screening is not a medical diagnosis.'
+        : 'No visible lice or nit-like signs were observed in the uploaded views.'
+    ),
     improvement_tracking_status: normalizeString(analysis?.improvement_tracking_status) || (
       decision === ELIGIBLE_STATUS
         ? 'Ready for donation'
-        : hasCoverageConcern
+        : hasCoverageConcern || hasScalpFindingConcern
           ? 'Needs improvement tracking'
           : 'Not eligible for donation yet'
     ),
-    improvement_recommendation: normalizeString(analysis?.improvement_recommendation) || (
-      hasCoverageConcern
-        ? 'Repeat the same photo views over time to track visible scalp coverage and density changes, and use gentle scalp and hair care while monitoring progress.'
-        : 'Keep tracking hair length and condition with future CheckHair scans before donating.'
-    ),
+    improvement_recommendation: improvementRecommendation,
     decision,
     summary,
     length_assessment: lengthAssessment || buildLengthAssessment({
@@ -1958,6 +2055,8 @@ Deno.serve(async (request) => {
       'Based on what you see in the photos and the questionnaire context:',
       'The current result must come from the current uploaded photos only.',
       'Return one per_view_notes entry for every provided current image, including optional back-side and hair-ends views when present.',
+      'For the Hair Scalp image, carefully inspect the part line, roots, crown, and visible hair shafts for dandruff-like flakes, lice, and nits before finalizing. The final JSON must always include dandruff_detected, dandruff_severity, dandruff_notes, lice_detected, lice_confidence, and lice_notes.',
+      'Dandruff/flakes and lice/nits are different findings. Dandruff/flakes: mark detected when visible white/yellow loose or irregular flake-like particles or buildup appear on the scalp/roots/part line. Lice/nits: mark detected only when insects or attached oval nit-like particles on hair shafts are clearly visible; otherwise use lice_confidence low/none with notes.',
       'Do not reject the photo set in this step. The photo set already passed validation, so return the closest conservative hair analysis and keep is_hair_detected=true.',
       'Recommendations must be about hair care, condition maintenance, length retention, scalp care, or visible damage. Do not put photo capture, retake, lighting, upload, framing, or recheck instructions in recommendations.',
       'If questionnaire answers report at least one risk, at least one recommendation must directly address that reported risk.',
@@ -2078,6 +2177,12 @@ Deno.serve(async (request) => {
             shedding_level: 'mild',
             visible_scalp_area: 'low',
             scalp_coverage_notes: 'Scalp coverage is marked for progress tracking from the visible scalp and part-line areas.',
+            dandruff_detected: false,
+            dandruff_severity: 'none',
+            dandruff_notes: 'No visible dandruff-like flakes were confirmed because detailed provider analysis was unavailable.',
+            lice_detected: false,
+            lice_confidence: 'none',
+            lice_notes: 'No visible lice or nit-like signs were confirmed because detailed provider analysis was unavailable.',
             improvement_tracking_status: 'Needs improvement tracking',
             improvement_recommendation: 'Use gentle scalp care, avoid tight hairstyles, and track coverage or shedding changes over time.',
             decision: IMPROVE_STATUS,
