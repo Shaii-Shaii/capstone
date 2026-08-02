@@ -1,8 +1,10 @@
+import React from "react";
 import { useRouter } from "expo-router";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { DonorTopBar } from "../../src/components/donor/DonorTopBar";
 import { DashboardLayout } from "../../src/components/layout/DashboardLayout";
+import { PatientTutorialModal } from "../../src/components/patient/PatientTutorialModal";
 import { EmptyDataState } from "../../src/components/ui/EmptyDataState";
 import { StatusBanner } from "../../src/components/ui/StatusBanner";
 import { patientDashboardNavItems } from "../../src/constants/dashboard";
@@ -37,6 +39,7 @@ export default function PatientHomeScreen() {
   const trackingSteps = tracker?.steps || [];
   const hasActiveRequest = Boolean(hasSubmittedRequest);
   const primaryTextColor = resolvedTheme?.primaryTextColor || roles.headingText;
+  const [isTutorialOpen, setIsTutorialOpen] = React.useState(false);
 
   const handleNavPress = (item) => {
     if (!item.route || item.route === "/patient/home") return;
@@ -58,6 +61,8 @@ export default function PatientHomeScreen() {
         >
           <DonorTopBar
             unreadCount={unreadCount}
+            showTutorialAction
+            onTutorialPress={() => setIsTutorialOpen(true)}
             onNotificationsPress={() =>
               router.navigate("/patient/notifications")
             }
@@ -66,6 +71,11 @@ export default function PatientHomeScreen() {
         </View>
       }
     >
+      <PatientTutorialModal
+        visible={isTutorialOpen}
+        tabKey="home"
+        onClose={() => setIsTutorialOpen(false)}
+      />
       {isLoadingContext || isLoadingTracking ? (
         <StatusBanner
           title="Loading request status"

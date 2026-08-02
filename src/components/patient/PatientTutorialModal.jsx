@@ -4,95 +4,59 @@ import { AppIcon } from '../ui/AppIcon';
 import { resolveThemeRoles, theme } from '../../design-system/theme';
 import { useAuth } from '../../providers/AuthProvider';
 
-const DONOR_TUTORIALS = {
-  homeOverview: {
-    title: 'Home Overview',
-    subtitle: 'Use this page to see what needs attention.',
+const PATIENT_TUTORIALS = {
+  home: {
+    title: 'Home Timeline',
+    subtitle: 'Track your wig request journey.',
     steps: [
-      { icon: 'home', title: 'Read your summary', body: 'Check your latest status, reminders, and next suggested action.' },
-      { icon: 'updates', title: 'Review progress', body: 'Look for updates from event registration, donation, or staff scanning.' },
-      { icon: 'donations', title: 'Continue donation', body: 'Open the suggested action if you need to scan hair, register, or donate.' },
-      { icon: 'notifications', title: 'Check alerts', body: 'Tap the bell for reminders, status changes, and app notices.' },
+      { icon: 'home', title: 'Check status', body: 'Look at Journey Timeline to see your current request step.' },
+      { icon: 'updates', title: 'Read updates', body: 'Open each timeline card to understand what is done or pending.' },
+      { icon: 'requests', title: 'View details', body: 'Tap View request details to open your Wig tab.' },
+      { icon: 'notifications', title: 'Check alerts', body: 'Tap the bell for request reminders and status updates.' },
     ],
   },
-  homeEvents: {
-    title: 'Donation Events',
-    subtitle: 'Find and join an event donation drive.',
+  wig: {
+    title: 'Wig Request',
+    subtitle: 'Request a wig and monitor progress.',
     steps: [
-      { icon: 'search', title: 'Browse events', body: 'Use the event list, search, and filters to find a suitable drive.' },
-      { icon: 'shield', title: 'Unlock private events', body: 'Tap the lock button and enter the organizer code if the event is private.' },
-      { icon: 'appointment', title: 'Open details', body: 'Check event date, location, available slots, and requirements.' },
-      { icon: 'checkmarkCircle', title: 'Join event', body: 'Register for the event when your details are ready.' },
-      { icon: 'donations', title: 'Prepare QR', body: 'Go to Donate, open Hair Event Donation, and show your QR to staff.' },
+      { icon: 'requests', title: 'Start request', body: 'Tap Request Wig if you do not have an active request yet.' },
+      { icon: 'editProfile', title: 'Complete details', body: 'Fill in patient details, medical information, and wig preferences.' },
+      { icon: 'camera', title: 'Add photos', body: 'Upload or capture the required reference and medical documents.' },
+      { icon: 'sparkle', title: 'Preview options', body: 'Review generated or available wig options before saving.' },
+      { icon: 'updates', title: 'Track request', body: 'After submitting, open the timeline to follow review and release updates.' },
     ],
   },
-  analysisOverview: {
-    title: 'Analysis Overview',
-    subtitle: 'Review your latest hair condition result.',
+  support: {
+    title: 'Support',
+    subtitle: 'Ask for help inside the app.',
     steps: [
-      { icon: 'sparkle', title: 'Check current result', body: 'Review condition, score, length, and donation readiness.' },
-      { icon: 'info', title: 'Read the reason', body: 'If not eligible, check the reason shown from your latest analysis.' },
-      { icon: 'updates', title: 'Open history', body: 'Review past scans and compare older hair condition results.' },
-      { icon: 'camera', title: 'Run a new scan', body: 'Tap the scan button if your hair changed or the result is outdated.' },
-    ],
-  },
-  analysisCheckHair: {
-    title: 'Check Hair Condition',
-    subtitle: 'Scan your hair before creating a donation.',
-    steps: [
-      { icon: 'camera', title: 'Start scan', body: 'Tap the scan button and allow camera access if prompted.' },
-      { icon: 'image', title: 'Take clear photos', body: 'Follow each photo prompt. Use good light and keep hair visible.' },
-      { icon: 'requests', title: 'Answer questions', body: 'Enter hair details such as treatment, texture, and condition.' },
-      { icon: 'sparkle', title: 'Review result', body: 'Check the estimated length, detected details, and eligibility message.' },
-      { icon: 'donations', title: 'Use for donation', body: 'If eligible, go to Donate and continue with event or logistic donation.' },
-    ],
-  },
-  donateHairEvent: {
-    title: 'Hair Event Donation',
-    subtitle: 'Use this when donating through an event.',
-    steps: [
-      { icon: 'appointment', title: 'Register first', body: 'Join an event from Home before expecting an event donation record here.' },
-      { icon: 'donations', title: 'Open event card', body: 'Select your event donation to view details and current status.' },
-      { icon: 'checkHair', title: 'Show QR to staff', body: 'At the event, let staff scan your QR to update your timeline.' },
-      { icon: 'updates', title: 'Track timeline', body: 'Refresh after scanning to see Cut, Wig in Production, or Wig Created updates.' },
-      { icon: 'success', title: 'Check certificate', body: 'After completion, open achievements or certificates when available.' },
-    ],
-  },
-  donateLogistic: {
-    title: 'Logistic Donation',
-    subtitle: 'Use this for ship or drop-off donations.',
-    steps: [
-      { icon: 'checkHair', title: 'Confirm eligibility', body: 'Complete Analysis first. The app blocks donation if hair is not ready.' },
-      { icon: 'location', title: 'Tap Add Donation', body: 'Use Add Donation only when you want to create a new logistic donation.' },
-      { icon: 'editProfile', title: 'Enter hair details', body: 'Confirm length, color, texture, notes, and upload a photo if needed.' },
-      { icon: 'appointment', title: 'Choose send-off', body: 'Select drop-off or shipping. For drop-off, pick date and time.' },
-      { icon: 'checkmarkCircle', title: 'Confirm donation', body: 'Submit the donation or appointment to generate a tracked record.' },
-      { icon: 'updates', title: 'Follow status', body: 'Refresh to see Submitted, Received, Cut, or production updates.' },
+      { icon: 'support', title: 'Open adviser', body: 'Use the chat panel for wig request, timeline, or account questions.' },
+      { icon: 'requests', title: 'Ask clearly', body: 'Mention your request, status, or issue so the adviser can guide you.' },
+      { icon: 'notifications', title: 'Follow updates', body: 'Check notifications after support or request changes.' },
     ],
   },
   profile: {
-    title: 'Profile Guide',
-    subtitle: 'Keep your account ready for donation.',
+    title: 'Profile',
+    subtitle: 'Keep patient information correct.',
     steps: [
-      { icon: 'profile', title: 'Open edit mode', body: 'Tap Edit Profile to update your personal details.' },
-      { icon: 'phone', title: 'Update contacts', body: 'Keep phone, email, and address correct for donation updates.' },
-      { icon: 'shield', title: 'Add consent', body: 'If the donor is a minor, complete guardian consent before donating.' },
-      { icon: 'save', title: 'Save changes', body: 'Review your entries, then save before leaving the page.' },
-      { icon: 'signOut', title: 'Manage account', body: 'Change password or log out from the account actions.' },
+      { icon: 'profile', title: 'Review details', body: 'Check your name, contact information, and patient account details.' },
+      { icon: 'phone', title: 'Update contacts', body: 'Keep phone and email updated so the team can reach you.' },
+      { icon: 'shield', title: 'Review documents', body: 'Make sure required patient or guardian documents are complete.' },
+      { icon: 'save', title: 'Save changes', body: 'Save updates before leaving the page.' },
     ],
   },
 };
 
 const FALLBACK_TUTORIAL = {
-  title: 'Tutorial Guide',
-  subtitle: 'Choose a tab to see how its feature works.',
+  title: 'Patient Guide',
+  subtitle: 'Use the active tab and open tutorial again for steps.',
   steps: [
-    { icon: 'info', title: 'Open a section', body: 'Use the active tab and tap the tutorial icon again for specific steps.' },
+    { icon: 'info', title: 'Choose a tab', body: 'Open Home, Wig, Support, or Profile to see specific guidance.' },
   ],
 };
 
 const resolveTutorialContent = (tabKey = '') => {
-  const rawContent = DONOR_TUTORIALS[String(tabKey || '')] || DONOR_TUTORIALS.homeOverview || FALLBACK_TUTORIAL;
+  const rawContent = PATIENT_TUTORIALS[String(tabKey || '')] || FALLBACK_TUTORIAL;
   const safeContent = rawContent && typeof rawContent === 'object' ? rawContent : FALLBACK_TUTORIAL;
   const steps = Array.isArray(safeContent.steps)
     ? safeContent.steps
@@ -126,7 +90,7 @@ const withOpacity = (color, opacity) => {
   return color;
 };
 
-export function DonorTutorialModal({ visible, tabKey = 'home', onClose }) {
+export function PatientTutorialModal({ visible, tabKey = 'home', onClose }) {
   const { resolvedTheme } = useAuth();
   const roles = resolveThemeRoles(resolvedTheme);
   const content = resolveTutorialContent(tabKey);
@@ -151,7 +115,7 @@ export function DonorTutorialModal({ visible, tabKey = 'home', onClose }) {
             </View>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Close tutorial"
+              accessibilityLabel="Close patient tutorial"
               onPress={onClose}
               style={styles.closeButton}
             >
@@ -190,7 +154,6 @@ export function DonorTutorialModal({ visible, tabKey = 'home', onClose }) {
               </View>
             ))}
           </ScrollView>
-
         </View>
       </View>
     </Modal>
@@ -252,7 +215,7 @@ const styles = StyleSheet.create({
     marginBottom: theme.spacing.md,
   },
   stepScroll: {
-    maxHeight: 300,
+    maxHeight: 340,
   },
   stepList: {
     gap: theme.spacing.sm,

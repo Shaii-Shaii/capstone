@@ -20,6 +20,7 @@ import { DashboardSectionHeader } from '../src/components/ui/DashboardSectionHea
 import { AddressOptionSheet, AddressSelectField, SignupAddressSection } from '../src/components/auth/SignupAddressSection';
 import { DonorTopBar } from '../src/components/donor/DonorTopBar';
 import { DonorTutorialModal } from '../src/components/donor/DonorTutorialModal';
+import { PatientTutorialModal } from '../src/components/patient/PatientTutorialModal';
 import { useProfileActions } from '../src/hooks/useProfileActions';
 import { useNotifications } from '../src/hooks/useNotifications';
 import { useAuth } from '../src/providers/AuthProvider';
@@ -1091,7 +1092,7 @@ export default function ProfileScreen() {
             <DonorTopBar
               title={resolvedTheme?.brandName || 'Donivra'}
               unreadCount={unreadCount}
-              showTutorialAction={role === 'donor'}
+              showTutorialAction={role === 'donor' || role === 'patient'}
               onTutorialPress={() => setIsTutorialOpen(true)}
               showProfileAction={true}
               showLogoutAction={false}
@@ -1107,7 +1108,13 @@ export default function ProfileScreen() {
             tabKey="profile"
             onClose={() => setIsTutorialOpen(false)}
           />
-        ) : null}
+        ) : (
+          <PatientTutorialModal
+            visible={isTutorialOpen}
+            tabKey="profile"
+            onClose={() => setIsTutorialOpen(false)}
+          />
+        )}
         {role === 'donor' ? renderDonorProfileContent() : renderPatientProfileContent()}
 
         <Modal transparent visible={isPopupVisible} animationType="fade" onRequestClose={handleModalClose}>

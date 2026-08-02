@@ -37,6 +37,7 @@ import { useAuth } from "../../providers/AuthProvider";
 import { verifyMedicalCertificateAsset } from "../../features/patientMedicalCertificate.service";
 import { logAppError } from "../../utils/appErrors";
 import { DonorTopBar } from "../donor/DonorTopBar";
+import { PatientTutorialModal } from "../patient/PatientTutorialModal";
 import { ProcessStatusTracker } from "../tracking/ProcessStatusTracker";
 import { AppButton } from "../ui/AppButton";
 import { AppCard } from "../ui/AppCard";
@@ -4480,6 +4481,7 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
   const [selectedOptionId, setSelectedOptionId] = useState("");
   const [selectedWigFilterId, setSelectedWigFilterId] = useState("");
   const [isTimelineOpen, setIsTimelineOpen] = useState(false);
+  const [isTutorialOpen, setIsTutorialOpen] = useState(false);
   const [flowStep, setFlowStep] = useState("patient");
   const [requestMode, setRequestMode] = useState("selected");
   const [photoValidation, setPhotoValidation] = useState(null);
@@ -5141,6 +5143,8 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
           >
             <DonorTopBar
               unreadCount={unreadCount}
+              showTutorialAction
+              onTutorialPress={() => setIsTutorialOpen(true)}
               onNotificationsPress={() =>
                 router.navigate("/patient/notifications")
               }
@@ -5151,6 +5155,13 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
         )
       }
     >
+      {!showFlowOnly ? (
+        <PatientTutorialModal
+          visible={isTutorialOpen}
+          tabKey="wig"
+          onClose={() => setIsTutorialOpen(false)}
+        />
+      ) : null}
       {!showFlowOnly ? (
         <>
           {isLoadingContext ? (

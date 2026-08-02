@@ -5,6 +5,7 @@ import { DashboardLayout } from './DashboardLayout';
 import { DashboardHeader } from '../ui/DashboardHeader';
 import { AppCard } from '../ui/AppCard';
 import { ChatbotSupportPanel } from '../chatbot/ChatbotSupportPanel';
+import { PatientTutorialModal } from '../patient/PatientTutorialModal';
 import { useNotifications } from '../../hooks/useNotifications';
 import { theme } from '../../design-system/theme';
 import { patientDashboardNavItems } from '../../constants/dashboard';
@@ -14,6 +15,7 @@ export function PatientSupportChatScreen() {
   const router = useRouter();
   const { user, profile, patientProfile } = useAuth();
   const { unreadCount } = useNotifications({ role: 'patient', userId: user?.id, databaseUserId: profile?.user_id });
+  const [isTutorialOpen, setIsTutorialOpen] = React.useState(false);
 
   const firstName = (profile?.first_name || '').trim();
   const lastName = (profile?.last_name || '').trim();
@@ -45,6 +47,11 @@ export function PatientSupportChatScreen() {
           onProfilePress={() => router.navigate('/profile')}
           utilityActions={[
             {
+              key: 'tutorial',
+              icon: 'tutorial',
+              onPress: () => setIsTutorialOpen(true),
+            },
+            {
               key: 'notifications',
               icon: 'notifications',
               badge: unreadCount ? String(Math.min(unreadCount, 99)) : undefined,
@@ -54,6 +61,11 @@ export function PatientSupportChatScreen() {
         />
       )}
     >
+      <PatientTutorialModal
+        visible={isTutorialOpen}
+        tabKey="support"
+        onClose={() => setIsTutorialOpen(false)}
+      />
       <AppCard variant="patientTint" radius="xl" padding="md" style={styles.chatCard}>
         <View style={styles.helpWrap}>
           <Text style={styles.helpTitle}>Patient adviser</Text>
