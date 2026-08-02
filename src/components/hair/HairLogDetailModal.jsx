@@ -28,6 +28,7 @@ const CAPTURE_NOISE_PATTERNS = [
   'reupload', 'all views are', 'photo is clear', 'visible in the',
 ];
 const CARE_SAFETY_NOTE = 'If you have allergies, scalp irritation, or sensitivity, consult a qualified hair or scalp care professional before trying new ingredients.';
+const HAIR_ANALYSIS_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000;
 
 const ADVERTISED_RECOMMENDATION_PATTERNS = [
   /\bDove\b/gi,
@@ -153,6 +154,30 @@ const formatTimeLabel = (value) => (
   }).format(new Date(value))
 );
 
+const formatNextAnalysisDateTime = (value) => (
+  new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Manila',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(new Date(value))
+);
+
+const formatCountdown = (milliseconds = 0) => {
+  const totalSeconds = Math.max(0, Math.ceil(milliseconds / 1000));
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (days > 0) return `${days}d ${hours}h ${minutes}m`;
+  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+};
+
 const formatLengthLabel = (value) => {
   const numericValue = Number(value);
   if (!Number.isFinite(numericValue) || numericValue <= 0) return 'Not detected';
@@ -250,6 +275,7 @@ export function HairLogDetailModal({
   const [isLoadingUrls, setIsLoadingUrls] = React.useState(false);
   const [recommendations, setRecommendations] = React.useState([]);
   const [isLoadingRecommendations, setIsLoadingRecommendations] = React.useState(false);
+  const [nowMs, setNowMs] = React.useState(() => Date.now());
 
   React.useEffect(() => {
     if (!visible || !entries.length) {
@@ -336,6 +362,12 @@ export function HairLogDetailModal({
     };
   }, [activeEntry, allImages, visible]);
 
+  React.useEffect(() => {
+    if (!visible) return undefined;
+    const intervalId = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(intervalId);
+  }, [visible]);
+
   if (!visible || (!activeEntry?.screening && !events.length)) return null;
 
   const screening = activeEntry?.screening || null;
@@ -386,6 +418,16 @@ export function HairLogDetailModal({
     { label: 'Dandruff', value: formatDetectedLabel(screening?.dandruff_detected) },
     { label: 'Lice / nits', value: formatDetectedLabel(screening?.lice_detected) },
   ];
+  const nextAnalysisAtMs = screening?.created_at
+    ? new Date(screening.created_at).getTime() + HAIR_ANALYSIS_COOLDOWN_MS
+    : NaN;
+  const nextAnalysisRemainingMs = Number.isFinite(nextAnalysisAtMs)
+    ? nextAnalysisAtMs - nowMs
+    : 0;
+  const canAnalyzeAgain = !Number.isFinite(nextAnalysisAtMs) || nextAnalysisRemainingMs <= 0;
+  const nextAnalysisLabel = Number.isFinite(nextAnalysisAtMs)
+    ? formatNextAnalysisDateTime(nextAnalysisAtMs)
+    : '';
   const insightBullets = Array.from(new Set([
     screening?.dandruff_notes,
     screening?.lice_notes,
@@ -459,6 +501,29 @@ export function HairLogDetailModal({
                 <Text style={[styles.statusSubtext, { color: pageColor(roles.bodyText) }]}>
                   Saved {formatSavedDateTime(screening.created_at)}
                 </Text>
+              </View>
+            ) : null}
+
+            {hasScreening ? (
+              <View style={[styles.nextAnalysisCard, pageMode && styles.pageInnerCard, { backgroundColor: roles.supportCardBackground, borderColor: roles.defaultCardBorder }]}>
+                <View style={[styles.nextAnalysisIcon, { backgroundColor: roles.iconPrimarySurface }]}>
+                  <MaterialCommunityIcons name="timer-sand" size={18} color={roles.iconPrimaryColor} />
+                </View>
+                <View style={styles.nextAnalysisCopy}>
+                  <Text style={[styles.nextAnalysisTitle, { color: pageColor(roles.headingText) }]}>
+                    Next Hair Analysis
+                  </Text>
+                  <Text style={[styles.nextAnalysisBody, { color: pageColor(roles.bodyText) }]}>
+                    {canAnalyzeAgain
+                      ? 'You can use Hair Analysis again now.'
+                      : `Available on ${nextAnalysisLabel}`}
+                  </Text>
+                </View>
+                <View style={[styles.nextAnalysisCountdown, { borderColor: roles.defaultCardBorder }]}>
+                  <Text style={[styles.nextAnalysisCountdownText, { color: pageColor(roles.primaryActionBackground) }]}>
+                    {canAnalyzeAgain ? 'Ready' : formatCountdown(nextAnalysisRemainingMs)}
+                  </Text>
+                </View>
               </View>
             ) : null}
 
@@ -811,6 +876,51 @@ const styles = StyleSheet.create({
   statusSubtext: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.bodySm,
+  },
+  nextAnalysisCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+    borderRadius: 6,
+    borderWidth: 1,
+    padding: theme.spacing.md,
+  },
+  nextAnalysisIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  nextAnalysisCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  nextAnalysisTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.bold,
+  },
+  nextAnalysisBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: theme.typography.compact.bodySm * theme.typography.lineHeights.relaxed,
+  },
+  nextAnalysisCountdown: {
+    minWidth: 72,
+    minHeight: 34,
+    borderWidth: 1,
+    borderRadius: theme.radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: theme.spacing.sm,
+    flexShrink: 0,
+  },
+  nextAnalysisCountdownText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    fontWeight: theme.typography.weights.bold,
   },
   sectionTitle: {
     fontFamily: theme.typography.fontFamilyDisplay,

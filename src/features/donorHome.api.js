@@ -635,6 +635,7 @@ export const createDonationDriveRegistration = async ({
   databaseUserId,
   hasEligibleHairScan = null,
   hasHairScanLog = null,
+  requiresPostDonationAnalysis = false,
   attendanceOnly = false,
 }) => {
   const effectiveDatabaseUserId = await resolveDatabaseUserIdFromSession(databaseUserId);
@@ -649,7 +650,9 @@ export const createDonationDriveRegistration = async ({
 
   if (!attendanceOnly && hasEligibleHairScan === false) {
     const eligibilityError = new Error(
-      hasHairScanLog
+      requiresPostDonationAnalysis
+        ? 'Your previous donated hair has already been cut. Please run Hair Analysis again so the app can verify if your current hair is long enough before registering for another donation event.'
+        : hasHairScanLog
         ? 'Your latest AI hair screening is not eligible for donation yet. Please follow the recommendations and scan again before registering for a donation event.'
         : 'Scan your hair first so the system can confirm if you are eligible to join this donation event.'
     );

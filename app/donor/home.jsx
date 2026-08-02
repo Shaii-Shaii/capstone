@@ -26,6 +26,7 @@ import { AppIcon } from '../../src/components/ui/AppIcon';
 import { StatusBanner } from '../../src/components/ui/StatusBanner';
 import { DonivraLoadingOverlay } from '../../src/components/ui/DonivraLoadingOverlay';
 import { DonorTopBar } from '../../src/components/donor/DonorTopBar';
+import { DonorTutorialModal } from '../../src/components/donor/DonorTutorialModal';
 import { SectionTitleRow } from '../../src/components/ui/SectionTitleRow';
 import { donorDashboardNavItems } from '../../src/constants/dashboard';
 import {
@@ -1983,6 +1984,7 @@ export default function DonorHomeScreen() {
   const [privateUnlockVariant, setPrivateUnlockVariant] = React.useState('info');
   const [activeHomeTab, setActiveHomeTab] = React.useState('overview');
   const [certificateToastMessage, setCertificateToastMessage] = React.useState('');
+  const [isTutorialOpen, setIsTutorialOpen] = React.useState(false);
   const privateAccessFabPosition = React.useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
   const privateAccessFabDragStart = React.useRef({ x: 0, y: 0 });
   const hasInitializedFabPosition = React.useRef(false);
@@ -2454,6 +2456,8 @@ export default function DonorHomeScreen() {
             avatarInitials={avatarInitials}
             avatarUri={avatarUri}
             unreadCount={unreadCount}
+            showTutorialAction
+            onTutorialPress={() => setIsTutorialOpen(true)}
             onNotificationsPress={() => router.navigate('/donor/notifications')}
             onProfilePress={() => router.navigate('/profile')}
             onLogoutPress={logout}
@@ -2462,6 +2466,11 @@ export default function DonorHomeScreen() {
         </View>
       )}
     >
+      <DonorTutorialModal
+        visible={isTutorialOpen}
+        tabKey={activeHomeTab === 'events' ? 'homeEvents' : 'homeOverview'}
+        onClose={() => setIsTutorialOpen(false)}
+      />
       {homeError ? (
         <StatusBanner
           variant="info"

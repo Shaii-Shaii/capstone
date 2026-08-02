@@ -13,6 +13,7 @@ import { AppIcon } from '../ui/AppIcon';
 import { AppInput } from '../ui/AppInput';
 import { StatusBanner } from '../ui/StatusBanner';
 import { DonorTopBar } from '../donor/DonorTopBar';
+import { DonorTutorialModal } from '../donor/DonorTutorialModal';
 import { SectionTitleRow } from '../ui/SectionTitleRow';
 import { HairLogDetailModal } from '../hair/HairLogDetailModal';
 import { EmptyDataState } from '../ui/EmptyDataState';
@@ -945,7 +946,6 @@ function LiveHairCameraPanel({
   onCapture,
   onToggleCamera,
   onToggleFlash,
-  onUpload,
   onRemove,
   onConfirmPhoto,
   onClose,
@@ -1036,7 +1036,7 @@ function LiveHairCameraPanel({
           <View style={styles.liveCameraPermission}>
             <AppIcon name="camera" size="xl" state="active" />
             <Text style={styles.liveCameraPermissionTitle}>Camera access needed</Text>
-            <Text style={styles.liveCameraPermissionBody}>Allow camera access for live hair scanning, or upload this required view.</Text>
+            <Text style={styles.liveCameraPermissionBody}>Allow camera access for live hair scanning.</Text>
             <AppButton
               title="Allow camera access"
               fullWidth={false}
@@ -1104,13 +1104,7 @@ function LiveHairCameraPanel({
           <Text style={styles.liveViewHintDark}>{liveScanStatus.typeLabel || shortViewHint}</Text>
         </View>
         <View style={styles.liveCaptureControls}>
-          <Pressable
-            onPress={onUpload}
-            disabled={isCapturing || isUploading || isAnalyzing}
-            style={styles.liveRoundControl}
-          >
-            <AppIcon name="image" size="md" state="inverse" />
-          </Pressable>
+          <View style={styles.liveRoundControlPlaceholder} />
           <Pressable
             onPress={currentPhoto ? onConfirmPhoto : hasCameraPermission ? onCapture : onRequestPermission}
             disabled={isCapturing || isUploading || isAnalyzing}
@@ -1193,7 +1187,7 @@ function NativeLiveFaceCamera({ cameraRef, facing = 'front', flashMode = 'off', 
         <AppIcon name="camera" size="xl" state="active" />
         <Text style={styles.liveCameraPermissionTitle}>Live scanner starting</Text>
         <Text style={styles.liveCameraPermissionBody}>
-          {nativeVisionCameraLoadError || nativeFaceCameraLoadError || 'Camera device is not ready yet. You can still upload a photo for this view.'}
+          {nativeVisionCameraLoadError || nativeFaceCameraLoadError || 'Camera device is not ready yet. Please try again in a moment.'}
         </Text>
       </View>
     );
@@ -2382,6 +2376,7 @@ export function DonorHairSubmissionScreen() {
   const [, setResultConfirmationMode] = useState('pending');
   const [retryCountdownSeconds, setRetryCountdownSeconds] = useState(0);
   const [transientErrorNotice, setTransientErrorNotice] = useState(null);
+  const [isTutorialOpen, setIsTutorialOpen] = useState(false);
   const [photoPreflightState, setPhotoPreflightState] = useState(null);
   const [isPhotoPreflightRunning, setIsPhotoPreflightRunning] = useState(false);
   const [isAnalysisLaunching, setIsAnalysisLaunching] = useState(false);
@@ -2414,7 +2409,6 @@ export function DonorHairSubmissionScreen() {
     isAnalyzing,
     isSaving,
     completedPhotoCount,
-    pickPhotoForSlot,
     savePhotoAssetForSlot,
     removePhoto,
     analyzePhotos,
@@ -3070,11 +3064,11 @@ export function DonorHairSubmissionScreen() {
 
     if (isRestricted) {
       setNativeCameraPermission('restricted');
-      setCameraModalError('Camera is restricted on this device. Use Upload to continue this scan.');
+      setCameraModalError('Camera is restricted on this device. Camera access is required for this scan.');
       return;
     }
 
-    setCameraModalError(message || 'Live camera is unavailable. Use Upload to continue this scan.');
+    setCameraModalError(message || 'Live camera is unavailable. Camera access is required for this scan.');
   }, [user?.id]);
 
   useEffect(() => {
@@ -3205,7 +3199,7 @@ export function DonorHairSubmissionScreen() {
       });
 
       if (!permissionGranted) {
-        setCameraModalError('Camera access was not granted. Allow camera access for live scanning, or use Upload instead.');
+        setCameraModalError('Camera access was not granted. Allow camera access for live scanning.');
         return;
       }
     }
@@ -3275,7 +3269,7 @@ export function DonorHairSubmissionScreen() {
         message: captureError?.message || 'Unknown camera capture error.',
       }, 'error');
 
-      setCameraModalError('The camera could not capture a photo right now. Please try again, or use Upload instead.');
+      setCameraModalError('The camera could not capture a photo right now. Please try again.');
     } finally {
       setIsCapturingPhoto(false);
     }
@@ -3387,20 +3381,6 @@ export function DonorHairSubmissionScreen() {
 
     return undefined;
   }, [autoCaptureEnabled, currentView?.key, currentView?.label, photoIndex]);
-
-  const handleLiveUpload = async (slotIndex) => {
-    setCameraModalError('');
-    if (autoCaptureTimeoutRef.current) {
-      clearInterval(autoCaptureTimeoutRef.current);
-      autoCaptureTimeoutRef.current = null;
-    }
-    autoCaptureActiveKeyRef.current = '';
-    setAutoCaptureCountdown(0);
-    autoCaptureCooldownUntilRef.current = Date.now() + 3500;
-    setPhotoPreflightState(null);
-    photoPreflightKeyRef.current = '';
-    await pickPhotoForSlot(slotIndex);
-  };
 
   const handleConfirmCurrentPhoto = React.useCallback(() => {
     setPhotoPreflightState(null);
@@ -3816,7 +3796,6 @@ export function DonorHairSubmissionScreen() {
             onCapture={() => handleCapturePhoto(photoIndex)}
             onToggleCamera={toggleCameraFacing}
             onToggleFlash={toggleFlashMode}
-            onUpload={() => handleLiveUpload(photoIndex)}
             onRemove={handleRemoveCurrentPhoto}
             onConfirmPhoto={handleConfirmCurrentPhoto}
             onClose={closeAnalyzerToHome}
@@ -3825,7 +3804,7 @@ export function DonorHairSubmissionScreen() {
             onRequestPermission={async () => {
               const granted = await requestLiveCameraPermission();
               if (!granted) {
-                setCameraModalError('Camera access was not granted. Allow camera access for live scanning, or use Upload instead.');
+                setCameraModalError('Camera access was not granted. Allow camera access for live scanning.');
               } else {
                 setCameraModalError('');
               }
@@ -4464,6 +4443,8 @@ export function DonorHairSubmissionScreen() {
           avatarInitials={avatarInitials}
           avatarUri={profile?.avatar_url || profile?.photo_path || ''}
           unreadCount={unreadCount}
+          showTutorialAction
+          onTutorialPress={() => setIsTutorialOpen(true)}
           onNotificationsPress={() => router.navigate('/donor/notifications')}
           onProfilePress={() => router.navigate('/profile')}
           onLogoutPress={logout}
@@ -4471,6 +4452,11 @@ export function DonorHairSubmissionScreen() {
         />
       )}
     >
+      <DonorTutorialModal
+        visible={isTutorialOpen}
+        tabKey="analysisCheckHair"
+        onClose={() => setIsTutorialOpen(false)}
+      />
       {transientErrorNotice && !isAnalyzerActive ? (
         <StatusBanner
           title={transientErrorNotice.title}
@@ -6097,6 +6083,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(255,255,255,0.16)',
+  },
+  liveRoundControlPlaceholder: {
+    width: 48,
+    height: 48,
   },
   liveCaptureButton: {
     width: 68,

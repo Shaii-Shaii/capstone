@@ -37,6 +37,7 @@ export const appIconMap = {
   supportActive: 'lifebuoy',
   feedback: 'message-alert-outline',
   feedbackActive: 'message-alert',
+  tutorial: 'help-circle-outline',
   notifications: 'bell-outline',
   notificationsActive: 'bell',
   eye: 'eye-outline',

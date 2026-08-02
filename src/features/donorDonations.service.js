@@ -311,11 +311,15 @@ const buildAiConditionReasons = (screening = null) => {
 
 const buildLengthRequirementMessage = ({ screening = null, minimumLengthCm = 0 }) => {
   const logMessage = getScreeningLogMessage(screening);
+  const estimatedLengthInches = convertLengthToInches(screening?.estimated_length, 'cm');
   const minimumInches = toRoundedNumber(minimumLengthCm / CM_PER_INCH, 1);
+  const measuredMessage = estimatedLengthInches
+    ? `Latest hair analysis estimated ${estimatedLengthInches} inches.`
+    : '';
   const requirementMessage = minimumInches
     ? `Minimum hair length: ${minimumInches} inches.`
     : 'Donation minimum hair length is not configured.';
-  return [logMessage, requirementMessage].filter(Boolean).join(' ');
+  return [logMessage, measuredMessage, requirementMessage].filter(Boolean).join(' ');
 };
 
 const resolveMinimumLengthCm = (donationRequirement = null) => {
@@ -869,9 +873,11 @@ const getDateKeyFromRow = (row = {}) => normalizeDateKey(getRowValue(row, [
 ]));
 
 const getDayTokenFromRow = (row = {}) => String(getRowValue(row, [
+  'Day_Group',
   'Day_Of_Week',
   'Weekday',
   'Day',
+  'day_group',
   'day_of_week',
   'weekday',
   'day',
@@ -881,6 +887,8 @@ const rowMatchesDate = (row = {}, date = new Date()) => {
   const token = getDayTokenFromRow(row);
   if (!token) return false;
   const dayIndex = date.getDay();
+  if (token === 'weekday') return dayIndex >= 1 && dayIndex <= 5;
+  if (token === 'weekend') return dayIndex === 0 || dayIndex === 6;
   const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
   const shortNames = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
   const numeric = Number(token);
@@ -935,19 +943,61 @@ const getSlotCapacity = (row = {}) => {
   const parsed = Number(getRowValue(row, [
     'Max_Appointments',
     'Slot_Capacity',
+    'Capacity_Per_Slot',
     'Capacity',
     'Max_Donors',
     'max_appointments',
     'slot_capacity',
+    'capacity_per_slot',
     'capacity',
     'max_donors',
   ]));
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
 };
 
+const getScheduleBreak = (row = {}) => ({
+  start: timeToMinutes(getRowValue(row, ['Break_Start_Time', 'break_start_time'])),
+  end: timeToMinutes(getRowValue(row, ['Break_End_Time', 'break_end_time'])),
+});
+
+const getScheduleBufferMinutes = (row = {}) => {
+  const parsed = Number(getRowValue(row, ['Buffer_Minutes', 'buffer_minutes']));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+};
+
+const getBookingNoticeDays = (row = {}) => {
+  const parsed = Number(getRowValue(row, ['Minimum_Booking_Notice_Days', 'minimum_booking_notice_days']));
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+};
+
+const getMaximumBookingDays = (row = {}) => {
+  const parsed = Number(getRowValue(row, ['Maximum_Booking_Days', 'maximum_booking_days']));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+};
+
+const mergeScheduleOverride = (operatingHoursRow = null, overrideRow = null) => {
+  if (!overrideRow) return operatingHoursRow;
+  if (isClosedScheduleRow(overrideRow)) return overrideRow;
+  return {
+    ...(operatingHoursRow || {}),
+    ...Object.fromEntries(Object.entries(overrideRow).filter(([, value]) => value !== null && value !== undefined && value !== '')),
+    Is_Open: true,
+    Is_Closed: false,
+  };
+};
+
 const getAppointmentId = (row = {}) => Number(getRowValue(row, ['Appointment_ID', 'appointment_id', 'id'])) || null;
 
-const getAppointmentStatus = (row = {}) => String(getRowValue(row, ['Status', 'status']) || '').trim();
+const getAppointmentStatus = (row = {}) => String(getRowValue(row, [
+  'Status',
+  'To_Status',
+  'New_Status',
+  'Changed_To_Status',
+  'status',
+  'to_status',
+  'new_status',
+  'changed_to_status',
+]) || '').trim();
 
 const isInactiveAppointmentStatus = (status = '') => (
   ['cancelled', 'canceled', 'rejected', 'completed', 'no show', 'no_show']
@@ -960,8 +1010,8 @@ const getLatestStatusesByAppointmentId = (historyRows = []) => {
     const appointmentId = getAppointmentId(row);
     if (!appointmentId) return;
     const current = rowsByAppointment.get(appointmentId);
-    const currentDate = new Date(current?.Created_At || current?.created_at || current?.Changed_At || 0);
-    const rowDate = new Date(row?.Created_At || row?.created_at || row?.Changed_At || 0);
+    const currentDate = new Date(current?.Changed_At || current?.changed_at || current?.Created_At || current?.created_at || 0);
+    const rowDate = new Date(row?.Changed_At || row?.changed_at || row?.Created_At || row?.created_at || 0);
     if (!current || rowDate >= currentDate) {
       rowsByAppointment.set(appointmentId, row);
     }
@@ -1000,6 +1050,7 @@ const buildScheduleSlotsFromRow = (row = {}) => {
   const startMinutes = timeToMinutes(startTime);
   const endMinutes = timeToMinutes(endTime);
   if (startMinutes == null || endMinutes == null || endMinutes <= startMinutes) return [];
+  const scheduleBreak = getScheduleBreak(row);
 
   const duration = getSlotDurationMinutes(row);
   if (!duration) {
@@ -1011,10 +1062,18 @@ const buildScheduleSlotsFromRow = (row = {}) => {
   }
 
   const slots = [];
-  for (let cursor = startMinutes; cursor + duration <= endMinutes; cursor += duration) {
+  const buffer = getScheduleBufferMinutes(row);
+  for (let cursor = startMinutes; cursor + duration <= endMinutes; cursor += duration + buffer) {
+    const slotEnd = cursor + duration;
+    const overlapsBreak = scheduleBreak.start != null
+      && scheduleBreak.end != null
+      && cursor < scheduleBreak.end
+      && slotEnd > scheduleBreak.start;
+    if (overlapsBreak) continue;
+
     slots.push({
       start_time: minutesToTime(cursor),
-      end_time: minutesToTime(cursor + duration),
+      end_time: minutesToTime(slotEnd),
       capacity: getSlotCapacity(row),
     });
   }
@@ -1078,7 +1137,13 @@ export const getWalkInDropoffAvailability = async ({ daysAhead = 21 } = {}) => {
     date.setDate(today.getDate() + offset);
     const dateKey = normalizeDateKey(date);
     const override = overrideByDate.get(dateKey);
-    const scheduleSource = override || (operatingHoursResult.data || []).find((row) => rowMatchesDate(row, date));
+    const operatingHours = (operatingHoursResult.data || []).find((row) => rowMatchesDate(row, date));
+    const scheduleSource = mergeScheduleOverride(operatingHours, override);
+    if (!scheduleSource) continue;
+    if (offset < getBookingNoticeDays(scheduleSource)) continue;
+    const maximumBookingDays = getMaximumBookingDays(scheduleSource);
+    if (maximumBookingDays != null && offset > maximumBookingDays) continue;
+
     const slots = buildScheduleSlotsFromRow(scheduleSource);
     if (!slots.length) continue;
 
@@ -1156,31 +1221,49 @@ export const scheduleWalkInDropoff = async ({
   const appointmentStartAt = `${cleanDate}T${pad(startHour)}:${windowMatch[2]}:00`;
   const appointmentEndAt = `${cleanDate}T${pad(endHour)}:${windowMatch[5]}:00`;
 
+  const freshSubmissionResult = await fetchHairSubmissionById(submission.submission_id);
+  if (freshSubmissionResult.error) {
+    return {
+      success: false,
+      error: freshSubmissionResult.error.message || 'Unable to verify the logistic donation before scheduling.',
+    };
+  }
+  if (!freshSubmissionResult.data?.submission_id) {
+    return {
+      success: false,
+      error: 'This drop-off draft is no longer available. Please refresh, then add the logistic donation again.',
+    };
+  }
+
   const appointmentResult = await upsertSalonDonationAppointment({
     userId: databaseUserId,
-    submissionId: submission.submission_id,
+    submissionId: freshSubmissionResult.data.submission_id,
     startAt: appointmentStartAt,
     endAt: appointmentEndAt,
     contactName: String(contactName || '').trim(),
     contactEmail: String(contactEmail || '').trim() || null,
     contactNumber: String(contactNumber || '').trim(),
     hairDetails: {
-      submission_id: submission.submission_id,
-      donation_source: submission.donation_source || 'Independent',
+      submission_id: freshSubmissionResult.data.submission_id,
+      donation_source: freshSubmissionResult.data.donation_source || submission.donation_source || 'Independent',
     },
     screeningAnswers: {},
     donorNotes: `Walk-in hair donation scheduled from the mobile Donations module.`,
   });
 
   if (appointmentResult.error || !appointmentResult.data?.appointment_id) {
+    const appointmentErrorMessage = String(appointmentResult.error?.message || '');
+    const friendlyAppointmentError = /foreign key constraint/i.test(appointmentErrorMessage)
+      ? 'Unable to schedule this drop-off because the linked donor or logistic donation record is missing. Please refresh, then add the logistic donation again.'
+      : appointmentResult.error?.message;
     return {
       success: false,
-      error: appointmentResult.error?.message || 'Unable to create the salon drop-off appointment.',
+      error: friendlyAppointmentError || 'Unable to create the salon drop-off appointment.',
     };
   }
 
   const logisticsResult = await upsertSubmissionLogistics({
-    submissionId: submission.submission_id,
+    submissionId: freshSubmissionResult.data.submission_id,
     logisticsType: 'onsite_delivery',
     shipmentStatus: 'Walk-in scheduled',
     pickupScheduleDate: cleanDate,
@@ -1701,6 +1784,26 @@ const hasIndependentDonationProgress = (submission = null) => (
   )
 );
 
+const hasLogisticDonationEvidence = ({
+  submission = null,
+  logistics = null,
+  appointment = null,
+  parcelImages = [],
+  trackingEntries = [],
+} = {}) => (
+  Boolean(
+    submission?.submission_id
+    && !Number(submission?.donation_drive_id)
+    && (
+      isManualDonationSubmission(submission)
+      || Boolean(logistics?.submission_logistics_id)
+      || Boolean(appointment?.appointment_id)
+      || Boolean((parcelImages || []).length)
+      || hasMeaningfulTrackingEntries(trackingEntries)
+    )
+  )
+);
+
 const isSubmissionCompleted = ({ submission = null }) => (
   Boolean(
     !submission?.submission_id
@@ -1861,6 +1964,28 @@ const buildDonationHistory = ({ submissions = [], activeSubmission = null }) => 
       date_label: formatHistoryDateLabel(submission.updated_at || submission.created_at || ''),
       bundle_quantity: Array.isArray(submission?.submission_details) ? submission.submission_details.length : 0,
     }))
+);
+
+const getCompletedDonationAt = (submission = null) => {
+  if (!submission?.submission_id) return null;
+  const status = submission?.status || '';
+  const isCompletedDonation = isCutAndShipCompletedStatus(status)
+    || ['completed', 'accepted'].includes(normalizeStatus(status));
+  if (!isCompletedDonation) return null;
+
+  const completedAt = submission?.cut_at || submission?.updated_at || submission?.created_at || null;
+  const completedMs = completedAt ? new Date(completedAt).getTime() : NaN;
+  return Number.isFinite(completedMs) ? completedAt : null;
+};
+
+const resolveLatestCompletedDonation = (submissions = []) => (
+  sortSubmissionsByCreatedAt(submissions)
+    .map((submission) => ({
+      submission,
+      completed_at: getCompletedDonationAt(submission),
+    }))
+    .filter((entry) => entry.completed_at)
+    .sort((left, right) => new Date(right.completed_at).getTime() - new Date(left.completed_at).getTime())[0] || null
 );
 
 const hasMeaningfulTrackingEntries = (trackingEntries = []) => (
@@ -2933,11 +3058,30 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
   const sortedEntries = sortScreeningEntries(flattenScreeningEntries(submissions));
   const latestAnalysisEntry = sortedEntries[0] || null;
   const latestScreening = latestAnalysisEntry?.screening || null;
-  const latestAiEligibility = evaluateAiDonationEligibility({
+  const rawLatestAiEligibility = evaluateAiDonationEligibility({
     screening: latestAnalysisEntry?.screening || null,
     detail: latestAnalysisEntry?.detail || null,
     donationRequirement: donationRequirementResult.data || null,
   });
+  const latestCompletedDonation = resolveLatestCompletedDonation(submissions);
+  const latestScreeningMs = latestScreening?.created_at ? new Date(latestScreening.created_at).getTime() : NaN;
+  const latestCompletedDonationMs = latestCompletedDonation?.completed_at
+    ? new Date(latestCompletedDonation.completed_at).getTime()
+    : NaN;
+  const requiresPostDonationAnalysis = Boolean(
+    Number.isFinite(latestCompletedDonationMs)
+    && (!Number.isFinite(latestScreeningMs) || latestScreeningMs <= latestCompletedDonationMs)
+  );
+  const postDonationAnalysisMessage = 'Your last donated hair was already cut. Please run a new Hair Analysis first so the app can verify your current hair length before another donation.';
+  const latestAiEligibility = requiresPostDonationAnalysis
+    ? {
+        ...rawLatestAiEligibility,
+        isQualified: false,
+        reasons: [postDonationAnalysisMessage],
+        reason: postDonationAnalysisMessage,
+        requires_post_donation_analysis: true,
+      }
+    : rawLatestAiEligibility;
   const aiRecord = resolveAiDonationRecord(latestAnalysisEntry, donationRequirementResult.data || null);
   const manualRecord = resolveManualDonationRecord({
     submissions,
@@ -2990,45 +3134,33 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
       production: submissionProductionResult.data || null,
     };
   }));
-  const unscheduledWalkInDonationIds = submissionFlowRecords
-    .filter((record) => {
-      const isUnscheduledWalkInDonation = matchesAnyToken(record.logistics?.logistics_type, ['onsite_delivery', 'walk_in', 'walk-in', 'dropoff', 'drop-off']);
-      const hasSchedule = Boolean(
-        record.appointment?.appointment_id
-        || record.logistics?.dropoff_window
-        || record.logistics?.pickup_schedule_date
-        || record.logistics?.pickup_scheduled_at
-      );
-      return isUnscheduledWalkInDonation && !hasSchedule;
-    })
-    .map((record) => Number(record.submission_id))
-    .filter(Boolean);
-
-  if (unscheduledWalkInDonationIds.length) {
-    const cleanupResults = await Promise.all(unscheduledWalkInDonationIds.map((submissionId) => {
-      const draftSubmission = independentFlowSubmissions.find(
-        (submission) => Number(submission?.submission_id) === Number(submissionId)
-      );
-      return discardUnscheduledWalkInDonationDraft({ submission: draftSubmission, userId });
-    }));
-    const deletedIds = new Set(cleanupResults
-      .map((result, index) => result?.deleted ? unscheduledWalkInDonationIds[index] : null)
-      .filter(Boolean));
-
-    if (deletedIds.size) {
-      submissions = submissions.filter((submission) => !deletedIds.has(Number(submission?.submission_id)));
-      activeFlowSubmissions = activeFlowSubmissions.filter((submission) => !deletedIds.has(Number(submission?.submission_id)));
-      independentFlowSubmissions = independentFlowSubmissions.filter((submission) => !deletedIds.has(Number(submission?.submission_id)));
-      submissionFlowRecords = submissionFlowRecords.filter((record) => !deletedIds.has(Number(record.submission_id)));
-      activeFlowSubmission = resolveCurrentFlowSubmission({ submissions: activeFlowSubmissions });
-      if (deletedIds.has(Number(activeRecord?.submission?.submission_id))) {
-        activeRecord = null;
-      }
-    }
-  }
-  const isAiEligible = Boolean(aiRecord?.qualification?.isQualified);
+  submissionFlowRecords = submissionFlowRecords.filter((record) => {
+    const flowSubmission = independentFlowSubmissions.find(
+      (submission) => Number(submission?.submission_id) === Number(record.submission_id)
+    );
+    return hasLogisticDonationEvidence({
+      submission: flowSubmission,
+      logistics: record.logistics,
+      appointment: record.appointment,
+      parcelImages: record.parcelImages,
+      trackingEntries: record.trackingEntries,
+    });
+  });
+  const logisticSubmissionIds = new Set(
+    submissionFlowRecords
+      .map((record) => Number(record.submission_id))
+      .filter(Boolean)
+  );
+  independentFlowSubmissions = independentFlowSubmissions.filter(
+    (submission) => logisticSubmissionIds.has(Number(submission?.submission_id))
+  );
+  activeFlowSubmissions = activeFlowSubmissions.filter(
+    (submission) => Number(submission?.donation_drive_id) || logisticSubmissionIds.has(Number(submission?.submission_id))
+  );
+  activeFlowSubmission = resolveCurrentFlowSubmission({ submissions: activeFlowSubmissions });
+  const isAiEligible = Boolean(!requiresPostDonationAnalysis && aiRecord?.qualification?.isQualified);
   const isManualQualified = Boolean(manualRecord?.qualification?.isQualified);
-  const isDonationReady = Boolean(activeRecord?.qualification?.isQualified);
+  const isDonationReady = Boolean(!requiresPostDonationAnalysis && activeRecord?.qualification?.isQualified);
   const activeSubmission = activeFlowSubmission || activeRecord?.submission || null;
   const activeDetail = activeRecord?.detail || getLatestSubmissionDetail(activeSubmission);
   const activeScreening = activeRecord?.screening || [...(activeSubmission?.ai_screenings || [])]
@@ -3246,6 +3378,14 @@ const hasCompletedDonation = Boolean(
     latestAnalysisEntry,
     latestScreening,
     latestAiEligibility,
+    latestCompletedDonation: latestCompletedDonation
+      ? {
+          submission_id: latestCompletedDonation.submission?.submission_id || null,
+          status: latestCompletedDonation.submission?.status || '',
+          completed_at: latestCompletedDonation.completed_at,
+        }
+      : null,
+    requiresPostDonationAnalysis,
     latestEligibleAnalysisEntry: aiRecord ? latestAnalysisEntry : null,
     latestAiDonation: aiRecord,
     latestDonationRequirement: donationRequirementResult.data || null,

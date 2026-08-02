@@ -154,8 +154,8 @@ export const useProcessTracking = ({ role, userId, databaseUserId: preferredData
       channel = channel.on('postgres_changes', {
         event: '*',
         schema: 'public',
-        table: 'hair_submissions',
-        filter: `user_id=eq.${databaseUserId}`,
+        table: 'Hair_Submissions',
+        filter: `User_ID=eq.${databaseUserId}`,
       }, () => {
         refreshTracking();
       });
@@ -164,8 +164,8 @@ export const useProcessTracking = ({ role, userId, databaseUserId: preferredData
         channel = channel.on('postgres_changes', {
           event: '*',
           schema: 'public',
-          table: 'hair_submission_logistics',
-          filter: `submission_id=eq.${watch.submissionId}`,
+          table: 'Hair_Submission_Logistics',
+          filter: `Submission_ID=eq.${watch.submissionId}`,
         }, () => {
           refreshTracking();
         });
@@ -173,28 +173,8 @@ export const useProcessTracking = ({ role, userId, databaseUserId: preferredData
         channel = channel.on('postgres_changes', {
           event: '*',
           schema: 'public',
-          table: 'hair_bundle_tracking_history',
-          filter: `submission_id=eq.${watch.submissionId}`,
-        }, () => {
-          refreshTracking();
-        });
-
-        channel = channel.on('postgres_changes', {
-          event: '*',
-          schema: 'public',
-          table: 'hair_submission_details',
-          filter: `submission_id=eq.${watch.submissionId}`,
-        }, () => {
-          refreshTracking();
-        });
-      }
-
-      if (watch.submissionDetailId) {
-        channel = channel.on('postgres_changes', {
-          event: '*',
-          schema: 'public',
-          table: 'qa_assessments',
-          filter: `submission_detail_id=eq.${watch.submissionDetailId}`,
+          table: 'Hair_Submission_Details',
+          filter: `Submission_ID=eq.${watch.submissionId}`,
         }, () => {
           refreshTracking();
         });
@@ -205,8 +185,8 @@ export const useProcessTracking = ({ role, userId, databaseUserId: preferredData
       channel = channel.on('postgres_changes', {
         event: '*',
         schema: 'public',
-        table: 'patients',
-        ...(databaseUserId ? { filter: `user_id=eq.${databaseUserId}` } : {}),
+        table: 'Patients',
+        ...(databaseUserId ? { filter: `User_ID=eq.${databaseUserId}` } : {}),
       }, () => {
         refreshTracking();
       });
@@ -215,8 +195,8 @@ export const useProcessTracking = ({ role, userId, databaseUserId: preferredData
         channel = channel.on('postgres_changes', {
           event: '*',
           schema: 'public',
-          table: 'wig_requests',
-          filter: `patient_id=eq.${watch.patientId}`,
+          table: 'Wig_Requests',
+          filter: `Patient_ID=eq.${watch.patientId}`,
         }, () => {
           refreshTracking();
         });
@@ -226,8 +206,8 @@ export const useProcessTracking = ({ role, userId, databaseUserId: preferredData
         channel = channel.on('postgres_changes', {
           event: '*',
           schema: 'public',
-          table: 'wig_request_specifications',
-          filter: `req_id=eq.${watch.reqId}`,
+          table: 'Wig_Request_Specifications',
+          filter: `Req_ID=eq.${watch.reqId}`,
         }, () => {
           refreshTracking();
         });
@@ -237,8 +217,8 @@ export const useProcessTracking = ({ role, userId, databaseUserId: preferredData
         channel = channel.on('postgres_changes', {
           event: '*',
           schema: 'public',
-          table: 'wigs',
-          filter: `wig_id=eq.${watch.wigId}`,
+          table: 'Wigs',
+          filter: `Wig_ID=eq.${watch.wigId}`,
         }, () => {
           refreshTracking();
         });
@@ -248,8 +228,8 @@ export const useProcessTracking = ({ role, userId, databaseUserId: preferredData
         channel = channel.on('postgres_changes', {
           event: '*',
           schema: 'public',
-          table: 'wig_allocations',
-          filter: `patient_id=eq.${watch.patientId}`,
+          table: 'Wig_Allocations',
+          filter: `Patient_ID=eq.${watch.patientId}`,
         }, () => {
           refreshTracking();
         });

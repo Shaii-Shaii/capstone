@@ -6,6 +6,7 @@ import { AppCard } from '../../src/components/ui/AppCard';
 import { DonorHairSubmissionScreen } from '../../src/components/layout/DonorHairSubmissionScreen';
 import { DashboardLayout } from '../../src/components/layout/DashboardLayout';
 import { DonorTopBar } from '../../src/components/donor/DonorTopBar';
+import { DonorTutorialModal } from '../../src/components/donor/DonorTutorialModal';
 import { AppIcon } from '../../src/components/ui/AppIcon';
 import { GradientActionButton } from '../../src/components/ui/GradientActionButton';
 import { EmptyDataState } from '../../src/components/ui/EmptyDataState';
@@ -267,6 +268,7 @@ function HairAnalysisHomeModule({ initialTab = 'overview' }) {
   const [donationRequirement, setDonationRequirement] = React.useState(cachedHome?.donationRequirement || null);
   const [isFirstCheckPromptVisible, setIsFirstCheckPromptVisible] = React.useState(false);
   const [isProfileCompletionPromptVisible, setIsProfileCompletionPromptVisible] = React.useState(false);
+  const [isTutorialOpen, setIsTutorialOpen] = React.useState(false);
   const [firstCheckPromptDismissed, setFirstCheckPromptDismissed] = React.useState(false);
   const [activeHairAnalysisTab, setActiveHairAnalysisTab] = React.useState(
     initialTab === 'history' ? 'checkhair' : 'overview'
@@ -578,6 +580,8 @@ function HairAnalysisHomeModule({ initialTab = 'overview' }) {
             avatarInitials={avatarInitials}
             avatarUri={profile?.avatar_url || profile?.photo_path || ''}
             unreadCount={unreadCount}
+            showTutorialAction
+            onTutorialPress={() => setIsTutorialOpen(true)}
             onNotificationsPress={() => router.push('/donor/notifications')}
             onProfilePress={() => router.navigate('/profile')}
           />
@@ -594,6 +598,11 @@ function HairAnalysisHomeModule({ initialTab = 'overview' }) {
         <DonivraLoadingOverlay visible label="Loading hair analysis..." />
       ) : null}
     >
+      <DonorTutorialModal
+        visible={isTutorialOpen}
+        tabKey={activeHairAnalysisTab === 'checkhair' ? 'analysisCheckHair' : 'analysisOverview'}
+        onClose={() => setIsTutorialOpen(false)}
+      />
       <View style={styles.container}>
         {error ? (
           <View style={[styles.errorCard, { borderColor: roles.defaultCardBorder, backgroundColor: roles.pageBackground }]}>

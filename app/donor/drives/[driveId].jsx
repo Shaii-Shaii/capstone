@@ -542,6 +542,7 @@ export default function DonorDriveDetailRoute() {
     ongoingDonationMessage: '',
     hasHairScanLog: false,
     isAiEligible: false,
+    requiresPostDonationAnalysis: false,
     hairEligibilityMessage: '',
     hasSubmittedDonationForDrive: false,
   });
@@ -550,6 +551,7 @@ export default function DonorDriveDetailRoute() {
   const hasOngoingDonation = Boolean(donationFlowState.hasOngoingDonation);
   const hasHairScanLog = Boolean(donationFlowState.hasHairScanLog);
   const hasSubmittedDonationForDrive = Boolean(donationFlowState.hasSubmittedDonationForDrive);
+  const requiresPostDonationAnalysis = Boolean(donationFlowState.requiresPostDonationAnalysis);
   const ended = isDriveEnded(drive);
   const ongoingDonationMessage = donationFlowState.ongoingDonationMessage
     || 'You already have an ongoing donation. Please complete or wait for the current donation process to finish before starting a new one.';
@@ -626,15 +628,18 @@ export default function DonorDriveDetailRoute() {
       ongoingDonationMessage: donationModuleResult.ongoingDonationMessage || '',
       hasHairScanLog: Boolean(donationModuleResult.latestScreening && donationModuleResult.latestAnalysisEntry?.submission),
       isAiEligible: Boolean(donationModuleResult.isAiEligible),
-      hairEligibilityMessage: donationModuleResult.latestScreening
-        ? donationModuleResult.isAiEligible
-          ? 'Your hair is cleared for this drive.'
-          : (() => {
-              const reason = String(donationModuleResult.latestAiEligibility?.reason || '').trim();
-              const firstSentence = reason.split(/[.!]/)[0].trim();
-              return firstSentence ? `${firstSentence}.` : 'Follow the scan recommendations and try again.';
-            })()
-        : 'Complete a CheckHair scan to check eligibility.',
+      requiresPostDonationAnalysis: Boolean(donationModuleResult.requiresPostDonationAnalysis),
+      hairEligibilityMessage: donationModuleResult.requiresPostDonationAnalysis
+        ? 'Your previous donated hair has already been cut. Run Hair Analysis again so the app can verify if your current hair is long enough for another event donation.'
+        : donationModuleResult.latestScreening
+          ? donationModuleResult.isAiEligible
+            ? 'Your hair is cleared for this drive.'
+            : (() => {
+                const reason = String(donationModuleResult.latestAiEligibility?.reason || '').trim();
+                const firstSentence = reason.split(/[.!]/)[0].trim();
+                return firstSentence ? `${firstSentence}.` : 'Follow the scan recommendations and try again.';
+              })()
+          : 'Complete a CheckHair scan to check eligibility.',
       hasSubmittedDonationForDrive,
     });
     setIsLoading(false);
@@ -751,7 +756,7 @@ export default function DonorDriveDetailRoute() {
     if ((!hasHairScanLog || !donationFlowState.isAiEligible) && !drive.registration?.registration_id) {
       setFeedbackMessage(hairEligibilityMessage);
       setFeedbackVariant('info');
-      if (!hasHairScanLog) router.navigate('/donor/donations');
+      if (!hasHairScanLog || requiresPostDonationAnalysis) router.navigate('/donor/donations');
       return;
     }
 
@@ -787,6 +792,7 @@ export default function DonorDriveDetailRoute() {
       databaseUserId: profile.user_id,
       hasEligibleHairScan: Boolean(donationFlowState.isAiEligible),
       hasHairScanLog,
+      requiresPostDonationAnalysis,
     });
     setIsSubmittingRsvp(false);
 
@@ -815,6 +821,7 @@ export default function DonorDriveDetailRoute() {
     hairEligibilityMessage,
     hasOngoingDonation,
     hasHairScanLog,
+    requiresPostDonationAnalysis,
     donationFlowState.isAiEligible,
     hasSubmittedDonationForDrive,
     loadRegistrationCount,

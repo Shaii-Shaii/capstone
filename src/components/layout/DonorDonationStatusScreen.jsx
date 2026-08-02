@@ -15,6 +15,7 @@ import { AppInput } from '../ui/AppInput';
 import { StatusBanner } from '../ui/StatusBanner';
 import { DonivraLoadingOverlay } from '../ui/DonivraLoadingOverlay';
 import { DonorTopBar } from '../donor/DonorTopBar';
+import { DonorTutorialModal } from '../donor/DonorTutorialModal';
 import { donorDashboardNavItems } from '../../constants/dashboard';
 import { useAuth } from '../../providers/AuthProvider';
 import { useNotifications } from '../../hooks/useNotifications';
@@ -536,7 +537,7 @@ const formatDateTimeLabel = (dateString) => {
 
 const getMainIneligibilityReason = (eligibility = null) => {
   if (!eligibility) {
-    return 'Your latest hair scan is not eligible for donation yet.';
+    return 'Based on your latest hair analysis result, you are not eligible for donation yet.';
   }
 
   const currentLengthCm = Number(eligibility.normalized_length_cm);
@@ -548,14 +549,14 @@ const getMainIneligibilityReason = (eligibility = null) => {
     && minimumLengthCm > 0
     && currentLengthCm < minimumLengthCm
   ) {
-    return `Hair length is below the donation requirement. Minimum required length: ${(minimumLengthCm / 2.54).toFixed(0)} inches.`;
+    return `Based on your latest hair analysis result, estimated length is ${(currentLengthCm / 2.54).toFixed(1)} inches, below the ${(minimumLengthCm / 2.54).toFixed(1)} inch donation requirement.`;
   }
 
   const reasons = Array.isArray(eligibility.reasons) ? eligibility.reasons : [];
   const primaryReason = reasons[0] || eligibility.reason || '';
   const reasonText = String(primaryReason || '').trim();
   if (!reasonText) {
-    return 'Your latest hair scan is not eligible for donation yet.';
+    return 'Based on your latest hair analysis result, you are not eligible for donation yet.';
   }
 
   if (/chemically treated/i.test(reasonText)) return 'Chemically treated hair is not allowed by the current donation rules.';
@@ -563,7 +564,89 @@ const getMainIneligibilityReason = (eligibility = null) => {
   if (/bleached hair/i.test(reasonText)) return 'Bleached hair is not allowed by the current donation rules.';
   if (/rebonded hair/i.test(reasonText)) return 'Rebonded hair is not allowed by the current donation rules.';
 
-  return reasonText.split(/(?<=[.!?])\s+/)[0] || 'Your latest hair scan is not eligible for donation yet.';
+  const firstReason = reasonText.split(/(?<=[.!?])\s+/)[0];
+  return firstReason
+    ? `Based on your latest hair analysis result: ${firstReason}`
+    : 'Based on your latest hair analysis result, you are not eligible for donation yet.';
+};
+
+const AVERAGE_HAIR_GROWTH_INCHES_PER_MONTH = 0.5;
+
+const addCalendarMonths = (date, months = 0) => {
+  const nextDate = new Date(date);
+  nextDate.setMonth(nextDate.getMonth() + months);
+  return nextDate;
+};
+
+const formatMonthYearLabel = (value) => {
+  if (!value) return '';
+  try {
+    return new Intl.DateTimeFormat('en-PH', {
+      month: 'long',
+      year: 'numeric',
+    }).format(new Date(value));
+  } catch {
+    return '';
+  }
+};
+
+const buildDonationReadinessPrediction = ({
+  eligibility = null,
+  latestCompletedDonation = null,
+} = {}) => {
+  const currentLengthCm = Number(eligibility?.normalized_length_cm);
+  const minimumLengthCm = Number(eligibility?.minimum_length_cm);
+  const minimumLengthInches = Number.isFinite(minimumLengthCm) && minimumLengthCm > 0
+    ? minimumLengthCm / 2.54
+    : 0;
+
+  if (!minimumLengthInches) return '';
+
+  if (latestCompletedDonation?.completed_at) {
+    const monthsNeeded = Math.max(1, Math.ceil(minimumLengthInches / AVERAGE_HAIR_GROWTH_INCHES_PER_MONTH));
+    const predictedDate = addCalendarMonths(new Date(latestCompletedDonation.completed_at), monthsNeeded);
+    const predictedLabel = formatMonthYearLabel(predictedDate);
+    return predictedLabel
+      ? `Estimated next donation window: around ${predictedLabel}. Run Hair Analysis first to verify your actual length.`
+      : 'Run Hair Analysis first so the app can verify your current hair length after donation.';
+  }
+
+  if (
+    Number.isFinite(currentLengthCm)
+    && currentLengthCm > 0
+    && Number.isFinite(minimumLengthCm)
+    && minimumLengthCm > 0
+    && currentLengthCm < minimumLengthCm
+  ) {
+    const remainingInches = (minimumLengthCm - currentLengthCm) / 2.54;
+    const monthsNeeded = Math.max(1, Math.ceil(remainingInches / AVERAGE_HAIR_GROWTH_INCHES_PER_MONTH));
+    const predictedDate = addCalendarMonths(new Date(), monthsNeeded);
+    const predictedLabel = formatMonthYearLabel(predictedDate);
+    return predictedLabel
+      ? `Estimated ready window: around ${predictedLabel}, if hair grows about 0.5 inch per month.`
+      : '';
+  }
+
+  return '';
+};
+
+const buildHairCareGuidance = ({ screening = null, recommendations = [] } = {}) => {
+  const recommendationTexts = (recommendations || [])
+    .map((recommendation) => recommendation?.recommendation_text || recommendation?.text || '')
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+  const analysisRecommendation = String(screening?.improvement_recommendation || '').trim();
+  const guidance = [
+    analysisRecommendation ? `From latest hair analysis: ${analysisRecommendation}` : '',
+    ...recommendationTexts.slice(0, 2),
+  ].filter(Boolean);
+
+  if (guidance.length) return guidance.slice(0, 3);
+
+  return [
+    'Keep hair clean, dry, and gently handled while it grows.',
+    'Avoid bleaching, rebonding, and harsh treatments before the next scan.',
+  ];
 };
 
 const getDriveLocationLabel = (drive = null) => (
@@ -957,6 +1040,7 @@ function HairEligibilityPromptModal({
   onStartHairCheck,
   title = 'Ready for your first check?',
   message = 'Start your hair health journey with a quick analysis of your hair\'s current condition.',
+  detailItems = [],
   actionTitle = 'Start First Hair Check',
   iconName = 'chart-line',
 }) {
@@ -988,6 +1072,32 @@ function HairEligibilityPromptModal({
           </View>
           <Text style={[styles.hairEligibilityModalTitle, { color: roles.headingText }]}>{title}</Text>
           <Text style={[styles.hairEligibilityModalMessage, { color: roles.bodyText }]}>{message}</Text>
+          {detailItems.length ? (
+            <View style={styles.hairEligibilityDetailList}>
+              {detailItems.map((item, index) => (
+                <View
+                  key={`${item.title || 'detail'}-${index}`}
+                  style={[styles.hairEligibilityDetailRow, { backgroundColor: roles.supportCardBackground }]}
+                >
+                  <MaterialCommunityIcons
+                    name={item.icon || 'information-outline'}
+                    size={17}
+                    color={roles.primaryActionBackground}
+                  />
+                  <View style={styles.hairEligibilityDetailCopy}>
+                    {item.title ? (
+                      <Text style={[styles.hairEligibilityDetailTitle, { color: roles.headingText }]}>
+                        {item.title}
+                      </Text>
+                    ) : null}
+                    <Text style={[styles.hairEligibilityDetailText, { color: roles.bodyText }]}>
+                      {item.body}
+                    </Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+          ) : null}
           <GradientActionButton
             title={actionTitle}
             onPress={onStartHairCheck}
@@ -4156,6 +4266,7 @@ export function DonorDonationStatusScreen() {
   const [isSavingBundle, setIsSavingBundle] = React.useState(false);
   const [isCancelModalOpen, setIsCancelModalOpen] = React.useState(false);
   const [isHairEligibilityPromptOpen, setIsHairEligibilityPromptOpen] = React.useState(false);
+  const [isTutorialOpen, setIsTutorialOpen] = React.useState(false);
   const [isDonationMethodModalOpen, setIsDonationMethodModalOpen] = React.useState(false);
   const [selectedLogisticMethod, setSelectedLogisticMethod] = React.useState('');
   const [pendingWalkInSubmission, setPendingWalkInSubmission] = React.useState(null);
@@ -4349,6 +4460,15 @@ export function DonorDonationStatusScreen() {
   );
   const isAiEligible = Boolean(moduleData?.isAiEligible);
   const hasHairScanLog = Boolean(latestScreening && moduleData?.latestAnalysisEntry?.submission);
+  const requiresPostDonationAnalysis = Boolean(moduleData?.requiresPostDonationAnalysis);
+  const donationReadinessPrediction = buildDonationReadinessPrediction({
+    eligibility: moduleData?.latestAiEligibility || null,
+    latestCompletedDonation: moduleData?.latestCompletedDonation || null,
+  });
+  const hairCareGuidance = buildHairCareGuidance({
+    screening: latestScreening,
+    recommendations: moduleData?.latestRecommendations || [],
+  });
   const hairEligibilityMessage = latestScreening
     ? isAiEligible
       ? 'Your latest eligible hair scan will be used for this donation.'
@@ -4356,10 +4476,28 @@ export function DonorDonationStatusScreen() {
     : 'Scan your hair first so the system can confirm if you are eligible to join this donation event.';
   const logisticEligibilityPromptTitle = !hasHairScanLog
     ? 'Hair Check Required'
-    : 'Not Eligible for Donation Yet';
+    : requiresPostDonationAnalysis
+      ? 'New Hair Analysis Required'
+      : 'Not Eligible for Donation Yet';
   const logisticEligibilityPromptMessage = !hasHairScanLog
-    ? 'Complete Hair Check in Analysis first so we can confirm if your hair is eligible for a logistic donation.'
-    : `${getMainIneligibilityReason(moduleData?.latestAiEligibility)} Open Analysis to review your latest result.`;
+    ? 'Complete Hair Check in Analysis first so we can confirm if your hair is eligible for donation.'
+    : requiresPostDonationAnalysis
+      ? 'Your previous donated hair has already been cut. Scan again so the app can verify your current hair length before another donation.'
+      : `${getMainIneligibilityReason(moduleData?.latestAiEligibility)} Open Analysis to review your latest result.`;
+  const logisticEligibilityPromptDetails = [
+    donationReadinessPrediction
+      ? {
+          icon: 'calendar-clock-outline',
+          title: 'Expected availability',
+          body: donationReadinessPrediction,
+        }
+      : null,
+    ...hairCareGuidance.map((body, index) => ({
+      icon: index === 0 ? 'hair-dryer-outline' : 'leaf',
+      title: index === 0 ? 'Hair care reminder' : '',
+      body,
+    })),
+  ].filter(Boolean);
   const hasOngoingDonation = Boolean(moduleData?.hasOngoingDonation);
   const effectiveDonationModuleScreen = donationModuleScreen;
   const independentQrState = moduleData?.independentQrState || null;
@@ -4625,9 +4763,9 @@ export function DonorDonationStatusScreen() {
         .filter(Boolean)
         .map((drive) => [Number(drive?.donation_drive_id), drive])
     );
-    const submissionSource = Array.isArray(moduleData?.activeSubmissions) && moduleData.activeSubmissions.length
+    const submissionSource = Array.isArray(moduleData?.activeSubmissions)
       ? moduleData.activeSubmissions
-      : (moduleData?.latestSubmission ? [moduleData.latestSubmission] : []);
+      : [];
     const submissionGroups = new Map();
 
     submissionSource
@@ -4762,7 +4900,6 @@ export function DonorDonationStatusScreen() {
     certificate,
     donationDrives,
     moduleData?.activeSubmissions,
-    moduleData?.latestSubmission,
     moduleData?.logistics,
     moduleData?.appointment,
     moduleData?.submissionFlowRecords,
@@ -5041,7 +5178,7 @@ export function DonorDonationStatusScreen() {
 
   const handleOpenManualModal = React.useCallback(() => {
     if (!isProfileComplete) { router.navigate('/profile'); return; }
-    if (!selectedDriveForDonation && (!hasHairScanLog || !isAiEligible)) {
+    if (!hasHairScanLog || !isAiEligible) {
       setIsHairEligibilityPromptOpen(true);
       return;
     }
@@ -5058,7 +5195,7 @@ export function DonorDonationStatusScreen() {
     setManualPhoto(null);
     setManualFeedback({ message: '', variant: 'info' });
     setIsManualModalOpen(true);
-  }, [hasHairScanLog, isAiEligible, isProfileComplete, moduleData?.latestScreening, router, selectedDriveForDonation]);
+  }, [hasHairScanLog, isAiEligible, isProfileComplete, moduleData?.latestScreening, router]);
 
   const handleAddLogisticDonation = React.useCallback(async () => {
     const freshModuleData = await loadModuleData({ silent: true });
@@ -5852,6 +5989,7 @@ export function DonorDonationStatusScreen() {
       databaseUserId: profile.user_id,
       hasEligibleHairScan: isAiEligible,
       hasHairScanLog,
+      requiresPostDonationAnalysis,
     });
     setIsGeneratingEventRsvp(false);
 
@@ -5870,7 +6008,7 @@ export function DonorDonationStatusScreen() {
         : 'RSVP generated. Show your RSVP QR at check-in. Donation submission unlocks after staff marks you Present.',
       variant: 'success',
     });
-  }, [hairEligibilityMessage, hasHairScanLog, hasOngoingDonation, isAiEligible, isGeneratingEventRsvp, profile?.user_id, refreshDriveRegistrationFromTable, selectedDriveForDonation]);
+  }, [hairEligibilityMessage, hasHairScanLog, hasOngoingDonation, isAiEligible, isGeneratingEventRsvp, profile?.user_id, refreshDriveRegistrationFromTable, requiresPostDonationAnalysis, selectedDriveForDonation]);
 
   React.useEffect(() => {
     if (donationModuleScreen !== DONATION_MODULE_SCREEN.EVENT_DETAILS) return;
@@ -6043,6 +6181,15 @@ export function DonorDonationStatusScreen() {
   }, []);
 
   const handleConfirmGenerateDonationQr = React.useCallback(async () => {
+    if (requiresPostDonationAnalysis || !isAiEligible) {
+      setModuleFeedback({
+        message: hairEligibilityMessage,
+        variant: 'info',
+      });
+      setIsSubmitPreviewOpen(false);
+      return false;
+    }
+
     const itemsToSubmit = activeDonationQrItems.length
       ? activeDonationQrItems
       : (moduleData?.latestSubmission ? [{
@@ -6176,10 +6323,13 @@ export function DonorDonationStatusScreen() {
   }, [
     activeDonationQrItems,
     activeDonationQrPayload,
+    hairEligibilityMessage,
+    isAiEligible,
     loadModuleData,
     moduleData?.latestDetail,
     moduleData?.latestSubmission,
     profile?.user_id,
+    requiresPostDonationAnalysis,
     selectedRecipient?.patient?.patient_id,
     selectedRecipient?.type,
     user?.id,
@@ -6593,14 +6743,24 @@ export function DonorDonationStatusScreen() {
               avatarInitials={avatarInitials}
               avatarUri={profile?.avatar_url || profile?.photo_path || ''}
               unreadCount={unreadCount}
+              showRefreshAction
+              showTutorialAction
+              onRefreshPress={handleRefreshModuleData}
+              onTutorialPress={() => setIsTutorialOpen(true)}
               onNotificationsPress={() => router.navigate('/donor/notifications')}
               onProfilePress={() => router.navigate('/profile')}
               onLogoutPress={logout}
               isLoggingOut={isLoggingOut}
+              isRefreshing={isRefreshing}
             />
           </View>
         )}
       >
+        <DonorTutorialModal
+          visible={isTutorialOpen}
+          tabKey={activeDonationTabKey === 'logistic' ? 'donateLogistic' : 'donateHairEvent'}
+          onClose={() => setIsTutorialOpen(false)}
+        />
         <ManualEntryModal
           visible
           form={manualForm}
@@ -6651,14 +6811,24 @@ export function DonorDonationStatusScreen() {
             avatarInitials={avatarInitials}
             avatarUri={profile?.avatar_url || profile?.photo_path || ''}
             unreadCount={unreadCount}
+            showRefreshAction
+            showTutorialAction
+            onRefreshPress={handleRefreshModuleData}
+            onTutorialPress={() => setIsTutorialOpen(true)}
             onNotificationsPress={() => router.navigate('/donor/notifications')}
             onProfilePress={() => router.navigate('/profile')}
             onLogoutPress={logout}
             isLoggingOut={isLoggingOut}
+            isRefreshing={isRefreshing}
           />
         </View>
       )}
     >
+      <DonorTutorialModal
+        visible={isTutorialOpen}
+        tabKey={activeDonationTabKey === 'logistic' ? 'donateLogistic' : 'donateHairEvent'}
+        onClose={() => setIsTutorialOpen(false)}
+      />
       {screenError ? (
         <StatusBanner
           message={screenError}
@@ -6853,6 +7023,7 @@ export function DonorDonationStatusScreen() {
         roles={roles}
         title={logisticEligibilityPromptTitle}
         message={logisticEligibilityPromptMessage}
+        detailItems={logisticEligibilityPromptDetails}
         actionTitle="Go to Analysis"
         onClose={() => setIsHairEligibilityPromptOpen(false)}
         onStartHairCheck={handleStartHairCheckFromPrompt}
@@ -9530,6 +9701,32 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.semantic.bodyMd,
     textAlign: 'center',
     lineHeight: theme.typography.semantic.bodyMd * theme.typography.lineHeights.relaxed,
+  },
+  hairEligibilityDetailList: {
+    width: '100%',
+    gap: theme.spacing.sm,
+  },
+  hairEligibilityDetailRow: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.spacing.sm,
+    borderRadius: 14,
+    padding: theme.spacing.md,
+  },
+  hairEligibilityDetailCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  hairEligibilityDetailTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.bold,
+  },
+  hairEligibilityDetailText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
   },
   hairEligibilityModalAction: {
     marginTop: theme.spacing.xs,

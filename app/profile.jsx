@@ -19,6 +19,7 @@ import { SectionTitleRow } from '../src/components/ui/SectionTitleRow';
 import { DashboardSectionHeader } from '../src/components/ui/DashboardSectionHeader';
 import { AddressOptionSheet, AddressSelectField, SignupAddressSection } from '../src/components/auth/SignupAddressSection';
 import { DonorTopBar } from '../src/components/donor/DonorTopBar';
+import { DonorTutorialModal } from '../src/components/donor/DonorTutorialModal';
 import { useProfileActions } from '../src/hooks/useProfileActions';
 import { useNotifications } from '../src/hooks/useNotifications';
 import { useAuth } from '../src/providers/AuthProvider';
@@ -274,6 +275,7 @@ export default function ProfileScreen() {
 
   const [mode, setMode] = useState('view');
   const [feedback, setFeedback] = useState(null);
+  const [isTutorialOpen, setIsTutorialOpen] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [passwordSuccess, setPasswordSuccess] = useState(false);
   const [activeProfilePicker, setActiveProfilePicker] = useState('');
@@ -1089,6 +1091,8 @@ export default function ProfileScreen() {
             <DonorTopBar
               title={resolvedTheme?.brandName || 'Donivra'}
               unreadCount={unreadCount}
+              showTutorialAction={role === 'donor'}
+              onTutorialPress={() => setIsTutorialOpen(true)}
               showProfileAction={true}
               showLogoutAction={false}
               onNotificationsPress={() => router.navigate(role === 'donor' ? '/donor/notifications' : '/patient/notifications')}
@@ -1097,6 +1101,13 @@ export default function ProfileScreen() {
           </View>
         )}
       >
+        {role === 'donor' ? (
+          <DonorTutorialModal
+            visible={isTutorialOpen}
+            tabKey="profile"
+            onClose={() => setIsTutorialOpen(false)}
+          />
+        ) : null}
         {role === 'donor' ? renderDonorProfileContent() : renderPatientProfileContent()}
 
         <Modal transparent visible={isPopupVisible} animationType="fade" onRequestClose={handleModalClose}>

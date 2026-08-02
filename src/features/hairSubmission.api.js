@@ -205,6 +205,55 @@ const logHairQuery = (source, extras = {}) => {
   });
 };
 
+const waitFor = (ms) => new Promise((resolve) => {
+  setTimeout(resolve, ms);
+});
+
+const isOptionalRelationReadUnavailableError = (error) => {
+  const normalizedMessage = String(error?.message || '').toLowerCase();
+  const normalizedCode = String(error?.code || '').trim();
+
+  return (
+    normalizedCode === '42P01'
+    || normalizedCode === 'PGRST002'
+    || normalizedCode === 'PGRST205'
+    || normalizedMessage.includes('does not exist')
+    || normalizedMessage.includes('could not find the table')
+    || normalizedMessage.includes('schema cache')
+  );
+};
+
+const readOptionalHairSubmissionRelation = async ({
+  queryFactory,
+  scope,
+  table,
+  extras = {},
+  retryDelayMs = 350,
+}) => {
+  const firstResult = await queryFactory();
+
+  if (!firstResult.error || !isOptionalRelationReadUnavailableError(firstResult.error)) {
+    return firstResult;
+  }
+
+  if (firstResult.error?.code === 'PGRST002') {
+    await waitFor(retryDelayMs);
+    const retryResult = await queryFactory();
+    if (!retryResult.error || !isOptionalRelationReadUnavailableError(retryResult.error)) {
+      return retryResult;
+    }
+  }
+
+  logAppEvent(scope, 'Optional hair submission relation could not be read. Continuing with empty related data.', {
+    table,
+    phase: 'read',
+    errorCode: firstResult.error?.code || null,
+    ...extras,
+  }, 'warn');
+
+  return { data: [], error: null };
+};
+
 const getPhilippineDatabaseTimestamp = () => {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Manila',
@@ -985,14 +1034,47 @@ export const fetchLatestLogisticsSettings = async () => {
 
 export const fetchUpcomingHaircutSchedules = async (limit = 3) => {
   logHairQuery('fetchUpcomingHaircutSchedules', {
-    table: null,
+    table: salonOperatingHoursTable,
     phase: 'read',
-    columns: [],
-    skipped: 'Haircut_Schedules is not present in the provided schema.',
+    columns: [
+      'Operating_Hours_ID',
+      'Day_Group',
+      'Is_Open',
+      'Opening_Time',
+      'Closing_Time',
+      'Break_Start_Time',
+      'Break_End_Time',
+      'Appointment_Duration_Minutes',
+      'Buffer_Minutes',
+      'Capacity_Per_Slot',
+      'Minimum_Booking_Notice_Days',
+      'Maximum_Booking_Days',
+    ],
     limit,
   });
 
-  return { data: [], error: null };
+  const result = await supabase
+    .from(salonOperatingHoursTable)
+    .select(`
+      schedule_id:Operating_Hours_ID,
+      day_group:Day_Group,
+      is_open:Is_Open,
+      opening_time:Opening_Time,
+      closing_time:Closing_Time,
+      break_start_time:Break_Start_Time,
+      break_end_time:Break_End_Time,
+      appointment_duration_minutes:Appointment_Duration_Minutes,
+      buffer_minutes:Buffer_Minutes,
+      capacity_per_slot:Capacity_Per_Slot,
+      minimum_booking_notice_days:Minimum_Booking_Notice_Days,
+      maximum_booking_days:Maximum_Booking_Days,
+      updated_at:Updated_At
+    `)
+    .eq('Is_Open', true)
+    .order('Day_Group', { ascending: true })
+    .limit(Math.max(1, Number(limit) || 3));
+
+  return { data: result.data || [], error: result.error };
 };
 
 export const fetchLatestHaircutReservationByUserId = async (userId) => {
@@ -1002,14 +1084,41 @@ export const fetchLatestHaircutReservationByUserId = async (userId) => {
   }
 
   logHairQuery('fetchLatestHaircutReservationByUserId', {
-    table: null,
+    table: salonDonationAppointmentsTable,
     phase: 'read',
     filters: { User_ID: resolvedUserId.userId },
-    columns: [],
-    skipped: 'Haircut_Reservations is not present in the provided schema.',
+    columns: [
+      'Appointment_ID',
+      'User_ID',
+      'Hair_Submission_ID',
+      'Appointment_Start_At',
+      'Appointment_End_At',
+      'Status',
+      'Created_At',
+      'Updated_At',
+    ],
   });
 
-  return { data: null, error: null };
+  const result = await supabase
+    .from(salonDonationAppointmentsTable)
+    .select(`
+      reservation_id:Appointment_ID,
+      appointment_id:Appointment_ID,
+      user_id:User_ID,
+      submission_id:Hair_Submission_ID,
+      appointment_start_at:Appointment_Start_At,
+      appointment_end_at:Appointment_End_At,
+      status:Status,
+      created_at:Created_At,
+      updated_at:Updated_At
+    `)
+    .eq('User_ID', resolvedUserId.userId)
+    .in('Status', ['Confirmed', 'Rescheduled', 'Checked In'])
+    .order('Appointment_Start_At', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  return { data: result.data || null, error: result.error };
 };
 
 export const fetchLatestDonationCertificateByUserId = async (userId) => {
@@ -1480,11 +1589,16 @@ export const fetchHairSubmissionsByUserId = async (userId, limit = 10) => {
 
   const submissionIds = result.data.map((row) => row?.submission_id).filter(Boolean);
 
-  const screeningsResult = await supabase
-    .from(aiScreeningsTable)
-    .select(aiScreeningSelect)
-    .in('Submission_ID', submissionIds)
-    .order('Created_At', { ascending: false });
+  const screeningsResult = await readOptionalHairSubmissionRelation({
+    queryFactory: () => supabase
+      .from(aiScreeningsTable)
+      .select(aiScreeningSelect)
+      .in('Submission_ID', submissionIds)
+      .order('Created_At', { ascending: false }),
+    scope: 'hair_submission.query.fetchHairSubmissionsByUserId.screenings.optional_unavailable',
+    table: aiScreeningsTable,
+    extras: { submissionIds },
+  });
 
   if (screeningsResult.error) {
     logAppError('hair_submission.query.fetchHairSubmissionsByUserId.screenings', screeningsResult.error, {
@@ -1502,11 +1616,16 @@ export const fetchHairSubmissionsByUserId = async (userId, limit = 10) => {
     screeningsBySubmissionId.set(screening.submission_id, currentRows);
   });
 
-  const detailsResult = await supabase
-    .from(hairSubmissionDetailsTable)
-    .select(hairSubmissionDetailSelect)
-    .in('Submission_ID', submissionIds)
-    .order('Created_At', { ascending: false });
+  const detailsResult = await readOptionalHairSubmissionRelation({
+    queryFactory: () => supabase
+      .from(hairSubmissionDetailsTable)
+      .select(hairSubmissionDetailSelect)
+      .in('Submission_ID', submissionIds)
+      .order('Created_At', { ascending: false }),
+    scope: 'hair_submission.query.fetchHairSubmissionsByUserId.details.optional_unavailable',
+    table: hairSubmissionDetailsTable,
+    extras: { submissionIds },
+  });
 
   if (detailsResult.error) {
     logAppError('hair_submission.query.fetchHairSubmissionsByUserId.details', detailsResult.error, {
@@ -1520,11 +1639,16 @@ export const fetchHairSubmissionsByUserId = async (userId, limit = 10) => {
   const detailIds = normalizedDetails.map((detail) => detail.submission_detail_id).filter(Boolean);
 
   const imagesResult = detailIds.length
-    ? await supabase
-        .from(hairSubmissionImagesTable)
-        .select(hairSubmissionImageSelect)
-        .in('Submission_Detail_ID', detailIds)
-        .order('Uploaded_At', { ascending: false })
+    ? await readOptionalHairSubmissionRelation({
+        queryFactory: () => supabase
+          .from(hairSubmissionImagesTable)
+          .select(hairSubmissionImageSelect)
+          .in('Submission_Detail_ID', detailIds)
+          .order('Uploaded_At', { ascending: false }),
+        scope: 'hair_submission.query.fetchHairSubmissionsByUserId.images.optional_unavailable',
+        table: hairSubmissionImagesTable,
+        extras: { detailIds },
+      })
     : { data: [], error: null };
 
   if (imagesResult.error) {
@@ -1554,11 +1678,16 @@ export const fetchHairSubmissionsByUserId = async (userId, limit = 10) => {
     detailsBySubmissionId.set(detail.submission_id, currentRows);
   });
 
-  const recommendationsResult = await supabase
-    .from(donorRecommendationsTable)
-    .select(donorRecommendationSelect)
-    .in('Submission_ID', submissionIds)
-    .order('Priority_Order', { ascending: true });
+  const recommendationsResult = await readOptionalHairSubmissionRelation({
+    queryFactory: () => supabase
+      .from(donorRecommendationsTable)
+      .select(donorRecommendationSelect)
+      .in('Submission_ID', submissionIds)
+      .order('Priority_Order', { ascending: true }),
+    scope: 'hair_submission.query.fetchHairSubmissionsByUserId.recommendations.optional_unavailable',
+    table: donorRecommendationsTable,
+    extras: { submissionIds },
+  });
 
   if (recommendationsResult.error) {
     logAppError('hair_submission.query.fetchHairSubmissionsByUserId.recommendations', recommendationsResult.error, {
@@ -1809,7 +1938,7 @@ export const upsertSalonDonationAppointment = async ({
     Screening_Answers: screeningAnswers || {},
     Donor_Notes: donorNotes || null,
     Booking_Source: 'Mobile',
-    Updated_At: new Date().toISOString(),
+    Updated_At: getPhilippineDatabaseTimestamp(),
   };
 
   const query = resolvedAppointmentId
@@ -1861,7 +1990,24 @@ export const fetchSalonDonationAppointmentBySubmissionId = async (submissionId) 
 export const fetchSalonOperatingHours = async () => {
   const result = await supabase
     .from(salonOperatingHoursTable)
-    .select('*');
+    .select(`
+      Operating_Hours_ID,
+      Day_Group,
+      Is_Open,
+      Opening_Time,
+      Closing_Time,
+      Break_Start_Time,
+      Break_End_Time,
+      Appointment_Duration_Minutes,
+      Buffer_Minutes,
+      Late_Grace_Minutes,
+      Capacity_Per_Slot,
+      Minimum_Booking_Notice_Days,
+      Maximum_Booking_Days,
+      Updated_By,
+      Updated_At
+    `)
+    .order('Day_Group', { ascending: true });
 
   return {
     data: result.data || [],
@@ -1869,10 +2015,29 @@ export const fetchSalonOperatingHours = async () => {
   };
 };
 
-export const fetchSalonScheduleOverrides = async () => {
-  const result = await supabase
+export const fetchSalonScheduleOverrides = async ({ startDate = '', endDate = '' } = {}) => {
+  let query = supabase
     .from(salonScheduleOverridesTable)
-    .select('*');
+    .select(`
+      Schedule_Override_ID,
+      Override_Date,
+      Is_Closed,
+      Opening_Time,
+      Closing_Time,
+      Break_Start_Time,
+      Break_End_Time,
+      Capacity_Per_Slot,
+      Reason,
+      Created_By,
+      Created_At,
+      Updated_By,
+      Updated_At
+    `);
+
+  if (startDate) query = query.gte('Override_Date', startDate);
+  if (endDate) query = query.lte('Override_Date', endDate);
+
+  const result = await query.order('Override_Date', { ascending: true });
 
   return {
     data: result.data || [],
@@ -1883,7 +2048,19 @@ export const fetchSalonScheduleOverrides = async () => {
 export const fetchSalonDonationAppointmentsInRange = async ({ startAt = '', endAt = '' } = {}) => {
   let query = supabase
     .from(salonDonationAppointmentsTable)
-    .select('*');
+    .select(`
+      Appointment_ID,
+      User_ID,
+      Appointment_Start_At,
+      Appointment_End_At,
+      Status,
+      Hair_Submission_ID,
+      Checked_In_At,
+      Completed_At,
+      Cancelled_At,
+      Created_At,
+      Updated_At
+    `);
 
   if (startAt) query = query.gte('Appointment_Start_At', startAt);
   if (endAt) query = query.lt('Appointment_Start_At', endAt);
@@ -1902,8 +2079,20 @@ export const fetchSalonAppointmentStatusHistoryByAppointmentIds = async (appoint
 
   const result = await supabase
     .from(salonAppointmentStatusHistoryTable)
-    .select('*')
-    .in('Appointment_ID', ids);
+    .select(`
+      Status_History_ID,
+      Appointment_ID,
+      From_Status,
+      To_Status,
+      Change_Type,
+      Old_Start_At,
+      New_Start_At,
+      Notes,
+      Changed_By,
+      Changed_At
+    `)
+    .in('Appointment_ID', ids)
+    .order('Changed_At', { ascending: false });
 
   return {
     data: result.data || [],

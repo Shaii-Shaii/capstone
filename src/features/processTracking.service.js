@@ -1,9 +1,7 @@
 import {
-  fetchHairBundleTrackingHistory,
   fetchHairSubmissionLogisticsBySubmissionId,
   fetchLatestHairSubmissionByUserId,
   fetchLatestHairSubmissionDetailBySubmissionId,
-  fetchLatestQaAssessmentBySubmissionDetailId,
 } from './hairSubmission.api';
 import {
   fetchLatestWigAllocationByPatientDetailsId,
@@ -56,7 +54,8 @@ const getStepState = ({ index, currentIndex, highlightedIndex = null, hasData = 
   return 'upcoming';
 };
 
-const buildDonorTracker = ({ submission, detail, logistics, qaAssessment, history }) => {
+// eslint-disable-next-line no-unused-vars
+const buildLegacyDonorTracker = ({ submission, detail, logistics, qaAssessment = null, history = [] }) => {
   if (!submission?.submission_id) {
     return {
       tracker: null,
@@ -64,24 +63,25 @@ const buildDonorTracker = ({ submission, detail, logistics, qaAssessment, histor
     };
   }
 
-  const latestHistory = history?.[0] || null;
-  const latestStatus = latestHistory?.status
-    || qaAssessment?.assessment_result
-    || logistics?.shipment_status
+  const latestStatus = logistics?.shipment_status
     || detail?.status
     || submission?.status;
 
+  const latestHistory = history?.[0] || null;
   const qaNeedsAttention = ['failed', 'rejected'].some((token) =>
     String(qaAssessment?.assessment_result || '').toLowerCase().includes(token)
   );
 
-  const currentIndex = latestHistory
-    ? 3
-    : qaAssessment
-      ? 2
-      : logistics
-        ? 1
-        : 0;
+  const normalizedSubmissionStatus = String(submission?.status || '')
+    .toLowerCase()
+    .replace(/[_-]+/g, ' ');
+  const hasWigStage = [
+    'wig in production',
+    'wiginproduction',
+    'wig created',
+    'wigcreated',
+  ].some((token) => normalizedSubmissionStatus.includes(token));
+  const currentIndex = hasWigStage ? 3 : logistics ? 2 : detail ? 1 : 0;
 
   const steps = [
     {
@@ -190,6 +190,127 @@ const buildDonorTracker = ({ submission, detail, logistics, qaAssessment, histor
           || logistics?.pickup_approved_at
           || logistics?.pickup_scheduled_at
           || logistics?.created_at
+          || submission.updated_at
+          || submission.created_at
+        )}`,
+      },
+      steps,
+      events,
+      watch: {
+        submissionId: submission.submission_id,
+        submissionDetailId: detail?.submission_detail_id || null,
+      },
+    },
+    error: null,
+  };
+};
+
+const buildDonorTracker = ({ submission, detail, logistics }) => {
+  if (!submission?.submission_id) {
+    return {
+      tracker: null,
+      error: null,
+    };
+  }
+
+  const normalizedSubmissionStatus = String(submission?.status || '')
+    .toLowerCase()
+    .replace(/[_-]+/g, ' ');
+  const hasWigStage = [
+    'wig in production',
+    'wiginproduction',
+    'wig created',
+    'wigcreated',
+  ].some((token) => normalizedSubmissionStatus.includes(token));
+  const detailNeedsAttention = ['failed', 'rejected'].some((token) =>
+    String(detail?.status || '').toLowerCase().includes(token)
+  );
+  const latestStatus = logistics?.shipment_status || detail?.status || submission?.status;
+  const currentIndex = hasWigStage ? 3 : logistics ? 2 : detail ? 1 : 0;
+
+  const steps = [
+    {
+      key: 'submission',
+      title: 'Submission received',
+      label: normalizeStatusLabel(submission.status, 'Submitted'),
+      description: `Hair submission ${submission.donation_reference || 'record'} was created on ${formatDateTime(submission.created_at)}.`,
+      state: getStepState({ index: 0, currentIndex, hasData: Boolean(submission) }),
+    },
+    {
+      key: 'details',
+      title: 'Donation details reviewed',
+      label: normalizeStatusLabel(detail?.status, 'Pending review'),
+      description: detail?.detail_notes || detail?.rejection_reason || 'Hair details will update after staff review.',
+      state: getStepState({
+        index: 1,
+        currentIndex,
+        highlightedIndex: detailNeedsAttention ? 1 : null,
+        hasData: Boolean(detail),
+      }),
+    },
+    {
+      key: 'logistics',
+      title: 'Logistics and transport',
+      label: normalizeStatusLabel(logistics?.shipment_status || logistics?.logistics_type, 'Waiting for logistics'),
+      description: logistics?.notes || 'Pickup, courier, or drop-off details will appear here once logistics is scheduled.',
+      state: getStepState({ index: 2, currentIndex, hasData: Boolean(logistics) }),
+    },
+    {
+      key: 'wig-stage',
+      title: 'Wig production',
+      label: normalizeStatusLabel(submission?.status, 'Waiting for production'),
+      description: hasWigStage
+        ? 'The donation has moved into the wig production stage.'
+        : 'This step updates when staff moves the donation into wig production.',
+      state: getStepState({ index: 3, currentIndex, hasData: hasWigStage }),
+    },
+  ];
+
+  const events = [
+    {
+      key: `submission-${submission.submission_id}`,
+      title: 'Hair submission created',
+      description: `Donation reference ${submission.donation_reference || 'not available'}`,
+      timestamp: formatDateTime(submission.created_at),
+      badge: normalizeStatusLabel(submission.status, 'Submitted'),
+    },
+    detail
+      ? {
+          key: `detail-${detail.submission_detail_id}`,
+          title: 'Donation details updated',
+          description: detail.detail_notes || detail.rejection_reason || 'Hair submission details were reviewed.',
+          timestamp: formatDateTime(detail.updated_at || detail.created_at),
+          badge: normalizeStatusLabel(detail.status, 'Reviewed'),
+        }
+      : null,
+    logistics
+      ? {
+          key: `logistics-${logistics.submission_logistics_id}`,
+          title: logistics.logistics_type
+            ? `${normalizeStatusLabel(logistics.logistics_type)} arranged`
+            : 'Logistics updated',
+          description: logistics.notes || 'Transport details were added for this donation.',
+          timestamp: formatDateTime(logistics.received_at || logistics.created_at),
+          badge: normalizeStatusLabel(logistics.shipment_status || logistics.logistics_type, 'In transit'),
+        }
+      : null,
+  ].filter(Boolean);
+
+  return {
+    tracker: {
+      title: 'Donation Status',
+      subtitle: 'Track the latest donation progress from submission to staff scanning updates.',
+      emptyTitle: 'No donation tracking yet',
+      emptyDescription: 'Your latest hair submission will appear here after you save it.',
+      summary: {
+        label: normalizeStatusLabel(latestStatus, 'Submitted'),
+        tone: getToneFromStatus(latestStatus || ''),
+        referenceLabel: 'Donation reference',
+        referenceValue: submission.donation_reference || 'Not available',
+        helperText: `Last updated ${formatDateTime(
+          logistics?.received_at
+          || logistics?.created_at
+          || detail?.updated_at
           || submission.updated_at
           || submission.created_at
         )}`,
@@ -430,23 +551,14 @@ export const getProcessTracking = async ({ role, userId }) => {
         throw new Error(detailError.message || 'Unable to load donor tracking details.');
       }
 
-      const [{ data: logistics, error: logisticsError }, { data: qaAssessment, error: qaError }, { data: history, error: historyError }] =
-        await Promise.all([
-          fetchHairSubmissionLogisticsBySubmissionId(submission.submission_id),
-          detail?.submission_detail_id ? fetchLatestQaAssessmentBySubmissionDetailId(detail.submission_detail_id) : Promise.resolve({ data: null, error: null }),
-          fetchHairBundleTrackingHistory({ submissionId: submission.submission_id, submissionDetailId: detail?.submission_detail_id }),
-        ]);
+      const { data: logistics, error: logisticsError } = await fetchHairSubmissionLogisticsBySubmissionId(submission.submission_id);
 
       if (logisticsError) throw new Error(logisticsError.message || 'Unable to load logistics updates.');
-      if (qaError) throw new Error(qaError.message || 'Unable to load QA updates.');
-      if (historyError) throw new Error(historyError.message || 'Unable to load bundle tracking history.');
 
       return buildDonorTracker({
         submission,
         detail,
         logistics,
-        qaAssessment,
-        history: history || [],
       });
     }
 

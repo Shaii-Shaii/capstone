@@ -16,13 +16,18 @@ export function DonorTopBar({
   showFeedbackAction,
   showProfileAction = true,
   showNotificationsAction = true,
+  showRefreshAction = false,
+  showTutorialAction = false,
   showLogoutAction = false,
   onBackPress,
   onFeedbackPress,
+  onRefreshPress,
+  onTutorialPress,
   onProfilePress,
   onNotificationsPress,
   onLogoutPress,
   isLoggingOut = false,
+  isRefreshing = false,
   style,
 }) {
   const { resolvedTheme } = useAuth();
@@ -128,6 +133,30 @@ export function DonorTopBar({
               style={styles.headerIconButton}
             >
               <AppIcon name="feedback" size="md" state="default" color={headerIconColor} />
+            </Pressable>
+          ) : null}
+
+          {showRefreshAction ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Refresh screen"
+              onPress={onRefreshPress}
+              disabled={!onRefreshPress || isRefreshing}
+              style={styles.headerIconButton}
+            >
+              <AppIcon name="refresh" size="md" state="default" color={headerIconColor} />
+            </Pressable>
+          ) : null}
+
+          {showTutorialAction ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Open tutorial guide"
+              onPress={onTutorialPress}
+              disabled={!onTutorialPress}
+              style={styles.headerIconButton}
+            >
+              <AppIcon name="tutorial" size="md" state="default" color={headerIconColor} />
             </Pressable>
           ) : null}
 
