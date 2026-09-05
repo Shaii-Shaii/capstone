@@ -37,7 +37,6 @@ import {
   fetchDonationCertificatesByUserId,
   fetchHairSubmissionProgressSummariesByUserId,
   hasDonationFlowProgress,
-  isCompletedDonationSubmission,
 } from '../src/features/hairSubmission.api';
 import {
   fetchActiveGuardianConsent,
@@ -425,13 +424,13 @@ export default function ProfileScreen() {
           .filter((submission) => submission?.submission_id)
           .map((submission) => [Number(submission.submission_id), submission])
       );
-      const completedCertificates = (certificatesResult.data || []).filter((certificate) => (
-        isCompletedDonationSubmission(submissionsById.get(Number(certificate?.submission_id)))
+      const issuedCertificates = (certificatesResult.data || []).filter((certificate) => (
+        submissionsById.has(Number(certificate?.submission_id))
       ));
 
       setDonorStats({
         donations: (submissionsResult.data || []).filter((submission) => hasDonationFlowProgress(submission)).length,
-        achievements: completedCertificates.length,
+        achievements: issuedCertificates.length,
       });
     };
 

@@ -391,20 +391,13 @@ const resolveSelectedDonationMode = (value = '') => (
   hairDonationModeOptions.find((item) => item.value === value) || null
 );
 
-const buildLogisticsRowPayload = ({ submissionId, donationMode, logisticsSettings }) => {
-  if (!donationMode?.logistics_type || !['shipping', 'pickup'].includes(donationMode.value)) return null;
+const buildLogisticsRowPayload = ({ submissionId, donationMode }) => {
+  if (!donationMode?.logistics_type || donationMode.value !== 'shipping') return null;
 
   const notes = [];
   if (donationMode.value === 'shipping') {
     notes.push('Donor selected logistics / shipping after AI screening.');
   }
-  if (donationMode.value === 'pickup') {
-    notes.push('Donor requested pickup after AI screening.');
-    if (logisticsSettings?.destination_name) {
-      notes.push(`Pickup or receiving point: ${logisticsSettings.destination_name}.`);
-    }
-  }
-
   return {
     submission_id: submissionId,
     logistics_type: donationMode.logistics_type,
@@ -486,7 +479,16 @@ export const saveHairScreeningFlow = async ({
       throw new Error(screeningResult.error?.message || 'Unable to save the AI screening result.');
     }
 
-    const screening = screeningResult.data;
+    const eligibilityResult = await HairSubmissionAPI.fetchCurrentHairEligibility(
+      screeningResult.data.ai_screening_id,
+    );
+    if (eligibilityResult.error || !eligibilityResult.data) {
+      throw new Error(eligibilityResult.error?.message || 'Unable to evaluate the saved Hair Check against current donation requirements.');
+    }
+    const screening = {
+      ...screeningResult.data,
+      current_eligibility: eligibilityResult.data,
+    };
     const notificationEvents = buildImmediateNotificationEvents({
       role: 'donor',
       payload: { screening, recommendations: persistedCareTips },
@@ -787,7 +789,6 @@ export const saveHairSubmissionFlow = async ({
     const logisticsPayload = buildLogisticsRowPayload({
       submissionId: submission.submission_id,
       donationMode: selectedDonationMode,
-      logisticsSettings,
     });
 
     if (logisticsPayload) {

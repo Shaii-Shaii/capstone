@@ -23,7 +23,7 @@ export const LatestHairLogResultCard = ({
   const conditionText = latestScreening.detected_condition || 'Not available';
   const recommendationText = latestRecommendation?.recommendation_text 
     ? String(latestRecommendation.recommendation_text).trim().split('\n')[0].slice(0, 120)
-    : latestScreening.decision || latestScreening.summary || 'Continue your current routine';
+    : latestScreening.summary || latestScreening.detected_condition || 'Hair analysis completed';
 
   // Map condition to color/icon
   const conditionLower = String(conditionText).toLowerCase();

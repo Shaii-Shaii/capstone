@@ -489,56 +489,6 @@ const buildLiveScanStatus = ({
   };
 };
 
-const hasHardDonationBlocker = (analysis = {}) => {
-  const condition = String(analysis?.detected_condition || '').toLowerCase();
-  const notes = String(analysis?.visible_damage_notes || '').toLowerCase();
-  const summary = String(analysis?.summary || '').toLowerCase();
-  const combined = `${condition} ${notes} ${summary}`;
-  const confidenceScore = Number(analysis?.confidence_score);
-
-  if (analysis?.is_hair_detected === false) return true;
-  if (Array.isArray(analysis?.missing_views) && analysis.missing_views.length) return true;
-  if (Number.isFinite(confidenceScore) && confidenceScore < 0.75) return true;
-  if (
-    /\b(shoulder|shoulder-length|collarbone|neck-length|chin-length|jaw-length)\b/i.test(combined)
-    && !/\b(armpit|underarm|mid-back|waist|lower back|chest)\b/i.test(combined)
-  ) return true;
-  if (analysis?.bald_spots_present === true) return true;
-  if (['moderate', 'high'].includes(String(analysis?.visible_scalp_area || '').toLowerCase())) return true;
-  if (['moderate', 'severe'].includes(String(analysis?.shedding_level || '').toLowerCase())) return true;
-
-  return [
-    'severe damage',
-    'major damage',
-    'extensive damage',
-    'heavy breakage',
-    'significant breakage',
-    'chemical damage',
-    'bleached',
-    'rebonded',
-    'split ends throughout',
-    'not suitable',
-  ].some((keyword) => combined.includes(keyword));
-};
-
-const hasShortDonationEndpoint = (analysis = {}) => {
-  const notes = [
-    analysis?.length_assessment,
-    analysis?.visible_damage_notes,
-    analysis?.summary,
-    Array.isArray(analysis?.per_view_notes)
-      ? analysis.per_view_notes.map((item) => item?.notes || '').join(' ')
-      : '',
-  ].join(' ').toLowerCase();
-
-  if (!notes) return false;
-  if (/\b(armpit|underarm|mid-back|mid back|middle of the back|lower back|low back|waist)\b/i.test(notes)) {
-    return false;
-  }
-
-  return /\b(shoulder|shoulder-length|collarbone|clavicle|upper chest|chest length|reaches the chest|neck-length|chin-length|jaw-length)\b/i.test(notes);
-};
-
 const hasScalpCoverageConcern = (analysis = {}) => (
   analysis?.bald_spots_present === true
   || ['moderate', 'high'].includes(String(analysis?.visible_scalp_area || '').toLowerCase())
@@ -582,19 +532,25 @@ const formatDensityScore = (value) => {
 
 const buildDonationAssessment = ({ analysis = {}, donationRequirement = null }) => {
   const totalLengthCm = Number(resolveEstimatedLengthCm(analysis));
-  const configuredMinimumCm = Number(donationRequirement?.minimum_hair_length_cm);
-  const minimumLengthCm = Number.isFinite(configuredMinimumCm) && configuredMinimumCm > 0
+  const rawConfiguredMinimumCm = donationRequirement?.minimum_hair_length_cm;
+  const configuredMinimumCm = rawConfiguredMinimumCm == null || rawConfiguredMinimumCm === ''
+    ? null
+    : Number(rawConfiguredMinimumCm);
+  const minimumLengthCm = Number.isFinite(configuredMinimumCm) && configuredMinimumCm >= 0
     ? configuredMinimumCm
     : null;
   const totalInches = cmToInches(totalLengthCm);
-  const minimumInches = minimumLengthCm ? cmToInches(minimumLengthCm) : null;
+  const minimumInches = minimumLengthCm != null ? cmToInches(minimumLengthCm) : null;
   const isLengthDetected = Number.isFinite(totalLengthCm) && totalLengthCm > 0;
-  const shortEndpoint = hasShortDonationEndpoint(analysis);
-  const hasRequirement = Boolean(donationRequirement?.donation_requirement_id) && Boolean(minimumLengthCm);
-  const meetsLengthRequirement = hasRequirement && isLengthDetected && totalLengthCm >= minimumLengthCm && !shortEndpoint;
-  const hasHardBlocker = hasHardDonationBlocker(analysis);
-  const isDonationReady = meetsLengthRequirement && !hasHardBlocker;
-  const donatableLengthCm = meetsLengthRequirement && !hasHardBlocker ? totalLengthCm : 0;
+  const hasRequirement = Boolean(donationRequirement?.donation_requirement_id);
+  const meetsLengthRequirement = hasRequirement && (
+    minimumLengthCm == null || (isLengthDetected && totalLengthCm >= minimumLengthCm)
+  );
+  const eligibilityReasons = Array.isArray(analysis?.eligibility_reasons) ? analysis.eligibility_reasons : [];
+  const evaluatedEligible = analysis?.eligibility_evaluation?.eligible === true;
+  const hasHardBlocker = eligibilityReasons.length > 0 || !evaluatedEligible;
+  const isDonationReady = hasRequirement && evaluatedEligible && eligibilityReasons.length === 0;
+  const donatableLengthCm = isDonationReady && isLengthDetected ? totalLengthCm : 0;
   const neededLengthCm = hasRequirement && isLengthDetected ? Math.max(0, minimumLengthCm - totalLengthCm) : null;
   const cutLineBottomPercent = isDonationReady && totalLengthCm > 0
     ? Math.max(24, Math.min(82, (minimumLengthCm / totalLengthCm) * 100))
@@ -605,7 +561,7 @@ const buildDonationAssessment = ({ analysis = {}, donationRequirement = null }) 
   const donatableLengthLabel = isDonationReady
     ? `${cmToInches(donatableLengthCm).toFixed(1)} inches`
     : isLengthDetected
-      ? shortEndpoint || hasHardBlocker
+      ? hasHardBlocker
         ? '0.0 inches'
         : `${cmToInches(neededLengthCm).toFixed(1)} inches more needed`
       : 'Not measured';
@@ -618,22 +574,14 @@ const buildDonationAssessment = ({ analysis = {}, donationRequirement = null }) 
     hairLengthLabel,
     isDonationReady,
     meetsLengthRequirement,
-    minimumLengthLabel: minimumInches ? `${minimumInches.toFixed(1)} inches` : 'Not configured',
+    minimumLengthLabel: minimumInches != null ? `${minimumInches.toFixed(1)} inches` : 'No minimum length',
     summary: isDonationReady
       ? (analysis?.donation_readiness_note || 'Your hair appears long enough for donation. You can prepare for a haircut assessment and final partner review.')
-      : !isLengthDetected
-        ? 'Hair length could not be measured reliably because the cut-start area or lowest ends were hidden. Retake the length views with the hair loose, fully visible, and free of clips or ties.'
       : !hasRequirement
-        ? 'Donation requirements are not configured. Please contact the team before using this result for donation eligibility.'
-      : hasScalpCoverageConcern(analysis)
-        ? 'Not eligible for donation yet. This check can still track visible scalp coverage, density, and hair wellness progress over time.'
-      : meetsLengthRequirement && !hasHardBlocker
-        ? 'Your hair length may be enough, but the scan found a concern that needs review before donation.'
-      : shortEndpoint
-        ? `Not eligible for donation yet. Donatable length is measured from the lower cheek or neck to the lowest visible ends, and the current endpoint appears above the required ${minimumInches.toFixed(1)} inches.`
-        : isLengthDetected && minimumInches
-          ? `Not eligible for donation yet. The estimated donation length is ${totalInches.toFixed(1)} inches, below the ${minimumInches.toFixed(1)}-inch requirement. Continue caring for and growing your hair before checking again.`
-          : 'Your hair is not ready for donation yet. Continue hair care and check again after more growth.',
+        ? 'Donation requirements are currently unavailable. Please try again later or contact the organization.'
+      : eligibilityReasons.length
+        ? eligibilityReasons.join(' ')
+        : 'Your hair does not satisfy the current donation requirements.',
   };
 };
 
@@ -1541,7 +1489,8 @@ function DonationRequirementsIntroModal({
   const { language } = useLanguage();
   const isFilipino = language === 'fil';
   const hasCurrentRequirement = Boolean(donationRequirement?.donation_requirement_id);
-  const minimumLength = Number(donationRequirement?.minimum_hair_length_inches);
+  const rawMinimumLength = donationRequirement?.minimum_hair_length_inches;
+  const minimumLength = rawMinimumLength == null || rawMinimumLength === '' ? null : Number(rawMinimumLength);
   const minimumDonorCount = Number(donationRequirement?.minimum_number_donor);
   const requirementUpdatedAt = donationRequirement?.updated_at
     ? new Date(donationRequirement.updated_at)
@@ -1636,8 +1585,8 @@ function DonationRequirementsIntroModal({
                 <MaterialCommunityIcons name="cloud-alert-outline" size={20} color={theme.colors.brandPrimary} />
                 <Text style={styles.requirementsIntroUnavailableText}>
                   {isFilipino
-                    ? 'Hindi ma-load ang kasalukuyang gabay sa donasyon. Maaari mong ipagpatuloy ang pagsusuri, ngunit ang organisasyon ang magkukumpirma kung kwalipikado ang buhok.'
-                    : 'The current donation guide could not be loaded. You may continue with a hair health check, but the organization must confirm donation eligibility.'}
+                    ? 'Kasalukuyang hindi available ang mga requirement sa donasyon. Subukan muli mamaya o makipag-ugnayan sa organisasyon.'
+                    : 'Donation requirements are currently unavailable. Please try again later or contact the organization.'}
                 </Text>
               </View>
             ) : null}
@@ -1650,9 +1599,9 @@ function DonationRequirementsIntroModal({
                 <View style={styles.requirementsIntroRequirementCopy}>
                   <Text style={styles.requirementsIntroRequirementLabel}>{isFilipino ? 'Haba ng buhok' : 'Hair length'}</Text>
                   <Text style={styles.requirementsIntroRequirementValue}>
-                    {Number.isFinite(minimumLength) && minimumLength > 0
+                    {Number.isFinite(minimumLength) && minimumLength >= 0
                       ? (isFilipino ? `Hindi bababa sa ${minimumLength.toFixed(1)} pulgada` : `At least ${minimumLength.toFixed(1)} inches`)
-                      : (isFilipino ? 'Kukumpirmahin ng organisasyon ang minimum na haba.' : 'The organization will confirm the minimum length.')}
+                      : (isFilipino ? 'Walang minimum na haba na itinakda.' : 'No minimum hair length is configured.')}
                   </Text>
                 </View>
               </View>
@@ -1728,8 +1677,13 @@ function DonationRequirementsIntroModal({
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={isFilipino ? 'Magpatuloy sa mga tanong tungkol sa buhok' : 'Continue to hair check questions'}
+              disabled={!hasCurrentRequirement}
               onPress={onContinue}
-              style={({ pressed }) => [styles.requirementsIntroContinue, pressed ? styles.questionDockButtonPressed : null]}
+              style={({ pressed }) => [
+                styles.requirementsIntroContinue,
+                !hasCurrentRequirement ? { opacity: 0.5 } : null,
+                pressed ? styles.questionDockButtonPressed : null,
+              ]}
             >
               <LinearGradient
                 pointerEvents="none"
@@ -3904,7 +3858,7 @@ const buildAnalysisHistoryContext = (submissions = []) => {
     .map((entry) => ({
       created_at: entry.screening?.created_at || '',
       detected_condition: entry.screening?.detected_condition || '',
-      decision: entry.screening?.decision || '',
+      analysis_summary: entry.screening?.summary || '',
       summary: entry.screening?.summary || '',
       estimated_length: entry.screening?.estimated_length ?? null,
       recommendations: Array.isArray(entry.recommendations)
@@ -3926,7 +3880,7 @@ const buildAnalysisHistoryContext = (submissions = []) => {
       ? {
           created_at: latestEntry.screening.created_at || '',
           detected_condition: latestEntry.screening.detected_condition || '',
-          decision: latestEntry.screening.decision || '',
+          analysis_summary: latestEntry.screening.summary || '',
           summary: latestEntry.screening.summary || '',
           estimated_length: latestEntry.screening.estimated_length ?? null,
         }

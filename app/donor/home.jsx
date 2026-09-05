@@ -2099,8 +2099,8 @@ const buildDailyReminder = (submissions = []) => {
   if (todayScreenings.length > 0) {
     // Already analyzed today - show improvement tip
     const latestToday = todayScreenings[todayScreenings.length - 1];
-    const decision = latestToday.screening.decision || latestToday.screening.summary || 'Keep following your routine';
-    const summary = String(decision)
+    const observationSummary = latestToday.screening.summary || latestToday.screening.detected_condition || 'Hair analysis completed';
+    const summary = String(observationSummary)
       .trim()
       .split('\n')[0] // first line only
       .slice(0, 100); // max 100 chars
@@ -2309,7 +2309,7 @@ export default function DonorHomeScreen() {
       donationEventCarouselRef.current?.scrollTo({ x: 0, animated: false });
     });
     return () => cancelAnimationFrame(frame);
-  }, [donationEventSearchQuery, donationEventSortOrder, donationEventVisibilityFilter, visibleDonationDrives.length]);
+  }, [donationEventSearchQuery, donationEventSortOrder, donationEventVisibilityFilter]);
   const donationEventsVisibilityLabel = getDonationEventVisibilityOption(donationEventVisibilityFilter).label;
   const donationEventsEmptyTitle = normalizedDonationEventSearchQuery
     ? 'No matching events found'
@@ -2538,11 +2538,23 @@ export default function DonorHomeScreen() {
       return;
     }
 
+    const previouslyVisibleDriveIds = new Set(
+      (homeCacheRef.current?.donationDrives || [])
+        .map((drive) => Number(drive?.donation_drive_id || drive?.id || 0))
+        .filter((driveId) => Number.isFinite(driveId) && driveId > 0),
+    );
+
     setIsUnlockingPrivateEvent(true);
-    const result = await unlockPrivateEventAccess({
-      accessCode: privateEventCode,
-    });
-    setIsUnlockingPrivateEvent(false);
+    let result;
+    try {
+      result = await unlockPrivateEventAccess({
+        accessCode: privateEventCode,
+      });
+    } catch (error) {
+      result = { data: null, error };
+    } finally {
+      setIsUnlockingPrivateEvent(false);
+    }
 
     if (result.error) {
       setPrivateUnlockMessage(result.error.message || 'Private event unlock failed.');
@@ -2554,19 +2566,48 @@ export default function DonorHomeScreen() {
     setPrivateUnlockVariant('success');
     setPrivateEventCode('');
     setIsPrivateAccessModalVisible(false);
-    let unlockedDriveId = extractDriveIdFromUnlockResult(result.data);
-    await loadHome({ silent: false });
-    if (!unlockedDriveId) {
-      const firstUnlockedPrivateDrive = (homeCacheRef.current?.donationDrives || []).find((drive) => !drive?.is_public);
-      const fallbackDriveId = Number(firstUnlockedPrivateDrive?.donation_drive_id || firstUnlockedPrivateDrive?.id || 0);
-      if (Number.isFinite(fallbackDriveId) && fallbackDriveId > 0) {
-        unlockedDriveId = fallbackDriveId;
-      }
+    setDonationEventSearchQuery('');
+    setDonationEventVisibilityFilter('all');
+
+    await loadHome({ silent: false, force: true });
+
+    const returnedDriveId = extractDriveIdFromUnlockResult(result.data);
+    let refreshedDrives = homeCacheRef.current?.donationDrives || [];
+    if (
+      returnedDriveId
+      && result.data
+      && typeof result.data === 'object'
+      && !refreshedDrives.some((drive) => Number(drive?.donation_drive_id || drive?.id || 0) === returnedDriveId)
+      && isDriveActiveForHome(result.data)
+    ) {
+      refreshedDrives = [result.data, ...refreshedDrives];
+      const nextHomeData = {
+        ...(homeCacheRef.current || {}),
+        donationDrives: refreshedDrives,
+        cachedAt: Date.now(),
+      };
+      homeCacheRef.current = nextHomeData;
+      cachedDonorHomeData = nextHomeData;
+      setDonationDrives(refreshedDrives);
     }
-    if (unlockedDriveId) {
-      router.navigate(`/donor/drives/${unlockedDriveId}`);
+
+    const displayedDrives = sortDonationDrivesByDate(refreshedDrives, donationEventSortOrder);
+    const unlockedDriveIndex = displayedDrives.findIndex((drive) => {
+      const driveId = Number(drive?.donation_drive_id || drive?.id || 0);
+      if (returnedDriveId) return driveId === returnedDriveId;
+      return !drive?.is_public && !previouslyVisibleDriveIds.has(driveId);
+    });
+
+    if (unlockedDriveIndex >= 0) {
+      setActiveDonationEventPage(unlockedDriveIndex);
+      requestAnimationFrame(() => {
+        donationEventCarouselRef.current?.scrollTo({
+          x: (donationEventCarouselWidth || 0) * unlockedDriveIndex,
+          animated: true,
+        });
+      });
     }
-  }, [loadHome, privateEventCode, router]);
+  }, [donationEventCarouselWidth, donationEventSortOrder, loadHome, privateEventCode]);
 
   const handleClosePrivateAccessModal = React.useCallback(() => {
     setPrivateEventCode('');

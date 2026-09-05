@@ -230,7 +230,7 @@ const buildSupportContextBundle = async ({ role, userId, text }) => {
     const latestScreening = submissionRows?.[0]?.ai_screenings?.[0] || null;
     supportContext.latestScreeningSummary = latestScreening
       ? [
-        latestScreening.decision ? `Decision: ${latestScreening.decision}.` : '',
+        latestScreening.summary ? `Analysis summary: ${latestScreening.summary}.` : '',
         latestScreening.summary || '',
         latestScreening.confidence_score != null
           ? `Confidence: ${Math.round(Number(latestScreening.confidence_score) * 100)}%.`

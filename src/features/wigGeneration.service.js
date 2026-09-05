@@ -6,8 +6,8 @@ const getRecommendationLabel = (index) => (
   index === 0
     ? '#1 - Best overall match'
     : index === 1
-      ? '#2 - Great alternative'
-      : '#3 - Another flattering option'
+      ? '#2 - Second choice'
+      : '#3 - Third choice'
 );
 
 const normalizePreviewOption = (item, index) => ({
@@ -119,7 +119,7 @@ const getEdgeFunctionErrorMessage = async (error) => {
 
 const includesAny = (message, tokens) => tokens.some((token) => message.includes(token));
 
-const resolveWigGenerationFailure = (technicalMessage = '') => {
+const resolveWigGenerationFailure = (technicalMessage = '', operation = 'preview') => {
   const message = String(technicalMessage || '').toLowerCase();
 
   if (message.includes('front photo')) {
@@ -146,6 +146,7 @@ const resolveWigGenerationFailure = (technicalMessage = '') => {
     'billing',
     'payment required',
     'status=402',
+    'failed (402)',
     'exceeded your current quota',
     'usage limit',
   ])) {
@@ -156,7 +157,15 @@ const resolveWigGenerationFailure = (technicalMessage = '') => {
     };
   }
 
-  if (includesAny(message, ['rate limit', 'too many requests', 'overloaded', 'temporarily busy', 'status 429', ' 429'])) {
+  if (includesAny(message, [
+    'rate limit',
+    'too many requests',
+    'overloaded',
+    'temporarily busy',
+    'status 429',
+    'status=429',
+    'failed (429)',
+  ])) {
     return {
       code: 'service_busy',
       title: 'Preview Service Is Busy',
@@ -181,6 +190,13 @@ const resolveWigGenerationFailure = (technicalMessage = '') => {
   }
 
   if (includesAny(message, ['three active wigs', 'valid reference images', 'reference image'])) {
+    if (operation === 'ranking') {
+      return {
+        code: 'wig_inventory_unavailable',
+        title: 'Wig Recommendations Unavailable',
+        message: 'There are not enough available wigs in this cap size to prepare three recommendations.',
+      };
+    }
     return {
       code: 'wig_inventory_unavailable',
       title: 'Wig Previews Unavailable',
@@ -193,6 +209,9 @@ const resolveWigGenerationFailure = (technicalMessage = '') => {
     'openai api key',
     'openrouter api key',
     'openrouter_image_model',
+    'provider_access_denied',
+    'failed (401)',
+    'failed (403)',
     'stage=provider_configuration',
     'type=configuration_error',
     'requested function was not found',
@@ -216,8 +235,7 @@ const resolveWigGenerationFailure = (technicalMessage = '') => {
 export const generatePatientWigPreview = async ({
   preferences,
   referenceImage,
-  selectedWig = null,
-  availableWigs = [],
+  candidateWigs = [],
 }) => {
   try {
     const normalizedReferenceImage = normalizeReferenceImage(referenceImage);
@@ -225,21 +243,19 @@ export const generatePatientWigPreview = async ({
       throw new Error('A front photo is required before generating a wig preview.');
     }
 
-    const normalizedAvailableWigs = (availableWigs || [])
+    const normalizedCandidates = (candidateWigs || [])
       .map(normalizeSelectedWig)
       .filter((wig) => wig.wig_id && wig.reference_image_url);
-    if (normalizedAvailableWigs.length < 3) {
-      throw new Error('At least three active wigs with reference images are required for AI recommendations.');
+    if (
+      normalizedCandidates.length !== 3
+      || new Set(normalizedCandidates.map((wig) => String(wig.wig_id))).size !== 3
+    ) {
+      throw new Error('Exactly three unique selected wigs with reference images are required for AI recommendations.');
     }
 
-    const normalizedSelectedWig = selectedWig ? normalizeSelectedWig(selectedWig) : null;
-    const orderedWigs = normalizedSelectedWig?.wig_id
-      ? [normalizedSelectedWig, ...normalizedAvailableWigs.filter((wig) => wig.wig_id !== normalizedSelectedWig.wig_id)]
-      : normalizedAvailableWigs;
-
     logAppEvent('wigGeneration.aiRequest', 'Requesting AI wig ranking and try-on images.', {
-      candidateCount: orderedWigs.length,
-      selectedWigId: normalizedSelectedWig?.wig_id || null,
+      candidateCount: normalizedCandidates.length,
+      candidateWigIds: normalizedCandidates.map((wig) => wig.wig_id),
       hasReferenceDataUrl: Boolean(normalizedReferenceImage.dataUrl),
     });
 
@@ -250,8 +266,7 @@ export const generatePatientWigPreview = async ({
           dataUrl: normalizedReferenceImage.dataUrl,
           imageUrl: normalizedReferenceImage.imageUrl,
         },
-        selected_wig_id: normalizedSelectedWig?.wig_id || null,
-        available_wigs: orderedWigs,
+        candidate_wigs: normalizedCandidates,
       },
     });
 
@@ -278,6 +293,69 @@ export const generatePatientWigPreview = async ({
 
     return {
       preview: null,
+      error: failure.message,
+      errorCode: failure.code,
+      errorTitle: failure.title,
+    };
+  }
+};
+
+export const rankPatientWigsForPhoto = async ({
+  preferences,
+  referenceImage,
+  candidateWigs = [],
+}) => {
+  try {
+    const normalizedReferenceImage = normalizeReferenceImage(referenceImage);
+    if (!normalizedReferenceImage.dataUrl && !normalizedReferenceImage.imageUrl) {
+      throw new Error('A front photo is required before ranking wig matches.');
+    }
+
+    const normalizedCandidates = (candidateWigs || [])
+      .map(normalizeSelectedWig)
+      .filter((wig) => wig.wig_id);
+    if (normalizedCandidates.length < 3) {
+      throw new Error('At least three available wigs are required for facial-fit recommendations.');
+    }
+
+    logAppEvent('wigGeneration.aiRankingRequest', 'Requesting facial-fit wig recommendations.', {
+      candidateCount: normalizedCandidates.length,
+      candidateWigIds: normalizedCandidates.map((wig) => wig.wig_id),
+      hasReferenceDataUrl: Boolean(normalizedReferenceImage.dataUrl),
+    });
+
+    const { data, error } = await invokeEdgeFunction(wigGenerationFunctionName, {
+      body: {
+        mode: 'rank_only',
+        preferences: preferences || {},
+        reference_image: {
+          dataUrl: normalizedReferenceImage.dataUrl,
+          imageUrl: normalizedReferenceImage.imageUrl,
+        },
+        candidate_wigs: normalizedCandidates,
+      },
+    });
+
+    if (error) throw new Error(await getEdgeFunctionErrorMessage(error));
+    if (data?.error) throw new Error(data.message || data.error);
+
+    const ranking = normalizePreview(data);
+    if (ranking.options.length < 3) {
+      throw new Error('AI returned an incomplete set of wig recommendations.');
+    }
+
+    return { ranking, recommendations: ranking.options.slice(0, 3), error: null };
+  } catch (error) {
+    const resolvedMessage = getErrorMessage(error);
+    const failure = resolveWigGenerationFailure(resolvedMessage, 'ranking');
+    logAppEvent('wigGeneration.rankPatientWigsForPhoto.failed', 'Wig ranking failed.', {
+      category: failure.code,
+      technicalMessage: resolvedMessage,
+      hasReferenceImage: Boolean(referenceImage?.uri || referenceImage?.dataUrl),
+    }, 'info');
+    return {
+      ranking: null,
+      recommendations: [],
       error: failure.message,
       errorCode: failure.code,
       errorTitle: failure.title,

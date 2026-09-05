@@ -60,7 +60,7 @@ export const isHairEligibilityRecentByDate = (screeningDate = null) => {
 /**
  * Get the most recent hair analysis result (if within 30 days)
  */
-export const getRecentHairEligibilityResult = (submissions = []) => {
+export const getRecentHairEligibilityResult = (submissions = [], currentEligibility = null) => {
   if (!Array.isArray(submissions) || submissions.length === 0) {
     return null;
   }
@@ -79,7 +79,8 @@ export const getRecentHairEligibilityResult = (submissions = []) => {
       const mostRecentScreening = screenings[0]; // Assuming screenings are already sorted
       const isRecent = isHairEligibilityRecentByDate(mostRecentScreening?.created_at);
 
-      if (isRecent) {
+      if (isRecent && currentEligibility?.isQualified === true
+        && Number(currentEligibility?.ai_screening_id) === Number(mostRecentScreening?.ai_screening_id)) {
         const latestDetail = [...(submission?.submission_details || [])]
           .sort((a, b) => new Date(b?.created_at || 0).getTime() - new Date(a?.created_at || 0).getTime())[0];
 
@@ -89,7 +90,7 @@ export const getRecentHairEligibilityResult = (submissions = []) => {
           detail: latestDetail,
           isRecent: true,
           createdAt: mostRecentScreening?.created_at,
-          decision: mostRecentScreening?.decision,
+          currentEligibility,
           estimatedLength: mostRecentScreening?.estimated_length,
         };
       }
@@ -146,6 +147,7 @@ export const extractHairDetailsFromRecentAssessment = (recentResult = null) => {
 export const determineDonationFlowStep = ({
   userProfile = {},
   hairSubmissions = [],
+  currentHairEligibility = null,
   isCheckingHair = false,
 } = {}) => {
   // Step 1: Profile completion check
@@ -161,7 +163,7 @@ export const determineDonationFlowStep = ({
   }
 
   // Step 2: Hair eligibility assessment check
-  const recentEligibility = getRecentHairEligibilityResult(hairSubmissions);
+  const recentEligibility = getRecentHairEligibilityResult(hairSubmissions, currentHairEligibility);
   const hasRecentEligibility = recentEligibility && recentEligibility.isRecent;
 
   if (!hasRecentEligibility && !isCheckingHair) {
@@ -208,7 +210,7 @@ export const buildHairEligibilityRecheckPrompt = (recentResult = null) => {
 
   return {
     title: 'Hair Eligibility Status',
-    message: `Your hair was assessed on ${new Date(recentResult.createdAt).toLocaleDateString()}. Result: ${recentResult.decision}`,
+    message: `Your hair was assessed on ${new Date(recentResult.createdAt).toLocaleDateString()}. Current result: Eligible under the current donation requirements.`,
     actionTitle: 'Re-assess Hair?',
     allowRecheck: true,
     currentResult: recentResult,
@@ -262,10 +264,11 @@ export const validateDonationDetails = (donationDetails = {}, donationRequiremen
     errors.push('Donation photo is required');
   }
 
-  const minLengthInches = Number(donationRequirement?.minimum_hair_length_inches);
-  if (!Number.isFinite(minLengthInches) || minLengthInches <= 0) {
-    errors.push('Donation requirements are not configured.');
-  } else {
+  const rawMinimumLength = donationRequirement?.minimum_hair_length_inches;
+  const minLengthInches = rawMinimumLength == null || rawMinimumLength === '' ? null : Number(rawMinimumLength);
+  if (!donationRequirement?.donation_requirement_id) {
+    errors.push('Donation requirements are currently unavailable. Please try again later or contact the organization.');
+  } else if (minLengthInches != null && Number.isFinite(minLengthInches) && minLengthInches >= 0) {
     const requiredLengthInches = Number(minLengthInches.toFixed(1));
 
     const hairLengthInches = Number(donationDetails.hairLengthUnit === 'cm'
@@ -388,14 +391,16 @@ export const getFlowStateSummary = ({
   currentStep = 1,
   userProfile = {},
   hairSubmissions = [],
+  currentHairEligibility = null,
   donationDetails = null,
   isCheckingHair = false,
 } = {}) => {
   const profileStatus = getProfileCompletionStatus(userProfile);
-  const recentEligibility = getRecentHairEligibilityResult(hairSubmissions);
+  const recentEligibility = getRecentHairEligibilityResult(hairSubmissions, currentHairEligibility);
   const flowStep = determineDonationFlowStep({
     userProfile,
     hairSubmissions,
+    currentHairEligibility,
     isCheckingHair,
   });
 

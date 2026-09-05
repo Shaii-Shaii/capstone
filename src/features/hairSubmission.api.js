@@ -165,9 +165,9 @@ const parseLogisticsNotes = (value = '') => {
 
 const normalizeLogisticsTypeForDb = (value = '') => {
   const key = normalizeFlowKey(value);
-  if (['courier', 'shipping', 'independentshipping'].includes(key)) return 'Courier';
+  if (['shipbycourier', 'courier', 'shipping', 'independentshipping'].includes(key)) return 'Ship by Courier';
   if (['pickup', 'pickuprequest'].includes(key)) return 'Pickup';
-  if (['salondropoff', 'onsitedelivery', 'walkin', 'dropoff'].includes(key)) return 'Salon Dropoff';
+  if (['walkindropoff', 'salondropoff', 'onsitedelivery', 'walkin', 'dropoff'].includes(key)) return 'Walk-in Drop-off';
   return '';
 };
 
@@ -555,15 +555,6 @@ const resolveSubmissionUserId = async (userId, databaseUserId = null) => {
   };
 };
 
-const createDonationCertificateNumber = (submission = null) => {
-  const submissionPart = String(submission?.donation_reference || submission?.submission_id || Date.now())
-    .replace(/[^a-z0-9]+/gi, '')
-    .slice(-10)
-    .toUpperCase();
-  const randomPart = Math.random().toString(36).slice(2, 6).toUpperCase();
-  return `DON-CERT-${submissionPart || Date.now().toString(36).toUpperCase()}-${randomPart}`;
-};
-
 const isEventSubmissionCutAndShipComplete = (submission = null) => {
   const statusKey = normalizeFlowKey(submission?.status || submission?.Status || '');
   return [
@@ -854,7 +845,7 @@ const normalizeTrackingEntry = (row) => ({
 
 const normalizeRequirementLength = (value) => {
   const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 };
 
 const normalizeDonationRequirement = (row) => {
@@ -1106,6 +1097,28 @@ export const createAiScreening = async (payload) => {
     columns: ['User_ID', 'Submission_ID', 'Estimated_Length', 'Detected_Color', 'Detected_Texture', 'Detected_Density', 'Detected_Condition', 'Visible_Damage_Notes', 'Confidence_Score', 'Shine_Level', 'Frizz_Level', 'Dryness_Level', 'Oiliness_Level', 'Damage_Level', 'Bald_Spots_Present', 'Affected_Regions', 'Hair_Density_Score', 'Shedding_Level', 'Visible_Scalp_Area', 'Scalp_Coverage_Notes', 'Dandruff_Detected', 'Dandruff_Severity', 'Dandruff_Notes', 'Lice_Detected', 'Lice_Confidence', 'Lice_Notes', 'Improvement_Tracking_Status', 'Improvement_Recommendation', 'Decision', 'Summary', 'Length_Assessment', 'Donation_Readiness_Note', 'History_Assessment', 'Screening_Images', 'Analysis_Result'],
   });
 
+  const analysisObservations = payload?.analysis_result
+    && typeof payload.analysis_result === 'object'
+    && !Array.isArray(payload.analysis_result)
+    ? { ...payload.analysis_result }
+    : {};
+  [
+    'decision',
+    'eligible',
+    'eligibility',
+    'eligibility_status',
+    'is_eligible',
+    'qualified',
+    'donation_eligibility',
+    'eligibility_reasons',
+    'eligibility_evaluation',
+    'ineligibility_reasons',
+    'failed_requirements',
+    'evaluated_requirements',
+    'wig_requirement_id',
+    'wig_requirement_updated_at',
+  ].forEach((key) => delete analysisObservations[key]);
+
   const insertRow = {
       User_ID: resolvedUser.userId,
       Submission_ID: payload?.submission_id || null,
@@ -1139,17 +1152,15 @@ export const createAiScreening = async (payload) => {
         : 'No visible lice or nit-like signs were observed in the uploaded views.'),
       Improvement_Tracking_Status: nonEmptyString(payload?.improvement_tracking_status, 'Needs improvement tracking'),
       Improvement_Recommendation: nonEmptyString(payload?.improvement_recommendation, 'Keep tracking hair length and condition with future CheckHair scans before donating.'),
-      Decision: nonEmptyString(payload?.decision, 'Improve hair condition'),
+      // PostgreSQL replaces this placeholder with its current derived display
+      // value. Authorization still re-evaluates instead of trusting Decision.
+      Decision: 'Analysis completed',
       Summary: nonEmptyString(payload?.summary, 'Hair analysis completed with limited details. Final screening requires manual review.'),
       Length_Assessment: nonEmptyString(payload?.length_assessment, ''),
       Donation_Readiness_Note: nonEmptyString(payload?.donation_readiness_note, ''),
       History_Assessment: nonEmptyString(payload?.history_assessment, ''),
       Screening_Images: Array.isArray(payload?.screening_images) ? payload.screening_images : [],
-      Analysis_Result: payload?.analysis_result
-        && typeof payload.analysis_result === 'object'
-        && !Array.isArray(payload.analysis_result)
-        ? payload.analysis_result
-        : {},
+      Analysis_Result: analysisObservations,
       Created_At: getPhilippineDatabaseTimestamp(),
     };
   const query = payload?.submission_id
@@ -1199,6 +1210,73 @@ export const fetchLatestDonationRequirement = async () => {
 
   return {
     data: result.data ? normalizeDonationRequirement(result.data) : null,
+    error: result.error,
+  };
+};
+
+const normalizeCurrentHairEligibility = (payload = null) => {
+  const result = payload && typeof payload === 'object' && !Array.isArray(payload)
+    ? payload
+    : {};
+  const reasons = Array.isArray(result.reasons)
+    ? result.reasons.map((reason) => String(reason || '').trim()).filter(Boolean)
+    : [];
+
+  return {
+    screeningExists: result.screening_exists === true,
+    screening_exists: result.screening_exists === true,
+    aiScreeningId: result.ai_screening_id || null,
+    ai_screening_id: result.ai_screening_id || null,
+    eligible: typeof result.eligible === 'boolean' ? result.eligible : null,
+    isQualified: result.eligible === true && result.available_for_new_donation === true,
+    availableForNewDonation: result.available_for_new_donation === true,
+    available_for_new_donation: result.available_for_new_donation === true,
+    submissionId: result.submission_id || null,
+    submission_id: result.submission_id || null,
+    decision: result.decision || null,
+    configurationError: result.configuration_error === true,
+    configuration_error: result.configuration_error === true,
+    reasons,
+    reason: reasons.join(' '),
+    failedRequirements: Array.isArray(result.failed_requirements) ? result.failed_requirements : [],
+    failed_requirements: Array.isArray(result.failed_requirements) ? result.failed_requirements : [],
+    passedRequirements: Array.isArray(result.passed_requirements) ? result.passed_requirements : [],
+    passed_requirements: Array.isArray(result.passed_requirements) ? result.passed_requirements : [],
+    evaluatedRequirements: result.evaluated_requirements || null,
+    evaluated_requirements: result.evaluated_requirements || null,
+    screeningCreatedAt: result.screening_created_at || null,
+    screening_created_at: result.screening_created_at || null,
+    evaluationSource: result.evaluation_source || 'current_wig_requirements',
+    normalized_length_cm: result.detected_length_cm == null ? null : Number(result.detected_length_cm),
+    detected_texture: result.detected_texture || '',
+    minimum_length_cm: result.evaluated_requirements?.minimum_hair_length_inches == null
+      ? null
+      : Number(result.evaluated_requirements.minimum_hair_length_inches) * CM_PER_INCH,
+  };
+};
+
+export const fetchCurrentHairEligibility = async (screeningId = null) => {
+  const normalizedScreeningId = screeningId == null || screeningId === ''
+    ? null
+    : Number(screeningId);
+  if (normalizedScreeningId != null && (
+    !Number.isInteger(normalizedScreeningId) || normalizedScreeningId <= 0
+  )) {
+    return { data: null, error: new Error('A valid AI screening ID is required.') };
+  }
+
+  logHairQuery('fetchCurrentHairEligibility', {
+    table: 'get_current_hair_eligibility',
+    phase: 'rpc',
+    filters: { AI_Screening_ID: normalizedScreeningId },
+  });
+
+  const result = await supabase.rpc('get_current_hair_eligibility', {
+    p_ai_screening_id: normalizedScreeningId,
+  });
+
+  return {
+    data: result.error ? null : normalizeCurrentHairEligibility(result.data),
     error: result.error,
   };
 };
@@ -1379,35 +1457,24 @@ export const fetchDonationCertificateBySubmissionId = async (submissionId) => {
   };
 };
 
-export const createDonationCertificate = async (payload = {}) => {
-  const { userId, error } = await resolveSubmissionUserId(payload?.user_id, payload?.database_user_id);
-  if (error) {
-    return { data: null, error };
+export const fetchDonationCertificateById = async (certificateId) => {
+  const normalizedCertificateId = Number(certificateId);
+  if (!Number.isInteger(normalizedCertificateId) || normalizedCertificateId <= 0) {
+    return { data: null, error: new Error('A valid certificate ID is required.') };
   }
 
-  logHairQuery('createDonationCertificate', {
+  logHairQuery('fetchDonationCertificateById', {
     table: donationCertificatesTable,
-    phase: 'create',
-    filters: { User_ID: userId, Submission_ID: payload?.submission_id || null },
-    columns: ['User_ID', 'Certificate_Number', 'Certificate_Type', 'File_URL', 'Issued_By', 'Issued_At', 'Remarks', 'Submission_ID'],
+    phase: 'read',
+    filters: { Certificate_ID: normalizedCertificateId },
+    columns: ['Certificate_ID', 'User_ID', 'Certificate_Number', 'Certificate_Type', 'File_URL', 'Issued_At', 'Remarks', 'Submission_ID'],
   });
-
-  const insertPayload = {
-    User_ID: userId,
-    Certificate_Number: payload?.certificate_number || null,
-    Certificate_Type: payload?.certificate_type || 'Certificate of Donation',
-    File_URL: payload?.file_url || null,
-    Issued_By: payload?.issued_by || null,
-    Issued_At: payload?.issued_at || getPhilippineDatabaseTimestamp(),
-    Remarks: payload?.remarks || null,
-    Submission_ID: payload?.submission_id || null,
-  };
 
   const result = await supabase
     .from(donationCertificatesTable)
-    .insert(insertPayload)
     .select(donationCertificateSelect)
-    .single();
+    .eq('Certificate_ID', normalizedCertificateId)
+    .maybeSingle();
 
   return {
     data: result.data ? normalizeDonationCertificate(result.data) : null,
@@ -1439,122 +1506,6 @@ export const fetchDonationCertificatesByUserId = async (userId, limit = 20) => {
   return {
     data: (result.data || []).map(normalizeDonationCertificate),
     error: result.error,
-  };
-};
-
-export const ensureCertificatesForScannedEventDonations = async (userId, limit = 50) => {
-  const resolvedUserId = await resolveSubmissionUserId(userId);
-  if (resolvedUserId.error) {
-    return { data: [], error: resolvedUserId.error };
-  }
-
-  const submissionsResult = await supabase
-    .from(hairSubmissionsTable)
-    .select(hairSubmissionSelect)
-    .eq('User_ID', resolvedUserId.userId)
-    .not('Event_Request_ID', 'is', null)
-    .order('Updated_At', { ascending: false })
-    .limit(limit);
-
-  if (submissionsResult.error) {
-    return { data: [], error: submissionsResult.error };
-  }
-
-  const submissions = (submissionsResult.data || []).map(normalizeHairSubmission);
-  const submissionIds = submissions.map((submission) => submission.submission_id).filter(Boolean);
-
-  if (!submissionIds.length) {
-    return { data: [], error: null };
-  }
-
-  const [existingCertificatesResult, trackingResult, logisticsResult] = await Promise.all([
-    supabase
-      .from(donationCertificatesTable)
-      .select(donationCertificateSelect)
-      .in('Submission_ID', submissionIds),
-    supabase
-      .from(hairBundleTrackingHistoryTable)
-      .select(trackingEntrySelect)
-      .in('Submission_ID', submissionIds),
-    supabase
-      .from(hairSubmissionLogisticsTable)
-      .select(hairSubmissionLogisticsSelect)
-      .in('Submission_ID', submissionIds),
-  ]);
-
-  if (existingCertificatesResult.error || trackingResult.error || logisticsResult.error) {
-    return {
-      data: [],
-      error: existingCertificatesResult.error || trackingResult.error || logisticsResult.error,
-    };
-  }
-
-  const existingBySubmissionId = new Map(
-    (existingCertificatesResult.data || [])
-      .map(normalizeDonationCertificate)
-      .filter((certificate) => certificate?.submission_id)
-      .map((certificate) => [Number(certificate.submission_id), certificate])
-  );
-  const trackingBySubmissionId = new Map();
-  (trackingResult.data || []).forEach((entry) => {
-    const submissionId = Number(entry?.submission_id);
-    const rows = trackingBySubmissionId.get(submissionId) || [];
-    rows.push(entry);
-    trackingBySubmissionId.set(submissionId, rows);
-  });
-  const logisticsBySubmissionId = new Map(
-    (logisticsResult.data || []).map((row) => [Number(row?.submission_id), row])
-  );
-  const isOrganizationReceipt = (entry = null) => {
-    const statusKey = normalizeFlowKey(entry?.status || entry?.shipment_status || '');
-    const textKey = normalizeFlowKey([entry?.title, entry?.description].filter(Boolean).join(' '));
-    return ['received', 'receivedbycompany', 'receivedbyhairforhope', 'receivedbyorganization', 'organizationreceived'].includes(statusKey)
-      || textKey.includes('receivedbyhairforhope')
-      || textKey.includes('receivedbyorganization')
-      || textKey.includes('organizationreceived');
-  };
-  const certificates = [];
-
-  for (const submission of submissions) {
-    const submissionId = Number(submission.submission_id);
-    const trackingEntries = trackingBySubmissionId.get(submissionId) || [];
-    const logistics = logisticsBySubmissionId.get(submissionId) || null;
-    const receiptEntry = trackingEntries.find(isOrganizationReceipt);
-    const hasOrganizationReceipt = Boolean(
-      receiptEntry
-      || logistics?.received_at
-      || isOrganizationReceipt(logistics)
-    );
-
-    if (!hasOrganizationReceipt || isHairCheckOnlySubmission(submission)) {
-      continue;
-    }
-
-    const existingCertificate = existingBySubmissionId.get(submissionId);
-    if (existingCertificate) {
-      certificates.push(existingCertificate);
-      continue;
-    }
-
-    const certificateResult = await createDonationCertificate({
-      user_id: resolvedUserId.userId,
-      submission_id: submission.submission_id,
-      certificate_number: createDonationCertificateNumber(submission),
-      certificate_type: 'Certificate of Donation',
-      issued_by: receiptEntry?.changed_by || logistics?.received_by || null,
-      issued_at: receiptEntry?.updated_at || logistics?.received_at || new Date().toISOString(),
-      remarks: 'Issued after the organization received the hair donation.',
-    });
-
-    if (certificateResult.data?.certificate_id) {
-      certificates.push(certificateResult.data);
-      existingBySubmissionId.set(Number(submission.submission_id), certificateResult.data);
-    }
-  }
-
-  return {
-    data: certificates,
-    error: null,
   };
 };
 
@@ -1642,7 +1593,7 @@ export const fetchDonationTimelineProductionByBundleId = async (bundleId) => {
       .maybeSingle(),
     supabase
       .from(wigsTable)
-      .select('Wig_ID, Bundle_ID, Wig_Status, Created_At, Updated_At, Completed_At, Wig_Name, Wig_Code, Req_ID')
+      .select('Wig_ID, Bundle_ID, Wig_Status, Created_At, Updated_At, Completed_At, Wig_Name, Wig_Code')
       .eq('Bundle_ID', normalizedBundleId)
       .maybeSingle(),
   ]);
@@ -1697,7 +1648,7 @@ export const fetchDonationTimelineProductionByBundleId = async (bundleId) => {
         completed_at: wigResult.data.Completed_At || null,
         wig_name: wigResult.data.Wig_Name || '',
         wig_code: wigResult.data.Wig_Code || '',
-        req_id: wigResult.data.Req_ID || null,
+        req_id: allocation?.Wig_Request_ID || null,
       } : null,
       allocation: allocation ? {
         allocation_id: allocation.Allocation_ID,
@@ -1930,6 +1881,10 @@ export const fetchAiScreeningsByUserId = async (userId, limit = 12) => {
       .from(aiScreeningsTable)
       .select(columns)
       .eq('User_ID', resolvedUser.userId)
+      // Legacy event registration created copied/manual seed rows. They stay
+      // in the database for audit history but are not actual Hair Checks.
+      .not('Analysis_Result', 'cs', JSON.stringify({ source: 'manual_seed' }))
+      .not('Summary', 'ilike', '%Copied into event donation registration.%')
       .order('Created_At', { ascending: false })
       .limit(Math.max(1, Number(limit) || 12));
   let result = await runQuery(aiScreeningSelect);
@@ -1940,20 +1895,6 @@ export const fetchAiScreeningsByUserId = async (userId, limit = 12) => {
   return {
     data: (result.data || []).map(normalizeAiScreening),
     error: result.error,
-  };
-};
-
-export const fetchLatestEligibleAiScreeningByUserId = async (userId) => {
-  const screeningsResult = await fetchAiScreeningsByUserId(userId, 30);
-  const latestScreening = (screeningsResult.data || []).find((screening) => (
-    screening?.ai_screening_id && String(screening?.decision || '').trim()
-  )) || null;
-  return {
-    data: latestScreening && (
-      ['eligible', 'eligiblefordonation', 'eligibleforhairdonation', 'passed']
-        .includes(normalizeFlowKey(latestScreening.decision))
-    ) ? latestScreening : null,
-    error: screeningsResult.error,
   };
 };
 
@@ -2138,10 +2079,16 @@ export const fetchHairScreeningEntryById = async ({ userId, screeningId } = {}) 
     return { data: null, error: screeningResult.error };
   }
 
-  const screening = normalizeAiScreening(screeningResult.data);
-  if (Number(screening.user_id) !== Number(resolvedUserId.userId)) {
+  const normalizedScreening = normalizeAiScreening(screeningResult.data);
+  if (Number(normalizedScreening.user_id) !== Number(resolvedUserId.userId)) {
     return { data: null, error: new Error('Hair screening was not found for this donor.') };
   }
+  const eligibilityResult = await fetchCurrentHairEligibility(normalizedScreening.ai_screening_id);
+  const screening = {
+    ...normalizedScreening,
+    current_eligibility: eligibilityResult.data || null,
+    current_eligibility_error: eligibilityResult.error?.message || '',
+  };
 
   if (!screening.submission_id) {
     return {
@@ -2227,13 +2174,19 @@ export const fetchLatestHairAnalysisSummaryByUserId = async (userId, submissionL
     };
   }
 
-  const screening = screeningsResult.data?.[0] || null;
-  if (!screening) {
+  const latestScreening = screeningsResult.data?.[0] || null;
+  if (!latestScreening) {
     return {
       data: { submissions: submissionsResult.data, latestAnalysisEntry: null },
       error: null,
     };
   }
+  const eligibilityResult = await fetchCurrentHairEligibility(latestScreening.ai_screening_id);
+  const screening = {
+    ...latestScreening,
+    current_eligibility: eligibilityResult.data || null,
+    current_eligibility_error: eligibilityResult.error?.message || '',
+  };
 
   const baseSubmission = submissionsResult.data.find(
     (submission) => Number(submission.ai_screening_id) === Number(screening.ai_screening_id)
@@ -2257,7 +2210,7 @@ export const fetchLatestHairAnalysisSummaryByUserId = async (userId, submissionL
         images: screening.screening_images || [],
       },
     },
-    error: null,
+    error: eligibilityResult.error || null,
   };
 };
 
@@ -2433,8 +2386,9 @@ export const createHairSubmissionLogistics = async (payload) => {
   if (!payload?.submission_id) {
     return { data: null, error: new Error('Submission ID is required for logistics.') };
   }
-  if (!normalizeLogisticsTypeForDb(payload?.logistics_type)) {
-    return { data: null, error: new Error('Choose Courier, Pickup, or Salon Dropoff.') };
+  const normalizedType = normalizeLogisticsTypeForDb(payload?.logistics_type);
+  if (!normalizedType || normalizedType === 'Pickup') {
+    return { data: null, error: new Error('Choose Walk-in Drop-off or Ship by Courier.') };
   }
 
   const parentResult = await supabase
@@ -2466,7 +2420,7 @@ export const upsertSalonDonationAppointment = async ({
   userId,
   submissionId,
   startAt,
-  endAt,
+  endAt = null,
   contactName,
   contactEmail = null,
   contactNumber,
@@ -2476,8 +2430,8 @@ export const upsertSalonDonationAppointment = async ({
   guardianConsentId = null,
   consentLegalDocumentId = null,
 }) => {
-  if (!userId || !submissionId || !startAt || !endAt || !contactName || !contactNumber) {
-    return { data: null, error: new Error('Complete the appointment details before scheduling your drop-off.') };
+  if (!userId || !submissionId || !startAt || !contactName || !contactNumber) {
+    return { data: null, error: new Error('Complete the expected walk-in details before confirming your drop-off.') };
   }
 
   let resolvedAppointmentId = appointmentId;
@@ -2497,7 +2451,7 @@ export const upsertSalonDonationAppointment = async ({
     User_ID: userId,
     Hair_Submission_ID: submissionId,
     Appointment_Start_At: startAt,
-    Appointment_End_At: endAt,
+    Appointment_End_At: endAt || null,
     Status: resolvedAppointmentId ? 'Rescheduled' : 'Confirmed',
     Contact_Name: contactName,
     Contact_Email: contactEmail || null,
@@ -2530,6 +2484,7 @@ export const upsertSalonDonationAppointment = async ({
       checked_in_at:Checked_In_At,
       completed_at:Completed_At,
       cancelled_at:Cancelled_At,
+      cancellation_reason:Cancellation_Reason,
       created_at:Created_At,
       updated_at:Updated_At
     `)
@@ -2557,11 +2512,60 @@ export const fetchSalonDonationAppointmentBySubmissionId = async (submissionId) 
       checked_in_at:Checked_In_At,
       completed_at:Completed_At,
       cancelled_at:Cancelled_At,
+      cancellation_reason:Cancellation_Reason,
       created_at:Created_At,
       updated_at:Updated_At
     `)
     .eq('Hair_Submission_ID', submissionId)
     .maybeSingle();
+
+  return { data: result.data || null, error: result.error };
+};
+
+export const fetchLogisticsDonationByWaybill = async (waybillCode = '') => {
+  const normalizedWaybill = String(waybillCode || '').trim().toUpperCase();
+  if (!/^WB[A-Z0-9]{6}$/.test(normalizedWaybill)) {
+    return { data: null, error: new Error('Waybill not found.') };
+  }
+
+  const result = await supabase.rpc('get_logistics_donation_by_waybill', {
+    p_waybill_code: normalizedWaybill,
+  });
+
+  return {
+    data: result.data || null,
+    error: result.error
+      ? new Error(result.error.message || 'Waybill not found.')
+      : null,
+  };
+};
+
+export const fetchExpectedWalkInDonations = async (expectedDate = '') => {
+  const result = await supabase.rpc(
+    'get_expected_walk_in_donations',
+    expectedDate ? { p_expected_date: expectedDate } : {}
+  );
+
+  return {
+    data: Array.isArray(result.data) ? result.data : [],
+    error: result.error,
+  };
+};
+
+export const updateWalkInArrivalStatus = async ({
+  appointmentId,
+  action,
+  cancellationReason = '',
+} = {}) => {
+  if (!appointmentId || !action) {
+    return { data: null, error: new Error('Choose a walk-in donation and an action.') };
+  }
+
+  const result = await supabase.rpc('update_walk_in_arrival_status', {
+    p_appointment_id: appointmentId,
+    p_action: action,
+    p_cancellation_reason: String(cancellationReason || '').trim() || null,
+  });
 
   return { data: result.data || null, error: result.error };
 };

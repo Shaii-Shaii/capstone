@@ -1,5 +1,9 @@
 import { createJsonResponse, handleCorsPreflight } from '../_shared/cors.ts';
-import { createStructuredResponse } from '../_shared/ai-vision.ts';
+import {
+  DEFAULT_OPENROUTER_HAIR_VISION_MODEL,
+  createStructuredResponse,
+  resolveOpenRouterHairVisionModel,
+} from '../_shared/ai-vision.ts';
 
 const detectionSchema = {
   type: 'object',
@@ -141,10 +145,17 @@ Deno.serve(async (request) => {
       return createJsonResponse({ error: 'A base64 image is required for head detection.' }, 400);
     }
 
-    const model = Deno.env.get('GOOGLE_AI_WIG_HEAD_DETECTION_MODEL')
-      || Deno.env.get('GOOGLE_AI_VISION_MODEL')
-      || Deno.env.get('GOOGLE_AI_MODEL')
-      || 'gemini-2.5-flash';
+    const hasOpenRouter = Boolean((Deno.env.get('OPENROUTER_API_KEY') || '').trim());
+    const model = hasOpenRouter
+      ? resolveOpenRouterHairVisionModel(
+          Deno.env.get('OPENROUTER_WIG_HEAD_DETECTION_MODEL')
+          || Deno.env.get('OPENROUTER_HAIR_VISION_MODEL')
+          || DEFAULT_OPENROUTER_HAIR_VISION_MODEL,
+        )
+      : Deno.env.get('GOOGLE_AI_WIG_HEAD_DETECTION_MODEL')
+        || Deno.env.get('GOOGLE_AI_VISION_MODEL')
+        || Deno.env.get('GOOGLE_AI_MODEL')
+        || 'gemini-2.5-flash';
 
     const result = await createStructuredResponse({
       systemInstruction: instructions,
@@ -205,10 +216,18 @@ Deno.serve(async (request) => {
       diagnostics: result?.diagnostics || null,
     });
   } catch (error) {
-    console.error('[detect-wig-head-frame]', error);
+    // Detection metadata is optional for FLUX image editing. Return a valid
+    // degraded result so a temporary vision-provider failure does not turn
+    // the entire patient preview flow into an HTTP error.
+    console.warn('[detect-wig-head-frame] continuing without placement metadata', {
+      message: error instanceof Error ? error.message : 'Head detection failed.',
+    });
     return createJsonResponse({
-      error: error instanceof Error ? error.message : 'Head detection failed.',
       placement: null,
-    }, 502);
+      reason: 'Automatic head positioning is temporarily unavailable.',
+      diagnostics: {
+        degraded: true,
+      },
+    });
   }
 });

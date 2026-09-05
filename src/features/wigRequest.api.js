@@ -13,6 +13,10 @@ const patientsTable = 'Patients';
 const hospitalsTable = 'Hospitals';
 const releaseSchedulesTable = 'Release_Schedules';
 const wigSafetyAssessmentsTable = 'patient_wig_safety_assessments';
+const wigTryOnSelectionsTable = 'Wig_Request_TryOn_Selections';
+const wigTryOnResultsTable = 'Wig_Virtual_TryOn_Results';
+const wigReleaseReceiptsTable = 'wig_release_receipts';
+const wigReleaseAppealsTable = 'wig_release_appeals';
 
 const wigRequestSelect = `
   req_id:Req_ID,
@@ -190,7 +194,14 @@ const normalizeWigAiFilter = (row) => {
     is_active: Boolean(row?.Is_Active),
     wig_name: wig?.Wig_Name || row?.Pending_Wig_Name || `Wig ${row?.Wig_ID || ''}`.trim(),
     wig_code: wig?.Wig_Code || row?.Pending_Wig_Code || '',
+    wig_status: wig?.Wig_Status || '',
     stock_count: wig?.Stock_Count ?? null,
+    catalog_image_path: wig?.Catalog_Image_Path || '',
+    catalog_family_number: wig?.Catalog_Family_Number ?? null,
+    is_available: Boolean(
+      Number(wig?.Stock_Count || 0) > 0
+      && String(wig?.Wig_Status || '').toLowerCase().replace(/[\s_-]/g, '') === 'available'
+    ),
     fit_settings: parseJsonValue(row?.Fit_Settings),
     thumbnail_path: row?.Thumbnail_Path || '',
     layer_full_wig_path: row?.Layer_Full_Wig_Path || '',
@@ -252,25 +263,26 @@ const normalizeWigRequest = (row) => {
   const specification = firstRelation(row?.wig_request_specifications);
 
   return {
-    id: row?.req_id || null,
-    req_id: row?.req_id || null,
-    patient_id: row?.patient_id || null,
-    status: row?.status || '',
-    request_date: row?.request_date || null,
-    requested_by: row?.requested_by || null,
-    approved_by: row?.approved_by || null,
-    approved_at: row?.approved_at || null,
-    updated_at: row?.updated_at || null,
-    pdf_url: row?.pdf_url || '',
-    status_reason: row?.status_reason || '',
-    requested_wig_id: row?.requested_wig_id || null,
-    allocated_wig_id: row?.allocated_wig_id || null,
-    request_code: row?.request_code || '',
-    requested_wig_specification_id: row?.requested_wig_specification_id || null,
-    requested_cap_size: row?.requested_cap_size || '',
-    is_wish_request: Boolean(row?.is_wish_request),
-    fulfillment_status: row?.fulfillment_status || '',
-    fulfillment_bundle_id: row?.fulfillment_bundle_id || null,
+    id: row?.req_id || row?.Req_ID || null,
+    req_id: row?.req_id || row?.Req_ID || null,
+    patient_id: row?.patient_id || row?.Patient_ID || null,
+    status: row?.status || row?.Status || '',
+    request_date: row?.request_date || row?.Request_Date || null,
+    requested_by: row?.requested_by || row?.Requested_By || null,
+    approved_by: row?.approved_by || row?.Approved_By || null,
+    approved_at: row?.approved_at || row?.Approved_At || null,
+    updated_at: row?.updated_at || row?.Updated_At || null,
+    pdf_url: row?.pdf_url || row?.Pdf_Url || '',
+    status_reason: row?.status_reason || row?.Status_Reason || '',
+    hospital_id: row?.hospital_id || row?.Hospital_ID || null,
+    requested_wig_id: row?.requested_wig_id || row?.Requested_Wig_ID || null,
+    allocated_wig_id: row?.allocated_wig_id || row?.Allocated_Wig_ID || null,
+    request_code: row?.request_code || row?.Request_Code || '',
+    requested_wig_specification_id: row?.requested_wig_specification_id || row?.Requested_Wig_Specification_ID || null,
+    requested_cap_size: row?.requested_cap_size || row?.Requested_Cap_Size || '',
+    is_wish_request: Boolean(row?.is_wish_request ?? row?.Is_Wish_Request),
+    fulfillment_status: row?.fulfillment_status || row?.Fulfillment_Status || '',
+    fulfillment_bundle_id: row?.fulfillment_bundle_id || row?.Fulfillment_Bundle_ID || null,
     notes: specification?.special_notes || '',
     ai_wig_preview_url: specification?.ai_wig_preview_url || '',
   };
@@ -418,9 +430,6 @@ export const upsertPatientWigSafetyAssessment = async ({
         : null,
       information_confirmed: Boolean(informationConfirmed),
       confirmed_at: confirmedAt,
-      review_status: 'Pending',
-      reviewed_by: null,
-      reviewed_at: null,
       updated_at: new Date().toISOString(),
     }], {
       onConflict: 'req_id',
@@ -471,6 +480,7 @@ export const cancelPendingWigRequest = async ({ reqId, patientId }) => {
     })
     .eq('Req_ID', reqId)
     .eq('Patient_ID', patientId)
+    .ilike('Status', 'pending')
     .gte('Request_Date', cancellationCutoff)
     .select(wigRequestSelect)
     .maybeSingle();
@@ -563,6 +573,182 @@ export const fetchLatestWigRequestByPatientDetailsId = async (patientId) => {
     }) : null,
     error: result.error,
   };
+};
+
+const normalizeTryOnSelection = (row) => ({
+  selection_id: row?.Selection_ID || row?.selection_id || null,
+  req_id: row?.Req_ID || row?.req_id || null,
+  wig_id: row?.Wig_ID || row?.wig_id || null,
+  wig_specification_id: row?.Wig_Specification_ID || row?.wig_specification_id || null,
+  filter_id: row?.Filter_ID || row?.filter_id || null,
+  selection_order: row?.Selection_Order || row?.selection_order || null,
+  tryon_result_id: row?.TryOn_Result_ID || row?.tryon_result_id || null,
+  ai_rank: row?.AI_Rank || row?.ai_rank || null,
+  ai_score: row?.AI_Score ?? row?.ai_score ?? null,
+  ai_reason: row?.AI_Reason || row?.ai_reason || '',
+  is_ai_best_match: Boolean(row?.Is_AI_Best_Match ?? row?.is_ai_best_match),
+  is_final_selection: Boolean(row?.Is_Final_Selection ?? row?.is_final_selection),
+});
+
+const normalizeRpcRows = (data) => (
+  Array.isArray(data) ? data : data ? [data] : []
+);
+
+export const beginOrResumePatientWigRequest = async () => {
+  const result = await supabase.rpc('patient_begin_or_resume_wig_request');
+  return {
+    data: result.data ? normalizeWigRequest(result.data) : null,
+    error: result.error,
+  };
+};
+
+export const discardIncompletePatientWigRequest = async (reqId) => {
+  const result = await supabase.rpc('patient_discard_incomplete_wig_request', {
+    p_req_id: reqId,
+  });
+  return {
+    data: result.data === true,
+    error: result.error,
+  };
+};
+
+export const setPatientWigRequestCapSize = async ({ reqId, capSize }) => {
+  const result = await supabase.rpc('patient_set_wig_request_cap_size', {
+    p_req_id: reqId,
+    p_cap_size: capSize,
+  });
+  return {
+    data: result.data ? normalizeWigRequest(result.data) : null,
+    error: result.error,
+  };
+};
+
+export const replacePatientWigTryOnCandidates = async ({ reqId, candidates }) => {
+  const result = await supabase.rpc('patient_replace_wig_tryon_candidates', {
+    p_req_id: reqId,
+    p_candidates: candidates,
+  });
+  return {
+    data: normalizeRpcRows(result.data).map(normalizeTryOnSelection),
+    error: result.error,
+  };
+};
+
+export const recordPatientWigTryOnResults = async ({
+  reqId,
+  sourceImagePath,
+  sourceImageUrl,
+  results,
+}) => {
+  const result = await supabase.rpc('patient_record_wig_tryon_results', {
+    p_req_id: reqId,
+    p_source_image_path: sourceImagePath || '',
+    p_source_image_url: sourceImageUrl || '',
+    p_results: results,
+  });
+  return {
+    data: normalizeRpcRows(result.data).map(normalizeTryOnSelection),
+    error: result.error,
+  };
+};
+
+export const finalizePatientWigRequest = async ({ reqId, wigId, previewUrl, specialNotes }) => {
+  const result = await supabase.rpc('patient_finalize_wig_request', {
+    p_req_id: reqId,
+    p_wig_id: wigId,
+    p_preview_url: previewUrl || '',
+    p_special_notes: specialNotes || null,
+  });
+  return {
+    data: result.data ? normalizeWigRequest(result.data) : null,
+    error: result.error,
+  };
+};
+
+export const fetchPatientWigTryOnSelections = async (reqId) => {
+  if (!reqId) return { data: [], error: null };
+  const selectionResult = await supabase
+    .from(wigTryOnSelectionsTable)
+    .select('*')
+    .eq('Req_ID', reqId)
+    .order('Selection_Order', { ascending: true });
+  if (selectionResult.error) return { data: [], error: selectionResult.error };
+
+  const selections = (selectionResult.data || []).map(normalizeTryOnSelection);
+  const resultIds = selections.map((item) => item.tryon_result_id).filter(Boolean);
+  const wigIds = selections.map((item) => item.wig_id).filter(Boolean);
+  const [tryOnResult, wigResult, specificationResult] = await Promise.all([
+    resultIds.length
+      ? supabase.from(wigTryOnResultsTable)
+        .select('TryOn_Result_ID, Generated_Image_URL, Generated_Image_Path, Captured_Image_URL')
+        .in('TryOn_Result_ID', resultIds)
+      : { data: [], error: null },
+    wigIds.length
+      ? supabase.from(wigsTable).select(wigSelect).in('Wig_ID', wigIds)
+      : { data: [], error: null },
+    wigIds.length
+      ? supabase.from(wigPhysicalSpecificationsTable).select(wigPhysicalSpecificationSelect).in('Wig_ID', wigIds)
+      : { data: [], error: null },
+  ]);
+  const firstError = tryOnResult.error || wigResult.error || specificationResult.error;
+  if (firstError) return { data: [], error: firstError };
+
+  const resultsById = new Map((tryOnResult.data || []).map((item) => [String(item.TryOn_Result_ID), item]));
+  const specificationsByWigId = new Map((specificationResult.data || []).map((item) => [
+    String(item.wig_id), normalizeWigPhysicalSpecification(item),
+  ]));
+  const wigsById = new Map((wigResult.data || []).map((item) => [
+    String(item.wig_id),
+    normalizeWigDetails(item, specificationsByWigId.get(String(item.wig_id)) || null),
+  ]));
+  return {
+    data: selections.map((selection) => ({
+      ...selection,
+      generated_image_url: resultsById.get(String(selection.tryon_result_id))?.Generated_Image_URL || '',
+      captured_image_url: resultsById.get(String(selection.tryon_result_id))?.Captured_Image_URL || '',
+      wig: wigsById.get(String(selection.wig_id)) || null,
+    })),
+    error: null,
+  };
+};
+
+export const fetchPatientWigReleaseReceipt = async (reqId) => {
+  if (!reqId) return { data: null, error: null };
+  const result = await supabase
+    .from(wigReleaseReceiptsTable)
+    .select('*')
+    .eq('req_id', reqId)
+    .order('release_cycle', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return { data: result.data || null, error: result.error };
+};
+
+export const acceptPatientWigReleaseReceipt = async (receiptId) => {
+  const result = await supabase.rpc('patient_accept_wig_release_receipt', {
+    p_receipt_id: receiptId,
+  });
+  return { data: result.data || null, error: result.error };
+};
+
+export const fetchPatientWigReleaseAppeal = async (receiptId) => {
+  if (!receiptId) return { data: null, error: null };
+  const result = await supabase
+    .from(wigReleaseAppealsTable)
+    .select('*')
+    .eq('receipt_id', receiptId)
+    .maybeSingle();
+  return { data: result.data || null, error: result.error };
+};
+
+export const submitPatientWigReleaseAppeal = async ({ receiptId, reason, description, evidencePaths = [] }) => {
+  const result = await supabase.rpc('patient_submit_wig_release_appeal', {
+    p_receipt_id: receiptId,
+    p_reason: reason,
+    p_description: description,
+    p_evidence_paths: evidencePaths,
+  });
+  return { data: result.data || null, error: result.error };
 };
 
 /** Request fields used by status/timeline surfaces, without loading preferences. */
@@ -721,12 +907,14 @@ export const fetchActiveWigAiFilters = async () => {
       'Pending_Wig_Name',
       'Pending_Wig_Code',
       'Wigs.Wig_Name',
+      'Wigs.Wig_Status',
+      'Wigs.Stock_Count',
     ],
   });
 
   let result = await supabase
     .from(wigAiFiltersTable)
-    .select('Filter_ID, Wig_ID, Version, Status, Is_Active, Fit_Settings, Thumbnail_Path, Layer_Full_Wig_Path, Layer_Back_Hair_Path, Layer_Face_Mask_Path, Layer_Front_Bangs_Path, Layer_Hair_Mask_Path, Pending_Wig_Name, Pending_Wig_Code, Pending_Hair_Length, Pending_Hair_Color, Pending_Hair_Texture, Pending_Hair_Density, Pending_Cap_Size, Pending_Style, Wigs:Wig_ID(Wig_Name, Wig_Code, Stock_Count)')
+    .select('Filter_ID, Wig_ID, Version, Status, Is_Active, Fit_Settings, Thumbnail_Path, Layer_Full_Wig_Path, Layer_Back_Hair_Path, Layer_Face_Mask_Path, Layer_Front_Bangs_Path, Layer_Hair_Mask_Path, Pending_Wig_Name, Pending_Wig_Code, Pending_Hair_Length, Pending_Hair_Color, Pending_Hair_Texture, Pending_Hair_Density, Pending_Cap_Size, Pending_Style, Wigs:Wig_ID(Wig_Name, Wig_Code, Wig_Status, Stock_Count, Catalog_Image_Path, Catalog_Family_Number)')
     .eq('Is_Active', true)
     .order('Filter_ID', { ascending: false });
 

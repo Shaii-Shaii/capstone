@@ -3,7 +3,6 @@ import { invokeEdgeFunction } from '../api/supabase/client';
 import * as NotificationAPI from './notification.api';
 import { notificationStoragePrefix, notificationTypes } from './notification.constants';
 import {
-  createDonationCertificate,
   fetchDonationCertificateBySubmissionId,
   fetchHairSubmissionWorkflowEvidenceByIds,
   fetchHairSubmissionsByUserId,
@@ -231,92 +230,19 @@ const buildNotification = ({
   isRead,
 });
 
-const createDonationCertificateNumber = (submission = null) => {
-  const submissionPart = String(submission?.donation_reference || submission?.submission_id || Date.now())
-    .replace(/[^a-z0-9]+/gi, '')
-    .slice(-10)
-    .toUpperCase();
-  const randomPart = Math.random().toString(36).slice(2, 6).toUpperCase();
-  return `DON-CERT-${submissionPart || Date.now().toString(36).toUpperCase()}-${randomPart}`;
-};
-
-const normalizeCertificateIssuerId = (value = null) => {
-  const issuerId = Number(value);
-  return Number.isFinite(issuerId) && issuerId > 0 ? issuerId : null;
-};
-
 const normalizeFlowStatusKey = (value = '') => String(value || '')
   .trim()
   .toLowerCase()
   .replace(/[_\s-]+/g, '');
 
-const textIncludesAny = (source = '', tokens = []) => {
-  const normalized = String(source || '').toLowerCase();
-  return tokens.some((token) => normalized.includes(token));
-};
-
-const isReceivedByOrganizationSignal = (item = null) => {
-  const statusKey = normalizeFlowStatusKey(item?.status || '');
-  return (
-  ['received', 'receivedbycompany', 'receivedbyhairforhope', 'receivedbyorganization', 'organizationreceived'].includes(statusKey)
-  || textIncludesAny(item?.title, ['received by hair for hope', 'received by organization', 'received by the organization', 'organization received'])
-  || textIncludesAny(item?.description, ['received by hair for hope', 'received by organization', 'received by the organization', 'organization received'])
-  );
-};
-
-const findOrganizationReceiptEvidence = ({ trackingEntries = [], logistics = null } = {}) => {
-  const sortedEntries = (trackingEntries || [])
-    .slice()
-    .sort((left, right) => new Date(right?.updated_at || 0).getTime() - new Date(left?.updated_at || 0).getTime());
-  const receivedEntry = sortedEntries.find((entry) => isReceivedByOrganizationSignal(entry));
-
-  if (receivedEntry) {
-    return {
-      issuedBy: normalizeCertificateIssuerId(receivedEntry.changed_by),
-      issuedAt: receivedEntry.updated_at || null,
-    };
-  }
-
-  if (
-    logistics?.received_at
-    || isReceivedByOrganizationSignal({ status: logistics?.shipment_status })
-  ) {
-    return {
-      issuedBy: normalizeCertificateIssuerId(logistics?.received_by),
-      issuedAt: logistics?.received_at || logistics?.created_at || null,
-    };
-  }
-
-  return null;
-};
-
 const ensureDonationCertificateForNotification = async ({
   submission,
-  trackingEntries = [],
-  logistics = null,
 }) => {
   if (!submission?.submission_id || !submission?.user_id) return null;
   if (isHairCheckOnlySubmission(submission)) return null;
 
-  const receiptEvidence = findOrganizationReceiptEvidence({ trackingEntries, logistics });
-  if (!receiptEvidence) return null;
-
   const existingResult = await fetchDonationCertificateBySubmissionId(submission.submission_id);
-  if (existingResult.data?.certificate_id) {
-    return existingResult.data;
-  }
-
-  const certificateResult = await createDonationCertificate({
-    user_id: submission.user_id,
-    submission_id: submission.submission_id,
-    certificate_number: createDonationCertificateNumber(submission),
-    certificate_type: 'Certificate of Donation',
-    issued_by: receiptEvidence.issuedBy || null,
-    issued_at: receiptEvidence.issuedAt || new Date().toISOString(),
-    remarks: 'Issued after the organization received the hair donation.',
-  });
-
-  return certificateResult.data || null;
+  return existingResult.data || null;
 };
 
 const normalizeTextToken = (value = '') => String(value || '')
@@ -715,7 +641,7 @@ const buildDonorDerivedNotifications = async ({
         dedupeKey: `${notificationTypes.screeningCompleted}:${screeningId}`,
         type: notificationTypes.screeningCompleted,
         title: 'Hair analysis completed',
-        message: screening.summary || `Your latest screening result is ${screening.decision || 'ready for review'}.`,
+        message: screening.summary || 'Your latest Hair Check observations are ready to review.',
         createdAt: screening.created_at,
         referenceType: 'ai_screening',
         referenceId: screeningId,
@@ -789,8 +715,6 @@ const buildDonorDerivedNotifications = async ({
     const certificate = hasDonationWorkflow
       ? await ensureDonationCertificateForNotification({
           submission,
-          trackingEntries,
-          logistics,
         })
       : null;
 
@@ -799,7 +723,7 @@ const buildDonorDerivedNotifications = async ({
         dedupeKey: `${notificationTypes.certificateAvailable}:${certificate.certificate_id}`,
         type: notificationTypes.certificateAvailable,
         title: 'Certificate available',
-        message: 'Your donation was received. Your certificate is ready in Achievements.',
+        message: 'Your hair donation was approved. Your certificate is ready in Achievements.',
         createdAt: certificate.issued_at || new Date().toISOString(),
         referenceType: 'donation_certificate',
         referenceId: certificate.certificate_id,
@@ -1172,7 +1096,7 @@ export const buildImmediateNotificationEvents = ({ role, payload }) => {
         dedupeKey: `${notificationTypes.screeningCompleted}:${payload.screening.ai_screening_id || payload.submission?.submission_id}`,
         type: notificationTypes.screeningCompleted,
         title: 'Hair analysis completed',
-        message: payload.screening.summary || `Your latest screening result is ${payload.screening.decision || 'ready for review'}.`,
+        message: payload.screening.summary || 'Your latest Hair Check observations are ready to review.',
         createdAt: payload.screening.created_at || new Date().toISOString(),
         referenceType: 'ai_screening',
         referenceId: payload.screening.ai_screening_id || payload.submission?.submission_id,

@@ -15,9 +15,8 @@ import { DonivraLoadingOverlay } from '../../src/components/ui/DonivraLoadingOve
 import { donorDashboardNavItems } from '../../src/constants/dashboard';
 import {
   fetchAiScreeningsByUserId,
-  fetchLatestDonationRequirement,
+  fetchCurrentHairEligibility,
 } from '../../src/features/hairSubmission.api';
-import { evaluateAiDonationEligibility } from '../../src/features/donorDonations.service';
 import {
   getCachedHairAnalysisHomeData,
   setCachedHairAnalysisHomeData,
@@ -135,8 +134,12 @@ function HairConditionSummaryCard({ entry, eligibility = null, onPress }) {
   if (!entry) return null;
 
   const mood = getHairScreeningMood(entry);
-  const isEligible = Boolean(eligibility?.isQualified);
-  const conditionLabel = isEligible ? t('analysis.eligible') : t('analysis.notEligible');
+  const isEligible = eligibility?.eligible === true;
+  const conditionLabel = eligibility?.configurationError || eligibility?.eligible == null
+    ? 'Requirements unavailable'
+    : isEligible
+      ? t('analysis.eligible')
+      : t('analysis.notEligible');
   const currentLengthCm = Number(eligibility?.normalized_length_cm);
   const minimumLengthCm = Number(eligibility?.minimum_length_cm);
   const eligibilityNote = !isEligible
@@ -194,7 +197,11 @@ function HairConditionSummaryCard({ entry, eligibility = null, onPress }) {
           <View style={styles.hairConditionActionCopy}>
             <Text style={[styles.hairConditionViewLabel, { color: roles.headingText }]}>{t('analysis.viewDetails')}</Text>
             <Text style={[styles.hairConditionStatusText, { color: roles.metaText }]}>
-              {isEligible ? t('analysis.eligibleShort') : t('analysis.reviewRequirements')}
+              {eligibility?.configurationError || eligibility?.eligible == null
+                ? 'Try again later'
+                : isEligible
+                  ? t('analysis.eligibleShort')
+                  : t('analysis.reviewRequirements')}
             </Text>
           </View>
           <AppIcon name="chevronRight" size="sm" state="muted" color={roles.metaText} />
@@ -330,7 +337,6 @@ function HairAnalysisHomeModule() {
   const [isLoading, setIsLoading] = React.useState(!cacheMatchesUser);
   const [error, setError] = React.useState('');
   const [screenings, setScreenings] = React.useState(cachedScreenings);
-  const [donationRequirement, setDonationRequirement] = React.useState(cachedHome?.donationRequirement || null);
   const [isFirstCheckPromptVisible, setIsFirstCheckPromptVisible] = React.useState(false);
   const [isProfileCompletionPromptVisible, setIsProfileCompletionPromptVisible] = React.useState(false);
   const [firstCheckPromptDismissed, setFirstCheckPromptDismissed] = React.useState(false);
@@ -390,17 +396,23 @@ function HairAnalysisHomeModule() {
 
     if (!screeningsRef.current.length) setIsLoading(true);
     setError('');
-    const [result, requirementResult] = await Promise.all([
-      fetchAiScreeningsByUserId(profile?.user_id || user.id, 30),
-      fetchLatestDonationRequirement(),
-    ]);
+    const result = await fetchAiScreeningsByUserId(profile?.user_id || user.id, 30);
+    const latestResultScreening = (Array.isArray(result.data) ? result.data : [])
+      .sort((left, right) => {
+        const timeDifference = new Date(right?.created_at || 0).getTime()
+          - new Date(left?.created_at || 0).getTime();
+        if (timeDifference) return timeDifference;
+        return Number(right?.ai_screening_id || 0) - Number(left?.ai_screening_id || 0);
+      })[0] || null;
+    const eligibilityResult = latestResultScreening?.ai_screening_id
+      ? await fetchCurrentHairEligibility(latestResultScreening.ai_screening_id)
+      : { data: null, error: null };
 
     if (analysisLoadRequestRef.current !== requestId) return;
 
-    if (result.error) {
-      setError(result.error.message || 'Could not load hair analysis history.');
+    if (result.error || eligibilityResult.error) {
+      setError(result.error?.message || eligibilityResult.error?.message || 'Could not load hair analysis history.');
       if (!Array.isArray(result.data)) {
-        setDonationRequirement(requirementResult.data || null);
         setIsLoading(false);
         return;
       }
@@ -413,12 +425,16 @@ function HairAnalysisHomeModule() {
         if (timeDifference) return timeDifference;
         return Number(right?.ai_screening_id || 0) - Number(left?.ai_screening_id || 0);
       })
-      .map((screening) => ({ ...screening, submission: null }));
-    const nextDonationRequirement = requirementResult.data || null;
-    setCachedHairAnalysisHomeData(user.id, { screenings: normalized, donationRequirement: nextDonationRequirement });
+      .map((screening) => ({
+        ...screening,
+        submission: null,
+        current_eligibility: Number(screening.ai_screening_id) === Number(eligibilityResult.data?.ai_screening_id)
+          ? eligibilityResult.data
+          : null,
+      }));
+    setCachedHairAnalysisHomeData(user.id, { screenings: normalized });
     screeningsRef.current = normalized;
     setScreenings(normalized);
-    setDonationRequirement(nextDonationRequirement);
     setIsLoading(false);
   }, [profile?.user_id, user?.id]);
 
@@ -434,18 +450,13 @@ function HairAnalysisHomeModule() {
   const latestScreening = screenings[0] || null;
   const latestEligibility = React.useMemo(() => {
     if (!latestScreening) return null;
-    const details = Array.isArray(latestScreening?.submission?.submission_details)
-      ? latestScreening.submission.submission_details
-      : [];
-    const latestDetail = [...details].sort(
-      (left, right) => new Date(right?.created_at || 0) - new Date(left?.created_at || 0)
-    )[0] || null;
-    return evaluateAiDonationEligibility({
-      screening: latestScreening,
-      detail: latestDetail,
-      donationRequirement,
-    });
-  }, [donationRequirement, latestScreening]);
+    return latestScreening.current_eligibility || {
+      isQualified: false,
+      configurationError: false,
+      reasons: ['Current eligibility is unavailable. Refresh and try again.'],
+      reason: 'Current eligibility is unavailable. Refresh and try again.',
+    };
+  }, [latestScreening]);
   const recentLogs = React.useMemo(() => screenings.slice(0, 5), [screenings]);
   const olderLogs = React.useMemo(() => recentLogs.slice(1), [recentLogs]);
   const hasRecentLogs = recentLogs.length > 0;

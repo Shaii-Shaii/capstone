@@ -60,6 +60,18 @@ const analysisSchema = {
         detected_condition: {
           type: 'string',
         },
+        chemical_treatment_detected: {
+          type: 'boolean',
+        },
+        colored_hair_detected: {
+          type: 'boolean',
+        },
+        bleached_hair_detected: {
+          type: 'boolean',
+        },
+        rebonded_hair_detected: {
+          type: 'boolean',
+        },
         visible_damage_notes: {
           type: 'string',
         },
@@ -127,9 +139,6 @@ const analysisSchema = {
         improvement_recommendation: {
           type: 'string',
         },
-        decision: {
-          type: 'string',
-        },
         summary: {
           type: 'string',
         },
@@ -173,6 +182,10 @@ const analysisSchema = {
         'detected_texture',
         'detected_density',
         'detected_condition',
+        'chemical_treatment_detected',
+        'colored_hair_detected',
+        'bleached_hair_detected',
+        'rebonded_hair_detected',
         'visible_damage_notes',
         'confidence_score',
         'shine_level',
@@ -194,7 +207,6 @@ const analysisSchema = {
         'lice_notes',
         'improvement_tracking_status',
         'improvement_recommendation',
-        'decision',
         'summary',
         'length_assessment',
         'donation_readiness_note',
@@ -296,7 +308,6 @@ const coreAnalysisSchema = {
         lice_notes: { type: 'string' },
         improvement_tracking_status: { type: 'string' },
         improvement_recommendation: { type: 'string' },
-        decision: { type: 'string' },
         summary: { type: 'string' },
         donation_readiness_note: { type: 'string' },
         history_assessment: { type: 'string' },
@@ -348,6 +359,19 @@ type DonationRequirementContext = {
   rebonded_hair_status?: boolean | null;
   hair_texture_status?: string;
   notes?: string;
+  updated_at?: string | null;
+};
+
+type WigRequirementRow = {
+  Wig_Requirement_ID?: number | null;
+  Minimum_Hair_Length?: number | null;
+  Chemical_Treatment_Status?: boolean | null;
+  Colored_Hair_Status?: boolean | null;
+  Bleached_Hair_Status?: boolean | null;
+  Rebonded_Hair_Status?: boolean | null;
+  Hair_Texture_Status?: string | null;
+  Notes?: string | null;
+  Updated_At?: string | null;
 };
 
 type SubmissionContext = {
@@ -364,7 +388,6 @@ type SubmissionContext = {
 type HistoryContextEntry = {
   created_at?: string;
   detected_condition?: string;
-  decision?: string;
   summary?: string;
   estimated_length?: number | null;
 };
@@ -417,11 +440,10 @@ const requiredViewDefinitions = [
 const minimumExpectedViews = ['Front View Photo', 'Side Profile Photo', 'Hair Scalp'];
 const expectedViews = minimumExpectedViews;
 const CM_PER_INCH = 2.54;
-const MIN_ELIGIBILITY_CONFIDENCE = 0.75;
 const ELIGIBLE_STATUS = 'Eligible for hair donation';
 const NOT_ELIGIBLE_STATUS = 'Not eligible for donation yet';
-const TRACKING_STATUS = 'Needs improvement tracking';
 const IMPROVE_STATUS = NOT_ELIGIBLE_STATUS;
+const DONATION_REQUIREMENTS_UNAVAILABLE_MESSAGE = 'Donation requirements are currently unavailable. Please try again later or contact the organization.';
 const CARE_SAFETY_NOTE = 'If you have allergies, scalp irritation, or sensitivity, consult a qualified hair or scalp care professional before trying new ingredients.';
 const NON_ADVERTISING_CARE_OPTIONS: Record<string, string[]> = {
   dry: [
@@ -551,7 +573,7 @@ const instructions = [
   'Validate cross-view consistency before hair analysis. The front and side views should appear to show the same current hair from the same person. The Hair Scalp view may crop the face or show a top-down head angle; compare it by hair/scalp cues only. Use only visible consistency cues; do not identify the person. Reject only if photos clearly appear to be from different people or clearly different current hair that cannot be explained by camera angle or lighting.',
   'Do not return not-detected, retake-required, or photo-validation style results. The output must be about visible hair analysis.',
   'If visibility is limited, keep is_hair_detected=true and lower confidence_score instead of rejecting the photo set.',
-  `When image quality or visibility is too weak for a confident donation judgment, keep the final decision as "${NOT_ELIGIBLE_STATUS}" and explain the limitation honestly.`,
+  'When image quality or visibility is weak, lower confidence and describe the observation limit. Do not make an eligibility-policy decision.',
 
   // Per-view notes
   'For each provided photo view, write a detailed per_view_notes entry describing WHAT YOU SEE:',
@@ -569,7 +591,7 @@ const instructions = [
   'Donation length starts at the likely cut-start area around the lower cheek, jawline, or neck ("bandang leeg"), not from the scalp, hairline, or root. Measure the visible hanging length from that cheek/neck start point down to the lowest clearly visible hair ends.',
   'Use the Front View Photo, Side Profile Photo, Right Side Photo, and Back Hair Photo together when available. The back-side photo is important for confirming the lowest visible ends and true hanging length. The hairline/root does not need to be visible for donation length if the cheek/neck or nape start area and lowest ends are visible.',
   'IMPORTANT LENGTH RULE: Do not return null just because there is no ruler. Make a conservative practical visual estimate using face/head scale and body landmarks. Approximate donation length from lower cheek/neck to ends: shoulder-length is usually about 4-8 inches, collarbone is usually about 6-10 inches, upper chest is usually about 8-12 inches, armpit is usually about 10-14 inches, mid-back is usually about 15-24 inches, waist is usually about 24-32 inches. Store the rounded numeric estimate in centimeters.',
-  'Do NOT mark the donor eligible when the visible ends only reach the shoulder, collarbone, or upper chest. For eligibility, the visible lower cheek/neck-to-ends length must clearly exceed the current database minimum hair length requirement and usually needs to reach at least around armpit or longer in the side/front view.',
+  'Body landmarks are estimation aids only. Do not turn shoulder, collarbone, armpit, or another landmark into an eligibility rule; compare the numeric estimate only with the current database requirement.',
   'Return null for estimated_length whenever length_measurable=false. If loose, naturally hanging hair is clearly visible but simply too short for donation, still return the best conservative numeric estimate instead of null.',
   'In length_assessment, explicitly mention that the estimate starts around the lower cheek/neck/cut-start area and name the visible endpoint landmark, such as shoulder, collarbone, armpit, mid-back, waist, or "lowest visible ends". Use inches only in this text.',
 
@@ -597,6 +619,7 @@ const instructions = [
   'improvement_tracking_status: use one of: Ready for donation, Not eligible for donation yet, Needs improvement tracking.',
   'improvement_recommendation: one practical, non-medical wellness/progress tracking recommendation. If coverage concerns are visible, suggest tracking the same views over time and gentle scalp/hair care; do not name diseases or diagnoses.',
   'detected_condition: use one precise label based on the MOST PROMINENT VISIBLE condition you observe:',
+  'chemical_treatment_detected, colored_hair_detected, bleached_hair_detected, and rebonded_hair_detected: return explicit booleans from visible evidence plus the questionnaire. Do not infer a specific treatment without evidence.',
   '  - Healthy: shiny, lustrous, no visible damage, sealed ends, good scalp condition',
   '  - Dry: dull appearance, rough texture, lack of shine, dry-looking ends',
   '  - Frizzy: visible frizz along shaft, flyaways, uneven texture',
@@ -644,13 +667,8 @@ const instructions = [
   '- recommendation_text: 2–3 actionable sentences explaining WHAT to do and WHY based on what you observed',
   '- priority_order: 1 = most urgent based on severity of observed issue',
 
-  // Decision
-  `decision: set to exactly one of: "${ELIGIBLE_STATUS}" or "${NOT_ELIGIBLE_STATUS}".`,
-  'Base this on: (1) visible evidence from photos, (2) donation requirement context if provided, (3) observed hair condition.',
-  `Use "${NOT_ELIGIBLE_STATUS}" when image quality prevents a confident visible-length or condition judgment.`,
-
   // donation_readiness_note
-  `donation_readiness_note: When the estimated_length clearly exceeds the current database minimum hair length requirement from the lower cheek/neck cut-start area to the ends, the endpoint landmark is armpit/mid-back/waist or similarly long, confidence_score is at least ${MIN_ELIGIBILITY_CONFIDENCE}, AND the detected_condition is Healthy or otherwise suitable, write 1-2 specific, encouraging sentences about what the donor should do to prepare for donation. When the hair is not yet ready for donation, return an empty string.`,
+  'donation_readiness_note: write 1-2 specific preparation sentences only when the measured observations satisfy the supplied database requirements. Otherwise return an empty string.',
 
   // history_assessment
   'history_assessment: if 2 or more prior hair-check entries are provided, compare current vs prior. Otherwise return empty string.',
@@ -700,11 +718,9 @@ const analysisInstructions = [
   'If the hair appears short, shoulder-length, or below the donation threshold, return the approximate short length in centimeters instead of null.',
   'Do not invent fake precision. Curled hair may receive a conservative estimate only when its naturally hanging ends remain visible. Tied, clipped, folded, blocked, covered, or cropped hair is not measurable and must return estimated_length=null.',
   'Donation suitability must respect the current database minimum hair length requirement measured from the lower cheek/neck cut-start area to the lowest visible ends.',
-  `Set decision to exactly one of: "${ELIGIBLE_STATUS}" or "${NOT_ELIGIBLE_STATUS}".`,
-  `Use "${ELIGIBLE_STATUS}" only when the visible donation length clearly exceeds the current database minimum hair length requirement, the visible endpoint is around armpit or longer, the visible condition appears suitable for donation, and confidence_score is at least ${MIN_ELIGIBILITY_CONFIDENCE}.`,
-  `Use "${NOT_ELIGIBLE_STATUS}" when the visible donation length appears below the current database minimum hair length requirement, the visible condition is not suitable, or the evidence is too limited for confident eligibility.`,
-  `Use "${NOT_ELIGIBLE_STATUS}" when clear bald spots, high visible scalp area, or severe shedding concerns mean the user is not ready to donate yet. Set improvement_tracking_status to "${TRACKING_STATUS}" when the user should track visible coverage or shedding progress.`,
-  `If the hair looks healthy but too short for donation, still return "${NOT_ELIGIBLE_STATUS}" and tailor recommendations toward healthy growth, length retention, reduced breakage, and maintaining current hair health.`,
+  'Do not return a donation decision. The server evaluates the observed attributes against the current database rules.',
+  'Do not use confidence, damage, dandruff, lice, density, shedding, scalp coverage, or body landmarks as donation requirements unless they appear in the supplied database requirement context. They may still be reported as wellness observations.',
+  'If the hair looks healthy but short, report the measured length accurately and tailor care guidance toward healthy growth and length retention without declaring eligibility.',
   'Questionnaire answers are required supporting context for wash frequency, itch, flakes, oiliness, dryness/roughness, hair fall, chemical history, heat use, and self-reported hair type. They must shape summary and recommendations without replacing photo evidence.',
   'confidence_score must reflect image clarity, visibility of ends and full length, texture and scalp detail, consistency across views, and consistency with the questionnaire.',
   'Return shine_level, frizz_level, dryness_level, oiliness_level, and damage_level as integers from 1 to 10. These MUST reflect your actual photo observations and MUST be logically consistent with your summary, visible_damage_notes, and detected_condition.',
@@ -724,8 +740,7 @@ const analysisInstructions = [
   'Do not use recommendation slots for camera, upload, lighting, retake, photo framing, or recheck instructions. Those belong before analysis, not in hair-care recommendations.',
   'Do not recommend or advertise products. Do not name brands, companies, stores, marketplaces, shopping links, product lines, countries, country-made products, or country-specific options. Mention only neutral ingredients that clearly match the observed concern, and skip ingredients when the recommendation is only about length, maintenance, retaking photos, or rechecking.',
   'If ingredients are mentioned, include a short caution that users with allergies, scalp irritation, or sensitivity should consult a qualified hair or scalp care professional before trying new ingredients.',
-  `For donation eligibility, require confidence_score >= ${MIN_ELIGIBILITY_CONFIDENCE}. If confidence is lower, use "${NOT_ELIGIBLE_STATUS}" and explain what must be clearer.`,
-  'Be conservative with eligibility: if cheek/neck-to-ends donation length, ends condition, chemical treatment status, or required views are uncertain, do not mark the donor eligible.',
+  'Eligibility criteria come only from the supplied current database requirement. Confidence describes observation quality and is not itself an eligibility threshold.',
   'Do not diagnose disease. Use careful phrases such as "the photos show", "this check suggests", and "based on the visible images".',
 ].join('\n');
 
@@ -733,6 +748,123 @@ const analysisInstructions = [
 const normalizeString = (value: unknown) => (
   typeof value === 'string' ? value.trim() : ''
 );
+
+const getCurrentDonationRequirement = async (request: Request) => {
+  const supabaseUrl = normalizeString(Deno.env.get('SUPABASE_URL'));
+  const anonKey = normalizeString(Deno.env.get('SUPABASE_ANON_KEY'));
+  const authorization = normalizeString(request.headers.get('Authorization'));
+
+  if (!supabaseUrl || !anonKey || !authorization.toLowerCase().startsWith('bearer ')) {
+    return { requirement: null, error: 'Your session could not be verified.', status: 401 };
+  }
+
+  const userResponse = await fetch(`${supabaseUrl}/auth/v1/user`, {
+    headers: { apikey: anonKey, Authorization: authorization },
+  });
+  if (!userResponse.ok) {
+    return { requirement: null, error: 'Your session could not be verified.', status: 401 };
+  }
+
+  const fields = [
+    'Wig_Requirement_ID',
+    'Minimum_Hair_Length',
+    'Chemical_Treatment_Status',
+    'Colored_Hair_Status',
+    'Bleached_Hair_Status',
+    'Rebonded_Hair_Status',
+    'Hair_Texture_Status',
+    'Notes',
+    'Updated_At',
+  ].join(',');
+  const response = await fetch(
+    `${supabaseUrl}/rest/v1/wig_requirements?select=${encodeURIComponent(fields)}&order=Updated_At.desc&limit=1`,
+    { headers: { apikey: anonKey, Authorization: authorization } },
+  );
+  if (!response.ok) {
+    console.error('[analyze-hair-submission] requirement lookup failed', { status: response.status });
+    return { requirement: null, error: DONATION_REQUIREMENTS_UNAVAILABLE_MESSAGE, status: 503 };
+  }
+
+  const rows = await response.json() as WigRequirementRow[];
+  const row = rows?.[0];
+  if (!row) {
+    return { requirement: null, error: DONATION_REQUIREMENTS_UNAVAILABLE_MESSAGE, status: 503 };
+  }
+
+  const minimumInches = normalizeNumber(row.Minimum_Hair_Length);
+  const requirement: DonationRequirementContext = {
+    donation_requirement_id: normalizeNumber(row.Wig_Requirement_ID),
+    minimum_hair_length: minimumInches == null ? null : Math.round(minimumInches * CM_PER_INCH * 100) / 100,
+    minimum_hair_length_inches: minimumInches,
+    chemical_treatment_status: row.Chemical_Treatment_Status ?? null,
+    colored_hair_status: row.Colored_Hair_Status ?? null,
+    bleached_hair_status: row.Bleached_Hair_Status ?? null,
+    rebonded_hair_status: row.Rebonded_Hair_Status ?? null,
+    hair_texture_status: normalizeString(row.Hair_Texture_Status),
+    notes: normalizeString(row.Notes),
+    updated_at: row.Updated_At ?? null,
+  };
+  return { requirement, error: '', status: 200 };
+};
+
+const evaluateCurrentHairObservations = async (
+  request: Request,
+  analysis: Record<string, unknown>,
+) => {
+  const supabaseUrl = normalizeString(Deno.env.get('SUPABASE_URL'));
+  const anonKey = normalizeString(Deno.env.get('SUPABASE_ANON_KEY'));
+  const authorization = normalizeString(request.headers.get('Authorization'));
+  const response = await fetch(
+    `${supabaseUrl}/rest/v1/rpc/evaluate_current_hair_observations`,
+    {
+      method: 'POST',
+      headers: {
+        apikey: anonKey,
+        Authorization: authorization,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        p_estimated_length_cm: normalizeNumber(analysis.estimated_length),
+        p_detected_texture: normalizeString(analysis.detected_texture),
+        p_analysis_result: analysis,
+      }),
+    },
+  );
+
+  if (!response.ok) {
+    console.error('[analyze-hair-submission] eligibility RPC failed', { status: response.status });
+    throw new Error(DONATION_REQUIREMENTS_UNAVAILABLE_MESSAGE);
+  }
+
+  return await response.json() as Record<string, unknown>;
+};
+
+const attachCurrentEligibility = (
+  analysis: Record<string, unknown>,
+  evaluation: Record<string, unknown>,
+) => {
+  if (evaluation.configuration_error === true || typeof evaluation.eligible !== 'boolean') {
+    throw new Error(DONATION_REQUIREMENTS_UNAVAILABLE_MESSAGE);
+  }
+  const reasons = Array.isArray(evaluation.reasons)
+    ? evaluation.reasons.map((reason) => normalizeString(reason)).filter(Boolean)
+    : [];
+  const eligible = evaluation.eligible === true;
+
+  return {
+    ...analysis,
+    decision: eligible ? ELIGIBLE_STATUS : IMPROVE_STATUS,
+    eligibility_reasons: reasons,
+    eligibility_evaluation: {
+      ...evaluation,
+      evaluated_at: new Date().toISOString(),
+      evaluation_source: 'current_wig_requirements',
+    },
+    donation_readiness_note: eligible
+      ? normalizeString(analysis.donation_readiness_note)
+      : reasons.join(' '),
+  };
+};
 
 const normalizeSheddingLevel = (value: unknown, fallback: 'none' | 'mild' = 'mild') => {
   const normalized = normalizeString(value).toLowerCase();
@@ -1014,38 +1146,6 @@ const hasRootToEndLengthRationale = (value: string) => {
   const mentionsRootArea = normalized.includes('root') || normalized.includes('hairline');
   const mentionsEnds = normalized.includes('end');
   return mentionsRootArea && mentionsEnds;
-};
-
-const hasShortEndpointLandmark = (value: string) => {
-  const normalized = normalizeString(value).toLowerCase();
-  if (!normalized) return false;
-
-  const hasLongEndpoint = includesAnyKeyword(normalized, [
-    'armpit',
-    'underarm',
-    'mid-back',
-    'mid back',
-    'middle of the back',
-    'lower back',
-    'low back',
-    'waist',
-  ]);
-  if (hasLongEndpoint) return false;
-
-  return includesAnyKeyword(normalized, [
-    'shoulder',
-    'shoulder-length',
-    'collarbone',
-    'clavicle',
-    'upper chest',
-    'chest length',
-    'reaches the chest',
-    'around the chest',
-    'neck-length',
-    'nape length',
-    'chin-length',
-    'jaw-length',
-  ]);
 };
 
 const hasUnmeasurableLengthEvidence = (value: string) => {
@@ -1335,27 +1435,6 @@ const enhanceRecommendations = ({
   });
 };
 
-const hasRequirementTreatmentConflict = (
-  requirementContext: DonationRequirementContext | null,
-  detectedCondition: string,
-  visibleDamageNotes: string,
-  questionnaireAnswers: Record<string, unknown>,
-) => {
-  if (!requirementContext) return false;
-
-  const questionnaireText = Object.entries(questionnaireAnswers || {})
-    .map(([key, value]) => `${key}: ${String(value ?? '')}`)
-    .join(' ');
-  const combined = `${detectedCondition} ${visibleDamageNotes} ${questionnaireText}`.toLowerCase();
-
-  if (requirementContext.chemical_treatment_status === false && includesAnyKeyword(combined, ['chemical', 'treated', 'permed', 'relaxed'])) return true;
-  if (requirementContext.colored_hair_status === false && includesAnyKeyword(combined, ['dyed', 'colored', 'colour', 'color-treated', 'multiple tones'])) return true;
-  if (requirementContext.bleached_hair_status === false && includesAnyKeyword(combined, ['bleach', 'bleached', 'lightened'])) return true;
-  if (requirementContext.rebonded_hair_status === false && includesAnyKeyword(combined, ['rebond', 'rebonded', 'straightened chemically'])) return true;
-
-  return false;
-};
-
 const buildLengthAssessment = ({
   estimatedLength,
   providedViews,
@@ -1405,7 +1484,6 @@ const buildSummaryFromAnalysisFields = ({
   detectedDensity,
   detectedCondition,
   visibleDamageNotes,
-  decision,
 }: {
   isHairDetected: boolean;
   invalidImageReason: string;
@@ -1414,7 +1492,6 @@ const buildSummaryFromAnalysisFields = ({
   detectedDensity: string;
   detectedCondition: string;
   visibleDamageNotes: string;
-  decision: string;
 }) => {
   if (!isHairDetected) {
     return invalidImageReason || 'Hair was assessed from the visible areas in the uploaded photos. Final screening requires manual review.';
@@ -1434,11 +1511,7 @@ const buildSummaryFromAnalysisFields = ({
     ? `${visibleDamageNotes.charAt(0).toUpperCase()}${visibleDamageNotes.slice(1)}.`
     : '';
 
-  const decisionPart = decision === ELIGIBLE_STATUS
-    ? 'This check suggests the visible condition and length may be suitable for donation.'
-    : 'This check suggests the hair still needs improvement before donation readiness.';
-
-  return `${observationParts.join(' ')}. ${notesPart} ${decisionPart} Final screening requires manual review.`
+  return `${observationParts.join(' ')}. ${notesPart} Final screening requires manual review.`
     .replace(/\s+/g, ' ')
     .trim();
 };
@@ -1469,7 +1542,7 @@ const runFocusedLengthFallback = async ({
         'If hair is tied back, clipped, folded into a bun, held by a tie/scrunchie, or its natural ends are hidden, return estimated_length=null and explain the obstruction in length_limit_reason. Never measure the distance to a clip, bun, or tied section.',
         'If length_measurable=true, return a conservative approximate estimated_length in centimeters for storage even when no ruler is present.',
         'Use face/head/body proportions and landmarks for donation length from lower cheek/neck to ends: shoulder-length is usually about 4-8 inches, collarbone about 6-10 inches, upper chest about 8-12 inches, armpit about 10-14 inches, mid-back about 15-24 inches, waist about 24-32 inches.',
-        'Do not estimate eligible donation length when the visible ends only reach the shoulder, collarbone, or upper chest. Eligibility requires a clear lower cheek/neck-to-ends length above the current database minimum hair length requirement.',
+        'Return the most accurate lower cheek/neck-to-ends measurement supported by the photos. Body landmarks are measurement aids and must never become eligibility rules.',
         'Return null whenever length_measurable=false or the lower cheek/neck cut-start area or natural lowest ends are blocked, tied, clipped, covered, or cropped.',
         'Write length_assessment in inches only and mention the lower cheek/neck start point.',
         'Do not reject ordinary eyeglasses unless they hide the hairline or hair.',
@@ -1701,7 +1774,7 @@ const formatHistoryContext = (historyContext: HistoryContext | null) => {
     `latest_check_at: ${normalizeString(historyContext.latest_check_at) || 'not provided'}`,
     'Recent checks:',
     ...historyContext.entries.slice(0, 6).map((entry, index) => (
-      `${index + 1}. created_at=${normalizeString(entry.created_at) || 'not provided'} | condition=${normalizeString(entry.detected_condition) || 'not provided'} | decision=${normalizeString(entry.decision) || 'not provided'} | estimated_length=${normalizeNumber(entry.estimated_length) ?? 'not provided'} | summary=${normalizeString(entry.summary) || 'not provided'}`
+      `${index + 1}. created_at=${normalizeString(entry.created_at) || 'not provided'} | condition=${normalizeString(entry.detected_condition) || 'not provided'} | estimated_length=${normalizeNumber(entry.estimated_length) ?? 'not provided'} | summary=${normalizeString(entry.summary) || 'not provided'}`
     )),
   ].join('\n');
 };
@@ -1711,27 +1784,6 @@ const formatQuestionnaireAnswers = (answers: Record<string, unknown> = {}) => (
     .map(([key, value]) => `${key}: ${value === '' || value === null || value === undefined ? 'not provided' : String(value)}`)
     .join('\n')
 );
-
-const isDonationConditionAcceptable = (condition: string, visibleDamageNotes: string) => {
-  const normalizedCondition = condition.toLowerCase();
-  const normalizedNotes = visibleDamageNotes.toLowerCase();
-  const combined = `${normalizedCondition} ${normalizedNotes}`;
-
-  if (!normalizedCondition) return false;
-  if (normalizedCondition.includes('healthy')) return true;
-  if (includesAnyKeyword(combined, [
-    'severe damage',
-    'major damage',
-    'extensive damage',
-    'heavy breakage',
-    'significant breakage',
-    'chemical damage',
-    'split ends throughout',
-    'not suitable',
-  ])) return false;
-
-  return !includesAnyKeyword(combined, ['bleached', 'rebonded']);
-};
 
 const scoreConditionForTrend = (condition: string) => {
   const normalized = condition.toLowerCase();
@@ -1876,7 +1928,6 @@ const normalizeAnalysisPayload = (
     || ['moderate', 'high'].includes(visibleScalpArea.toLowerCase())
     || ['moderate', 'severe'].includes(sheddingLevel.toLowerCase())
     || (hairDensityScore != null && hairDensityScore < 45);
-  const hasScalpFindingConcern = dandruffDetected || liceDetected;
 
   // Correct level values that contradict the AI's own text observations
   const combinedText = [
@@ -1898,25 +1949,16 @@ const normalizeAnalysisPayload = (
   const oilinessLevel = rawOilinessLevel;
   const inferredMissingViews = expectedViews.filter((view) => !providedViews.includes(view));
   const missingViews = [...new Set([...inferredMissingViews, ...normalizedMissingViews])];
-  const configuredMinimumDonationLengthCm = Number(requirementContext?.minimum_hair_length);
-  const minimumDonationLengthCm = Number.isFinite(configuredMinimumDonationLengthCm) && configuredMinimumDonationLengthCm > 0
+  const rawMinimumDonationLengthCm = requirementContext?.minimum_hair_length;
+  const configuredMinimumDonationLengthCm = rawMinimumDonationLengthCm == null
+    ? null
+    : Number(rawMinimumDonationLengthCm);
+  const minimumDonationLengthCm = Number.isFinite(configuredMinimumDonationLengthCm) && configuredMinimumDonationLengthCm >= 0
     ? configuredMinimumDonationLengthCm
     : null;
-  const endpointEvidenceText = [
-    lengthAssessment,
-    normalizeString(analysis?.summary),
-    visibleDamageNotes,
-    ...normalizedViewNotes.map((item) => item.notes),
-  ].join(' ');
-  const hasBelowThresholdEndpointLandmark = (
-    (minimumDonationLengthCm != null && approximateLengthFromText != null && approximateLengthFromText < minimumDonationLengthCm)
-    || hasShortEndpointLandmark(endpointEvidenceText)
-  );
   const finalEstimatedLength = !lengthMeasurable
     ? null
-    : hasBelowThresholdEndpointLandmark && estimatedLength != null
-      ? Math.min(estimatedLength, approximateLengthFromText ?? (minimumDonationLengthCm != null ? minimumDonationLengthCm - 0.1 : estimatedLength))
-      : estimatedLength;
+    : estimatedLength;
   const donationReadinessNote = normalizeString(analysis?.donation_readiness_note);
   const historyAssessment = normalizeString(analysis?.history_assessment) || inferHistoryAssessment(
     historyContext,
@@ -1924,25 +1966,7 @@ const normalizeAnalysisPayload = (
     finalEstimatedLength,
   );
   const questionnaireAssessment = inferQuestionnaireAssessment(questionnaireAnswers);
-  const conditionAcceptable = isDonationConditionAcceptable(detectedCondition, visibleDamageNotes);
-  const treatmentConflict = hasRequirementTreatmentConflict(
-    requirementContext,
-    detectedCondition,
-    visibleDamageNotes,
-    questionnaireAnswers,
-  );
-  const hasClearEnoughEvidence = isHairDetected && !missingViews.length && confidenceScore != null && confidenceScore >= MIN_ELIGIBILITY_CONFIDENCE;
-  const hasDonationRequirement = minimumDonationLengthCm != null;
-  const meetsLengthRule = hasDonationRequirement && finalEstimatedLength != null && finalEstimatedLength >= minimumDonationLengthCm && !hasBelowThresholdEndpointLandmark;
-
-  let decision = normalizeString(analysis?.decision) === ELIGIBLE_STATUS
-    ? ELIGIBLE_STATUS
-    : IMPROVE_STATUS;
-  if (!hasDonationRequirement || !hasClearEnoughEvidence || !meetsLengthRule || !conditionAcceptable || treatmentConflict || hasCoverageConcern || hasScalpFindingConcern) {
-    decision = IMPROVE_STATUS;
-  } else if (concernType === 'donation_eligibility') {
-    decision = ELIGIBLE_STATUS;
-  }
+  const decision = 'Analysis completed';
 
   const summary = normalizeString(analysis?.summary) || buildSummaryFromAnalysisFields({
     isHairDetected,
@@ -1952,7 +1976,6 @@ const normalizeAnalysisPayload = (
     detectedDensity,
     detectedCondition,
     visibleDamageNotes,
-    decision,
   });
   const normalizedRecommendations = enhanceRecommendations({
     source: analysis?.recommendations,
@@ -1973,16 +1996,10 @@ const normalizeAnalysisPayload = (
           ? 'Repeat the same photo views over time to track visible scalp coverage and density changes, and use gentle scalp and hair care while monitoring progress.'
           : 'Keep tracking hair length and condition with future CheckHair scans before donating.'
   );
-  const minimumLengthMessage = minimumDonationLengthCm != null && finalEstimatedLength != null && !meetsLengthRule
-    ? `The estimated donation length is ${formatLengthInches(finalEstimatedLength)}, below the ${formatLengthInches(minimumDonationLengthCm)} requirement. Continue caring for and growing the hair before checking again.`
-    : '';
-  const finalImprovementTrackingStatus = decision === ELIGIBLE_STATUS
-    ? 'Ready for donation'
-    : 'Not eligible for donation yet';
-  const finalImprovementRecommendation = minimumLengthMessage || improvementRecommendation;
-  const finalDonationReadinessNote = decision === ELIGIBLE_STATUS
-    ? donationReadinessNote
-    : minimumLengthMessage;
+  const finalImprovementTrackingStatus = normalizeString(analysis?.improvement_tracking_status)
+    || 'Analysis completed';
+  const finalImprovementRecommendation = improvementRecommendation;
+  const finalDonationReadinessNote = donationReadinessNote;
 
   return {
     is_hair_detected: finalIsHairDetected,
@@ -1998,6 +2015,18 @@ const normalizeAnalysisPayload = (
     detected_texture: detectedTexture || 'Straight',
     detected_density: detectedDensity || 'Medium',
     detected_condition: detectedCondition || 'Needs manual hair review',
+    chemical_treatment_detected: typeof analysis?.chemical_treatment_detected === 'boolean'
+      ? analysis.chemical_treatment_detected
+      : null,
+    colored_hair_detected: typeof analysis?.colored_hair_detected === 'boolean'
+      ? analysis.colored_hair_detected
+      : null,
+    bleached_hair_detected: typeof analysis?.bleached_hair_detected === 'boolean'
+      ? analysis.bleached_hair_detected
+      : null,
+    rebonded_hair_detected: typeof analysis?.rebonded_hair_detected === 'boolean'
+      ? analysis.rebonded_hair_detected
+      : null,
     visible_damage_notes: visibleDamageNotes,
     confidence_score: confidenceScore ?? 0,
     shine_level: shineLevel,
@@ -2071,9 +2100,7 @@ Deno.serve(async (request) => {
     const questionnaireAnswers = body?.questionnaire_answers && typeof body.questionnaire_answers === 'object'
       ? body.questionnaire_answers as Record<string, unknown>
       : {};
-    const donationRequirementContext = body?.donation_requirement_context && typeof body.donation_requirement_context === 'object'
-      ? body.donation_requirement_context as DonationRequirementContext
-      : null;
+    const clientRequirementId = body?.donation_requirement_context?.donation_requirement_id ?? null;
     const complianceContext = body?.compliance_context && typeof body.compliance_context === 'object'
       ? body.compliance_context as ComplianceContext
       : null;
@@ -2122,6 +2149,17 @@ Deno.serve(async (request) => {
       }, 422);
     }
 
+    const requirementResult = await getCurrentDonationRequirement(request);
+    if (!requirementResult.requirement) {
+      return createJsonResponse({
+        error: requirementResult.error || DONATION_REQUIREMENTS_UNAVAILABLE_MESSAGE,
+        error_type: requirementResult.status === 401 ? 'authentication_required' : 'donation_requirements_unavailable',
+        edge_function_invoked: true,
+        provider_request_attempted: false,
+      }, requirementResult.status);
+    }
+    const donationRequirementContext = requirementResult.requirement;
+
     const providedViews = new Set(
       validImages
         .flatMap((image) => getImageCanonicalViewLabels(image))
@@ -2150,7 +2188,8 @@ Deno.serve(async (request) => {
       missingProvidedViews,
       hasQuestionnaireAnswers: Boolean(Object.keys(questionnaireAnswers).length),
       hasComplianceContext: Boolean(complianceContext?.acknowledged),
-      hasDonationRequirementContext: Boolean(donationRequirementContext),
+      donationRequirementId: donationRequirementContext.donation_requirement_id ?? null,
+      clientRequirementId,
       hasSubmissionContext: Boolean(submissionContext?.submission_id),
       historyEntryCount: Array.isArray(historyContext?.entries) ? historyContext.entries.length : 0,
       hasOpenRouterKey,
@@ -2206,10 +2245,9 @@ Deno.serve(async (request) => {
       'Recommendations must be about hair care, condition maintenance, length retention, scalp care, or visible damage. Do not put photo capture, retake, lighting, upload, framing, or recheck instructions in recommendations.',
       'If questionnaire answers report at least one risk, at least one recommendation must directly address that reported risk.',
       'Visible donation length must be at least the current database minimum hair length requirement from the lower cheek/neck cut-start area for donation eligibility.',
-      `Use "${ELIGIBLE_STATUS}" only when visible condition is suitable, confidence_score is at least ${MIN_ELIGIBILITY_CONFIDENCE}, all required views are clearly visible, and the visible endpoint is around armpit or longer. Shoulder, collarbone, or upper-chest length is not eligible.`,
-      'If donation requirements disallow colored, bleached, rebonded, or chemically treated hair and the photos or questionnaire suggest that treatment, mark the result as needing improvement or manual review.',
+      'Report explicit treatment booleans accurately. The server, not the AI, will compare them with the current database requirements and set the final eligibility decision.',
       'Do not recommend or advertise products. Include neutral ingredients only when they clearly fit a visible concern: dryness, visible damage, frizz, visible flakes, oily roots, or chemically treated hair. Skip ingredients when the recommendation is only about length, maintenance, retaking photos, or rechecking. Do not include brand names, company names, store names, marketplaces, shopping links, advertised product names, countries, country-made products, or country-specific product options. If ingredients are mentioned, include a short caution that users with allergies, scalp irritation, or sensitivity should consult a qualified hair or scalp care professional before trying new ingredients.',
-      `Use "${NOT_ELIGIBLE_STATUS}" when length is too short, condition needs work, confidence is too low, or scalp coverage should be tracked before donation.`,
+      'Do not invent any donation requirement that is absent from the database context.',
     ].join('\n');
 
     // Build multimodal content parts (text + images interleaved)
@@ -2340,7 +2378,7 @@ Deno.serve(async (request) => {
             recommendations: [],
           };
 
-          const analysis = {
+          const normalizedAnalysis = {
             ...normalizeAnalysisPayload(
               rawAnalysis,
               Array.from(providedViews),
@@ -2351,6 +2389,11 @@ Deno.serve(async (request) => {
             ),
             recommendations: [],
           };
+          const eligibilityEvaluation = await evaluateCurrentHairObservations(
+            request,
+            normalizedAnalysis,
+          );
+          const analysis = attachCurrentEligibility(normalizedAnalysis, eligibilityEvaluation);
 
           return createJsonResponse({
             success: true,
@@ -2500,7 +2543,7 @@ Deno.serve(async (request) => {
       }
     }
 
-    const analysis = normalizeAnalysisPayload(
+    const normalizedAnalysis = normalizeAnalysisPayload(
       rawAnalysis,
       Array.from(providedViews),
       concernType,
@@ -2508,6 +2551,11 @@ Deno.serve(async (request) => {
       questionnaireAnswers,
       historyContext,
     );
+    const eligibilityEvaluation = await evaluateCurrentHairObservations(
+      request,
+      normalizedAnalysis,
+    );
+    const analysis = attachCurrentEligibility(normalizedAnalysis, eligibilityEvaluation);
 
     console.info('[analyze-hair-submission] google ai result ready', {
       concernType,

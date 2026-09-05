@@ -21,6 +21,7 @@ import {
     ScrollView,
     StyleSheet,
     Text,
+    useWindowDimensions,
     View,
 } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
@@ -256,8 +257,8 @@ const buildRecommendationOptions = ({
       matchLabel: index === 0
         ? "#1 - Best overall match"
         : index === 1
-          ? "#2 - Great alternative"
-          : "#3 - Another flattering option",
+          ? "#2 - Second choice"
+          : "#3 - Third choice",
       suitabilityReason: option.suitability_reason || option.note || "",
       selectedWig: option.selected_wig || option.selectedWig || null,
       optionIndex: option.option_index || index + 1,
@@ -1596,6 +1597,15 @@ const normalizePreferenceMatchValue = (value, name) =>
     ? normalizeLengthRecommendation(value)
     : normalizeRecommendationKey(value);
 
+const normalizeCapSizeValue = (value) => {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return "";
+  if (normalized === "s" || normalized.includes("small")) return "small";
+  if (normalized === "m" || normalized.includes("medium")) return "medium";
+  if (normalized === "l" || normalized.includes("large")) return "large";
+  return normalizeRecommendationKey(normalized);
+};
+
 const getWigPreferenceValue = (wig, name) => {
   const specification = wig?.physical_specification || {};
 
@@ -1725,6 +1735,118 @@ const validateAiTryOnPhoto = (photo) => {
   };
 };
 
+function CapSizeOptionButton({ label, isSelected, onPress, roles }) {
+  const scale = useRef(new Animated.Value(1)).current;
+  const normalizedLabel = String(label || "").trim().toLowerCase();
+  const measurement = normalizedLabel.includes("small")
+    ? '21"'
+    : normalizedLabel.includes("medium")
+      ? '22"–22.5"'
+      : normalizedLabel.includes("large")
+        ? '23"–23.5"'
+        : "";
+  const animateScale = (value, useSpring = false) => {
+    const animation = useSpring
+      ? Animated.spring(scale, {
+          toValue: value,
+          damping: 16,
+          stiffness: 240,
+          mass: 0.7,
+          useNativeDriver: true,
+        })
+      : Animated.timing(scale, {
+          toValue: value,
+          duration: 90,
+          useNativeDriver: true,
+        });
+    animation.start();
+  };
+
+  return (
+    <Animated.View style={[styles.capSizeOptionShell, { transform: [{ scale }] }]}>
+      <Pressable
+        accessibilityRole="radio"
+        accessibilityState={{ selected: isSelected }}
+        accessibilityLabel={`Cap size: ${label}`}
+        accessibilityHint={isSelected ? "Currently selected" : "Select this cap size"}
+        onPress={onPress}
+        onPressIn={() => animateScale(0.96)}
+        onPressOut={() => animateScale(1, true)}
+        style={[
+          styles.capSizeOption,
+          {
+            borderColor: isSelected
+              ? roles.primaryActionBackground
+              : roles.defaultCardBorder,
+          },
+        ]}
+      >
+        <LinearGradient
+          colors={isSelected
+            ? [theme.colors.palette.wine600, theme.colors.palette.wine900]
+            : [theme.colors.palette.white, theme.colors.palette.warm50]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.capSizeOptionGradient}
+        >
+          <View style={[
+            styles.capSizeOptionIcon,
+            {
+              backgroundColor: isSelected
+                ? "rgba(255,255,255,0.18)"
+                : roles.iconPrimarySurface,
+            },
+          ]}>
+            <MaterialCommunityIcons
+              name="tape-measure"
+              size={19}
+              color={isSelected ? "#FFFFFF" : roles.iconPrimaryColor}
+            />
+          </View>
+          <Text style={[
+            styles.capSizeOptionText,
+            { color: isSelected ? "#FFFFFF" : roles.headingText },
+          ]}>
+            {label}
+          </Text>
+          {measurement ? (
+            <View style={[
+              styles.capSizeMeasurementPill,
+              {
+                backgroundColor: isSelected
+                  ? "rgba(255,255,255,0.16)"
+                  : roles.iconPrimarySurface,
+              },
+            ]}>
+              <Text style={[
+                styles.capSizeMeasurementText,
+                { color: isSelected ? "#FFFFFF" : roles.iconPrimaryColor },
+              ]}>
+                {measurement}
+              </Text>
+            </View>
+          ) : null}
+          <Text style={[
+            styles.capSizeOptionState,
+            { color: isSelected ? "rgba(255,255,255,0.84)" : roles.metaText },
+          ]}>
+            {isSelected ? "Selected" : "Tap to select"}
+          </Text>
+          <View style={[
+            styles.capSizeRadio,
+            {
+              borderColor: isSelected ? "rgba(255,255,255,0.72)" : roles.defaultCardBorder,
+              backgroundColor: isSelected ? "rgba(255,255,255,0.18)" : roles.pageBackground,
+            },
+          ]}>
+            {isSelected ? <MaterialCommunityIcons name="check" size={12} color="#FFFFFF" /> : null}
+          </View>
+        </LinearGradient>
+      </Pressable>
+    </Animated.View>
+  );
+}
+
 function PreferenceChipGroup({
   control,
   name,
@@ -1733,8 +1855,16 @@ function PreferenceChipGroup({
   options,
   recommendedOptions,
   roles,
+  variant = "default",
 }) {
   if (!Array.isArray(options) || !options.length) return null;
+  const isSizeSelector = variant === "size";
+  const displayOptions = isSizeSelector
+    ? [...options].sort((left, right) => {
+        const order = { small: 0, medium: 1, large: 2 };
+        return (order[String(left).toLowerCase()] ?? 99) - (order[String(right).toLowerCase()] ?? 99);
+      })
+    : options;
   const recommendedOptionKeys = new Set(
     (recommendedOptions || [])
       .map((option) => normalizePreferenceMatchValue(option, name))
@@ -1747,33 +1877,45 @@ function PreferenceChipGroup({
       name={name}
       render={({ field }) => (
         <View style={styles.preferenceSection}>
-          <View style={styles.preferenceSectionHeader}>
-            <Text
-              style={[
-                styles.preferenceSectionTitle,
-                { color: roles.headingText },
-              ]}
-            >
-              {title}
-            </Text>
-            {helperText ? (
-              <Text
-                style={[
-                  styles.preferenceSectionHint,
-                  { color: roles.bodyText },
-                ]}
-              >
-                {helperText}
-              </Text>
-            ) : null}
-          </View>
-          <View style={styles.preferenceChipWrap}>
-            {options.map((option) => {
+          {isSizeSelector ? (
+            <View style={styles.capSizeSectionHeader}>
+              <View style={[styles.capSizeSelectionIcon, { backgroundColor: roles.iconPrimarySurface }]}>
+                <MaterialCommunityIcons name="head-outline" size={23} color={roles.iconPrimaryColor} />
+              </View>
+              <View style={styles.capSizeSectionHeaderCopy}>
+                <Text style={[styles.capSizeEyebrow, { color: roles.iconPrimaryColor }]}>CAP SIZE</Text>
+                <Text style={[styles.preferenceSectionTitle, { color: roles.headingText }]}>{title}</Text>
+                {helperText ? (
+                  <Text style={[styles.preferenceSectionHint, { color: roles.bodyText }]}>{helperText}</Text>
+                ) : null}
+              </View>
+            </View>
+          ) : (
+            <View style={styles.preferenceSectionHeader}>
+              <Text style={[styles.preferenceSectionTitle, { color: roles.headingText }]}>{title}</Text>
+              {helperText ? (
+                <Text style={[styles.preferenceSectionHint, { color: roles.bodyText }]}>{helperText}</Text>
+              ) : null}
+            </View>
+          )}
+          <View style={[styles.preferenceChipWrap, isSizeSelector ? styles.capSizeOptionGrid : null]}>
+            {displayOptions.map((option) => {
               const isSelected = field.value === option;
               const isAiRecommended = recommendedOptionKeys.has(
                 normalizePreferenceMatchValue(option, name),
               );
               const label = toFriendlyPreferenceLabel(option, name);
+              if (isSizeSelector) {
+                return (
+                  <CapSizeOptionButton
+                    key={`${name}-${option}`}
+                    label={label}
+                    isSelected={isSelected}
+                    onPress={() => field.onChange(option)}
+                    roles={roles}
+                  />
+                );
+              }
               return (
                 <Pressable
                   key={`${name}-${option}`}
@@ -1806,18 +1948,18 @@ function PreferenceChipGroup({
                     />
                   ) : null}
                   <Text
-                    style={[
-                      styles.preferenceChipText,
-                      {
-                        color: isSelected
-                          ? roles.iconPrimaryColor
-                          : roles.bodyText,
-                      },
-                      isSelected ? styles.preferenceChipTextSelected : null,
-                    ]}
-                  >
-                    {label}
-                  </Text>
+                        style={[
+                          styles.preferenceChipText,
+                          {
+                            color: isSelected
+                              ? roles.iconPrimaryColor
+                              : roles.bodyText,
+                          },
+                          isSelected ? styles.preferenceChipTextSelected : null,
+                        ]}
+                      >
+                        {label}
+                      </Text>
                   {isAiRecommended ? (
                     <View
                       style={[
@@ -1828,19 +1970,8 @@ function PreferenceChipGroup({
                         },
                       ]}
                     >
-                      <AppIcon
-                        name="sparkle"
-                        size="sm"
-                        color={roles.iconPrimaryColor}
-                      />
-                      <Text
-                        style={[
-                          styles.aiChipBadgeText,
-                          { color: roles.iconPrimaryColor },
-                        ]}
-                      >
-                        AI
-                      </Text>
+                      <AppIcon name="sparkle" size="sm" color={roles.iconPrimaryColor} />
+                      <Text style={[styles.aiChipBadgeText, { color: roles.iconPrimaryColor }]}>AI</Text>
                     </View>
                   ) : null}
                 </Pressable>
@@ -1848,11 +1979,18 @@ function PreferenceChipGroup({
             })}
           </View>
           {field.value ? (
-            <Text
-              style={[styles.preferenceSelectedText, { color: roles.metaText }]}
-            >
-              Selected: {toFriendlyPreferenceLabel(field.value, name)}
-            </Text>
+            isSizeSelector ? (
+              <View style={[styles.capSizeSelectionConfirmation, { backgroundColor: roles.iconPrimarySurface }]}>
+                <MaterialCommunityIcons name="check-circle" size={16} color={roles.iconPrimaryColor} />
+                <Text style={[styles.capSizeSelectionConfirmationText, { color: roles.iconPrimaryColor }]}>
+                  {toFriendlyPreferenceLabel(field.value, name)} cap size selected
+                </Text>
+              </View>
+            ) : (
+              <Text style={[styles.preferenceSelectedText, { color: roles.metaText }]}>
+                Selected: {toFriendlyPreferenceLabel(field.value, name)}
+              </Text>
+            )
           ) : null}
         </View>
       )}
@@ -2342,6 +2480,61 @@ function WigJourneyTimeline({ tracker, roles }) {
   );
 }
 
+function WigReleaseAppealModal({ visible, isSaving, onClose, onSubmit, roles }) {
+  const [reason, setReason] = useState("Damaged on Receipt");
+  const [description, setDescription] = useState("");
+  const reasons = ["Damaged on Receipt", "Wrong Wig", "Poor Fit", "Other"];
+
+  return (
+    <Modal transparent visible={visible} animationType="fade" onRequestClose={isSaving ? undefined : onClose}>
+      <View style={styles.cancelRequestModalRoot}>
+        <Pressable style={styles.cancelRequestModalBackdrop} disabled={isSaving} onPress={onClose} />
+        <View style={[styles.cancelRequestModalCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
+          <View style={styles.cancelRequestModalIcon}>
+            <MaterialCommunityIcons name="message-alert-outline" size={27} color={roles.primaryActionBackground} />
+          </View>
+          <View style={styles.cancelRequestModalCopy}>
+            <Text style={[styles.cancelRequestModalTitle, { color: roles.headingText }]}>Report a wig issue</Text>
+            <Text style={[styles.cancelRequestModalText, { color: roles.bodyText }]}>Tell staff what happened before the appeal deadline.</Text>
+          </View>
+          <View style={styles.photoTipsRow}>
+            {reasons.map((item) => (
+              <Pressable
+                key={item}
+                onPress={() => setReason(item)}
+                style={[styles.photoTipPill, {
+                  backgroundColor: reason === item ? roles.primaryActionBackground : roles.supportCardBackground,
+                  borderColor: roles.defaultCardBorder,
+                }]}
+              >
+                <Text style={[styles.photoTipText, { color: reason === item ? roles.primaryActionText : roles.bodyText }]}>{item}</Text>
+              </Pressable>
+            ))}
+          </View>
+          <AppInput
+            label="What happened?"
+            value={description}
+            onChangeText={setDescription}
+            placeholder="Add a short description"
+            multiline
+            numberOfLines={4}
+          />
+          <View style={styles.cancelRequestModalActions}>
+            <AppButton title="Keep Receipt" variant="outline" onPress={onClose} disabled={isSaving} fullWidth={true} />
+            <AppButton
+              title="Submit Appeal"
+              onPress={() => onSubmit?.({ reason, description: description.trim() })}
+              loading={isSaving}
+              disabled={isSaving || !description.trim()}
+              fullWidth={true}
+            />
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 function CancelWigRequestModal({
   visible,
   requestCode,
@@ -2444,20 +2637,25 @@ function CancelWigRequestModal({
   );
 }
 
-function RequestFlowHeader({ title, onBack, roles }) {
+function RequestFlowHeader({ title, onBack, canGoBack = true, roles }) {
   return (
     <View style={styles.requestFlowHeader}>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Go back"
-        onPress={onBack}
-        style={({ pressed }) => [
-          styles.requestFlowBackButton,
-          pressed ? styles.preferencePressed : null,
-        ]}
-      >
-        <AppIcon name="arrowLeft" size="md" color={roles.primaryActionText} />
-      </Pressable>
+      {canGoBack ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Go to the previous wig request step"
+          accessibilityHint="Keeps your wig request open"
+          onPress={onBack}
+          style={({ pressed }) => [
+            styles.requestFlowBackButton,
+            pressed ? styles.preferencePressed : null,
+          ]}
+        >
+          <AppIcon name="arrowLeft" size="md" color={roles.primaryActionText} />
+        </Pressable>
+      ) : (
+        <View style={styles.requestFlowHeaderSpacer} />
+      )}
       <Text
         numberOfLines={1}
         style={[
@@ -3267,152 +3465,13 @@ function AiMatcherSkeleton({ roles }) {
   );
 }
 
-function MatcherRecommendationCard({
-  option,
-  optionIndex,
-  isActive,
-  imageUri,
-  selectedWig,
-  onPress,
-  roles,
-}) {
-  const [previewLayout, setPreviewLayout] = useState({ width: 0, height: 0 });
-  const selectedWigLayerUrl = getPrimaryTryOnImageUrl(selectedWig);
-  const placement = option?.placement || null;
-  const selectedWigLayerStyle =
-    placement?.faceFrame && previewLayout.width && previewLayout.height
-      ? buildFaceAnchoredTryOnLayerStyle(
-          placement.faceFrame,
-          previewLayout,
-          "fullWig",
-          3,
-          selectedWig?.fit_settings,
-          placement.wigCalibration || DEFAULT_WIG_CALIBRATION,
-        )
-      : buildTryOnLayerStyle(selectedWig?.fit_settings, "fullWig", 3);
-
-  return (
-    <Pressable
-      accessibilityRole="radio"
-      accessibilityLabel={`Wig match ${optionIndex + 1}: ${option.name}`}
-      accessibilityState={{ selected: isActive }}
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.matcherCard,
-        {
-          backgroundColor: roles.defaultCardBackground,
-          borderColor: isActive
-            ? roles.primaryActionBackground
-            : roles.defaultCardBorder,
-        },
-        pressed ? styles.preferencePressed : null,
-      ]}
-    >
-      <View
-        style={[
-          styles.matcherImageWrap,
-          { backgroundColor: roles.supportCardBackground },
-        ]}
-        onLayout={(event) =>
-          setPreviewLayout({
-            width: event.nativeEvent.layout.width,
-            height: event.nativeEvent.layout.height,
-          })
-        }
-      >
-        {imageUri ? (
-          <>
-            <Image source={{ uri: imageUri }} style={styles.matcherImage} />
-            {selectedWigLayerUrl ? (
-              <Image
-                source={{ uri: selectedWigLayerUrl }}
-                resizeMode="contain"
-                fadeDuration={0}
-                style={[selectedWigLayerStyle, styles.matcherWigOverlay]}
-              />
-            ) : null}
-          </>
-        ) : (
-          <View style={styles.matcherImagePlaceholder}>
-            <AppIcon name="image" size="xl" color={roles.iconPrimaryColor} />
-          </View>
-        )}
-        <LinearGradient
-          pointerEvents="none"
-          colors={["transparent", "rgba(75,16,32,0.58)"]}
-          start={{ x: 0.5, y: 0.5 }}
-          end={{ x: 0.5, y: 1 }}
-          style={styles.matcherImageShade}
-        />
-        <View style={styles.matcherRankBadge}>
-          <MaterialCommunityIcons name="creation" size={13} color={theme.colors.palette.wine800} />
-          <Text style={styles.matcherRankText}>MATCH {optionIndex + 1}</Text>
-        </View>
-        {isActive ? (
-          <View style={styles.matcherSelectedBadge}>
-            <MaterialCommunityIcons name="check" size={14} color="#FFFFFF" />
-            <Text style={styles.matcherSelectedBadgeText}>Selected</Text>
-          </View>
-        ) : null}
-      </View>
-
-      <LinearGradient
-        colors={
-          isActive
-            ? [theme.colors.palette.blush100, theme.colors.palette.warm50]
-            : [theme.colors.palette.white, theme.colors.palette.warm50]
-        }
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={styles.matcherCardBody}
-      >
-        <Text
-          numberOfLines={2}
-          style={[styles.matcherCardTitle, { color: roles.headingText }]}
-        >
-          {option.name}
-        </Text>
-        <Text
-          numberOfLines={1}
-          style={[styles.matcherCardMeta, { color: roles.bodyText }]}
-        >
-          {option.family || option.matchLabel || "Personalized style"}
-        </Text>
-        <View style={styles.matcherCardFooter}>
-          <Text
-            numberOfLines={2}
-            style={[styles.matcherCardPrice, { color: roles.iconPrimaryColor }]}
-          >
-            {option.matchLabel || "Selected"}
-          </Text>
-          <View
-            style={[
-              styles.matcherFavoriteButton,
-              {
-                backgroundColor: isActive
-                  ? roles.primaryActionBackground
-                  : roles.iconPrimarySurface,
-              },
-            ]}
-          >
-            <AppIcon
-              name={isActive ? "checkmarkCircle" : "gesture-tap"}
-              size="md"
-              color={isActive ? roles.primaryActionText : roles.iconPrimaryColor}
-            />
-          </View>
-        </View>
-      </LinearGradient>
-    </Pressable>
-  );
-}
-
 function AiWigCompositePreview({
   baseImageUri,
   selectedWig,
   placement,
   previewCaptureRef,
   roles,
+  compact = false,
 }) {
   const [previewLayout, setPreviewLayout] = useState({ width: 0, height: 0 });
   const [manualFit, setManualFit] = useState({
@@ -3555,6 +3614,7 @@ function AiWigCompositePreview({
         style={[
           styles.aiResultImage,
           styles.aiCompositeFrame,
+          compact ? styles.aiCompositeFrameCompact : null,
           { backgroundColor: roles.supportCardBackground },
         ]}
         onLayout={(event) =>
@@ -3624,16 +3684,21 @@ function RequestFlowModal({
   availableWigs,
   referenceImage,
   selectedWig,
+  selectedWigs,
+  selectedWigIds,
   recommendedPreferenceOptions,
   recommendationOptions,
+  catalogRecommendations,
   selectedOptionId,
   onSelectOption,
   wigPreferenceOptions,
+  isLoadingAvailableWigs,
   isLoadingWigPreferenceOptions,
   generatedImageUri,
   preview,
   hasGeneratedPreview,
   isGeneratingPreview,
+  isRankingWigs,
   isSavingRequest,
   isCapturingPhoto,
   certificateVerification,
@@ -3645,13 +3710,17 @@ function RequestFlowModal({
   photoValidation,
   hasCameraPermission,
   cameraRef,
-  onClose,
+  onBack,
   onContinueToDetails,
   onCapturePhoto,
   onUploadCertificate,
   onScanCertificate,
   onRequestCameraPermission,
   onContinueToWigs,
+  onSubmitCapSize,
+  onChangeCapSize,
+  onReviewChoices,
+  onBackToStyles,
   onStartGeneration,
   onTryAnotherWig,
   onUploadAnotherPhoto,
@@ -3659,7 +3728,6 @@ function RequestFlowModal({
   previewCaptureRef,
   onSubmitRequest,
   onSelectWig,
-  onRequestOwnWig,
   safetyAssessment,
   isSavingSafety,
   onChangeSafety,
@@ -3667,14 +3735,17 @@ function RequestFlowModal({
   roles,
 }) {
   const insets = useSafeAreaInsets();
+  const { width: requestViewportWidth } = useWindowDimensions();
   const [isRetakingPhoto, setIsRetakingPhoto] = useState(false);
   const [documentPreviewUri, setDocumentPreviewUri] = useState("");
   const [documentPreviewFailed, setDocumentPreviewFailed] = useState(false);
   const [isDocumentPreviewLoading, setIsDocumentPreviewLoading] = useState(false);
   const [isPatientApproveDocked, setIsPatientApproveDocked] = useState(true);
-  const [recommendationViewportWidth, setRecommendationViewportWidth] = useState(0);
-  const recommendationCarouselRef = useRef(null);
-  const recommendationScrollX = useRef(new Animated.Value(0)).current;
+  const flowScrollRef = useRef(null);
+  const previewCarouselRef = useRef(null);
+  const previewCarouselScrollX = useRef(new Animated.Value(0)).current;
+  const stepOpacity = useRef(new Animated.Value(1)).current;
+  const stepTranslateY = useRef(new Animated.Value(0)).current;
   const patientScrollMetricsRef = useRef({
     contentHeight: 0,
     viewportHeight: 0,
@@ -3690,18 +3761,28 @@ function RequestFlowModal({
   );
   const hasAvailableWigs =
     Array.isArray(availableWigs) && availableWigs.length > 0;
+  const previewCarouselCardWidth = Math.min(
+    278,
+    Math.max(232, requestViewportWidth - (theme.spacing.xxl * 2) - 44),
+  );
+  const previewCarouselGap = theme.spacing.md;
+  const previewCarouselSnapInterval = previewCarouselCardWidth + previewCarouselGap;
+  const catalogRecommendationByWigId = new Map(
+    (catalogRecommendations || []).map((recommendation, index) => [
+      String(recommendation?.selectedWig?.wig_id || recommendation?.selected_wig?.wig_id || recommendation?.id || ""),
+      { ...recommendation, rank: index + 1 },
+    ]),
+  );
+  const displayedWigs = [...(availableWigs || [])].sort((left, right) => {
+    const leftRank = catalogRecommendationByWigId.get(String(left?.wig_id || left?.id || ""))?.rank || 99;
+    const rightRank = catalogRecommendationByWigId.get(String(right?.wig_id || right?.id || ""))?.rank || 99;
+    return leftRank - rightRank;
+  });
   const activeRecommendation = (recommendationOptions || []).find(
     (option) => option.id === selectedOptionId,
   ) || recommendationOptions?.[0] || null;
-  const activeRecommendationIndex = Math.max(
-    0,
-    (recommendationOptions || []).findIndex(
-      (option) => option.id === activeRecommendation?.id,
-    ),
-  );
-  const recommendationCardWidth = recommendationViewportWidth || 280;
-  const recommendationSnapInterval = recommendationCardWidth + theme.spacing.md;
-  const selectRecommendationAtIndex = (index, shouldScroll = false) => {
+  const activeSelectedWig = activeRecommendation?.selectedWig || selectedWig;
+  const selectRecommendationAtIndex = (index) => {
     const boundedIndex = Math.max(
       0,
       Math.min(index, Math.max(0, (recommendationOptions || []).length - 1)),
@@ -3709,12 +3790,6 @@ function RequestFlowModal({
     const option = recommendationOptions?.[boundedIndex];
     if (!option) return;
     onSelectOption?.(option.id);
-    if (shouldScroll) {
-      recommendationCarouselRef.current?.scrollTo({
-        x: boundedIndex * recommendationSnapInterval,
-        animated: true,
-      });
-    }
   };
   const patientPicture = patientDetails?.patient_picture || "";
   const medicalDocument = patientDetails?.medical_document || "";
@@ -3781,10 +3856,24 @@ function RequestFlowModal({
   }, [referenceImage?.uri]);
 
   useEffect(() => {
-    if (step !== "summary") return;
-    recommendationScrollX.setValue(0);
-    recommendationCarouselRef.current?.scrollTo({ x: 0, animated: false });
-  }, [recommendationOptions, recommendationScrollX, step]);
+    flowScrollRef.current?.scrollTo({ y: 0, animated: false });
+    stepOpacity.stopAnimation();
+    stepTranslateY.stopAnimation();
+    stepOpacity.setValue(0);
+    stepTranslateY.setValue(12);
+    Animated.parallel([
+      Animated.timing(stepOpacity, {
+        toValue: 1,
+        duration: theme.motion.contentSwap,
+        useNativeDriver: true,
+      }),
+      Animated.spring(stepTranslateY, {
+        toValue: 0,
+        ...theme.motion.spring,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [step, stepOpacity, stepTranslateY]);
 
   useEffect(() => {
     setDocumentPreviewFailed(false);
@@ -3846,7 +3935,7 @@ function RequestFlowModal({
       transparent={false}
       visible={visible}
       animationType="slide"
-      onRequestClose={onClose}
+      onRequestClose={onBack}
     >
       <KeyboardAvoidingView
         style={[
@@ -3874,7 +3963,8 @@ function RequestFlowModal({
             <View pointerEvents="none" style={styles.flowTopBarGlow} />
             <RequestFlowHeader
               title="Request Wig"
-              onBack={onClose}
+              onBack={onBack}
+              canGoBack={step !== "generating" && !isRankingWigs}
               roles={roles}
             />
           </LinearGradient>
@@ -3885,14 +3975,21 @@ function RequestFlowModal({
             </View>
           ) : null}
 
-          <ScrollView
-            style={styles.flowScroll}
+          <Animated.ScrollView
+            ref={flowScrollRef}
+            style={[
+              styles.flowScroll,
+              {
+                opacity: stepOpacity,
+                transform: [{ translateY: stepTranslateY }],
+              },
+            ]}
             contentContainerStyle={[
               styles.flowScrollContent,
               {
                 paddingBottom:
                   Math.max(insets.bottom, theme.spacing.xl) +
-                  (["styles", "summary"].includes(step) ? 112 : 0),
+                  (["styles", "confirmChoices", "summary"].includes(step) ? 112 : 0),
               },
             ]}
             onLayout={(event) => {
@@ -4337,27 +4434,47 @@ function RequestFlowModal({
 
                 {shouldShowCapturedPhoto ? (
                   <View style={styles.photoReviewActions}>
-                    <View style={styles.photoReviewActionCell}>
-                      <AppButton
-                        title="Retake"
-                        variant="outline"
-                        onPress={handleCameraAction}
-                        fullWidth={true}
-                        leading={<AppIcon name="camera" state="active" />}
-                        style={styles.photoCameraAction}
-                      />
-                    </View>
-                    <View style={styles.photoReviewActionCell}>
-                      <AppButton
-                        title={isGeneratingPreview ? "Creating..." : "Use Photo"}
-                        disabled={!photoValidation?.valid}
-                        loading={isGeneratingPreview}
-                        onPress={onContinueToWigs}
-                        fullWidth={true}
-                        leading={<AppIcon name="success" state="inverse" />}
-                        style={styles.photoCameraAction}
-                      />
-                    </View>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Retake photo"
+                      onPress={handleCameraAction}
+                      style={({ pressed }) => [
+                        styles.photoReviewActionCell,
+                        pressed ? styles.photoReviewActionPressed : null,
+                      ]}
+                    >
+                      <LinearGradient
+                        colors={[theme.colors.palette.white, theme.colors.palette.blush100]}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 1 }}
+                        style={[styles.photoReviewActionGradient, { borderColor: roles.defaultCardBorder }]}
+                      >
+                        <MaterialCommunityIcons name="camera-retake-outline" size={20} color={roles.iconPrimaryColor} />
+                        <Text style={[styles.photoReviewSecondaryText, { color: roles.iconPrimaryColor }]}>Retake</Text>
+                      </LinearGradient>
+                    </Pressable>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Continue to cap size"
+                      accessibilityState={{ disabled: !photoValidation?.valid }}
+                      disabled={!photoValidation?.valid}
+                      onPress={onContinueToWigs}
+                      style={({ pressed }) => [
+                        styles.photoReviewActionCell,
+                        pressed && photoValidation?.valid ? styles.photoReviewActionPressed : null,
+                        !photoValidation?.valid ? styles.photoReviewActionDisabled : null,
+                      ]}
+                    >
+                      <LinearGradient
+                        colors={[theme.colors.palette.wine600, theme.colors.palette.wine900]}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 1 }}
+                        style={styles.photoReviewActionGradient}
+                      >
+                        <MaterialCommunityIcons name="check-circle-outline" size={20} color="#FFFFFF" />
+                        <Text numberOfLines={1} style={styles.photoReviewPrimaryText}>Continue</Text>
+                      </LinearGradient>
+                    </Pressable>
                   </View>
                 ) : (
                   <AppButton
@@ -4373,64 +4490,148 @@ function RequestFlowModal({
               </View>
             ) : null}
 
+            {step === "cap" ? (
+              <View style={styles.flowSection}>
+                <LinearGradient
+                  colors={[theme.colors.palette.wine900, theme.colors.palette.wine700, theme.colors.palette.wine600]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.photoGuideCard}
+                >
+                  <View pointerEvents="none" style={styles.photoGuideGlow} />
+                  <View style={styles.photoGuideIcon}>
+                    <MaterialCommunityIcons name="tape-measure" size={24} color="#FFFFFF" />
+                  </View>
+                  <View style={styles.photoGuideCopy}>
+                    <Text style={styles.photoGuideEyebrow}>COMFORTABLE FIT</Text>
+                    <Text style={styles.photoGuideTitle}>Choose your cap size</Text>
+                    <Text style={styles.photoGuideBody}>We will show catalog wigs made in this size.</Text>
+                  </View>
+                </LinearGradient>
+
+                <LinearGradient
+                  colors={[
+                    theme.colors.palette.white,
+                    theme.colors.palette.blush100,
+                    theme.colors.palette.warm50,
+                  ]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={[
+                    styles.capSizeSelectionCard,
+                    { borderColor: roles.defaultCardBorder },
+                  ]}
+                >
+                  <View pointerEvents="none" style={styles.capSizeCardGlow} />
+                  <PreferenceChipGroup
+                    control={control}
+                    name="capSize"
+                    title="Select your fit"
+                    helperText="Choose the size recommended by your care provider."
+                    options={wigPreferenceOptions?.capSizes || []}
+                    recommendedOptions={[]}
+                    roles={roles}
+                    variant="size"
+                  />
+                </LinearGradient>
+
+                <AppButton
+                  title={isRankingWigs ? "Finding Your Best Matches..." : "Find My Best Wig Matches"}
+                  onPress={onSubmitCapSize}
+                  loading={isSavingRequest || isRankingWigs}
+                  disabled={isSavingRequest || isRankingWigs || !(wigPreferenceOptions?.capSizes || []).length}
+                  fullWidth={true}
+                  leading={<MaterialCommunityIcons name="view-grid-outline" size={20} color={roles.primaryActionText} />}
+                  trailing={<MaterialCommunityIcons name="arrow-right" size={20} color={roles.primaryActionText} />}
+                  style={styles.wigFlowPrimaryButton}
+                />
+              </View>
+            ) : null}
+
             {step === "styles" ? (
               <View style={styles.flowSection}>
-                <View style={styles.requestFlowSectionHeader}>
-                  <Text style={[styles.flowTitle, { color: roles.headingText }]}>Choose a Wig</Text>
-                  <Text style={[styles.flowBody, { color: roles.bodyText }]}>
-                    Tap a wig card to choose it. Its reference image will be
-                    sent with your photo to create the preview.
-                  </Text>
-                </View>
+                <LinearGradient
+                  colors={[theme.colors.palette.wine900, theme.colors.palette.wine700, theme.colors.palette.wine600]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.wigGalleryIntroCard}
+                >
+                  <View pointerEvents="none" style={styles.photoGuideGlow} />
+                  <View style={styles.wigGalleryIntroIcon}>
+                    <MaterialCommunityIcons name="view-grid-outline" size={24} color="#FFFFFF" />
+                  </View>
+                  <View style={styles.wigGalleryIntroCopy}>
+                    <Text style={styles.photoGuideEyebrow}>AI FACIAL-FIT PICKS</Text>
+                    <Text style={styles.photoGuideTitle}>Choose three looks</Text>
+                    <Text style={styles.photoGuideBody}>AI picks appear first with a friendly reason. You can still choose any three.</Text>
+                  </View>
+                  <View style={styles.wigGallerySelectionCount}>
+                    <Text style={styles.wigGallerySelectionCountText}>{selectedWigIds?.length || 0}/3</Text>
+                  </View>
+                </LinearGradient>
 
-                {hasAvailableWigs ? (
-                  <View style={styles.wigStyleList}>
-                    {availableWigs.map((wig) => {
-                      const isSelected = selectedWig?.id === wig.id;
+                {isLoadingAvailableWigs ? (
+                  <LinearGradient
+                    colors={[theme.colors.palette.white, theme.colors.palette.blush100]}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                    style={[styles.wigGalleryStatusCard, { borderColor: roles.defaultCardBorder }]}
+                  >
+                    <ActivityIndicator size="small" color={roles.primaryActionBackground} />
+                    <View style={styles.wigGalleryStatusCopy}>
+                      <Text style={[styles.availableWigsEmptyText, { color: roles.headingText }]}>Loading matching wigs</Text>
+                      <Text style={[styles.flowBody, { color: roles.bodyText }]}>Preparing the gallery for your selected cap size.</Text>
+                    </View>
+                  </LinearGradient>
+                ) : hasAvailableWigs ? (
+                  <View style={styles.wigGalleryGrid}>
+                    {displayedWigs.map((wig) => {
+                      const selectionIndex = (selectedWigIds || []).indexOf(wig.id);
+                      const isSelected = selectionIndex >= 0;
+                      const aiRecommendation = catalogRecommendationByWigId.get(String(wig?.wig_id || wig?.id || ""));
                       const wigSpec = wig?.physical_specification || {};
-                      const specSummary = [
-                        wigSpec?.color ? `Color: ${wigSpec.color}` : "",
-                        wigSpec?.length != null ? `Length: ${wigSpec.length}` : "",
-                        wigSpec?.style ? `Style: ${wigSpec.style}` : "",
-                        wigSpec?.hair_texture ? `Texture: ${wigSpec.hair_texture}` : "",
-                      ]
+                      const colorAndLength = [
+                        wigSpec?.color || "",
+                        wigSpec?.length != null ? `${wigSpec.length} in` : "",
+                      ].filter(Boolean).join(" • ");
+                      const styleAndTexture = [wigSpec?.style, wigSpec?.hair_texture]
                         .filter(Boolean)
-                        .join("\n");
+                        .join(" • ");
                       const previewUrl = getWigPreviewImageUrl(wig);
 
                       return (
-                        <Pressable
-                          key={wig.id || `${wig.wig_id}-${wig.wig_name}`}
-                          accessibilityRole="radio"
-                          accessibilityLabel={`${wig.wig_name}${specSummary ? `, ${specSummary.replace(/\n/g, ", ")}` : ""}`}
-                          accessibilityHint="Selects this wig for your preview"
-                          accessibilityState={{ checked: isSelected }}
-                          onPress={() => onSelectWig?.(wig.id)}
-                          style={({ pressed }) => [
-                            styles.wigStyleCard,
-                            {
-                              backgroundColor: isSelected
-                                ? roles.supportCardBackground
-                                : roles.pageBackground,
-                              borderColor: isSelected
-                                ? roles.primaryActionBackground
-                                : roles.defaultCardBorder,
-                            },
-                            isSelected ? styles.wigStyleCardSelected : null,
-                            pressed ? styles.wigStyleCardPressed : null,
-                          ]}
-                        >
-                          <View style={styles.wigStyleThumbWrap}>
+                        <View key={wig.id || `${wig.wig_id}-${wig.wig_name}`} style={styles.wigGalleryCell}>
+                          <Pressable
+                            accessibilityRole="checkbox"
+                            accessibilityLabel={`${wig.wig_name}${colorAndLength ? `, ${colorAndLength}` : ""}`}
+                            accessibilityHint="Adds or removes this wig from your three try-on choices"
+                            accessibilityState={{ checked: isSelected }}
+                            onPress={() => onSelectWig?.(wig.id)}
+                            style={({ pressed }) => [
+                              styles.wigGalleryCard,
+                              {
+                                backgroundColor: isSelected
+                                  ? roles.supportCardBackground
+                                  : roles.pageBackground,
+                                borderColor: isSelected
+                                  ? roles.primaryActionBackground
+                                  : roles.defaultCardBorder,
+                              },
+                              isSelected ? styles.wigGalleryCardSelected : null,
+                              pressed ? styles.wigGalleryCardPressed : null,
+                            ]}
+                          >
+                            <View style={styles.wigGalleryImageWrap}>
                             {previewUrl ? (
                               <Image
                                 source={{ uri: previewUrl }}
-                                resizeMode="cover"
-                                style={styles.wigStyleThumb}
+                                resizeMode="contain"
+                                style={styles.wigGalleryImage}
                               />
                             ) : (
                               <View
                                 style={[
-                                  styles.wigStyleThumb,
+                                  styles.wigGalleryImage,
                                   styles.wigStyleThumbPlaceholder,
                                   {
                                     backgroundColor:
@@ -4445,59 +4646,107 @@ function RequestFlowModal({
                                 />
                               </View>
                             )}
-                          </View>
-
-                          <View style={styles.wigStyleCopy}>
-                            <Text
-                              style={[
-                                styles.wigStyleTitle,
-                                { color: roles.headingText },
-                              ]}
-                              numberOfLines={1}
-                              ellipsizeMode="tail"
+                            <LinearGradient
+                              pointerEvents="none"
+                              colors={["transparent", "rgba(54,4,16,0.60)", "rgba(54,4,16,0.94)"]}
+                              locations={[0, 0.32, 1]}
+                              style={styles.wigGalleryInfoOverlay}
                             >
-                              {wig.wig_name}
-                            </Text>
-                            {specSummary ? (
-                              <Text
-                                style={[
-                                  styles.wigStyleSpec,
-                                  { color: roles.bodyText },
-                                ]}
-                                numberOfLines={4}
-                              >
-                                {specSummary}
+                              <View style={styles.wigGalleryInfoCopy}>
+                                <Text
+                                  style={styles.wigGalleryOverlayTitle}
+                                >
+                                  {wig.wig_name}
+                                </Text>
+                                {colorAndLength ? (
+                                  <View style={styles.wigGalleryMetaRow}>
+                                    <MaterialCommunityIcons name="palette-outline" size={13} color="#FFFFFF" />
+                                    <Text style={styles.wigGalleryOverlayMeta}>
+                                      {colorAndLength}
+                                    </Text>
+                                  </View>
+                                ) : null}
+                                {styleAndTexture ? (
+                                  <Text style={styles.wigGalleryOverlayDescription}>
+                                    {styleAndTexture}
+                                  </Text>
+                                ) : null}
+                                <View style={styles.wigGalleryOverlayAvailability}>
+                                  <View style={[styles.wigGalleryAvailabilityDot, {
+                                    backgroundColor: wig.is_available ? "#8EE6B7" : theme.colors.palette.blush100,
+                                  }]} />
+                                  <Text style={styles.wigGalleryOverlayAvailabilityText}>
+                                    {wig.is_available ? "Available" : "Wish option"}
+                                  </Text>
+                                </View>
+                              </View>
+                            </LinearGradient>
+                            <View style={[styles.wigGalleryChoiceBadge, isSelected ? styles.wigGalleryChoiceBadgeSelected : null]}>
+                              <MaterialCommunityIcons
+                                name={isSelected ? "check-circle" : "plus-circle-outline"}
+                                size={15}
+                                color={isSelected ? "#FFFFFF" : theme.colors.palette.wine800}
+                              />
+                              <Text style={[styles.wigGalleryChoiceBadgeText, isSelected ? styles.wigGalleryChoiceBadgeTextSelected : null]}>
+                                {isSelected ? `Choice ${selectionIndex + 1}` : "Choose"}
                               </Text>
+                            </View>
+                            {aiRecommendation ? (
+                              <View style={styles.wigGalleryAiBadge}>
+                                <MaterialCommunityIcons name="creation" size={13} color={theme.colors.palette.wine800} />
+                                <Text style={styles.wigGalleryAiBadgeText}>AI PICK #{aiRecommendation.rank}</Text>
+                              </View>
                             ) : null}
                           </View>
-
-                        </Pressable>
+                          {aiRecommendation?.suitabilityReason ? (
+                            <View style={[styles.wigGalleryReason, { backgroundColor: roles.iconPrimarySurface }]}>
+                              <MaterialCommunityIcons name="creation-outline" size={14} color={roles.iconPrimaryColor} />
+                              <Text style={[styles.wigGalleryReasonText, { color: roles.bodyText }]}>
+                                {aiRecommendation.suitabilityReason}
+                              </Text>
+                            </View>
+                          ) : null}
+                          </Pressable>
+                        </View>
                       );
                     })}
                   </View>
                 ) : (
-                  <View
+                  <LinearGradient
+                    colors={[theme.colors.palette.white, theme.colors.palette.blush100]}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
                     style={[
-                      styles.availableWigsEmpty,
-                      {
-                        borderColor: roles.defaultCardBorder,
-                        backgroundColor: roles.defaultCardBackground,
-                      },
+                      styles.wigGalleryEmptyCard,
+                      { borderColor: roles.defaultCardBorder },
                     ]}
                   >
-                    <Text
-                      style={[
-                        styles.availableWigsEmptyText,
-                        { color: roles.headingText },
-                      ]}
-                    >
-                      No wig preview is available right now.
-                    </Text>
-                    <Text style={[styles.flowBody, { color: roles.bodyText }]}>
-                      Request a custom wig specification instead.
-                    </Text>
-                  </View>
+                    <View style={[styles.wigGalleryEmptyIcon, { backgroundColor: roles.iconPrimarySurface }]}>
+                      <MaterialCommunityIcons name="hanger" size={25} color={roles.iconPrimaryColor} />
+                    </View>
+                    <View style={styles.wigGalleryEmptyCopy}>
+                      <Text style={[styles.availableWigsEmptyText, { color: roles.headingText }]}>No matching previews yet</Text>
+                      <Text style={[styles.flowBody, { color: roles.bodyText }]}>Try another cap size to see available gallery styles.</Text>
+                    </View>
+                    <AppButton
+                      title="Choose Another Cap Size"
+                      variant="outline"
+                      onPress={onChangeCapSize}
+                      fullWidth={true}
+                    />
+                  </LinearGradient>
                 )}
+
+                {!isLoadingAvailableWigs && hasAvailableWigs && availableWigs.length < 3 ? (
+                  <View style={[
+                    styles.availableWigsEmpty,
+                    { borderColor: roles.defaultCardBorder, backgroundColor: roles.defaultCardBackground },
+                  ]}>
+                    <Text style={[styles.availableWigsEmptyText, { color: roles.headingText }]}>Three wigs are required</Text>
+                    <Text style={[styles.flowBody, { color: roles.bodyText }]}>This cap size has fewer than three preview-ready styles.</Text>
+                    <AppButton title="Choose Another Cap Size" variant="outline" onPress={onChangeCapSize} fullWidth={true} />
+                  </View>
+                ) : null}
 
               </View>
             ) : null}
@@ -4679,226 +4928,261 @@ function RequestFlowModal({
                       <Text style={styles.matcherCountText}>3 PERSONALIZED LOOKS</Text>
                     </View>
                   </View>
-                  <Text style={styles.matcherHeroTitle}>Your Top 3 Wig Matches</Text>
+                  <Text style={styles.matcherHeroTitle}>Choose your favorite look</Text>
                   <Text style={styles.matcherHeroBody}>
-                    Swipe through each look and tap your favorite.
+                    Compare all three previews in one gallery.
                   </Text>
                 </LinearGradient>
 
                 {hasGeneratedPreview ? (
                   <View style={styles.aiResultGrid}>
-                    <View
-                      style={styles.matcherCarouselViewport}
-                      onLayout={(event) => {
-                        const nextWidth = Math.round(event.nativeEvent.layout.width);
-                        if (nextWidth > 0 && nextWidth !== recommendationViewportWidth) {
-                          setRecommendationViewportWidth(nextWidth);
-                        }
+                    <Animated.ScrollView
+                      ref={previewCarouselRef}
+                      horizontal
+                      nestedScrollEnabled
+                      removeClippedSubviews={false}
+                      showsHorizontalScrollIndicator={false}
+                      style={styles.summaryPreviewFanViewport}
+                      contentContainerStyle={styles.summaryPreviewGallery}
+                      snapToInterval={previewCarouselSnapInterval}
+                      snapToAlignment="start"
+                      decelerationRate="fast"
+                      disableIntervalMomentum
+                      scrollEventThrottle={16}
+                      onScroll={Animated.event(
+                        [{ nativeEvent: { contentOffset: { x: previewCarouselScrollX } } }],
+                        { useNativeDriver: true },
+                      )}
+                      onMomentumScrollEnd={(event) => {
+                        const nextIndex = Math.max(
+                          0,
+                          Math.min(
+                            recommendationOptions.length - 1,
+                            Math.round(event.nativeEvent.contentOffset.x / previewCarouselSnapInterval),
+                          ),
+                        );
+                        selectRecommendationAtIndex(nextIndex);
                       }}
                     >
-                      <Animated.ScrollView
-                        ref={recommendationCarouselRef}
-                        horizontal
-                        pagingEnabled={false}
-                        snapToInterval={recommendationSnapInterval}
-                        snapToAlignment="start"
-                        decelerationRate="fast"
-                        disableIntervalMomentum
-                        nestedScrollEnabled
-                        bounces={false}
-                        showsHorizontalScrollIndicator={false}
-                        contentContainerStyle={styles.aiRecommendationRow}
-                        onScroll={Animated.event(
-                          [{ nativeEvent: { contentOffset: { x: recommendationScrollX } } }],
-                          { useNativeDriver: true },
-                        )}
-                        onMomentumScrollEnd={(event) => {
-                          const index = Math.round(
-                            event.nativeEvent.contentOffset.x / recommendationSnapInterval,
-                          );
-                          selectRecommendationAtIndex(index);
-                        }}
-                        scrollEventThrottle={16}
-                      >
-                        {recommendationOptions.map((option, index) => {
-                          const inputRange = [
-                            (index - 1) * recommendationSnapInterval,
-                            index * recommendationSnapInterval,
-                            (index + 1) * recommendationSnapInterval,
-                          ];
-                          const scale = recommendationScrollX.interpolate({
-                            inputRange,
-                            outputRange: [0.965, 1, 0.965],
-                            extrapolate: "clamp",
-                          });
-                          const opacity = recommendationScrollX.interpolate({
-                            inputRange,
-                            outputRange: [0.72, 1, 0.72],
-                            extrapolate: "clamp",
-                          });
-
-                          return (
-                            <Animated.View
-                              key={option.id}
-                              style={[
-                                styles.aiRecommendationCard,
-                                {
-                                  width: recommendationCardWidth,
-                                  opacity,
-                                  transform: [{ scale }],
-                                },
-                              ]}
-                            >
-                              <MatcherRecommendationCard
-                                option={option}
-                                optionIndex={index}
-                                isActive={option.id === activeRecommendation?.id}
-                                imageUri={option.generatedImageUri || option.previewUrl}
-                                selectedWig={null}
-                                onPress={() => selectRecommendationAtIndex(index)}
-                                roles={roles}
-                              />
-                            </Animated.View>
-                          );
-                        })}
-                      </Animated.ScrollView>
-                    </View>
-
-                    <View style={styles.matcherCarouselNavigation}>
-                      <View style={styles.matcherPagination}>
-                        {recommendationOptions.map((option, index) => {
-                          const isSelected = index === activeRecommendationIndex;
-                          return (
+                      {recommendationOptions.map((option, index) => {
+                        const isSelected = Boolean(selectedOptionId) && option.id === selectedOptionId;
+                        const imageUri = option.generatedImageUri || option.previewUrl;
+                        const wigSpec = option?.selectedWig?.physical_specification || {};
+                        const colorAndLength = [
+                          wigSpec?.color || "",
+                          wigSpec?.length != null ? `${wigSpec.length} in` : "",
+                        ].filter(Boolean).join(" • ");
+                        const styleAndTexture = [wigSpec?.style || option?.family, wigSpec?.hair_texture]
+                          .filter(Boolean)
+                          .join(" • ");
+                        const carouselInputRange = [
+                          (index - 1) * previewCarouselSnapInterval,
+                          index * previewCarouselSnapInterval,
+                          (index + 1) * previewCarouselSnapInterval,
+                        ];
+                        const animatedScale = previewCarouselScrollX.interpolate({
+                          inputRange: carouselInputRange,
+                          outputRange: [0.92, 1, 0.92],
+                          extrapolate: "clamp",
+                        });
+                        const animatedOpacity = previewCarouselScrollX.interpolate({
+                          inputRange: carouselInputRange,
+                          outputRange: [0.68, 1, 0.68],
+                          extrapolate: "clamp",
+                        });
+                        const animatedLift = previewCarouselScrollX.interpolate({
+                          inputRange: carouselInputRange,
+                          outputRange: [12, 0, 12],
+                          extrapolate: "clamp",
+                        });
+                        return (
+                          <Animated.View
+                            key={option.id}
+                            style={[
+                              styles.summaryPreviewFanSlot,
+                              {
+                                width: previewCarouselCardWidth,
+                                marginRight: index < recommendationOptions.length - 1
+                                  ? previewCarouselGap
+                                  : 0,
+                                opacity: animatedOpacity,
+                                transform: [
+                                  { translateY: animatedLift },
+                                  { scale: animatedScale },
+                                ],
+                              },
+                            ]}
+                          >
                             <Pressable
-                              key={option.id}
-                              accessibilityRole="button"
-                              accessibilityLabel={`Show wig match ${index + 1}`}
-                              onPress={() => selectRecommendationAtIndex(index, true)}
-                              hitSlop={8}
-                              style={[
-                                styles.matcherPaginationDot,
+                              accessibilityRole="radio"
+                              accessibilityLabel={`Wig preview ${index + 1}: ${option.name}`}
+                              accessibilityState={{ selected: isSelected }}
+                              onPress={() => {
+                                selectRecommendationAtIndex(index);
+                                previewCarouselRef.current?.scrollTo({
+                                  x: index * previewCarouselSnapInterval,
+                                  animated: true,
+                                });
+                              }}
+                              style={({ pressed }) => [
+                                styles.summaryPreviewTile,
                                 {
-                                  backgroundColor: isSelected
+                                  backgroundColor: roles.defaultCardBackground,
+                                  borderColor: isSelected
                                     ? roles.primaryActionBackground
                                     : roles.defaultCardBorder,
                                 },
-                                isSelected ? styles.matcherPaginationDotActive : null,
+                                isSelected ? styles.summaryPreviewTileSelected : null,
+                                pressed ? styles.summaryPreviewTilePressed : null,
                               ]}
-                            />
-                          );
-                        })}
-                      </View>
-                      <View style={[styles.matcherSwipeHint, { backgroundColor: roles.iconPrimarySurface }]}>
-                        <MaterialCommunityIcons
-                          name="gesture-swipe-horizontal"
-                          size={17}
-                          color={roles.iconPrimaryColor}
-                        />
-                        <Text style={[styles.matcherSwipeHintText, { color: roles.bodyText }]}>Swipe to compare</Text>
-                      </View>
-                    </View>
+                            >
+                              {imageUri ? (
+                                <Image source={{ uri: imageUri }} resizeMode="cover" style={styles.summaryPreviewImage} />
+                              ) : (
+                                <View style={[styles.summaryPreviewPlaceholder, { backgroundColor: roles.supportCardBackground }]}>
+                                  <AppIcon name="image" size="lg" color={roles.iconPrimaryColor} />
+                                </View>
+                              )}
+                              <LinearGradient
+                                pointerEvents="none"
+                                colors={["transparent", "rgba(54,4,16,0.26)", "rgba(54,4,16,0.94)"]}
+                                locations={[0.12, 0.42, 1]}
+                                style={styles.summaryPreviewInfoOverlay}
+                              >
+                                <View style={styles.summaryPreviewDetails}>
+                                  <Text style={styles.summaryPreviewTitle}>{option.name}</Text>
+                                  <Text style={styles.summaryPreviewMatch}>{option.matchLabel || "Personalized look"}</Text>
+                                  {colorAndLength ? (
+                                    <View style={styles.wigGalleryMetaRow}>
+                                      <MaterialCommunityIcons name="palette-outline" size={13} color="#FFFFFF" />
+                                      <Text style={styles.wigGalleryOverlayMeta}>{colorAndLength}</Text>
+                                    </View>
+                                  ) : null}
+                                  {styleAndTexture ? (
+                                    <Text style={styles.wigGalleryOverlayDescription}>{styleAndTexture}</Text>
+                                  ) : null}
+                                  {option.suitabilityReason ? (
+                                    <View style={styles.summaryPreviewReasonRow}>
+                                      <MaterialCommunityIcons name="creation-outline" size={13} color="#F7DDE4" />
+                                      <Text style={styles.summaryPreviewReasonText}>{option.suitabilityReason}</Text>
+                                    </View>
+                                  ) : null}
+                                </View>
+                              </LinearGradient>
+                              <View style={styles.summaryPreviewRankBadge}>
+                                <MaterialCommunityIcons name="creation" size={12} color={theme.colors.palette.wine800} />
+                                <Text style={styles.summaryPreviewRankText}>LOOK {index + 1}</Text>
+                              </View>
+                              <View style={[
+                                styles.summaryPreviewSelectedBadge,
+                                !isSelected ? styles.summaryPreviewChooseBadge : null,
+                              ]}>
+                                <MaterialCommunityIcons
+                                  name={isSelected ? "check-circle" : "plus-circle-outline"}
+                                  size={15}
+                                  color={isSelected ? "#FFFFFF" : theme.colors.palette.wine800}
+                                />
+                                <Text style={[
+                                  styles.summaryPreviewSelectedText,
+                                  !isSelected ? styles.summaryPreviewChooseText : null,
+                                ]}>
+                                  {isSelected ? "Selected" : "Choose"}
+                                </Text>
+                              </View>
+                            </Pressable>
+                          </Animated.View>
+                        );
+                      })}
+                    </Animated.ScrollView>
 
-                    {activeRecommendation?.suitabilityReason ? (
-                      <LinearGradient
-                        colors={[theme.colors.palette.blush100, theme.colors.palette.warm50]}
-                        start={{ x: 0, y: 0 }}
-                        end={{ x: 1, y: 1 }}
-                        style={[
-                          styles.aiRecommendationReason,
-                          { borderColor: roles.defaultCardBorder },
-                        ]}
-                      >
-                        <View style={styles.aiRecommendationReasonHeader}>
-                          <View style={[styles.aiRecommendationReasonIcon, { backgroundColor: roles.primaryActionBackground }]}>
-                            <MaterialCommunityIcons name="creation" size={17} color={roles.primaryActionText} />
-                          </View>
-                          <View style={styles.aiRecommendationReasonHeading}>
-                            <Text style={[styles.aiRecommendationReasonTitle, { color: roles.headingText }]}>
-                              Why this look works
-                            </Text>
-                            <Text style={[styles.aiRecommendationReasonMatch, { color: roles.iconPrimaryColor }]} numberOfLines={1}>
-                              {activeRecommendation.matchLabel || "Personalized for you"}
-                            </Text>
+                    <LinearGradient
+                      colors={["rgba(255,255,255,0.92)", "rgba(247,221,228,0.74)"]}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 1 }}
+                      style={[styles.summaryGalleryHint, { borderColor: roles.defaultCardBorder }]}
+                    >
+                      <View style={[styles.summaryGalleryHintIcon, { backgroundColor: roles.iconPrimarySurface }]}>
+                        <MaterialCommunityIcons name="gesture-swipe-horizontal" size={17} color={roles.iconPrimaryColor} />
+                      </View>
+                      <Text style={[styles.summaryGalleryHintText, { color: roles.bodyText }]}>Swipe to compare · Tap to choose your final wig</Text>
+                    </LinearGradient>
+
+                    {preview?.render_mode === "wig_overlay" ? (
+                      <View style={[
+                        styles.aiResultPanel,
+                        styles.aiPreviewCard,
+                        {
+                          backgroundColor: roles.pageBackground,
+                          borderColor: roles.defaultCardBorder,
+                        },
+                      ]}>
+                        <View style={styles.aiPreviewCardHeader}>
+                          <View>
+                            <Text style={[styles.aiResultLabel, { color: roles.headingText }]}>Adjust preview</Text>
+                            <Text style={[styles.aiPreviewHint, { color: roles.bodyText }]}>Fine-tune this older overlay before saving.</Text>
                           </View>
                         </View>
-                        <Text style={[styles.flowBody, { color: roles.bodyText }]}>
-                          {activeRecommendation.suitabilityReason}
-                        </Text>
-                      </LinearGradient>
-                    ) : null}
-
-                    <View style={[
-                      styles.aiResultPanel,
-                      styles.aiPreviewCard,
-                      {
-                        backgroundColor: roles.pageBackground,
-                        borderColor: roles.defaultCardBorder,
-                      },
-                    ]}>
-                      <View style={styles.aiPreviewCardHeader}>
-                        <View>
-                          <Text style={[styles.aiResultLabel, { color: roles.headingText }]}>
-                            Selected AI try-on
-                          </Text>
-                          <Text style={[styles.aiPreviewHint, { color: roles.headingText }]}>
-                            {activeRecommendation?.matchLabel || "AI-recommended style"}
-                          </Text>
-                        </View>
-                      </View>
-                      {preview?.render_mode === "wig_overlay" ? (
                         <AiWigCompositePreview
                           baseImageUri={referenceImage?.uri || generatedImageUri}
-                          selectedWig={preview?.selected_wig || selectedWig}
+                          selectedWig={preview?.selected_wig || activeSelectedWig}
                           placement={preview?.placement || referenceImage?.placement}
                           previewCaptureRef={previewCaptureRef}
                           roles={roles}
+                          compact={true}
                         />
-                      ) : (
-                        <Image
-                          source={{ uri: generatedImageUri }}
-                          resizeMode="cover"
-                          style={styles.aiResultImage}
-                        />
-                      )}
-                    </View>
+                      </View>
+                    ) : null}
 
-                    <View style={[
+                    <LinearGradient
+                      colors={[theme.colors.palette.white, theme.colors.palette.warm50]}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 1 }}
+                      style={[
                       styles.previewReferenceCard,
-                      {
-                        backgroundColor: roles.pageBackground,
-                        borderColor: roles.defaultCardBorder,
-                      },
-                    ]}>
+                      { borderColor: roles.defaultCardBorder },
+                    ]}
+                    >
                       <Image
                         source={{ uri: referenceImage?.uri }}
                         resizeMode="cover"
                         style={styles.previewReferenceImage}
                       />
                       <View style={styles.previewReferenceCopy}>
-                        <Text style={[styles.aiResultLabel, { color: roles.headingText }]}>Original photo</Text>
-                        <Text style={[styles.previewReferenceText, { color: roles.headingText }]}>
-                          Used as the reference for this preview.
+                        <Text style={[styles.aiResultLabel, { color: roles.iconPrimaryColor }]}>Photo reference</Text>
+                        <Text style={[styles.previewReferenceText, { color: roles.bodyText }]}>
+                          Used only to create these previews.
                         </Text>
                       </View>
-                    </View>
+                      <MaterialCommunityIcons name="shield-check-outline" size={21} color={roles.iconPrimaryColor} />
+                    </LinearGradient>
 
-                    {selectedWig ? (
-                      <View style={[
+                    {selectedOptionId && activeSelectedWig ? (
+                      <LinearGradient
+                        colors={[theme.colors.palette.blush100, theme.colors.palette.warm50]}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 1 }}
+                        style={[
                         styles.summaryNoteCard,
-                        {
-                          backgroundColor: roles.pageBackground,
-                          borderColor: roles.defaultCardBorder,
-                        },
-                      ]}>
-                        <Text style={[styles.summaryNoteTitle, { color: roles.headingText }]}>
-                          {selectedWig.wig_name}
-                        </Text>
+                        { borderColor: roles.defaultCardBorder },
+                      ]}
+                      >
+                        <View style={styles.summarySelectedWigHeader}>
+                          <View style={[styles.summarySelectedWigIcon, { backgroundColor: roles.primaryActionBackground }]}>
+                            <MaterialCommunityIcons name="check" size={18} color={roles.primaryActionText} />
+                          </View>
+                          <View style={styles.summarySelectedWigCopy}>
+                            <Text style={[styles.summarySelectedWigEyebrow, { color: roles.iconPrimaryColor }]}>YOUR SELECTION</Text>
+                            <Text style={[styles.summaryNoteTitle, { color: roles.headingText }]} numberOfLines={2}>
+                              {activeSelectedWig.wig_name}
+                            </Text>
+                          </View>
+                        </View>
                         <View style={styles.wigSpecificationGrid}>
                           {[
-                            ["Color", selectedWig?.physical_specification?.color],
-                            ["Length", selectedWig?.physical_specification?.length],
-                            ["Style", selectedWig?.physical_specification?.style],
-                            ["Texture", selectedWig?.physical_specification?.hair_texture],
+                            ["Color", activeSelectedWig?.physical_specification?.color],
+                            ["Length", activeSelectedWig?.physical_specification?.length],
+                            ["Style", activeSelectedWig?.physical_specification?.style],
+                            ["Texture", activeSelectedWig?.physical_specification?.hair_texture],
                           ].filter(([, value]) => value !== null && value !== undefined && value !== "").map(([label, value]) => (
                             <View key={label} style={[styles.wigSpecificationItem, { borderColor: roles.defaultCardBorder }]}>
                               <Text style={[styles.wigSpecificationLabel, { color: roles.headingText }]}>{label}</Text>
@@ -4906,7 +5190,7 @@ function RequestFlowModal({
                             </View>
                           ))}
                         </View>
-                      </View>
+                      </LinearGradient>
                     ) : null}
                   </View>
                 ) : (
@@ -4930,10 +5214,23 @@ function RequestFlowModal({
                   </AppCard>
                 )}
 
-                <View style={styles.previewActionSection}>
-                  <Text style={[styles.previewActionTitle, { color: roles.headingText }]}>Your selected look</Text>
+                <LinearGradient
+                  colors={[theme.colors.palette.blush100, theme.colors.palette.warm50]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={[styles.previewActionSection, { borderColor: roles.defaultCardBorder }]}
+                >
+                  <View style={styles.previewActionHeader}>
+                    <View style={[styles.previewActionIcon, { backgroundColor: roles.iconPrimarySurface }]}>
+                      <MaterialCommunityIcons name="check-decagram-outline" size={20} color={roles.iconPrimaryColor} />
+                    </View>
+                    <View style={styles.previewActionCopy}>
+                      <Text style={[styles.previewActionTitle, { color: roles.headingText }]}>Ready to submit?</Text>
+                      <Text style={[styles.previewActionBody, { color: roles.bodyText }]}>Save this preview or make a change first.</Text>
+                    </View>
+                  </View>
                   <AppButton
-                    title="Download Preview"
+                    title="Save preview"
                     variant="outline"
                     disabled={!generatedImageUri && preview?.render_mode !== "wig_overlay"}
                     onPress={onDownloadImage}
@@ -4942,7 +5239,7 @@ function RequestFlowModal({
                   <View style={styles.previewAlternativeActions}>
                     <View style={styles.previewAlternativeAction}>
                       <AppButton
-                        title="Change Wig"
+                        title="Choose again"
                         variant="outline"
                         size="sm"
                         onPress={onTryAnotherWig}
@@ -4951,7 +5248,7 @@ function RequestFlowModal({
                     </View>
                     <View style={styles.previewAlternativeAction}>
                       <AppButton
-                        title="New Photo"
+                        title="Retake photo"
                         variant="outline"
                         size="sm"
                         onPress={onUploadAnotherPhoto}
@@ -4959,7 +5256,129 @@ function RequestFlowModal({
                       />
                     </View>
                   </View>
+                </LinearGradient>
+              </View>
+            ) : null}
+
+            {step === "confirmChoices" ? (
+              <View style={styles.flowSection}>
+                <LinearGradient
+                  colors={[theme.colors.palette.wine900, theme.colors.palette.wine700, theme.colors.palette.wine600]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.photoGuideCard}
+                >
+                  <View pointerEvents="none" style={styles.photoGuideGlow} />
+                  <View style={styles.photoGuideIcon}>
+                    <MaterialCommunityIcons name="check-decagram-outline" size={24} color="#FFFFFF" />
+                  </View>
+                  <View style={styles.photoGuideCopy}>
+                    <Text style={styles.photoGuideEyebrow}>CONFIRM YOUR SELECTION</Text>
+                    <Text style={styles.photoGuideTitle}>Review your three looks</Text>
+                    <Text style={styles.photoGuideBody}>Check each style before we create your previews.</Text>
+                  </View>
+                </LinearGradient>
+
+                <View style={styles.confirmWigGrid}>
+                  {(selectedWigs || []).map((wig, index) => {
+                    const aiRecommendation = catalogRecommendationByWigId.get(String(wig?.wig_id || wig?.id || ""));
+                    const wigSpec = wig?.physical_specification || {};
+                    const colorAndLength = [
+                      wigSpec?.color || "",
+                      wigSpec?.length != null ? `${wigSpec.length} in` : "",
+                    ].filter(Boolean).join(" • ");
+                    const styleAndTexture = [wigSpec?.style, wigSpec?.hair_texture]
+                      .filter(Boolean)
+                      .join(" • ");
+                    const previewUrl = getWigPreviewImageUrl(wig);
+
+                    return (
+                      <View key={wig.id || wig.wig_id} style={styles.wigGalleryCell}>
+                        <View
+                          style={[
+                            styles.wigGalleryCard,
+                            {
+                              backgroundColor: roles.supportCardBackground,
+                              borderColor: roles.primaryActionBackground,
+                            },
+                            styles.wigGalleryCardSelected,
+                          ]}
+                        >
+                          <View style={styles.wigGalleryImageWrap}>
+                            {previewUrl ? (
+                              <Image
+                                source={{ uri: previewUrl }}
+                                resizeMode="contain"
+                                style={styles.wigGalleryImage}
+                              />
+                            ) : (
+                              <View
+                                style={[
+                                  styles.wigGalleryImage,
+                                  styles.wigStyleThumbPlaceholder,
+                                  { backgroundColor: roles.supportCardBackground },
+                                ]}
+                              >
+                                <AppIcon name="image" size="md" color={roles.primaryActionBackground} />
+                              </View>
+                            )}
+                            <LinearGradient
+                              pointerEvents="none"
+                              colors={["transparent", "rgba(54,4,16,0.60)", "rgba(54,4,16,0.94)"]}
+                              locations={[0, 0.32, 1]}
+                              style={styles.wigGalleryInfoOverlay}
+                            >
+                              <View style={styles.wigGalleryInfoCopy}>
+                                <Text style={styles.wigGalleryOverlayTitle}>{wig.wig_name}</Text>
+                                {colorAndLength ? (
+                                  <View style={styles.wigGalleryMetaRow}>
+                                    <MaterialCommunityIcons name="palette-outline" size={13} color="#FFFFFF" />
+                                    <Text style={styles.wigGalleryOverlayMeta}>{colorAndLength}</Text>
+                                  </View>
+                                ) : null}
+                                {styleAndTexture ? (
+                                  <Text style={styles.wigGalleryOverlayDescription}>{styleAndTexture}</Text>
+                                ) : null}
+                                <View style={styles.wigGalleryOverlayAvailability}>
+                                  <View style={[styles.wigGalleryAvailabilityDot, {
+                                    backgroundColor: wig.is_available ? "#8EE6B7" : theme.colors.palette.blush100,
+                                  }]} />
+                                  <Text style={styles.wigGalleryOverlayAvailabilityText}>
+                                    {wig.is_available ? "Available" : "Wish option"}
+                                  </Text>
+                                </View>
+                              </View>
+                            </LinearGradient>
+
+                            <View style={[styles.wigGalleryChoiceBadge, styles.wigGalleryChoiceBadgeSelected]}>
+                              <MaterialCommunityIcons name="check-circle" size={15} color="#FFFFFF" />
+                              <Text style={[styles.wigGalleryChoiceBadgeText, styles.wigGalleryChoiceBadgeTextSelected]}>
+                                Choice {index + 1}
+                              </Text>
+                            </View>
+
+                            {aiRecommendation ? (
+                              <View style={styles.wigGalleryAiBadge}>
+                                <MaterialCommunityIcons name="creation" size={13} color={theme.colors.palette.wine800} />
+                                <Text style={styles.wigGalleryAiBadgeText}>AI PICK #{aiRecommendation.rank}</Text>
+                              </View>
+                            ) : null}
+                          </View>
+
+                          {aiRecommendation?.suitabilityReason ? (
+                            <View style={[styles.wigGalleryReason, { backgroundColor: roles.iconPrimarySurface }]}>
+                              <MaterialCommunityIcons name="creation-outline" size={14} color={roles.iconPrimaryColor} />
+                              <Text style={[styles.wigGalleryReasonText, { color: roles.bodyText }]}>
+                                {aiRecommendation.suitabilityReason}
+                              </Text>
+                            </View>
+                          ) : null}
+                        </View>
+                      </View>
+                    );
+                  })}
                 </View>
+
               </View>
             ) : null}
 
@@ -5068,7 +5487,7 @@ function RequestFlowModal({
                 />
               </View>
             ) : null}
-          </ScrollView>
+          </Animated.ScrollView>
 
           {step === "patient" && isPatientApproveDocked ? (
             <View
@@ -5099,13 +5518,80 @@ function RequestFlowModal({
               ]}
             >
               <AppButton
-                title="Create Wig Preview"
-                disabled={!selectedWig}
-                onPress={onStartGeneration}
+                title={selectedWigIds?.length === 3 ? "Review 3 Choices" : `Selected ${selectedWigIds?.length || 0} of 3`}
+                disabled={selectedWigIds?.length !== 3}
+                onPress={onReviewChoices}
                 fullWidth={true}
                 leading={<AppIcon name="sparkle" state="inverse" />}
               />
             </View>
+          ) : null}
+
+          {step === "confirmChoices" ? (
+            <LinearGradient
+              pointerEvents="box-none"
+              colors={["rgba(247,249,252,0)", roles.pageBackground, roles.pageBackground]}
+              locations={[0, 0.32, 1]}
+              style={[
+                styles.confirmChoicesFooter,
+                { paddingBottom: Math.max(insets.bottom, theme.spacing.md) },
+              ]}
+            >
+              <View style={styles.confirmChoicesFooterRow}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Edit wig choices"
+                  onPress={onBackToStyles}
+                  style={({ pressed }) => [
+                    styles.confirmChoicesAction,
+                    pressed ? styles.confirmChoicesActionPressed : null,
+                  ]}
+                >
+                  <LinearGradient
+                    colors={[theme.colors.palette.white, theme.colors.palette.blush100]}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                    style={[styles.confirmChoicesActionGradient, { borderColor: roles.defaultCardBorder }]}
+                  >
+                    <View style={styles.confirmChoicesButtonLabel}>
+                      <MaterialCommunityIcons name="pencil-outline" size={18} color={roles.iconPrimaryColor} />
+                      <Text numberOfLines={1} style={[styles.confirmChoicesEditText, { color: roles.iconPrimaryColor }]}>Edit choices</Text>
+                    </View>
+                  </LinearGradient>
+                </Pressable>
+
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Confirm selected looks"
+                  disabled={isGeneratingPreview}
+                  onPress={onStartGeneration}
+                  style={({ pressed }) => [
+                    styles.confirmChoicesAction,
+                    styles.confirmChoicesPrimaryAction,
+                    pressed && !isGeneratingPreview ? styles.confirmChoicesActionPressed : null,
+                  ]}
+                >
+                  <LinearGradient
+                    colors={[theme.colors.palette.wine600, theme.colors.palette.wine900]}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                    style={styles.confirmChoicesActionGradient}
+                  >
+                    {isGeneratingPreview ? (
+                      <View style={styles.confirmChoicesButtonLabel}>
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                        <Text numberOfLines={1} style={styles.confirmChoicesConfirmText}>Creating...</Text>
+                      </View>
+                    ) : (
+                      <View style={styles.confirmChoicesButtonLabel}>
+                        <MaterialCommunityIcons name="check-decagram-outline" size={19} color="#FFFFFF" />
+                        <Text numberOfLines={1} style={styles.confirmChoicesConfirmText}>Confirm looks</Text>
+                      </View>
+                    )}
+                  </LinearGradient>
+                </Pressable>
+              </View>
+            </LinearGradient>
           ) : null}
 
           {step === "summary" ? (
@@ -5116,14 +5602,53 @@ function RequestFlowModal({
                 { paddingBottom: Math.max(insets.bottom, theme.spacing.md) },
               ]}
             >
-              <AppButton
-                title="Submit Wig Request"
-                loading={isSavingRequest}
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={selectedOptionId ? "Submit final wig" : "Choose your final wig"}
+                accessibilityState={{ disabled: !selectedOptionId || isSavingRequest, busy: isSavingRequest }}
+                disabled={!selectedOptionId || isSavingRequest}
                 onPress={onSubmitRequest}
-                fullWidth={true}
-                leading={<AppIcon name="requests" state="inverse" />}
-                style={styles.summarySubmitButton}
-              />
+                style={({ pressed }) => [
+                  styles.summarySubmitButton,
+                  pressed && selectedOptionId && !isSavingRequest ? styles.summarySubmitButtonPressed : null,
+                ]}
+              >
+                <LinearGradient
+                  colors={selectedOptionId
+                    ? [theme.colors.palette.wine600, theme.colors.palette.wine900]
+                    : ["rgba(255,255,255,0.52)", "rgba(247,221,228,0.22)"]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={[
+                    styles.summarySubmitButtonGradient,
+                    {
+                      borderColor: selectedOptionId
+                        ? theme.colors.palette.wine700
+                        : roles.defaultCardBorder,
+                    },
+                  ]}
+                >
+                  {isSavingRequest ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <MaterialCommunityIcons
+                      name="clipboard-check-outline"
+                      size={20}
+                      color={selectedOptionId ? "#FFFFFF" : roles.metaText}
+                    />
+                  )}
+                  <Text style={[
+                    styles.summarySubmitButtonText,
+                    { color: selectedOptionId ? "#FFFFFF" : roles.metaText },
+                  ]}>
+                    {isSavingRequest
+                      ? "Submitting..."
+                      : selectedOptionId
+                        ? "Submit Final Wig"
+                        : "Choose Your Final Wig"}
+                  </Text>
+                </LinearGradient>
+              </Pressable>
             </View>
           ) : null}
         </View>
@@ -5179,16 +5704,19 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [isCapturingPhoto, setIsCapturingPhoto] = useState(false);
   const [selectedOptionId, setSelectedOptionId] = useState("");
-  const [selectedWigFilterId, setSelectedWigFilterId] = useState("");
+  const [selectedWigFilterIds, setSelectedWigFilterIds] = useState([]);
   const [isCancelRequestModalOpen, setIsCancelRequestModalOpen] = useState(false);
+  const [isReleaseAppealModalOpen, setIsReleaseAppealModalOpen] = useState(false);
+  const [isSavingReleaseAction, setIsSavingReleaseAction] = useState(false);
   const [flowStep, setFlowStep] = useState("patient");
-  const [requestMode, setRequestMode] = useState("selected");
   const [photoValidation, setPhotoValidation] = useState(null);
   const [certificateVerification, setCertificateVerification] = useState(null);
   const [isVerifyingCertificate, setIsVerifyingCertificate] = useState(false);
   const [safetyAssessment, setSafetyAssessment] = useState(SAFETY_ASSESSMENT_DEFAULTS);
   const [safetyAssessmentRequestId, setSafetyAssessmentRequestId] = useState(null);
+  const [completedSafetyRequestId, setCompletedSafetyRequestId] = useState(null);
   const [isSavingSafety, setIsSavingSafety] = useState(false);
+  const [isLeavingRequest, setIsLeavingRequest] = useState(false);
   const [isSafetyAnswersOpen, setIsSafetyAnswersOpen] = useState(false);
   const [termsDocument, setTermsDocument] = useState(null);
   const [isLoadingTermsDocument, setIsLoadingTermsDocument] = useState(false);
@@ -5266,25 +5794,39 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
     latestWigSpecification,
     requestWig,
     safetyAssessment: savedSafetyAssessment,
+    tryOnSelections,
+    releaseReceipt,
+    releaseAppeal,
+    hasDraftRequest,
     hasSubmittedRequest,
     referenceImage,
     preview,
+    wigRankings,
     error,
     successMessage,
     isLoadingContext,
     hasLoadedContext,
     isGeneratingPreview,
+    isRankingWigs,
     isSavingRequest,
     isCancellingRequest,
     availableWigs,
+    isLoadingAvailableWigs,
     wigPreferenceOptions,
     isLoadingWigPreferenceOptions,
     saveCapturedReferenceImage,
     clearReferenceImage,
     clearPreview,
+    rankAvailableWigs,
+    beginRequest,
+    discardDraftRequest,
+    saveCapSize,
+    confirmTryOnCandidates,
     generatePreview,
     saveRequest,
     cancelRequest,
+    acceptReleaseReceipt,
+    submitReleaseAppeal,
     refreshContext,
   } = usePatientWigRequest({ userId: user?.id });
 
@@ -5306,6 +5848,7 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
   const {
     control,
     handleSubmit,
+    setValue,
     setError: setFormError,
     formState: { errors },
   } = useForm({
@@ -5400,6 +5943,15 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
       ),
     [availableWigs],
   );
+  const matchingPreviewWigs = useMemo(() => {
+    const selectedCapSize = normalizeCapSizeValue(
+      draftValues?.capSize || latestWigRequest?.requested_cap_size,
+    );
+    if (!selectedCapSize) return availablePreviewWigs;
+    return availablePreviewWigs.filter((wig) => (
+      normalizeCapSizeValue(getWigPreferenceValue(wig, "capSize")) === selectedCapSize
+    ));
+  }, [availablePreviewWigs, draftValues?.capSize, latestWigRequest?.requested_cap_size]);
   const recommendationOptions = useMemo(
     () =>
       buildRecommendationOptions({
@@ -5464,33 +6016,67 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
     }),
     [aiRecommendedWig],
   );
-  const selectedWig = useMemo(
-    () =>
-      availablePreviewWigs.find((wig) => wig.id === selectedWigFilterId) || null,
-    [availablePreviewWigs, selectedWigFilterId],
+  const selectedWigs = useMemo(
+    () => selectedWigFilterIds
+      .map((filterId) => matchingPreviewWigs.find((wig) => wig.id === filterId))
+      .filter(Boolean),
+    [matchingPreviewWigs, selectedWigFilterIds],
   );
+  const catalogRecommendationOptions = useMemo(
+    () => buildRecommendationOptions({
+      preview: wigRankings,
+      specification: latestWigSpecification,
+      draftValues,
+    }),
+    [draftValues, latestWigSpecification, wigRankings],
+  );
+  const selectedWig = selectedWigs[0] || null;
   const selectedRecommendationWig = selectedOption?.selectedWig || null;
   const effectiveSelectedWig = selectedRecommendationWig || selectedWig;
   useEffect(() => {
-    setSelectedOptionId(recommendationOptions[0]?.id || "");
-  }, [
-    latestWigSpecification?.ai_wig_preview_url,
-    preview?.generated_image_data_url,
-    recommendationOptions,
-  ]);
+    setSelectedOptionId("");
+  }, [preview?.generated_image_data_url]);
 
   useEffect(() => {
     if (!availablePreviewWigs.length) {
-      setSelectedWigFilterId("");
+      setSelectedWigFilterIds([]);
       return;
     }
 
-    setSelectedWigFilterId((current) => {
-      if (current && availablePreviewWigs.some((wig) => wig.id === current))
-        return current;
-      return "";
+    setSelectedWigFilterIds((current) => current.filter((filterId) => (
+      matchingPreviewWigs.some((wig) => wig.id === filterId)
+    )).slice(0, 3));
+  }, [availablePreviewWigs.length, matchingPreviewWigs]);
+
+  useEffect(() => {
+    if (!showFlowOnly || !hasLoadedContext || !hasDraftRequest) return;
+    if (latestWigRequest?.requested_cap_size) {
+      setValue("capSize", latestWigRequest.requested_cap_size);
+    }
+    setSafetyAssessmentRequestId(latestWigRequest?.req_id || null);
+    const savedSelections = Array.isArray(tryOnSelections) ? tryOnSelections : [];
+    if (savedSelections.length === 3) {
+      setSelectedWigFilterIds(savedSelections.map((selection) => selection.filter_id).filter(Boolean));
+    }
+    const hasThreeGeneratedResults = savedSelections.filter((selection) => selection.generated_image_url).length === 3;
+    const hasCompletedSafety = Boolean(
+      savedSafetyAssessment?.information_confirmed
+      || completedSafetyRequestId === latestWigRequest?.req_id,
+    );
+    setFlowStep((currentStep) => {
+      if (!["patient", "safety"].includes(currentStep)) return currentStep;
+      if (!hasCompletedSafety) return "safety";
+      return hasThreeGeneratedResults ? "summary" : "photo";
     });
-  }, [availablePreviewWigs]);
+  }, [completedSafetyRequestId, hasDraftRequest, hasLoadedContext, latestWigRequest?.req_id, latestWigRequest?.requested_cap_size, savedSafetyAssessment?.information_confirmed, setValue, showFlowOnly, tryOnSelections]);
+
+  useEffect(() => {
+    if (!hasDraftRequest || !matchingPreviewWigs.length || tryOnSelections?.length !== 3) return;
+    const savedFilterIds = tryOnSelections
+      .map((selection) => selection.filter_id)
+      .filter((filterId) => matchingPreviewWigs.some((wig) => wig.id === filterId));
+    if (savedFilterIds.length === 3) setSelectedWigFilterIds(savedFilterIds);
+  }, [hasDraftRequest, matchingPreviewWigs, tryOnSelections]);
 
   const handleNavPress = (item) => {
     if (!item.route || item.route === "/patient/requests") return;
@@ -5567,36 +6153,36 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
     });
   };
 
-  const generateRecommendationsForPhoto = async (image) => {
+  const generateConfirmedWigPreviews = async (image) => {
     const validation = validateAiTryOnPhoto(image);
     setPhotoValidation(validation);
     if (!validation.valid) return { success: false, error: validation.message };
-    if (availablePreviewWigs.length < 3) {
+    if (selectedWigs.length !== 3) {
       Alert.alert(
-        "Wig Previews Unavailable",
-        "There are not enough preview-ready wig styles available right now. Please try again later.",
+        "Choose three wigs",
+        "Confirm exactly three wig styles before taking your photo.",
         [{ text: "Got it" }],
       );
       return {
         success: false,
-        title: "Wig Previews Unavailable",
-        error: "There are not enough preview-ready wig styles available right now.",
+        title: "Choose Three Wigs",
+        error: "Confirm exactly three wig styles before taking your photo.",
       };
     }
 
     setFlowStep("generating");
-    const generationResult = await generatePreview(draftValues, null, image);
+    const generationResult = await generatePreview(draftValues, selectedWigs, image);
     if (generationResult?.success) {
-      setSelectedWigFilterId("");
+      setSelectedOptionId("");
       setFlowStep("summary");
       return generationResult;
     }
 
-    setFlowStep("photo");
+    setFlowStep("confirmChoices");
     Alert.alert(
       generationResult?.title || "Preview Could Not Be Created",
       generationResult?.error || "Something interrupted the preview. Your photo is still saved—please try again.",
-      [{ text: "Back to Photo" }],
+      [{ text: "Back to choices" }],
     );
     return generationResult;
   };
@@ -5635,33 +6221,32 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
   };
 
   const handleContinueToWigs = async () => {
-    return await generateRecommendationsForPhoto(referenceImage);
+    const validation = validateAiTryOnPhoto(referenceImage);
+    setPhotoValidation(validation);
+    if (!validation.valid) {
+      Alert.alert("Photo needs review", validation.message);
+      return { success: false, error: validation.message };
+    }
+    setFlowStep("cap");
+    return { success: true };
   };
 
   const handleStartGeneration = handleSubmit(async (values) => {
-    const validation = validateAiTryOnPhoto(referenceImage);
-    setPhotoValidation(validation);
-    if (!validation.valid) return { success: false, error: validation.message };
-
-    if (!selectedWig?.id) {
-      Alert.alert("Select a wig", "Choose one wig before creating a preview.");
-      return { success: false, error: "Choose one wig before creating a preview." };
+    if (selectedWigs.length !== 3) {
+      Alert.alert("Choose three wigs", "Select exactly three unique styles for your try-on.");
+      return { success: false, error: "Select exactly three unique styles." };
     }
-
-    setFlowStep("generating");
-    const result = await generatePreview(values, selectedWig);
-
-    if (result?.success) {
+    if (Array.isArray(preview?.options) && preview.options.length === 3) {
       setFlowStep("summary");
+      return { success: true, reusedPreview: true };
+    }
+    const result = await confirmTryOnCandidates(selectedWigs);
+    if (!result?.success) {
+      Alert.alert("Selections not saved", result?.error || "Please try again.");
       return result;
     }
-
-    setFlowStep("styles");
-    Alert.alert(
-      "Preview unavailable",
-      "We couldn't prepare your wig preview. Please try again or choose another photo.",
-    );
-    return result;
+    clearPreview();
+    return await generateConfirmedWigPreviews(referenceImage, values);
   });
 
   const handleTryAnotherWig = () => {
@@ -5670,10 +6255,9 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
     setFlowStep("styles");
   };
 
-  const handleUploadAnotherPhoto = () => {
+  const handleUploadAnotherPhoto = async () => {
     clearPreview();
     clearReferenceImage();
-    setSelectedWigFilterId("");
     setSelectedOptionId("");
     setPhotoValidation(null);
     setFlowStep("photo");
@@ -5740,43 +6324,23 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
   };
 
   const handleSaveRequest = handleSubmit(async (values) => {
-    if (!values.acceptedTerms) {
-      setFormError("acceptedTerms", {
-        type: "manual",
-        message: "Please accept the request agreement first.",
-      });
-      return {
-        success: false,
-        error: "Please accept the request agreement first.",
-      };
-    }
-
-    const requestedWigId =
-      requestMode === "custom" ? null : effectiveSelectedWig?.wig_id || null;
-    let capturedPreviewImage = null;
-    try {
-      capturedPreviewImage = await captureAdjustedWigPreview();
-    } catch {
-      Alert.alert(
-        "Preview not ready",
-        "The adjusted wig preview could not be saved yet. Please wait a moment and try again.",
-      );
-      return { success: false, error: "The adjusted wig preview could not be saved yet." };
+    const finalOption = recommendationOptions.find((option) => option.id === selectedOptionId) || null;
+    const requestedWigId = finalOption?.selectedWig?.wig_id || finalOption?.id || null;
+    if (!requestedWigId || !selectedOptionId) {
+      Alert.alert("Choose your final wig", "Tap one of the three previews before submitting.");
+      return { success: false, error: "Choose one final wig." };
     }
 
     const result = await saveRequest(
       values,
       selectedOptionId,
       requestedWigId,
-      capturedPreviewImage,
+      null,
     );
 
     if (result?.success) {
       void refreshTracking().catch(() => {});
-      const requestId = result?.wigRequest?.req_id || latestWigRequest?.req_id || null;
-      setSafetyAssessmentRequestId(requestId);
-      setSafetyAssessment(SAFETY_ASSESSMENT_DEFAULTS);
-      setFlowStep("safety");
+      router.replace("/patient/requests");
     }
 
     return result;
@@ -5827,8 +6391,12 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
       return;
     }
 
-    await refreshTracking();
-    router.replace("/patient/requests");
+    setCompletedSafetyRequestId(safetyAssessmentRequestId);
+    await Promise.all([
+      refreshTracking(),
+      refreshContext({ silent: true, force: true }),
+    ]);
+    setFlowStep("photo");
   };
 
   const handleCancelLatestRequest = () => {
@@ -5841,6 +6409,37 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
       return;
     }
     setIsCancelRequestModalOpen(true);
+  };
+
+  const handleAcceptReleaseReceipt = () => {
+    Alert.alert(
+      "Confirm wig receipt?",
+      releaseReceipt?.terms_snapshot || "Confirm that you received the released wig and accept the receipt terms.",
+      [
+        { text: "Not Yet", style: "cancel" },
+        {
+          text: "Confirm Receipt",
+          onPress: async () => {
+            setIsSavingReleaseAction(true);
+            const result = await acceptReleaseReceipt();
+            setIsSavingReleaseAction(false);
+            if (!result?.success) Alert.alert("Receipt not confirmed", result?.error || "Please try again.");
+          },
+        },
+      ],
+    );
+  };
+
+  const handleSubmitReleaseAppeal = async ({ reason, description }) => {
+    setIsSavingReleaseAction(true);
+    const result = await submitReleaseAppeal({ reason, description });
+    setIsSavingReleaseAction(false);
+    if (!result?.success) {
+      Alert.alert("Appeal not submitted", result?.error || "Please try again.");
+      return;
+    }
+    setIsReleaseAppealModalOpen(false);
+    Alert.alert("Appeal submitted", "Staff will review your report.");
   };
 
   const handleConfirmCancelLatestRequest = async () => {
@@ -5865,6 +6464,92 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
 
     setIsCancelRequestModalOpen(false);
     await refreshTracking();
+  };
+
+  const cancelUnfinishedRequestAndLeave = async () => {
+    if (isLeavingRequest) return;
+    setIsLeavingRequest(true);
+
+    try {
+      if (hasDraftRequest) {
+        const result = await discardDraftRequest();
+        if (!result?.success) {
+          Alert.alert(
+            "Unable to cancel request",
+            result?.error || "We could not cancel your unfinished request. Your progress is still safe—please try again.",
+          );
+          return;
+        }
+      } else {
+        clearReferenceImage();
+        clearPreview();
+      }
+
+      router.back();
+    } catch {
+      Alert.alert(
+        "Unable to cancel request",
+        "Something interrupted the cancellation. Your progress is still safe—please try again.",
+      );
+    } finally {
+      setIsLeavingRequest(false);
+    }
+  };
+
+  const confirmUnfinishedRequestExit = () => {
+    Alert.alert(
+      "Cancel unfinished request?",
+      "Your wig request is not finished. If you leave now, it will be canceled and your current progress will be removed.",
+      [
+        { text: "Continue request", style: "cancel" },
+        {
+          text: "Cancel request and leave",
+          style: "destructive",
+          onPress: () => {
+            void cancelUnfinishedRequestAndLeave();
+          },
+        },
+      ],
+    );
+  };
+
+  const handleRequestFlowBack = () => {
+    if (isSavingRequest || isSavingSafety || isGeneratingPreview || isRankingWigs || isLeavingRequest) {
+      Alert.alert(
+        "Please wait",
+        isGeneratingPreview
+          ? "Your wig previews are still being created. Keep this screen open until they finish."
+          : isRankingWigs
+            ? "AI is finding your best wig matches. Keep this screen open until it finishes."
+          : isLeavingRequest
+            ? "Your unfinished request is being canceled safely."
+            : "This step is still being saved. You can go back when it finishes.",
+      );
+      return;
+    }
+
+    if (flowStep === "patient") {
+      confirmUnfinishedRequestExit();
+      return;
+    }
+
+    const previousStepByStep = {
+      safety: "patient",
+      photo: "safety",
+      cap: "photo",
+      styles: "cap",
+      confirmChoices: "styles",
+      summary: "confirmChoices",
+      customSpec: "cap",
+    };
+    const previousStep = previousStepByStep[flowStep];
+
+    if (!previousStep) {
+      confirmUnfinishedRequestExit();
+      return;
+    }
+
+    setFlowStep(previousStep);
   };
 
   const openRequestFlow = () => {
@@ -5900,14 +6585,91 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
       };
     }
 
-    setRequestMode(availablePreviewWigs.length ? "selected" : "custom");
-    setFlowStep(availablePreviewWigs.length ? "photo" : "customSpec");
-    return { success: true };
+    const result = await beginRequest();
+    if (!result?.success) {
+      Alert.alert("Request not started", result?.error || "Please try again.");
+      return result;
+    }
+    if (
+      result.wigRequest?.requested_wig_id
+      || String(result.wigRequest?.status || "").trim().toLowerCase() !== "pending"
+    ) {
+      Alert.alert("Request already active", "Track your current wig request before starting another.");
+      router.replace("/patient/requests");
+      return { success: false, alreadySubmitted: true };
+    }
+    setSafetyAssessmentRequestId(result.wigRequest?.req_id || null);
+    setCompletedSafetyRequestId(null);
+    setSafetyAssessment(SAFETY_ASSESSMENT_DEFAULTS);
+    setFlowStep("safety");
+    return result;
   });
 
-  const handleRequestOwnWig = () => {
-    setRequestMode("custom");
-    setFlowStep("customSpec");
+  const handleSubmitCapSize = handleSubmit(async (values) => {
+    if (!values.capSize) {
+      Alert.alert("Choose a cap size", "Select the cap size that feels most comfortable.");
+      return { success: false };
+    }
+    const result = await saveCapSize(values.capSize);
+    if (!result?.success) {
+      Alert.alert("Cap size not saved", result?.error || "Please try again.");
+      return result;
+    }
+    if (matchingPreviewWigs.length < 3) {
+      Alert.alert(
+        "Not enough matching wigs",
+        "At least three catalog wigs in this cap size are needed for the virtual try-on.",
+      );
+      return { success: false };
+    }
+    const rankingResult = await rankAvailableWigs(values, matchingPreviewWigs, referenceImage);
+    if (!rankingResult?.success) {
+      Alert.alert(
+        rankingResult?.title || "Recommendations unavailable",
+        rankingResult?.error || "We could not rank the wigs right now. Please try again.",
+      );
+      return rankingResult;
+    }
+    const recommendedIds = (rankingResult.recommendations || [])
+      .map((recommendation) => (
+        recommendation?.selectedWig?.id
+        || recommendation?.selectedWig?.wig_id
+        || recommendation?.selected_wig?.id
+        || recommendation?.selected_wig?.wig_id
+        || recommendation?.id
+      ))
+      .map((id) => matchingPreviewWigs.find((wig) => String(wig.wig_id || wig.id) === String(id))?.id)
+      .filter(Boolean)
+      .slice(0, 3);
+    setSelectedWigFilterIds(recommendedIds);
+    setFlowStep("styles");
+    return result;
+  });
+
+  const handleReviewChoices = () => {
+    if (selectedWigs.length !== 3) {
+      Alert.alert("Choose three wigs", "Select exactly three looks before continuing.");
+      return;
+    }
+    Alert.alert(
+      "Review these three wigs?",
+      "You can check each selection on the next screen before AI creates your try-on previews.",
+      [
+        { text: "Keep choosing", style: "cancel" },
+        { text: "Review my choices", onPress: () => setFlowStep("confirmChoices") },
+      ],
+    );
+  };
+
+  const handleToggleWig = (filterId) => {
+    setSelectedWigFilterIds((current) => {
+      if (current.includes(filterId)) return current.filter((id) => id !== filterId);
+      if (current.length >= 3) {
+        Alert.alert("Three wigs selected", "Remove one choice before adding another.");
+        return current;
+      }
+      return [...current, filterId];
+    });
   };
 
   return (
@@ -6067,6 +6829,39 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
                         </LinearGradient>
                       </Pressable>
                     ) : null}
+
+                    {releaseReceipt ? (
+                      <LinearGradient
+                        colors={[roles.defaultCardBackground, roles.supportCardBackground]}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 1 }}
+                        style={[styles.requestQuickAction, { borderColor: roles.defaultCardBorder, padding: theme.spacing.md, gap: theme.spacing.sm }]}
+                      >
+                        <View style={styles.requestQuickActionRow}>
+                          <LinearGradient colors={[theme.colors.palette.wine600, theme.colors.palette.wine900]} style={styles.requestQuickActionIcon}>
+                            <MaterialCommunityIcons name="hand-heart-outline" size={21} color="#FFFFFF" />
+                          </LinearGradient>
+                          <View style={styles.requestQuickActionCopy}>
+                            <Text style={[styles.requestQuickActionTitle, { color: roles.headingText }]}>Wig release receipt</Text>
+                            <Text style={[styles.requestQuickActionHint, { color: roles.metaText }]}>
+                              {releaseReceipt.received_confirmed_at ? "Receipt confirmed" : "Please confirm after receiving your wig"}
+                            </Text>
+                          </View>
+                        </View>
+                        <Text numberOfLines={3} style={[styles.flowBody, { color: roles.bodyText }]}>{releaseReceipt.terms_snapshot}</Text>
+                        {!releaseReceipt.received_confirmed_at ? (
+                          <AppButton title="Confirm Wig Received" onPress={handleAcceptReleaseReceipt} loading={isSavingReleaseAction} fullWidth={true} />
+                        ) : releaseAppeal ? (
+                          <View style={[styles.documentStatusPill, { backgroundColor: roles.iconPrimarySurface, alignSelf: "flex-start" }]}>
+                            <Text style={[styles.documentRowStatus, { color: roles.primaryActionBackground }]}>Appeal: {releaseAppeal.status}</Text>
+                          </View>
+                        ) : new Date(releaseReceipt.appeal_deadline).getTime() >= Date.now() ? (
+                          <AppButton title="Report a Wig Issue" variant="outline" onPress={() => setIsReleaseAppealModalOpen(true)} fullWidth={true} />
+                        ) : (
+                          <Text style={[styles.requestQuickActionHint, { color: roles.metaText }]}>The appeal period has ended.</Text>
+                        )}
+                      </LinearGradient>
+                    ) : null}
                   </View>
                 </>
               ) : isLoadingContext || !hasLoadedContext ? (
@@ -6148,7 +6943,7 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
                         { color: requestFlowPrimaryTextColor },
                       ]}
                     >
-                      Find a wig made for you
+                      {hasDraftRequest ? "Continue your wig request" : "Find a wig made for you"}
                     </Text>
                     <Text
                       style={[
@@ -6156,8 +6951,9 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
                         { color: roles.bodyText },
                       ]}
                     >
-                      Tell us your preferences and we will guide you through
-                      matching, review, and release updates.
+                      {hasDraftRequest
+                        ? "Your progress is saved. Continue with your safety, fit, or wig choices."
+                        : "Choose your fit, compare three wigs, and submit your favorite."}
                     </Text>
                   </View>
 
@@ -6199,7 +6995,7 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
                   </View>
 
                   <AppButton
-                    title="Start wig request"
+                    title={hasDraftRequest ? "Resume wig request" : "Start wig request"}
                     onPress={openRequestFlow}
                     leading={<AppIcon name="requests" state="inverse" />}
                     trailing={
@@ -6243,19 +7039,24 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
         patientName={patientFullName}
         patientDetails={requestPatientDetails}
         medicalCondition={medicalCondition}
-        availableWigs={availablePreviewWigs}
+        availableWigs={matchingPreviewWigs}
         referenceImage={referenceImage}
         selectedWig={effectiveSelectedWig}
+        selectedWigs={selectedWigs}
+        selectedWigIds={selectedWigFilterIds}
         recommendedPreferenceOptions={recommendedPreferenceOptions}
         recommendationOptions={recommendationOptions}
+        catalogRecommendations={catalogRecommendationOptions}
         selectedOptionId={selectedOptionId}
         onSelectOption={setSelectedOptionId}
         wigPreferenceOptions={wigPreferenceOptions}
+        isLoadingAvailableWigs={isLoadingAvailableWigs}
         isLoadingWigPreferenceOptions={isLoadingWigPreferenceOptions}
         generatedImageUri={generatedImageUri}
         preview={preview}
         hasGeneratedPreview={hasGeneratedPreview}
         isGeneratingPreview={isGeneratingPreview}
+        isRankingWigs={isRankingWigs}
         isSavingRequest={isSavingRequest}
         isCapturingPhoto={isCapturingPhoto}
         certificateVerification={certificateVerification}
@@ -6267,21 +7068,24 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
         photoValidation={photoValidation}
         hasCameraPermission={hasCameraPermission}
         cameraRef={cameraRef}
-        onClose={() => router.back()}
+        onBack={handleRequestFlowBack}
         onContinueToDetails={handleContinueToDetails}
         onCapturePhoto={handleCapturePhoto}
         onUploadCertificate={handleUploadCertificate}
         onScanCertificate={handleScanCertificate}
         onRequestCameraPermission={requestCameraPermission}
         onContinueToWigs={handleContinueToWigs}
+        onSubmitCapSize={handleSubmitCapSize}
+        onChangeCapSize={() => setFlowStep("cap")}
+        onReviewChoices={handleReviewChoices}
+        onBackToStyles={() => setFlowStep("styles")}
         onStartGeneration={handleStartGeneration}
         onTryAnotherWig={handleTryAnotherWig}
         onUploadAnotherPhoto={handleUploadAnotherPhoto}
         onDownloadImage={handleDownloadImage}
         previewCaptureRef={wigPreviewCaptureRef}
         onSubmitRequest={handleSaveRequest}
-        onSelectWig={setSelectedWigFilterId}
-        onRequestOwnWig={handleRequestOwnWig}
+        onSelectWig={handleToggleWig}
         safetyAssessment={safetyAssessment}
         isSavingSafety={isSavingSafety}
         onChangeSafety={handleChangeSafety}
@@ -6302,6 +7106,13 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
         isCancelling={isCancellingRequest}
         onClose={() => setIsCancelRequestModalOpen(false)}
         onConfirm={handleConfirmCancelLatestRequest}
+        roles={roles}
+      />
+      <WigReleaseAppealModal
+        visible={isReleaseAppealModalOpen}
+        isSaving={isSavingReleaseAction}
+        onClose={() => setIsReleaseAppealModalOpen(false)}
+        onSubmit={handleSubmitReleaseAppeal}
         roles={roles}
       />
     </DashboardLayout>
@@ -7452,15 +8263,16 @@ const styles = StyleSheet.create({
     gap: theme.spacing.sm,
   },
   preferenceChip: {
-    minHeight: 34,
+    minHeight: 46,
     flexDirection: "row",
     alignItems: "center",
     gap: theme.spacing.xs,
     justifyContent: "center",
-    borderRadius: 6,
+    borderRadius: theme.radius.pill,
     borderWidth: 1,
-    paddingHorizontal: theme.spacing.sm,
-    paddingVertical: 6,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    ...theme.shadows.soft,
   },
   preferenceChipRecommended: {
     backgroundColor: "transparent",
@@ -7488,6 +8300,95 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.semantic.bodySm,
   },
   preferenceChipTextSelected: {
+    fontWeight: theme.typography.weights.bold,
+  },
+  capSizeOptionGrid: {
+    width: "100%",
+    justifyContent: "space-between",
+  },
+  capSizeOptionShell: {
+    width: "31.5%",
+    minHeight: 138,
+    borderRadius: theme.radius.lg,
+    ...theme.shadows.soft,
+  },
+  capSizeOption: {
+    width: "100%",
+    minHeight: 138,
+    borderRadius: theme.radius.lg,
+    borderWidth: 1.5,
+    paddingHorizontal: 0,
+    paddingVertical: 0,
+    overflow: "hidden",
+  },
+  capSizeOptionGradient: {
+    position: "relative",
+    width: "100%",
+    minHeight: 135,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+    borderRadius: theme.radius.lg - 1,
+    paddingHorizontal: theme.spacing.xs,
+    paddingVertical: theme.spacing.sm,
+  },
+  capSizeOptionIcon: {
+    width: 36,
+    height: 36,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 12,
+  },
+  capSizeOptionText: {
+    maxWidth: "100%",
+    textAlign: "center",
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.bold,
+  },
+  capSizeOptionState: {
+    maxWidth: "100%",
+    textAlign: "center",
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  capSizeMeasurementPill: {
+    minHeight: 24,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: theme.spacing.sm,
+  },
+  capSizeMeasurementText: {
+    textAlign: "center",
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    fontWeight: theme.typography.weights.bold,
+  },
+  capSizeRadio: {
+    position: "absolute",
+    top: 8,
+    right: 8,
+    width: 20,
+    height: 20,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: theme.radius.full,
+    borderWidth: 1,
+  },
+  capSizeSelectionConfirmation: {
+    alignSelf: "flex-start",
+    minHeight: 34,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.xs,
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: theme.spacing.sm,
+  },
+  capSizeSelectionConfirmationText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
     fontWeight: theme.typography.weights.bold,
   },
   preferenceSelectedText: {
@@ -9154,8 +10055,33 @@ const styles = StyleSheet.create({
     backgroundColor: "transparent",
   },
   summarySubmitButton: {
+    width: "100%",
     borderRadius: theme.radius.lg,
+    overflow: "hidden",
     ...theme.shadows.hero,
+  },
+  summarySubmitButtonPressed: {
+    opacity: 0.9,
+    transform: [{ scale: 0.985 }],
+  },
+  summarySubmitButtonGradient: {
+    width: "100%",
+    minHeight: 54,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: theme.spacing.sm,
+    borderWidth: 1,
+    borderRadius: theme.radius.lg,
+    paddingHorizontal: theme.spacing.lg,
+  },
+  summarySubmitButtonText: {
+    flexShrink: 1,
+    textAlign: "center",
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.semibold,
+    letterSpacing: 0.2,
   },
   patientInlineApproveSlot: {
     width: "100%",
@@ -9165,6 +10091,414 @@ const styles = StyleSheet.create({
   stylesActionButton: {
     flex: 1,
     minWidth: 0,
+  },
+  capSizeSelectionCard: {
+    position: "relative",
+    gap: theme.spacing.md,
+    borderRadius: theme.radius.xl,
+    borderWidth: 1,
+    padding: theme.spacing.lg,
+    overflow: "hidden",
+    ...theme.shadows.card,
+  },
+  capSizeCardGlow: {
+    position: "absolute",
+    width: 140,
+    height: 140,
+    top: -82,
+    right: -46,
+    borderRadius: 70,
+    backgroundColor: "rgba(143,34,67,0.08)",
+  },
+  capSizeSectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.md,
+  },
+  capSizeSelectionIcon: {
+    width: 46,
+    height: 46,
+    flexShrink: 0,
+    borderRadius: 15,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  capSizeSectionHeaderCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  capSizeEyebrow: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    fontWeight: theme.typography.weights.bold,
+    letterSpacing: 0.7,
+  },
+  wigFlowPrimaryButton: {
+    borderRadius: theme.radius.xl,
+    ...theme.shadows.hero,
+  },
+  wigGalleryIntroCard: {
+    position: "relative",
+    minHeight: 128,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.md,
+    borderRadius: theme.radius.xl,
+    padding: theme.spacing.lg,
+    overflow: "hidden",
+    ...theme.shadows.hero,
+  },
+  wigGalleryIntroIcon: {
+    width: 50,
+    height: 50,
+    borderRadius: theme.radius.lg,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.15)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.2)",
+  },
+  wigGalleryIntroCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 3,
+  },
+  wigGallerySelectionCount: {
+    minWidth: 46,
+    height: 34,
+    borderRadius: theme.radius.pill,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: theme.spacing.sm,
+    backgroundColor: "rgba(255,255,255,0.94)",
+  },
+  wigGallerySelectionCountText: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.bold,
+    color: theme.colors.palette.wine800,
+  },
+  wigGalleryGrid: {
+    width: "100%",
+    alignSelf: "stretch",
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "space-between",
+    rowGap: theme.spacing.md,
+  },
+  wigGalleryCell: {
+    width: "48%",
+    maxWidth: "48%",
+    flexBasis: "48%",
+    flexGrow: 0,
+    flexShrink: 0,
+    alignSelf: "flex-start",
+    overflow: "hidden",
+    borderRadius: theme.radius.xl,
+  },
+  wigGalleryStatusCard: {
+    minHeight: 92,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.md,
+    borderWidth: 1,
+    borderRadius: theme.radius.xl,
+    padding: theme.spacing.lg,
+    ...theme.shadows.soft,
+  },
+  wigGalleryStatusCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 3,
+  },
+  wigGalleryEmptyCard: {
+    minHeight: 214,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: theme.spacing.md,
+    borderWidth: 1,
+    borderRadius: theme.radius.xl,
+    padding: theme.spacing.lg,
+    ...theme.shadows.card,
+  },
+  wigGalleryEmptyIcon: {
+    width: 52,
+    height: 52,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 18,
+  },
+  wigGalleryEmptyCopy: {
+    alignItems: "center",
+    gap: 4,
+  },
+  wigGalleryCard: {
+    width: "100%",
+    borderRadius: theme.radius.xl,
+    borderWidth: 1,
+    overflow: "hidden",
+    ...theme.shadows.card,
+  },
+  wigGalleryCardSelected: {
+    borderWidth: 2,
+    ...theme.shadows.hero,
+  },
+  wigGalleryCardPressed: {
+    opacity: 0.9,
+    transform: [{ scale: 0.975 }],
+  },
+  wigGalleryImageWrap: {
+    position: "relative",
+    width: "100%",
+    aspectRatio: 0.88,
+    overflow: "hidden",
+    backgroundColor: theme.colors.surfaceSoft,
+  },
+  wigGalleryImage: {
+    width: "100%",
+    height: "100%",
+  },
+  wigGalleryImageShade: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  wigGalleryInfoOverlay: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    minHeight: "68%",
+    justifyContent: "flex-end",
+    padding: theme.spacing.sm,
+    paddingTop: theme.spacing.xl,
+  },
+  wigGalleryInfoCopy: {
+    minWidth: 0,
+    gap: 5,
+  },
+  wigGalleryOverlayTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.snug,
+    fontWeight: theme.typography.weights.bold,
+    color: "#FFFFFF",
+  },
+  wigGalleryOverlayMeta: {
+    flex: 1,
+    flexShrink: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    lineHeight: 15,
+    fontWeight: theme.typography.weights.semibold,
+    color: "rgba(255,255,255,0.94)",
+  },
+  wigGalleryOverlayDescription: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    lineHeight: 15,
+    color: "rgba(255,255,255,0.82)",
+  },
+  wigGalleryOverlayAvailability: {
+    alignSelf: "flex-start",
+    minHeight: 24,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: theme.spacing.sm,
+    backgroundColor: "rgba(255,255,255,0.16)",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(255,255,255,0.28)",
+  },
+  wigGalleryOverlayAvailabilityText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    fontWeight: theme.typography.weights.semibold,
+    color: "#FFFFFF",
+  },
+  wigGalleryChoiceBadge: {
+    position: "absolute",
+    top: theme.spacing.sm,
+    right: theme.spacing.sm,
+    minHeight: 30,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: theme.spacing.sm,
+    backgroundColor: "rgba(255,255,255,0.92)",
+  },
+  wigGalleryChoiceBadgeSelected: {
+    backgroundColor: theme.colors.palette.wine700,
+  },
+  wigGalleryAiBadge: {
+    position: "absolute",
+    top: theme.spacing.sm,
+    left: theme.spacing.sm,
+    minHeight: 28,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: theme.spacing.sm,
+    backgroundColor: "rgba(255,255,255,0.94)",
+    ...theme.shadows.soft,
+  },
+  wigGalleryAiBadgeText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 9,
+    fontWeight: theme.typography.weights.bold,
+    letterSpacing: 0.45,
+    color: theme.colors.palette.wine800,
+  },
+  wigGalleryReason: {
+    minHeight: 78,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 6,
+    padding: theme.spacing.sm,
+  },
+  wigGalleryReasonText: {
+    flex: 1,
+    flexShrink: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    lineHeight: 15,
+  },
+  wigGalleryChoiceBadgeText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.bold,
+    color: theme.colors.palette.wine800,
+  },
+  wigGalleryChoiceBadgeTextSelected: {
+    color: "#FFFFFF",
+  },
+  wigGalleryCopy: {
+    flex: 1,
+    gap: 6,
+    padding: theme.spacing.md,
+  },
+  wigGalleryTitle: {
+    minHeight: 38,
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.snug,
+    fontWeight: theme.typography.weights.bold,
+  },
+  wigGalleryMetaRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  wigGalleryMeta: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  wigGalleryDescription: {
+    minHeight: 30,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    lineHeight: theme.typography.semantic.caption * theme.typography.lineHeights.relaxed,
+  },
+  wigGalleryAvailabilityPill: {
+    alignSelf: "flex-start",
+    minHeight: 25,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: theme.spacing.sm,
+  },
+  wigGalleryAvailabilityDot: {
+    width: 7,
+    height: 7,
+    borderRadius: theme.radius.full,
+  },
+  wigGalleryAvailabilityText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  confirmWigGrid: {
+    width: "100%",
+    alignSelf: "stretch",
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "center",
+    columnGap: theme.spacing.sm,
+    rowGap: theme.spacing.md,
+  },
+  confirmChoicesFooter: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 34,
+    width: "100%",
+    alignItems: "center",
+    paddingHorizontal: theme.spacing.md,
+    paddingTop: theme.spacing.xl,
+  },
+  confirmChoicesFooterRow: {
+    width: "100%",
+    maxWidth: theme.layout.contentMaxWidth,
+    alignSelf: "center",
+    minHeight: 56,
+    flexDirection: "row",
+    alignItems: "stretch",
+    justifyContent: "center",
+    gap: theme.spacing.sm,
+  },
+  confirmChoicesAction: {
+    flex: 1,
+    minWidth: 0,
+    overflow: "hidden",
+    borderRadius: theme.radius.xl,
+    ...theme.shadows.card,
+  },
+  confirmChoicesPrimaryAction: {
+    flex: 1,
+    ...theme.shadows.hero,
+  },
+  confirmChoicesActionPressed: {
+    opacity: 0.9,
+    transform: [{ scale: 0.98 }],
+  },
+  confirmChoicesActionGradient: {
+    flex: 1,
+    minHeight: 56,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    borderRadius: theme.radius.xl,
+    borderWidth: 1,
+    paddingHorizontal: theme.spacing.sm,
+  },
+  confirmChoicesButtonLabel: {
+    maxWidth: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
+  confirmChoicesEditText: {
+    flexShrink: 1,
+    textAlign: "center",
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.bold,
+  },
+  confirmChoicesConfirmText: {
+    flexShrink: 1,
+    textAlign: "center",
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.bold,
+    color: "#FFFFFF",
   },
   wigStyleList: {
     gap: theme.spacing.sm,
@@ -9495,14 +10829,56 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.md,
   },
   photoReviewActions: {
-    width: "100%",
+    width: 232,
+    alignSelf: "center",
     flexDirection: "row",
+    justifyContent: "center",
     alignItems: "stretch",
     gap: theme.spacing.sm,
   },
   photoReviewActionCell: {
-    flex: 1,
+    width: 112,
+    maxWidth: 112,
+    flexBasis: 112,
+    flexGrow: 0,
+    flexShrink: 0,
     minWidth: 0,
+    minHeight: 52,
+    overflow: "hidden",
+    borderRadius: theme.radius.xl,
+    ...theme.shadows.card,
+  },
+  photoReviewActionGradient: {
+    width: "100%",
+    minHeight: 52,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 7,
+    borderWidth: 1,
+    borderRadius: theme.radius.xl,
+    paddingHorizontal: theme.spacing.sm,
+  },
+  photoReviewActionPressed: {
+    opacity: 0.9,
+    transform: [{ scale: 0.98 }],
+  },
+  photoReviewActionDisabled: {
+    opacity: 0.5,
+  },
+  photoReviewSecondaryText: {
+    textAlign: "center",
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.bold,
+  },
+  photoReviewPrimaryText: {
+    flexShrink: 1,
+    textAlign: "center",
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.bold,
+    color: "#FFFFFF",
   },
   aiGeneratingState: {
     minHeight: 420,
@@ -9513,6 +10889,187 @@ const styles = StyleSheet.create({
   },
   aiResultGrid: {
     gap: theme.spacing.md,
+  },
+  summaryPreviewFanViewport: {
+    width: "100%",
+    height: 354,
+    flexGrow: 0,
+    flexShrink: 0,
+  },
+  summaryPreviewGallery: {
+    minHeight: 354,
+    alignItems: "flex-start",
+    paddingHorizontal: theme.spacing.sm,
+    paddingTop: theme.spacing.sm,
+    paddingBottom: theme.spacing.lg,
+  },
+  summaryPreviewFanSlot: {
+    height: 334,
+    minHeight: 334,
+    maxHeight: 334,
+    flexGrow: 0,
+    flexShrink: 0,
+    alignSelf: "flex-start",
+  },
+  summaryPreviewTile: {
+    position: "relative",
+    width: "100%",
+    height: 320,
+    minHeight: 320,
+    maxHeight: 320,
+    flexGrow: 0,
+    flexShrink: 0,
+    alignSelf: "flex-start",
+    overflow: "hidden",
+    borderWidth: 1,
+    borderRadius: theme.radius.xl,
+    backgroundColor: theme.colors.surfaceSoft,
+    ...theme.shadows.card,
+  },
+  summaryPreviewTileSelected: {
+    borderWidth: 2,
+    ...theme.shadows.hero,
+  },
+  summaryPreviewTilePressed: {
+    opacity: 0.86,
+  },
+  summaryPreviewImage: {
+    position: "absolute",
+    left: 0,
+    top: 0,
+    width: "100%",
+    height: 320,
+    borderRadius: theme.radius.xl,
+  },
+  summaryPreviewPlaceholder: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: theme.radius.xl,
+  },
+  summaryPreviewInfoOverlay: {
+    position: "absolute",
+    left: 0,
+    top: 0,
+    width: "100%",
+    height: 320,
+    justifyContent: "flex-end",
+    borderRadius: theme.radius.xl,
+    padding: theme.spacing.md,
+    paddingTop: 88,
+  },
+  summaryPreviewDetails: {
+    minWidth: 0,
+    gap: 5,
+  },
+  summaryPreviewTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.body,
+    lineHeight: theme.typography.semantic.body * theme.typography.lineHeights.snug,
+    fontWeight: theme.typography.weights.bold,
+    color: "#FFFFFF",
+  },
+  summaryPreviewMatch: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    fontWeight: theme.typography.weights.bold,
+    color: "#F7DDE4",
+  },
+  summaryPreviewReasonRow: {
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 5,
+    marginTop: 3,
+    paddingTop: theme.spacing.xs,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: "rgba(255,255,255,0.28)",
+  },
+  summaryPreviewReasonText: {
+    flex: 1,
+    flexShrink: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    lineHeight: 15,
+    color: "rgba(255,255,255,0.92)",
+  },
+  summaryPreviewRankBadge: {
+    position: "absolute",
+    top: theme.spacing.sm,
+    left: theme.spacing.sm,
+    minHeight: 25,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    borderRadius: theme.radius.full,
+    paddingHorizontal: 7,
+    backgroundColor: "rgba(255,255,255,0.94)",
+  },
+  summaryPreviewRankText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 9,
+    fontWeight: theme.typography.weights.bold,
+    letterSpacing: 0.5,
+    color: theme.colors.palette.wine800,
+  },
+  summaryPreviewSelectedBadge: {
+    position: "absolute",
+    top: theme.spacing.sm,
+    right: theme.spacing.sm,
+    minHeight: 28,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+    borderRadius: theme.radius.full,
+    paddingHorizontal: theme.spacing.sm,
+    backgroundColor: "rgba(104,26,46,0.94)",
+  },
+  summaryPreviewChooseBadge: {
+    backgroundColor: "rgba(255,255,255,0.94)",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(104,26,46,0.18)",
+  },
+  summaryPreviewSelectedText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    fontWeight: theme.typography.weights.bold,
+    color: theme.colors.textInverse,
+  },
+  summaryPreviewChooseText: {
+    color: theme.colors.palette.wine800,
+  },
+  summaryGalleryHint: {
+    width: "100%",
+    maxWidth: 330,
+    alignSelf: "center",
+    minHeight: 46,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: theme.spacing.sm,
+    borderWidth: 1,
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: theme.spacing.xs,
+    overflow: "hidden",
+    ...theme.shadows.soft,
+  },
+  summaryGalleryHintIcon: {
+    width: 30,
+    height: 30,
+    flexShrink: 0,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: theme.radius.pill,
+  },
+  summaryGalleryHintText: {
+    flex: 1,
+    flexShrink: 1,
+    textAlign: "center",
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    fontWeight: theme.typography.weights.semibold,
   },
   matcherCarouselViewport: {
     width: "100%",
@@ -9649,6 +11206,9 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     position: "relative",
   },
+  aiCompositeFrameCompact: {
+    height: 220,
+  },
   aiCompositeBaseImage: {
     width: "100%",
     height: "100%",
@@ -9685,6 +11245,31 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderRadius: theme.radius.lg,
     padding: theme.spacing.md,
+    ...theme.shadows.soft,
+  },
+  summarySelectedWigHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.sm,
+  },
+  summarySelectedWigIcon: {
+    width: 38,
+    height: 38,
+    flexShrink: 0,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 13,
+  },
+  summarySelectedWigCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  summarySelectedWigEyebrow: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    fontWeight: theme.typography.weights.bold,
+    letterSpacing: 0.55,
   },
   summaryNoteTitle: {
     fontFamily: theme.typography.fontFamily,
@@ -9701,8 +11286,8 @@ const styles = StyleSheet.create({
     padding: theme.spacing.sm,
   },
   previewReferenceImage: {
-    width: 64,
-    height: 64,
+    width: 56,
+    height: 56,
     borderRadius: theme.radius.md,
   },
   previewReferenceCopy: {
@@ -9739,11 +11324,38 @@ const styles = StyleSheet.create({
   },
   previewActionSection: {
     gap: theme.spacing.sm,
+    borderWidth: 1,
+    borderRadius: theme.radius.lg,
+    padding: theme.spacing.md,
+    ...theme.shadows.soft,
+  },
+  previewActionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.sm,
+  },
+  previewActionIcon: {
+    width: 40,
+    height: 40,
+    flexShrink: 0,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 14,
+  },
+  previewActionCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
   },
   previewActionTitle: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.bodySm,
     fontWeight: theme.typography.weights.bold,
+  },
+  previewActionBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    lineHeight: theme.typography.semantic.caption * theme.typography.lineHeights.relaxed,
   },
   previewAlternativeActions: {
     flexDirection: "row",

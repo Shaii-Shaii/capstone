@@ -7,9 +7,16 @@ import {
   getDefaultAiModel,
 } from '../_shared/ai-generation.ts';
 
-const MAX_CANDIDATE_WIGS = 24;
 const RECOMMENDATION_COUNT = 3;
+const WIG_PREVIEW_IMAGE_MODEL = 'black-forest-labs/flux.2-pro';
 const PREVIEW_STORAGE_BUCKET = Deno.env.get('WIG_REQUEST_PREVIEWS_BUCKET') || 'wig_request_previews';
+
+const getWigRecommendationModel = () => (
+  toText(Deno.env.get('OPENROUTER_WIG_RECOMMENDATION_MODEL'))
+  || toText(Deno.env.get('OPENROUTER_VISION_MODEL'))
+  || toText(Deno.env.get('OPENROUTER_HAIR_VALIDATION_MODEL'))
+  || getDefaultAiModel()
+);
 
 type WigRecommendation = {
   wig_id: string;
@@ -266,13 +273,13 @@ const toInventorySummary = (wig: Record<string, unknown>) => ({
 });
 
 const completeRecommendations = (
-  rawRecommendations: Array<Record<string, unknown>>,
-  wigs: Array<Record<string, unknown>>,
+  rawRecommendations: Record<string, unknown>[],
+  wigs: Record<string, unknown>[],
   selectedWigId = '',
 ): WigRecommendation[] => {
   const wigById = new Map(wigs.map((wig) => [getWigId(wig), wig]));
   const usedIds = new Set<string>();
-  const completed: Array<Record<string, unknown>> = [];
+  const completed: Record<string, unknown>[] = [];
 
   if (selectedWigId && wigById.has(selectedWigId)) {
     const selectedRecommendation = (rawRecommendations || []).find(
@@ -373,11 +380,7 @@ const createWigImageWithRetry = async ({
           { image_url: patientImageUrl },
           { image_url: wigReferenceUrl },
         ],
-        quality: 'medium',
-        size: '1024x1024',
-        outputFormat: 'webp',
-        inputFidelity: 'high',
-        outputCompression: 82,
+        outputFormat: 'jpeg',
       });
     } catch (error) {
       const status = Number((error as Error & { status?: number })?.status || 0);
@@ -406,18 +409,24 @@ Deno.serve(async (request) => {
 
     executionStage = 'request_validation';
     const body = await request.json();
+    const rankOnly = toText(body?.mode).toLowerCase() === 'rank_only';
     const referenceImage = (body?.reference_image || {}) as Record<string, unknown>;
     const patientImageUrl = getPatientImageUrl(referenceImage);
-    const requestedWigs = Array.isArray(body?.available_wigs) ? body.available_wigs : [];
-    const selectedWigId = toText(body?.selected_wig_id);
+    const requestedWigs = Array.isArray(body?.candidate_wigs) ? body.candidate_wigs : [];
     const generationProvider = getAiGenerationProvider();
+    const recommendationModel = getWigRecommendationModel();
     const imageModel = getDefaultAiImageModel();
-    const wigs = requestedWigs
+    const normalizedWigs = requestedWigs
       .map((wig: Record<string, unknown>) => normalizeWig(wig))
-      .filter((wig: Record<string, unknown>) => (
-        getWigId(wig) && isAllowedStorageImageUrl(getWigReferenceUrl(wig))
-      ))
-      .slice(0, MAX_CANDIDATE_WIGS);
+      .filter((wig: Record<string, unknown>) => getWigId(wig));
+    // Ranking only uses the patient photo and catalog specifications. Wig image
+    // references are required later, when the user confirms three choices and
+    // FLUX creates the try-on previews.
+    const wigs = rankOnly
+      ? normalizedWigs
+      : normalizedWigs.filter((wig: Record<string, unknown>) => (
+          isAllowedStorageImageUrl(getWigReferenceUrl(wig))
+        ));
 
     if (!patientImageUrl) {
       return createJsonResponse({ error: 'A front photo is required before generating wig recommendations.' }, 400);
@@ -433,9 +442,9 @@ Deno.serve(async (request) => {
       }, 500);
     }
 
-    if (!imageModel.startsWith('openai/')) {
+    if (!rankOnly && imageModel !== WIG_PREVIEW_IMAGE_MODEL) {
       return createJsonResponse({
-        error: 'Wig preview generation must use an OpenAI image model through OpenRouter.',
+        error: 'Wig preview generation must use FLUX.2 Pro through OpenRouter.',
         message: `OPENROUTER_IMAGE_MODEL is set to ${imageModel || 'an empty value'}.`,
         stage: 'provider_configuration',
         provider: generationProvider,
@@ -443,15 +452,25 @@ Deno.serve(async (request) => {
       }, 500);
     }
 
-    if (wigs.length < RECOMMENDATION_COUNT) {
+    const uniqueWigCount = new Set(wigs.map((wig: Record<string, unknown>) => getWigId(wig))).size;
+    const hasValidCandidateCount = rankOnly
+      ? requestedWigs.length >= RECOMMENDATION_COUNT
+        && wigs.length >= RECOMMENDATION_COUNT
+        && uniqueWigCount === wigs.length
+      : requestedWigs.length === RECOMMENDATION_COUNT
+        && wigs.length === RECOMMENDATION_COUNT
+        && uniqueWigCount === RECOMMENDATION_COUNT;
+    if (!hasValidCandidateCount) {
       return createJsonResponse({
-        error: 'At least three active wigs with reference images are required for AI recommendations.',
+        error: rankOnly
+          ? 'At least three unique available wigs are required for facial-fit ranking.'
+          : 'Exactly three unique selected wigs with valid reference images are required for AI recommendations.',
       }, 400);
     }
 
     console.info('[generate-wig-preview] recommendation started', {
       provider: getAiGenerationProvider(),
-      analysisModel: getDefaultAiModel(),
+      analysisModel: recommendationModel,
       imageModel,
       candidateCount: wigs.length,
     });
@@ -461,6 +480,7 @@ Deno.serve(async (request) => {
 
     executionStage = 'facial_fit_analysis';
     const analysis = await createStructuredResponse({
+      model: recommendationModel,
       instructions: rankingInstructions,
       schemaName: 'patient_wig_recommendations',
       schema: recommendationSchema,
@@ -472,13 +492,14 @@ Deno.serve(async (request) => {
             {
               type: 'input_text',
               text: JSON.stringify({
-                task: 'Rank the three most visually suitable wigs.',
+                task: rankOnly
+                  ? 'Choose and rank the three best facial-fit wigs from the supplied matching inventory.'
+                  : 'Rank only the three patient-selected wigs from best visual match to third choice.',
                 inventory: wigs.map(toInventorySummary),
                 patient_preferences: body?.preferences || {},
-                selected_wig_id: selectedWigId || null,
-                selection_instruction: selectedWigId
-                  ? 'Include the patient-selected wig in the three recommendations and rank the other candidates around it.'
-                  : 'Choose the top three candidates from the inventory.',
+                selection_instruction: rankOnly
+                  ? 'Return exactly three distinct wigs from the supplied inventory.'
+                  : 'Return all three supplied wigs exactly once. Do not add or replace a candidate.',
               }),
             },
             {
@@ -491,13 +512,42 @@ Deno.serve(async (request) => {
       ],
     }) as Record<string, unknown>;
 
+    const rankedRecommendations = (Array.isArray(analysis?.recommendations)
+      ? analysis.recommendations as Record<string, unknown>[]
+      : []
+    ).sort((left, right) => Number(left?.rank || 99) - Number(right?.rank || 99));
     const recommendations = completeRecommendations(
-      Array.isArray(analysis?.recommendations)
-        ? analysis.recommendations as Array<Record<string, unknown>>
-        : [],
+      rankedRecommendations,
       wigs,
-      selectedWigId,
     );
+
+    if (rankOnly) {
+      const rankedOptions = recommendations.map((recommendation, index) => {
+        const wig = recommendation.wig as Record<string, unknown>;
+        return {
+          id: getWigId(wig),
+          option_index: index + 1,
+          recommended_style_name: getWigName(wig),
+          recommended_style_family: toText((wig?.physical_specification as Record<string, unknown>)?.style),
+          match_label: `#${index + 1} - ${index === 0 ? 'Best overall match' : index === 1 ? 'Strong match' : 'Great alternative'}`,
+          suitability_reason: toText(recommendation.suitability_reason),
+          note: toText(recommendation.suitability_reason),
+          summary: toText(recommendation.suitability_reason),
+          style_notes: toText(recommendation.styling_note),
+          selected_wig: wig,
+        };
+      });
+      return createJsonResponse({
+        success: true,
+        mode: 'rank_only',
+        provider: getAiGenerationProvider(),
+        analysis_model: recommendationModel,
+        visual_profile_summary: toText(analysis?.visual_profile_summary),
+        summary: toText(analysis?.visual_profile_summary),
+        recommendations: rankedOptions,
+        options: rankedOptions,
+      });
+    }
 
     executionStage = 'try_on_generation';
     const resolvedWigReferences = await Promise.all(recommendations.map((recommendation) => (
@@ -506,8 +556,14 @@ Deno.serve(async (request) => {
         `${getWigName(recommendation.wig as Record<string, unknown>)} reference image`,
       )
     )));
-    const generatedOptions = await Promise.all(recommendations.map(async (recommendation, index) => {
+    const generatedOptions: Record<string, unknown>[] = [];
+    for (const [index, recommendation] of recommendations.entries()) {
       const wig = recommendation.wig as Record<string, unknown>;
+      console.info('[generate-wig-preview] FLUX try-on started', {
+        optionIndex: index + 1,
+        imageModel,
+        wigId: getWigId(wig),
+      });
       const generated = await createWigImageWithRetry({
         prompt: buildTryOnPrompt({ wig, recommendation }),
         patientImageUrl: resolvedPatientImage,
@@ -524,7 +580,7 @@ Deno.serve(async (request) => {
         optionIndex: index + 1,
       });
 
-      return {
+      generatedOptions.push({
         id: getWigId(wig),
         option_index: index + 1,
         recommended_style_name: getWigName(wig),
@@ -532,8 +588,8 @@ Deno.serve(async (request) => {
         match_label: `#${index + 1} - ${index === 0
           ? 'Best overall match'
           : index === 1
-            ? 'Great alternative'
-            : 'Another flattering option'}`,
+            ? 'Second choice'
+            : 'Third choice'}`,
         suitability_reason: toText(recommendation.suitability_reason),
         note: toText(recommendation.suitability_reason),
         summary: toText(recommendation.suitability_reason),
@@ -542,8 +598,13 @@ Deno.serve(async (request) => {
         preview_url: generatedImageUrl,
         render_mode: `${getAiGenerationProvider()}_image_edit`,
         selected_wig: wig,
-      };
-    }));
+      });
+      console.info('[generate-wig-preview] FLUX try-on ready', {
+        optionIndex: index + 1,
+        imageModel,
+        wigId: getWigId(wig),
+      });
+    }
 
     const primary = generatedOptions[0];
     console.info('[generate-wig-preview] recommendation ready', {
@@ -556,7 +617,7 @@ Deno.serve(async (request) => {
     return createJsonResponse({
       success: true,
       provider: getAiGenerationProvider(),
-      analysis_model: getDefaultAiModel(),
+      analysis_model: recommendationModel,
       image_model: getDefaultAiImageModel(),
       visual_profile_summary: toText(analysis?.visual_profile_summary),
       summary: toText(analysis?.visual_profile_summary),
@@ -568,14 +629,19 @@ Deno.serve(async (request) => {
       options: generatedOptions,
     });
   } catch (error) {
-    console.error('[generate-wig-preview]', error);
+    const errorDiagnostics = (error as Error & { diagnostics?: Record<string, unknown> })?.diagnostics || null;
+    console.error('[generate-wig-preview]', {
+      stage: executionStage,
+      message: error instanceof Error ? error.message : String(error || ''),
+      diagnostics: errorDiagnostics,
+    });
     const errorMessage = error instanceof Error ? error.message : String(error || '');
     const normalizedMessage = errorMessage.toLowerCase();
     const providerStatus = Number((error as Error & { status?: number })?.status || 0) || null;
     const isConfigurationError = normalizedMessage.includes('openai api key is not configured')
       || normalizedMessage.includes('openrouter api key is not configured')
       || normalizedMessage.includes('must use openrouter')
-      || normalizedMessage.includes('must use an openai image model')
+      || normalizedMessage.includes('must use flux.2 pro')
       || normalizedMessage.includes('supabase storage credentials are not configured');
 
     return createJsonResponse({
@@ -585,6 +651,7 @@ Deno.serve(async (request) => {
       message: toSafeErrorMessage(errorMessage),
       stage: executionStage,
       providerStatus,
+      diagnostics: errorDiagnostics,
       errorType: isConfigurationError ? 'configuration_error' : 'provider_error',
       provider: getAiGenerationProvider(),
     }, isConfigurationError ? 500 : 502);

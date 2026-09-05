@@ -2,7 +2,7 @@ import { invokeEdgeFunction } from '../api/supabase/client';
 import { hairAnalysisFunctionName, hairSubmissionImageTypes } from './hairSubmission.constants';
 import { normalizeHairAnalyzerAnswers } from './hairSubmission.schema';
 import { getErrorMessage, logAppError, logAppEvent } from '../utils/appErrors';
-import { alignScreeningWithMinimumLength, resolveEstimatedLengthCm } from '../utils/hairLength';
+import { resolveEstimatedLengthCm } from '../utils/hairLength';
 
 const HAIR_ANALYSIS_MAX_INVOKE_ATTEMPTS = 2;
 const HAIR_ANALYSIS_RETRYABLE_STATUS = new Set([500, 502, 503, 504]);
@@ -146,7 +146,7 @@ const normalizeAnalysis = (data, donationRequirementContext = null) => {
   ].filter(Boolean).join(' ');
   const dandruffDetected = data?.dandruff_detected === true || hasVisibleDandruffEvidence(scalpFindingEvidenceText);
 
-  return alignScreeningWithMinimumLength({
+  return {
     is_hair_detected: data?.is_hair_detected !== false,
     invalid_image_reason: data?.invalid_image_reason || '',
     missing_views: Array.isArray(data?.missing_views) ? data.missing_views : [],
@@ -158,6 +158,10 @@ const normalizeAnalysis = (data, donationRequirementContext = null) => {
     detected_texture: data?.detected_texture || 'Straight',
     detected_density: data?.detected_density || 'Medium',
     detected_condition: data?.detected_condition || 'Needs manual hair review',
+    chemical_treatment_detected: data?.chemical_treatment_detected === true,
+    colored_hair_detected: data?.colored_hair_detected === true,
+    bleached_hair_detected: data?.bleached_hair_detected === true,
+    rebonded_hair_detected: data?.rebonded_hair_detected === true,
     visible_damage_notes: data?.visible_damage_notes || 'No visible damage notes reported.',
     confidence_score: toNumberOrDefault(data?.confidence_score, 0),
     shine_level: toNumberOrDefault(data?.shine_level, 5),
@@ -188,12 +192,18 @@ const normalizeAnalysis = (data, donationRequirementContext = null) => {
     improvement_tracking_status: data?.improvement_tracking_status || 'Needs improvement tracking',
     improvement_recommendation: data?.improvement_recommendation || 'Keep tracking hair length and condition with future CheckHair scans before donating.',
     decision: data?.decision || 'Improve hair condition',
+    eligibility_reasons: Array.isArray(data?.eligibility_reasons) ? data.eligibility_reasons : [],
+    eligibility_evaluation: data?.eligibility_evaluation && typeof data.eligibility_evaluation === 'object'
+      ? data.eligibility_evaluation
+      : null,
+    wig_requirement_id: data?.wig_requirement_id ?? null,
+    wig_requirement_updated_at: data?.wig_requirement_updated_at || null,
     summary: data?.summary || 'Hair analysis completed with limited details. Final screening requires manual review.',
     length_assessment: data?.length_assessment || '',
     donation_readiness_note: data?.donation_readiness_note || '',
     history_assessment: data?.history_assessment || '',
     recommendations: normalizeRecommendations(data?.recommendations || []),
-  }, donationRequirementContext);
+  };
 };
 
 const hasStructuredAnalysisContent = (analysis) => Boolean(
@@ -626,18 +636,10 @@ export const analyzeHairPhotos = async ({
         viewKey: image.viewKey,
         viewLabel: image.viewLabel,
       })),
+      // The edge function fetches the current row itself. The id is diagnostic
+      // only and is never trusted for eligibility.
       donation_requirement_context: donationRequirementContext
-        ? {
-            donation_requirement_id: donationRequirementContext.donation_requirement_id || null,
-            minimum_hair_length: donationRequirementContext.minimum_hair_length_cm ?? null,
-            minimum_hair_length_inches: donationRequirementContext.minimum_hair_length_inches ?? null,
-            chemical_treatment_status: donationRequirementContext.chemical_treatment_status ?? null,
-            colored_hair_status: donationRequirementContext.colored_hair_status ?? null,
-            bleached_hair_status: donationRequirementContext.bleached_hair_status ?? null,
-            rebonded_hair_status: donationRequirementContext.rebonded_hair_status ?? null,
-            hair_texture_status: donationRequirementContext.hair_texture_status || '',
-            notes: donationRequirementContext.notes || '',
-          }
+        ? { donation_requirement_id: donationRequirementContext.donation_requirement_id || null }
         : null,
       submission_context: submissionContext
         ? {
@@ -1115,7 +1117,9 @@ export const analyzeHairPhotos = async ({
       }
     }
 
-    const userMessage = errorType === 'photo_verification_required'
+    const userMessage = errorType === 'donation_requirements_unavailable'
+      ? 'Donation requirements are currently unavailable. Please try again later or contact the organization.'
+      : errorType === 'photo_verification_required'
       ? 'Your photos need a completed verification before analysis. Please run the photo check again.'
       : technicalMessage.includes('at least one hair photo')
       ? 'Please upload at least one clear hair photo before running the analysis.'

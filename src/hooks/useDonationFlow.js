@@ -23,6 +23,7 @@ import { logAppError, logAppEvent } from '../utils/appErrors';
 export const useDonationFlow = ({
   userProfile = {},
   hairSubmissions = [],
+  currentHairEligibility = null,
   onFlowComplete = null,
   onFlowError = null,
 } = {}) => {
@@ -41,12 +42,13 @@ export const useDonationFlow = ({
     currentStep,
     userProfile,
     hairSubmissions,
+    currentHairEligibility,
     donationDetails,
     isCheckingHair,
   });
 
   const profileStatus = getProfileCompletionStatus(userProfile);
-  const recentHairEligibility = getRecentHairEligibilityResult(hairSubmissions);
+  const recentHairEligibility = getRecentHairEligibilityResult(hairSubmissions, currentHairEligibility);
   const recentHairDetails = recentHairEligibility
     ? extractHairDetailsFromRecentAssessment(recentHairEligibility)
     : null;

@@ -1,15 +1,54 @@
 import { invokeEdgeFunction } from '../api/supabase/client';
-import { getErrorMessage, logAppError, logAppEvent } from '../utils/appErrors';
+import { getErrorMessage, logAppEvent } from '../utils/appErrors';
 
 const HEAD_DETECTION_FUNCTION = 'detect-wig-head-frame';
 const FACE_LANDMARKER_MODEL = 'face_landmarker.task';
 
 let mediaPipeModule = null;
+let isMediaPipeNativeLibraryUnavailable = false;
 try {
   mediaPipeModule = require('react-native-mediapipe');
 } catch {
   mediaPipeModule = null;
+  isMediaPipeNativeLibraryUnavailable = true;
 }
+
+const isMissingMediaPipeNativeLibraryError = (error) => {
+  const message = getErrorMessage(error).toLowerCase();
+
+  return (
+    message.includes('libmediapipe_tasks_vision_jni.so')
+    && (message.includes('dlopen failed') || message.includes('not found'))
+  );
+};
+
+const readEdgeFunctionFailure = async (error) => {
+  const response = error?.context;
+  const status = Number(response?.status) || null;
+  const errorCode = typeof response?.headers?.get === 'function'
+    ? response.headers.get('sb-error-code') || null
+    : null;
+  let providerMessage = '';
+
+  if (response && typeof response.clone === 'function') {
+    try {
+      const payload = await response.clone().json();
+      providerMessage = String(payload?.error || payload?.message || '').trim();
+    } catch {
+      try {
+        providerMessage = String(await response.clone().text()).trim();
+      } catch {
+        // The response body is diagnostic-only. Head detection can still fall back.
+      }
+    }
+  }
+
+  return {
+    status,
+    errorCode,
+    providerMessage: providerMessage || getErrorMessage(error, 'Head detector unavailable.'),
+  };
+};
 
 const averageLandmarks = (landmarks = [], indexes = []) => {
   const points = indexes.map((index) => landmarks[index]).filter(Boolean);
@@ -98,6 +137,8 @@ const buildMediaPipePlacement = (resultBundle = {}, photo = {}) => {
 };
 
 const detectWithMediaPipe = async (photo = {}) => {
+  if (isMediaPipeNativeLibraryUnavailable) return null;
+
   const detectOnImage = mediaPipeModule?.faceLandmarkDetectionOnImage;
   if (typeof detectOnImage !== 'function' || !photo?.uri) return null;
 
@@ -113,13 +154,28 @@ const detectWithMediaPipe = async (photo = {}) => {
   return buildMediaPipePlacement(resultBundle, photo);
 };
 
+const tryDetectWithMediaPipe = async (photo = {}) => {
+  try {
+    return await detectWithMediaPipe(photo);
+  } catch (error) {
+    if (isMissingMediaPipeNativeLibraryError(error)) {
+      // Some Android builds do not package MediaPipe's optional JNI library.
+      // Cache that capability result and continue with the server detector.
+      isMediaPipeNativeLibraryUnavailable = true;
+      return null;
+    }
+
+    throw error;
+  }
+};
+
 export const detectWigHeadFrame = async (photo = {}) => {
   try {
     if (!photo?.dataUrl || !photo?.width || !photo?.height) {
       return { placement: null, error: 'Photo is missing image data for head detection.' };
     }
 
-    const mediaPipePlacement = await detectWithMediaPipe(photo);
+    const mediaPipePlacement = await tryDetectWithMediaPipe(photo);
     if (mediaPipePlacement?.faceFrame) {
       logAppEvent('wigHeadDetection.detect', 'Detected head frame using MediaPipe static image.', {
         provider: 'mediapipe',
@@ -145,20 +201,36 @@ export const detectWigHeadFrame = async (photo = {}) => {
       throw error;
     }
 
-    logAppEvent('wigHeadDetection.detect', 'Detected head frame for wig overlay.', {
-      hasPlacement: Boolean(data?.placement?.faceFrame),
+    const hasPlacement = Boolean(data?.placement?.faceFrame);
+    logAppEvent('wigHeadDetection.detect', hasPlacement
+      ? 'Detected head frame for wig overlay.'
+      : 'Continuing without optional head-frame metadata.', {
+      hasPlacement,
       provider: data?.diagnostics?.provider || null,
+      degraded: Boolean(data?.diagnostics?.degraded),
     });
 
     return {
       placement: data?.placement || null,
       error: null,
+      warning: hasPlacement ? null : data?.reason || null,
     };
   } catch (error) {
-    logAppError('wigHeadDetection.detect', error);
+    const failure = await readEdgeFunctionFailure(error);
+
+    // Head-frame detection only improves overlay metadata. FLUX receives the
+    // original front photo and can generate the try-on without these points,
+    // so a provider/gateway failure must not interrupt the request or surface
+    // as an unhandled Expo error.
+    logAppEvent('wigHeadDetection.detect.fallback', 'Continuing without optional head-frame metadata.', {
+      status: failure.status,
+      errorCode: failure.errorCode,
+      providerMessage: failure.providerMessage,
+    });
     return {
       placement: null,
-      error: getErrorMessage(error) || 'Head detection failed.',
+      error: null,
+      warning: 'Automatic head positioning was unavailable. The original photo will be used.',
     };
   }
 };

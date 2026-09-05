@@ -23,10 +23,10 @@ import { SectionTitleRow } from '../../src/components/ui/SectionTitleRow';
 import { StatusBanner } from '../../src/components/ui/StatusBanner';
 import { donorDashboardNavItems } from '../../src/constants/dashboard';
 import {
+  fetchDonationCertificateById,
   fetchDonationCertificatesByUserId,
   fetchDonorPatientImpactByBundleIds,
   fetchHairSubmissionCertificateRecordsByIds,
-  isCompletedDonationSubmission,
 } from '../../src/features/hairSubmission.api';
 import { fetchOrganizationPreview } from '../../src/features/donorHome.api';
 import {
@@ -138,7 +138,7 @@ const sortCertificateRows = (rows, sortKey) => {
   });
 };
 
-const getConditionLabel = (certificate) => certificate?.detectedCondition || certificate?.decision || 'Verified';
+const getConditionLabel = (certificate) => certificate?.detectedCondition || 'Verified donation';
 
 const getCertificateCanvasNameFontSize = (value = '') => {
   const length = String(value || '').trim().length;
@@ -431,6 +431,9 @@ function CertificateRow({ item, onView, onOpenStoredFile, colors, styles }) {
         <View>
           <Text style={styles.cardTitle}>{item.certificateType || 'Certificate of Donation'}</Text>
           <Text style={styles.cardSubtitle}>{item.organizationName || 'Hair for Hope'}</Text>
+          <Text style={styles.cardMetaValue} numberOfLines={1}>
+            Certificate No. {item.certificateNumber || 'Pending'}
+          </Text>
         </View>
 
         <View style={styles.cardMetaRow}>
@@ -458,7 +461,12 @@ function CertificateRow({ item, onView, onOpenStoredFile, colors, styles }) {
               <MaterialCommunityIcons name="download-outline" size={16} color={colors.primary} />
               <Text style={styles.openStoredLink}>Stored file</Text>
             </Pressable>
-          ) : null}
+          ) : (
+            <View style={[styles.openStoredButton, styles.disabledAction]}>
+              <MaterialCommunityIcons name="file-alert-outline" size={16} color={colors.outline} />
+              <Text style={[styles.openStoredLink, { color: colors.outline }]}>File unavailable</Text>
+            </View>
+          )}
         </View>
       </View>
     </Pressable>
@@ -550,12 +558,12 @@ export default function DonorAchievementsScreen() {
       const submissionsById = Object.fromEntries(
         (submissionsResult.data || []).map((submission) => [submission.submission_id, submission])
       );
-      const completedCertificateRows = (certificateResult.data || []).filter((certificate) => (
-        isCompletedDonationSubmission(submissionsById[certificate.submission_id])
+      const issuedCertificateRows = (certificateResult.data || []).filter((certificate) => (
+        certificate?.submission_id && submissionsById[certificate.submission_id]
       ));
       const organizationIds = [
         ...new Set(
-          completedCertificateRows
+          issuedCertificateRows
             .map((certificate) => submissionsById[certificate.submission_id]?.organization_id)
             .filter(Boolean)
         ),
@@ -571,7 +579,7 @@ export default function DonorAchievementsScreen() {
       if (cancelled) return;
 
       const organizationsById = Object.fromEntries(organizationResults);
-      const certificates = completedCertificateRows.map((certificate) => {
+      const certificates = issuedCertificateRows.map((certificate) => {
         const linkedSubmission = submissionsById[certificate.submission_id] || null;
         const linkedScreening = Array.isArray(linkedSubmission?.ai_screenings)
           ? linkedSubmission.ai_screenings[0]
@@ -650,6 +658,36 @@ export default function DonorAchievementsScreen() {
     }
 
     setFeedback({ type: 'error', title: 'Cannot open file', message: 'This certificate file could not be opened on this device.' });
+  };
+
+  const handleViewCertificate = async (certificate) => {
+    const certificateIdValue = certificate?.certificateId || certificate?.id;
+    if (!certificateIdValue) {
+      setFeedback({ type: 'error', title: 'Certificate unavailable', message: 'This certificate record could not be identified.' });
+      return;
+    }
+
+    const result = await fetchDonationCertificateById(certificateIdValue);
+    if (result.error || !result.data) {
+      setFeedback({
+        type: 'error',
+        title: 'Certificate unavailable',
+        message: result.error?.message || 'This certificate could not be loaded. Please try again.',
+      });
+      return;
+    }
+
+    setSelectedCertificate({
+      ...certificate,
+      certificateId: result.data.certificate_id,
+      certificateNumber: result.data.certificate_number || certificate.certificateNumber,
+      certificateType: result.data.certificate_type || certificate.certificateType,
+      fileUrl: result.data.file_url || '',
+      issuedAt: result.data.issued_at,
+      issuedAtLabel: formatDateLabel(result.data.issued_at),
+      remarks: result.data.remarks || '',
+      submissionId: result.data.submission_id,
+    });
   };
 
   const ensureDonorName = (certificate) => {
@@ -803,7 +841,7 @@ export default function DonorAchievementsScreen() {
                   <CertificateRow
                     key={String(item.id)}
                     item={item}
-                    onView={setSelectedCertificate}
+                    onView={handleViewCertificate}
                     onOpenStoredFile={handleOpenStoredCertificate}
                     colors={colors}
                     styles={styles}

@@ -207,30 +207,19 @@ export const hairAnalyzerQuestionChoices = {
 export const hairDonationModeOptions = [
   {
     value: 'shipping',
-    label: 'Logistics / shipping',
-    description: 'Send the prepared hair package to the donation drop-off address. Shipping fee is shouldered by the donor.',
+    label: 'Ship by Courier',
+    description: 'Pack your donation and send it using your preferred courier.',
     delivery_method: 'shipping',
-    logistics_type: 'Courier',
+    logistics_type: 'Ship by Courier',
     shipment_status: 'Pending shipment',
-    pickup_request: false,
   },
   {
     value: 'onsite_delivery',
-    label: 'Delivered onsite',
-    description: 'Bring the prepared donation onsite if you are near the area and ready for manual review.',
+    label: 'Walk-in Drop-off',
+    description: 'Schedule a visit and personally bring your donation.',
     delivery_method: 'onsite_delivery',
-    logistics_type: 'Salon Dropoff',
+    logistics_type: 'Walk-in Drop-off',
     shipment_status: 'Pending onsite drop-off',
-    pickup_request: false,
-  },
-  {
-    value: 'pickup',
-    label: 'Pickup request',
-    description: 'Request pickup if the current pickup settings allow it and the area is covered.',
-    delivery_method: 'pickup',
-    logistics_type: 'Pickup',
-    shipment_status: 'Pickup requested',
-    pickup_request: true,
   },
   {
     value: 'haircut_assessment',
@@ -239,7 +228,6 @@ export const hairDonationModeOptions = [
     delivery_method: 'haircut_assessment',
     logistics_type: '',
     shipment_status: '',
-    pickup_request: false,
   },
 ];
 

@@ -105,7 +105,7 @@ const buildLegacyDonorTracker = ({ submission, detail, logistics, qaAssessment =
         ? [logistics.courier_name, logistics.tracking_number].filter(Boolean).join(' • ')
           || logistics.notes
           || 'Transport details were added to this submission.'
-        : 'Pickup, courier, or drop-off details will appear here once logistics is scheduled.',
+        : 'Courier or walk-in drop-off details will appear here once logistics is confirmed.',
       state: getStepState({ index: 1, currentIndex, hasData: Boolean(logistics) }),
     },
     {
@@ -257,7 +257,7 @@ const buildDonorTracker = ({ submission, detail, logistics }) => {
       key: 'logistics',
       title: 'Logistics and transport',
       label: normalizeStatusLabel(logistics?.shipment_status || logistics?.logistics_type, 'Waiting for logistics'),
-      description: logistics?.notes || 'Pickup, courier, or drop-off details will appear here once logistics is scheduled.',
+      description: logistics?.notes || 'Courier or walk-in drop-off details will appear here once logistics is confirmed.',
       state: getStepState({ index: 2, currentIndex, hasData: Boolean(logistics) }),
     },
     {

@@ -131,7 +131,7 @@ export const buildDonorCertificateModel = ({
     estimatedLength: screening?.estimated_length ?? null,
     bundleQuantity: submission?.bundle_quantity || 0,
     donationStatus: submission?.status || '',
-    decision: screening?.decision || '',
+    decision: 'Staff-approved donation',
     detectedCondition: screening?.detected_condition || '',
     confidenceScore: screening?.confidence_score ?? null,
     summary: screening?.summary || '',

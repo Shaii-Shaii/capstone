@@ -161,6 +161,17 @@ const mapAnalysisError = (message = '', extras = {}) => {
   );
 
   if (
+    normalizedErrorType === 'donation_requirements_unavailable'
+    || normalized.includes('donation requirements are currently unavailable')
+  ) {
+    return createErrorState(
+      'Donation Requirements Unavailable',
+      'Donation requirements are currently unavailable. Please try again later or contact the organization.',
+      { errorType: 'donation_requirements_unavailable', retryable: true }
+    );
+  }
+
+  if (
     providerRequestAttempted
     && (
       normalizedErrorType === 'provider_access_denied'

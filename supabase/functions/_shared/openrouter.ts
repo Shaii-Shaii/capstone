@@ -1,7 +1,7 @@
 const OPENROUTER_CHAT_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const OPENROUTER_IMAGE_URL = 'https://openrouter.ai/api/v1/images';
 const OPENROUTER_DEFAULT_MODEL = 'openrouter/free';
-const OPENROUTER_DEFAULT_IMAGE_MODEL = 'openai/gpt-image-1';
+const OPENROUTER_DEFAULT_IMAGE_MODEL = 'black-forest-labs/flux.2-pro';
 const OPENROUTER_MAX_ATTEMPTS = 2;
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 
@@ -427,6 +427,11 @@ export const createImageEdit = async ({
     .map((url) => ({ type: 'image_url', image_url: { url } }));
   if (!references.length) throw new Error('At least one source image is required for image editing.');
 
+  const isFlux2Model = model.startsWith('black-forest-labs/flux.2');
+  const effectiveOutputFormat = isFlux2Model && outputFormat === 'webp'
+    ? 'jpeg'
+    : outputFormat;
+
   const response = await fetch(OPENROUTER_IMAGE_URL, {
     method: 'POST',
     headers: getHeaders(),
@@ -434,18 +439,37 @@ export const createImageEdit = async ({
       model,
       prompt,
       input_references: references,
-      quality,
-      size,
-      output_format: outputFormat,
-      output_compression: Math.max(0, Math.min(100, outputCompression)),
+      output_format: effectiveOutputFormat,
       n: 1,
+      ...(!isFlux2Model
+        ? {
+            quality,
+            size,
+            output_compression: Math.max(0, Math.min(100, outputCompression)),
+          }
+        : {}),
     }),
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const error = new Error(extractErrorMessage(payload)) as Error & { status?: number; provider?: string };
+    const providerMessage = extractErrorMessage(payload);
+    const error = new Error(
+      `OpenRouter image request failed (${response.status}): ${providerMessage}`,
+    ) as Error & {
+      status?: number;
+      provider?: string;
+      diagnostics?: Record<string, unknown>;
+    };
     error.status = response.status;
     error.provider = 'openrouter';
+    error.diagnostics = {
+      provider: 'openrouter',
+      provider_endpoint: OPENROUTER_IMAGE_URL,
+      provider_model: model,
+      provider_response_status: response.status,
+      provider_request_id: toText(response.headers.get('x-request-id')) || null,
+      provider_error_type: classifyError(response.status, providerMessage),
+    };
     throw error;
   }
 
@@ -453,9 +477,25 @@ export const createImageEdit = async ({
   const base64 = toText(image?.b64_json);
   const imageUrl = toText(image?.url);
   if (base64) {
-    const mimeType = toText(image?.media_type) || `image/${outputFormat}`;
-    return { imageDataUrl: `data:${mimeType};base64,${base64}`, outputFormat, raw: payload };
+    const mimeType = toText(image?.media_type) || `image/${effectiveOutputFormat}`;
+    return {
+      imageDataUrl: `data:${mimeType};base64,${base64}`,
+      outputFormat: effectiveOutputFormat,
+      raw: payload,
+    };
   }
-  if (imageUrl) return { imageUrl, outputFormat, raw: payload };
-  throw new Error('OpenRouter image generation returned no usable image output.');
+  if (imageUrl) return { imageUrl, outputFormat: effectiveOutputFormat, raw: payload };
+  const error = new Error(
+    `OpenRouter image generation returned no usable image output for ${model}.`,
+  ) as Error & { provider?: string; diagnostics?: Record<string, unknown> };
+  error.provider = 'openrouter';
+  error.diagnostics = {
+    provider: 'openrouter',
+    provider_endpoint: OPENROUTER_IMAGE_URL,
+    provider_model: model,
+    provider_response_status: response.status,
+    provider_request_id: toText(response.headers.get('x-request-id')) || null,
+    provider_error_type: 'empty_response',
+  };
+  throw error;
 };

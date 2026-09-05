@@ -21,7 +21,7 @@ import {
 } from '../../features/hairSubmission.api';
 import { resolveThemeRoles, theme } from '../../design-system/theme';
 import { useAuth } from '../../providers/AuthProvider';
-import { alignScreeningWithMinimumLength, formatEstimatedLengthInches } from '../../utils/hairLength';
+import { formatEstimatedLengthInches } from '../../utils/hairLength';
 import {
   getCanonicalHairAssessment,
   getHairScreeningMood,
@@ -295,7 +295,6 @@ export function HairLogDetailModal({
   onClose,
   onStartAnalysis,
   pageMode = false,
-  donationRequirement = null,
 }) {
   const { resolvedTheme } = useAuth();
   const { width: windowWidth } = useWindowDimensions();
@@ -421,7 +420,15 @@ export function HairLogDetailModal({
 
   if (!visible || (!activeEntry?.screening && !events.length)) return null;
 
-  const screening = alignScreeningWithMinimumLength(activeEntry?.screening || null, donationRequirement);
+  const screening = activeEntry?.screening || null;
+  const currentEligibility = screening?.current_eligibility || null;
+  const currentEligibilityLabel = currentEligibility?.configurationError
+    ? 'Requirements unavailable'
+    : currentEligibility?.eligible === true
+      ? 'Eligible'
+      : currentEligibility?.eligible === false
+        ? 'Ineligible'
+        : 'Not evaluated';
   const hasScreening = Boolean(screening);
   const assessment = hasScreening
     ? getCanonicalHairAssessment(screening)
@@ -471,7 +478,10 @@ export function HairLogDetailModal({
       : 'Use this scan as a baseline and compare the next check for changes.');
   const assessmentMetrics = [
     { label: 'Condition', value: screening?.detected_condition || 'Not detected', icon: 'head-heart-outline', wide: true },
-    { label: 'Donation decision', value: screening?.decision || 'Not detected', icon: 'content-cut', wide: true },
+    { label: 'Current eligibility', value: currentEligibilityLabel, icon: 'content-cut', wide: true },
+    currentEligibility?.reason
+      ? { label: 'Current requirement result', value: currentEligibility.reason, icon: 'information-outline', wide: true }
+      : null,
     { label: 'Length', value: formatEstimatedLengthInches(screening), icon: 'ruler' },
     { label: 'Color', value: screening?.detected_color || 'Not detected', icon: 'palette' },
     { label: 'Texture', value: screening?.detected_texture || 'Not detected', icon: 'waves' },
@@ -491,7 +501,7 @@ export function HairLogDetailModal({
     { label: 'Lice / nits', value: formatDetectedLabel(screening?.lice_detected), icon: 'shield-bug-outline' },
     { label: 'Lice confidence', value: screening?.lice_confidence || 'None', icon: 'shield-check-outline' },
     { label: 'Tracking status', value: screening?.improvement_tracking_status || 'Not detected', icon: 'head-sync-outline', wide: true },
-  ];
+  ].filter(Boolean);
   const nextAnalysisAtMs = screening?.created_at
     ? new Date(screening.created_at).getTime() + HAIR_ANALYSIS_COOLDOWN_MS
     : NaN;

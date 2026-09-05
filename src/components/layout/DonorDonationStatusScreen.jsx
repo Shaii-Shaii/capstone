@@ -6,6 +6,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Camera, Map as MapLibreMap, Marker } from '@maplibre/maplibre-react-native';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { DashboardLayout } from './DashboardLayout';
 import { AppButton } from '../ui/AppButton';
 import { AppIcon } from '../ui/AppIcon';
@@ -17,6 +18,7 @@ import { StatusBanner } from '../ui/StatusBanner';
 import { DonivraLoadingOverlay } from '../ui/DonivraLoadingOverlay';
 import { DonorTabHeader } from '../donor/DonorTabHeader';
 import { ProfileCompletionGateModal } from '../donor/ProfileCompletionGateModal';
+import { DASHBOARD_TAB_BAR_HEIGHT } from '../ui/DashboardTabBar';
 import { donorDashboardNavItems } from '../../constants/dashboard';
 import { useAuth } from '../../providers/AuthProvider';
 import { useLanguage } from '../../providers/LanguageProvider';
@@ -39,6 +41,7 @@ import {
   ensureIndependentDonationQr,
   submitDonationForStaffWaybill,
   scheduleWalkInDropoff,
+  confirmCourierLogisticsDonation,
   getWalkInDropoffAvailability,
   discardUnscheduledWalkInDonationDraft,
   linkDonationRecipient,
@@ -51,6 +54,7 @@ import {
 } from '../../features/donorHome.api';
 import {
   fetchAiScreeningsByUserId,
+  fetchCurrentHairEligibility,
   fetchLatestLogisticsSettings,
   updateHairSubmissionById,
   updateHairSubmissionDetailById,
@@ -97,6 +101,8 @@ const LENGTH_UNIT_OPTIONS = [
   { label: 'Inches', value: 'in' },
 ];
 const DONATION_REALTIME_DEBOUNCE_MS = 1200;
+const DONOR_CANCELLATION_WINDOW_DAYS = 7;
+const DONOR_CANCELLATION_WINDOW_MS = DONOR_CANCELLATION_WINDOW_DAYS * 24 * 60 * 60 * 1000;
 let cachedDonorDonationModuleData = null;
 let cachedDonorDonationModuleUserId = '';
 
@@ -246,25 +252,15 @@ const getAgeFromBirthdate = (value) => {
   return age;
 };
 
-const getScreeningLogText = (screening = null, { preferSummary = false } = {}) => {
-  const values = preferSummary
-    ? [screening?.summary, screening?.visible_damage_notes, screening?.detected_condition, screening?.decision]
-    : [screening?.decision, screening?.summary, screening?.visible_damage_notes, screening?.detected_condition];
-
-  return values.map((value) => String(value || '').trim()).find(Boolean) || '';
-};
-
 const buildDonationDecisionText = ({ screening = null, isEligible = false, ineligibilityReason = '' }) => {
   if (isEligible) {
-    const decision = String(screening?.decision || '').trim().toLowerCase();
-    const preferSummary = decision.includes('improve') || decision.includes('not eligible') || decision.includes('needs');
-    return getScreeningLogText(screening, { preferSummary });
+    return String(screening?.current_eligibility?.reason || 'Meets the current donation requirements.').trim();
   }
 
   const reason = String(ineligibilityReason || '').trim();
   if (reason) return reason;
 
-  return getScreeningLogText(screening);
+  return String(screening?.current_eligibility?.reason || screening?.summary || '').trim();
 };
 
 const formatScreeningLengthInches = (screening = null) => {
@@ -305,17 +301,6 @@ const hasApprovalToken = (value = '') => {
   ].some((token) => normalized.includes(token));
 };
 
-const getCombinedDonationUpdateText = (item = null) => [
-  item?.status,
-  item?.statusLabel,
-  item?.title,
-  item?.label,
-  item?.description,
-  item?.savedNote,
-  item?.message,
-  item?.badge,
-].filter(Boolean).join(' ');
-
 const hasDonationApprovalEvidence = ({
   submission = null,
   certificate = null,
@@ -328,6 +313,11 @@ const hasDonationApprovalEvidence = ({
     return true;
   }
 
+  if (hasApprovalToken(submission?.status)) return true;
+  if ((submission?.submission_details || []).some((detail) => hasApprovalToken(detail?.status))) {
+    return true;
+  }
+
   const relatedUpdates = [
     ...(timelineStages || []),
     ...(timelineEvents || []),
@@ -336,7 +326,69 @@ const hasDonationApprovalEvidence = ({
     !item?.submission_id || Number(item.submission_id) === Number(submission.submission_id)
   ));
 
-  return relatedUpdates.some((item) => hasApprovalToken(getCombinedDonationUpdateText(item)));
+  return relatedUpdates.some((item) => {
+    const hasStageState = Boolean(item?.state);
+    const hasReachedStage = Boolean(
+      item?.evidenceAt
+      || item?.completedAt
+      || item?.displayEvidenceAt
+      || ['completed', 'current'].includes(normalizeTimelineKey(item?.state))
+    );
+    if (hasStageState && !hasReachedStage) return false;
+    return hasApprovalToken([
+      item?.status,
+      item?.statusLabel,
+      item?.title,
+      item?.label,
+    ].filter(Boolean).join(' '));
+  });
+};
+
+const getDonationCancellationAvailability = ({
+  submission = null,
+  registration = null,
+  certificate = null,
+  timelineStages = [],
+  timelineEvents = [],
+  trackingEntries = [],
+  now = Date.now(),
+} = {}) => {
+  if (!submission?.submission_id) {
+    return { allowed: false, reason: 'No active donation was found.' };
+  }
+
+  if (isClosedDonationStatus(submission?.status)) {
+    return { allowed: false, reason: 'This donation is already closed.' };
+  }
+
+  if (hasDonationApprovalEvidence({
+    submission,
+    certificate,
+    timelineStages,
+    timelineEvents,
+    trackingEntries,
+  })) {
+    return { allowed: false, reason: 'Approved donations can no longer be cancelled.' };
+  }
+
+  const createdAtMs = new Date(submission?.created_at || 0).getTime();
+  if (!Number.isFinite(createdAtMs) || createdAtMs <= 0) {
+    return { allowed: false, reason: 'The cancellation period could not be verified.' };
+  }
+  if (now > createdAtMs + DONOR_CANCELLATION_WINDOW_MS) {
+    return { allowed: false, reason: 'The 7-day cancellation period has ended.' };
+  }
+
+  const normalizedStatusKey = normalizeTimelineKey(submission?.status);
+  if (
+    isRsvpCheckedIn(registration)
+    || submission?.cut_at
+    || ['cut', 'wiginproduction', 'wigcreated'].includes(normalizedStatusKey)
+  ) {
+    return { allowed: false, reason: 'This donation has already moved to processing.' };
+  }
+
+  return { allowed: true, reason: '' };
 };
 
 const canCancelDonationSubmission = ({
@@ -347,25 +399,14 @@ const canCancelDonationSubmission = ({
   timelineEvents = [],
   trackingEntries = [],
 } = {}) => {
-  const normalizedStatus = String(submission?.status || '').trim().toLowerCase();
-  const normalizedStatusKey = normalizeTimelineKey(normalizedStatus);
-  const isDraftLike = ['draft', 'pending', 'qr generated', 'not generated'].includes(normalizedStatus);
-
-  return Boolean(submission?.submission_id)
-    && !isClosedDonationStatus(submission?.status)
-    && !isRsvpCheckedIn(registration)
-    && !submission?.cut_at
-    && !['cut', 'wiginproduction', 'wigcreated'].includes(normalizedStatusKey)
-    && (
-      isDraftLike
-      || !hasDonationApprovalEvidence({
-        submission,
-        certificate,
-        timelineStages,
-        timelineEvents,
-        trackingEntries,
-      })
-    );
+  return getDonationCancellationAvailability({
+    submission,
+    registration,
+    certificate,
+    timelineStages,
+    timelineEvents,
+    trackingEntries,
+  }).allowed;
 };
 
 const DONATION_MODULE_SCREEN = {
@@ -376,6 +417,8 @@ const DONATION_MODULE_SCREEN = {
   QR_CODES: 'qrCodes',
   MY_DONATIONS: 'myDonations',
   WALK_IN_SCHEDULE: 'walkInSchedule',
+  COURIER_CONFIRMATION: 'courierConfirmation',
+  LOGISTICS_CONFIRMATION: 'logisticsConfirmation',
   DONATION_STATUS: 'donationStatus',
 };
 
@@ -599,7 +642,7 @@ const buildEventDonationTimelineStages = ({ item, fallbackStages = [], certifica
       ...stage,
       displayEvidenceAt: stage.evidenceAt,
       state: isCompleted ? 'completed' : (isCurrent ? 'current' : 'upcoming'),
-      progressLabel: isCompleted ? 'Complete' : (isCurrent ? 'Ongoing' : 'On waiting'),
+      progressLabel: isCompleted ? 'Complete' : (isCurrent ? 'Ongoing' : 'Waiting'),
       statusLabel: stage.statusLabel || (isCompleted ? 'Complete' : ''),
     };
   });
@@ -627,24 +670,8 @@ const formatDateTimeLabel = (dateString) => {
   }
 };
 
-const normalizeScreeningDecision = (value = '') => String(value || '')
-  .trim()
-  .toLowerCase()
-  .replace(/[^a-z0-9]+/g, '');
-
-const ELIGIBLE_SCREENING_DECISIONS = new Set([
-  'eligible',
-  'eligiblefordonation',
-  'eligibleforhairdonation',
-  'passed',
-]);
-
-const isEligibleScreeningRecord = (screening = null) => (
-  ELIGIBLE_SCREENING_DECISIONS.has(normalizeScreeningDecision(screening?.decision))
-);
-
 const resolveLatestCompletedScreening = (screenings = []) => [...(screenings || [])]
-  .filter((screening) => screening?.ai_screening_id && String(screening?.decision || '').trim())
+  .filter((screening) => screening?.ai_screening_id)
   .sort((left, right) => {
     const timestampDifference = new Date(right?.created_at || 0).getTime()
       - new Date(left?.created_at || 0).getTime();
@@ -659,6 +686,12 @@ const normalizeScreeningReason = (value) => {
 };
 
 const getRecordedScreeningReasons = (screening = null) => {
+  const currentReasons = screening?.current_eligibility?.reasons
+    || screening?.eligibility_reasons;
+  if (Array.isArray(currentReasons)) {
+    return [...new Set(currentReasons.map(normalizeScreeningReason).filter(Boolean))].slice(0, 3);
+  }
+
   const analysis = screening?.analysis_result || {};
   const donationEligibility = analysis?.donation_eligibility || analysis?.eligibility || {};
   const candidates = [
@@ -667,8 +700,6 @@ const getRecordedScreeningReasons = (screening = null) => {
     ...(Array.isArray(analysis?.reasons) ? analysis.reasons : []),
     ...(Array.isArray(donationEligibility?.reasons) ? donationEligibility.reasons : []),
     donationEligibility?.reason,
-    screening?.donation_readiness_note,
-    screening?.improvement_recommendation,
   ];
 
   return [...new Set(candidates.map(normalizeScreeningReason).filter(Boolean))].slice(0, 3);
@@ -777,7 +808,7 @@ const getDonationCardMeta = ({ submission = null, drive = null, logistics = null
   const rawStatus = String(logistics?.shipment_status || submission?.status || '').trim();
   const normalized = rawStatus.toLowerCase();
   const logisticsType = String(logistics?.logistics_type || '').trim().toLowerCase();
-  const isWalkInLogistics = ['salon dropoff', 'onsite_delivery', 'walk_in', 'walk-in', 'dropoff', 'drop-off']
+  const isWalkInLogistics = ['walk-in drop-off', 'salon dropoff', 'onsite_delivery', 'walk_in', 'walk-in', 'dropoff', 'drop-off']
     .includes(logisticsType);
 
   if (isClosedDonationStatus(rawStatus)) {
@@ -790,7 +821,7 @@ const getDonationCardMeta = ({ submission = null, drive = null, logistics = null
 
   if (submission?.submission_id) {
     if (isWalkInLogistics && !appointment?.appointment_id) {
-      return { label: 'Schedule required', category: 'active', icon: 'calendar-clock-outline' };
+      return { label: 'Expected arrival required', category: 'active', icon: 'calendar-clock-outline' };
     }
 
     if (
@@ -861,6 +892,56 @@ const getTimelineStageDescription = (stage = {}) => {
   }
 };
 
+const getCompactTimelineStageDescription = (stage = {}) => {
+  const key = String(stage?.key || '').trim().toLowerCase();
+  const compactCopy = {
+    event_rsvp: 'Your event place is confirmed.',
+    donation_submitted: 'Your donation is confirmed.',
+    donation_ready_to_send: 'Your waybill is ready.',
+    waybill_ready: 'Your waybill is ready.',
+    dropoff_scheduled: 'Your expected arrival is saved.',
+    cut_and_ship: 'Your hair is ready to send.',
+    cut_and_shipped: 'Your hair is ready to send.',
+    sent_by_donor: 'Your donation is on its way.',
+    ready_for_shipment: 'Your parcel is ready.',
+    in_transit: 'Your donation is in transit.',
+    received_by_company: 'The organization received your hair.',
+    received_by_organization: 'The organization received your hair.',
+    qa_assessment: 'Staff will check the donated hair.',
+    quality_checking: 'Staff is checking the hair.',
+    bundling: 'Approved hair is being bundled.',
+    wig_production: 'Approved hair is in production.',
+    wig_distribution_hospitals: 'The wig is ready for distribution.',
+    distribution_to_patients: 'The wig is being delivered.',
+    assigned_to_patient: 'The wig has a recipient.',
+    received_by_patient: 'The recipient received the wig.',
+  };
+  if (compactCopy[key]) return compactCopy[key];
+
+  const source = String(stage?.savedNote || getTimelineStageDescription(stage) || '').trim();
+  const firstSentence = source.split(/(?<=[.!?])\s+/)[0] || source;
+  return firstSentence.length > 82 ? `${firstSentence.slice(0, 79).trim()}...` : firstSentence;
+};
+
+const getCompactTimelineStageLabel = (stage = {}) => {
+  const key = String(stage?.key || '').trim().toLowerCase();
+  const labels = {
+    donation_submitted: 'Donation confirmed',
+    donation_ready_to_send: 'Waybill ready',
+    waybill_ready: 'Waybill ready',
+    dropoff_scheduled: 'Expected walk-in',
+    sent_by_donor: 'Sent by donor',
+    received_by_company: 'Hair received',
+    received_by_organization: 'Hair received',
+    qa_assessment: 'Hair review',
+    quality_checking: 'Hair review',
+    wig_production: 'Wig production',
+    assigned_to_patient: 'Recipient assigned',
+    received_by_patient: 'Received by patient',
+  };
+  return labels[key] || stage?.label || stage?.title || 'Donation update';
+};
+
 // â”€â”€â”€ Shared UI primitives â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function SectionHeader({ eyebrow, title, body, roles }) {
@@ -894,40 +975,67 @@ function ModalShell({
   textColor = theme.colors.textPrimary,
   borderColor = theme.colors.borderSubtle,
   compact = false,
+  centered = false,
+  eyebrow = '',
+  headerIcon = '',
+  accentColor = theme.colors.brandPrimary,
+  showCloseButton = true,
 }) {
   if (!visible) return null;
   return (
     <Modal
       transparent
       visible={visible}
-      animationType="slide"
+      animationType={centered ? 'fade' : 'slide'}
       onRequestClose={onClose}
       statusBarTranslucent
       navigationBarTranslucent
     >
-      <View style={styles.modalOverlay}>
+      <View style={[styles.modalOverlay, centered ? styles.modalOverlayCentered : null]}>
         <Pressable style={styles.modalBackdrop} onPress={onClose} />
         <View style={[
           styles.modalCard,
           compact ? styles.modalCardCompact : null,
+          centered ? styles.modalCardCentered : null,
           { backgroundColor: cardBackground, borderColor },
-        ]}>
-          <View style={[styles.modalHeader, compact ? styles.modalHeaderCompact : null]}>
+        ]} accessibilityViewIsModal>
+          <View style={[
+            styles.modalHeader,
+            compact ? styles.modalHeaderCompact : null,
+            centered ? styles.modalHeaderCentered : null,
+          ]}>
+            {headerIcon ? (
+              <LinearGradient
+                colors={[accentColor, theme.colors.palette.wine900]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.modalHeaderIcon}
+              >
+                <MaterialCommunityIcons name={headerIcon} size={23} color={theme.colors.textOnBrand} />
+              </LinearGradient>
+            ) : null}
             <View style={styles.modalHeaderCopy}>
+              {eyebrow ? (
+                <Text style={[styles.modalEyebrow, { color: accentColor }]}>{eyebrow}</Text>
+              ) : null}
               <Text style={[styles.modalTitle, compact ? styles.modalTitleCompact : null, { color: textColor }]}>
                 {title}
               </Text>
               {subtitle ? <Text style={[styles.modalSubtitle, { color: textColor }]}>{subtitle}</Text> : null}
             </View>
-            <Pressable
-              onPress={onClose}
-              style={[styles.modalCloseBtn, compact ? styles.modalCloseBtnCompact : null, {
-                backgroundColor: cardBackground,
-                borderColor,
-              }]}
-            >
-              <MaterialCommunityIcons name="close" size={compact ? 20 : 22} color={textColor} />
-            </Pressable>
+            {showCloseButton ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Close modal"
+                onPress={onClose}
+                style={[styles.modalCloseBtn, compact ? styles.modalCloseBtnCompact : null, {
+                  backgroundColor: cardBackground,
+                  borderColor,
+                }]}
+              >
+                <MaterialCommunityIcons name="close" size={compact ? 20 : 22} color={textColor} />
+              </Pressable>
+            ) : null}
           </View>
           <View style={styles.modalBody}>
             {scrollContent ? (
@@ -941,7 +1049,15 @@ function ModalShell({
               </ScrollView>
             ) : children}
           </View>
-          {footer ? <View style={[styles.modalFooter, { backgroundColor: cardBackground }]}>{footer}</View> : null}
+          {footer ? (
+            <View style={[
+              styles.modalFooter,
+              centered ? styles.modalFooterCentered : null,
+              { backgroundColor: cardBackground },
+            ]}>
+              {footer}
+            </View>
+          ) : null}
         </View>
       </View>
     </Modal>
@@ -957,11 +1073,7 @@ function ChoiceField({ label, value, options, onChange }) {
   return (
     <View style={styles.choiceField}>
       <Text style={[styles.choiceLabel, { color: textColor }]}>{label}</Text>
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.choiceChipRow}
-      >
+      <View style={styles.choiceChipRow}>
         {options.map((opt) => {
           const active = value === opt.value;
           const disabled = Boolean(opt.disabled);
@@ -975,14 +1087,20 @@ function ChoiceField({ label, value, options, onChange }) {
               style={[
                 styles.choiceChip,
                 { backgroundColor: fieldBackground, borderColor: roles.defaultCardBorder },
-                active ? styles.choiceChipActive : null,
+                active ? {
+                  backgroundColor: roles.iconPrimarySurface,
+                  borderColor: roles.primaryActionBackground,
+                } : null,
                 disabled ? styles.choiceChipDisabled : null,
               ]}
             >
+              {active ? (
+                <MaterialCommunityIcons name="check-circle" size={16} color={roles.primaryActionBackground} />
+              ) : null}
               <Text style={[
                 styles.choiceChipText,
                 { color: textColor },
-                active ? styles.choiceChipTextActive : null,
+                active ? [styles.choiceChipTextActive, { color: roles.primaryActionBackground }] : null,
                 disabled ? styles.choiceChipTextDisabled : null,
               ]}>
                 {opt.label}
@@ -990,18 +1108,29 @@ function ChoiceField({ label, value, options, onChange }) {
             </Pressable>
           );
         })}
-      </ScrollView>
+      </View>
     </View>
   );
 }
 
 function ManualSection({ icon, title, body, children, roles }) {
   return (
-    <View style={[styles.manualSectionCard, { borderBottomColor: roles.defaultCardBorder }]}>
+    <View style={[
+      styles.manualSectionCard,
+      {
+        backgroundColor: roles.defaultCardBackground,
+        borderColor: roles.defaultCardBorder,
+      },
+    ]}>
       <View style={styles.manualSectionHeader}>
-        <View style={[styles.manualSectionIconWrap, { backgroundColor: roles.iconPrimarySurface }]}>
-          <AppIcon name={icon} size="sm" color={roles.iconPrimaryColor} />
-        </View>
+        <LinearGradient
+          colors={[roles.primaryActionBackground, theme.colors.palette.wine900]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.manualSectionIconWrap}
+        >
+          <AppIcon name={icon} size="sm" color={theme.colors.textOnBrand} />
+        </LinearGradient>
         <View style={styles.manualSectionCopy}>
           <Text style={[styles.manualSectionTitle, { color: roles.headingText }]}>{title}</Text>
           {body ? <Text style={[styles.manualSectionBody, { color: roles.bodyText }]}>{body}</Text> : null}
@@ -1282,6 +1411,419 @@ function DonationEventFilterSheet({
         </View>
       </View>
     </Modal>
+  );
+}
+
+function ManualEntryStickyActions({ roles, isSaving, isEditing, onClose, onSave, saveTitle = '' }) {
+  const insets = useSafeAreaInsets();
+
+  return (
+    <View
+      pointerEvents="box-none"
+      style={[
+        styles.manualEntryStickyActionHost,
+        { bottom: DASHBOARD_TAB_BAR_HEIGHT + Math.max(insets.bottom, theme.spacing.xs) },
+      ]}
+    >
+      <LinearGradient
+        colors={[roles.pageBackground, roles.iconPrimarySurface]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={[styles.manualEntryStickyActions, { borderColor: roles.defaultCardBorder }]}
+      >
+        <View style={styles.modalFooterActionHalf}>
+          <AppButton
+            title="Cancel"
+            variant="outline"
+            onPress={onClose}
+            disabled={isSaving}
+            leading={<MaterialCommunityIcons name="close" size={19} color={roles.primaryActionBackground} />}
+            style={styles.manualEntryStickyButton}
+            textColorOverride={roles.primaryActionBackground}
+          />
+        </View>
+        <View style={styles.modalFooterActionHalf}>
+          <AppButton
+            title={isSaving ? 'Starting...' : (saveTitle || (isEditing ? 'Update hair' : 'Save hair'))}
+            onPress={onSave}
+            loading={isSaving}
+            leading={!isSaving ? <MaterialCommunityIcons name="content-save-outline" size={19} color={roles.primaryActionText} /> : null}
+            style={styles.manualEntryStickyButton}
+          />
+        </View>
+      </LinearGradient>
+    </View>
+  );
+}
+
+function DonationStickyCancelAction({ roles, onCancel }) {
+  const insets = useSafeAreaInsets();
+
+  return (
+    <View
+      pointerEvents="box-none"
+      style={[
+        styles.donationCancelStickyHost,
+        {
+          bottom: DASHBOARD_TAB_BAR_HEIGHT
+            + Math.max(insets.bottom, theme.spacing.xs)
+            + theme.spacing.lg,
+        },
+      ]}
+    >
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Cancel my donation"
+        onPress={onCancel}
+        style={({ pressed }) => [
+          styles.donationCancelStickyButton,
+          pressed ? styles.donationCancelStickyButtonPressed : null,
+        ]}
+      >
+        <LinearGradient
+          pointerEvents="none"
+          colors={[theme.colors.palette.red600, roles.primaryActionBackground]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.donationCancelStickyGradient}
+        >
+          <View style={styles.donationCancelStickyIcon}>
+            <MaterialCommunityIcons name="close-circle-outline" size={21} color={theme.colors.textOnBrand} />
+          </View>
+          <View style={styles.donationCancelStickyCopy}>
+            <Text style={styles.donationCancelStickyTitle}>Cancel donation</Text>
+            <Text style={styles.donationCancelStickyText}>Available within 7 days.</Text>
+          </View>
+        </LinearGradient>
+      </Pressable>
+    </View>
+  );
+}
+
+function WaybillQrModal({ visible, roles, waybillCode, onClose }) {
+  const [activeAction, setActiveAction] = React.useState('');
+  const [feedback, setFeedback] = React.useState({ message: '', variant: 'info' });
+
+  React.useEffect(() => {
+    if (!visible) {
+      setActiveAction('');
+      setFeedback({ message: '', variant: 'info' });
+    }
+  }, [visible]);
+
+  const handlePrint = React.useCallback(async () => {
+    if (!waybillCode || activeAction) return;
+    setActiveAction('print');
+    setFeedback({ message: '', variant: 'info' });
+    try {
+      await printDonationQrPdf({
+        title: 'DONIVRA DONATION WAYBILL',
+        subtitle: 'Present this QR when handing over your donation.',
+        helperText: 'This is your Donivra tracking reference.',
+        qrPayloadText: waybillCode,
+        details: [{ label: 'Waybill', value: waybillCode }],
+      });
+      setFeedback({ message: 'Print dialog opened.', variant: 'success' });
+    } catch (_error) {
+      setFeedback({ message: 'Unable to print the QR right now.', variant: 'error' });
+    } finally {
+      setActiveAction('');
+    }
+  }, [activeAction, waybillCode]);
+
+  const handleDownload = React.useCallback(async () => {
+    if (!waybillCode || activeAction) return;
+    setActiveAction('download');
+    setFeedback({ message: '', variant: 'info' });
+    const result = await saveDonationQrPngToDevice({
+      qrPayloadText: waybillCode,
+      fileName: `donivra-waybill-${waybillCode}`,
+    });
+    setActiveAction('');
+    setFeedback({
+      message: result.success
+        ? (result.shared ? 'Choose where to save the QR.' : 'QR saved to your device.')
+        : (result.error || 'Unable to download the QR right now.'),
+      variant: result.success ? 'success' : 'error',
+    });
+  }, [activeAction, waybillCode]);
+
+  return (
+    <ModalShell
+      visible={visible}
+      centered
+      compact
+      eyebrow="DONATION WAYBILL"
+      headerIcon="qrcode-scan"
+      title="Your waybill QR"
+      subtitle="Show this code when you hand over your donation."
+      onClose={onClose}
+      cardBackground={roles.defaultCardBackground}
+      borderColor={withOpacity(roles.primaryActionBackground, 0.2)}
+      accentColor={roles.primaryActionBackground}
+      footer={(
+        <View style={styles.waybillModalActions}>
+          <View style={styles.modalFooterActionHalf}>
+            <AppButton
+              title={activeAction === 'print' ? 'Opening...' : 'Print'}
+              variant="outline"
+              onPress={handlePrint}
+              loading={activeAction === 'print'}
+              disabled={Boolean(activeAction)}
+              leading={activeAction !== 'print'
+                ? <MaterialCommunityIcons name="printer-outline" size={18} color={roles.primaryActionBackground} />
+                : null}
+              textColorOverride={roles.primaryActionBackground}
+            />
+          </View>
+          <View style={styles.modalFooterActionHalf}>
+            <AppButton
+              title={activeAction === 'download' ? 'Saving...' : 'Download'}
+              onPress={handleDownload}
+              loading={activeAction === 'download'}
+              disabled={Boolean(activeAction)}
+              leading={activeAction !== 'download'
+                ? <MaterialCommunityIcons name="download-outline" size={18} color={roles.primaryActionText} />
+                : null}
+            />
+          </View>
+        </View>
+      )}
+    >
+      {feedback.message ? (
+        <StatusBanner
+          message={feedback.message}
+          variant={feedback.variant}
+          presentation="inline"
+          visible
+          style={styles.bannerSpacing}
+        />
+      ) : null}
+      <LinearGradient
+        colors={[theme.colors.palette.blush100, roles.defaultCardBackground]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={[styles.waybillModalQrPanel, { borderColor: roles.defaultCardBorder }]}
+      >
+        <View style={styles.waybillModalQrFrame}>
+          <Image
+            source={{ uri: buildQrImageUrl(waybillCode, 720) }}
+            style={styles.waybillModalQrImage}
+            resizeMode="contain"
+            accessibilityLabel={`Waybill QR ${waybillCode}`}
+          />
+        </View>
+        <Text selectable style={[styles.waybillModalCode, { color: roles.headingText }]}>
+          {waybillCode}
+        </Text>
+        <Text style={[styles.waybillModalHelp, { color: roles.bodyText }]}>Keep this QR for receiving.</Text>
+      </LinearGradient>
+    </ModalShell>
+  );
+}
+
+function ManualEntryPageHeader({ roles, isEditing, onClose }) {
+  return (
+    <View pointerEvents="box-none" style={styles.manualEntryStickyHeaderSurface}>
+      <LinearGradient
+        colors={[roles.primaryActionBackground, theme.colors.palette.wine900]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.manualEntryPageHeader}
+      >
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Back to logistics donation"
+          onPress={onClose}
+          style={({ pressed }) => [
+            styles.manualEntryBackButton,
+            pressed ? styles.manualEntryHeaderControlPressed : null,
+          ]}
+        >
+          <MaterialCommunityIcons name="arrow-left" size={22} color={theme.colors.textOnBrand} />
+        </Pressable>
+        <View style={styles.manualEntryHeaderCopy}>
+          <Text style={styles.manualEntryPageEyebrow}>LOGISTICS DONATION</Text>
+          <Text style={styles.manualEntryPageTitle}>
+            {isEditing ? 'Edit donation details' : 'Donation details'}
+          </Text>
+          <Text
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.82}
+            style={styles.manualEntryPageSubtitle}
+          >
+            {isEditing
+              ? 'Update this donation before generating its QR.'
+              : 'Review your profile and latest Hair Check.'}
+          </Text>
+        </View>
+        <View style={styles.manualEntryHeaderIcon}>
+          <MaterialCommunityIcons name="content-cut" size={22} color={theme.colors.textOnBrand} />
+        </View>
+      </LinearGradient>
+    </View>
+  );
+}
+
+function DonorProfilePreview({ roles, profile }) {
+  const donorName = [
+    profile?.first_name,
+    profile?.middle_name,
+    profile?.last_name,
+    profile?.suffix,
+  ].map((part) => String(part || '').trim()).filter(Boolean).join(' ') || 'Not provided';
+  const birthday = String(profile?.birthdate || '').trim();
+  const age = getAgeFromBirthdate(birthday);
+  const seenLocationParts = new Set();
+  const location = [
+    profile?.street,
+    profile?.barangay,
+    profile?.city,
+    profile?.province,
+    profile?.region,
+    profile?.country,
+  ].map((part) => String(part || '').trim()).filter((part) => {
+    if (!part) return false;
+    const key = part.toLowerCase();
+    if (seenLocationParts.has(key)) return false;
+    seenLocationParts.add(key);
+    return true;
+  }).join(', ') || 'Not provided';
+  const details = [
+    { key: 'name', icon: 'account-outline', label: 'Name', value: donorName, wide: true },
+    {
+      key: 'birthday',
+      icon: 'calendar-month-outline',
+      label: 'Birthday',
+      value: birthday ? formatDateLabel(`${birthday}T00:00:00`) : 'Not provided',
+    },
+    {
+      key: 'age',
+      icon: 'cake-variant-outline',
+      label: 'Age',
+      value: Number.isInteger(age) ? `${age} years old` : 'Not available',
+    },
+    { key: 'location', icon: 'map-marker-outline', label: 'Location', value: location, wide: true },
+  ];
+
+  return (
+    <ManualSection
+      icon="account-circle-outline"
+      title="Donor information"
+      body="Confirm the account details for this donation."
+      roles={roles}
+    >
+      <View style={styles.donorProfilePreviewGrid}>
+        {details.map((detail) => (
+          <View
+            key={detail.key}
+            style={[
+              styles.donorProfilePreviewItem,
+              detail.wide ? styles.donorProfilePreviewItemWide : null,
+              { backgroundColor: roles.supportCardBackground },
+            ]}
+          >
+            <View style={[styles.donorProfilePreviewIcon, { backgroundColor: roles.iconPrimarySurface }]}>
+              <MaterialCommunityIcons name={detail.icon} size={18} color={roles.iconPrimaryColor} />
+            </View>
+            <View style={styles.donorProfilePreviewCopy}>
+              <Text style={[styles.donorProfilePreviewLabel, { color: roles.metaText }]}>{detail.label}</Text>
+              <Text style={[styles.donorProfilePreviewValue, { color: roles.headingText }]}>{detail.value}</Text>
+            </View>
+          </View>
+        ))}
+      </View>
+      <View style={[styles.profileReadOnlyNote, { borderColor: roles.defaultCardBorder }]}>
+        <MaterialCommunityIcons name="lock-outline" size={16} color={roles.metaText} />
+        <Text style={[styles.profileReadOnlyNoteText, { color: roles.metaText }]}>
+          These details come from your profile. Update your profile if anything is incorrect.
+        </Text>
+      </View>
+    </ManualSection>
+  );
+}
+
+function LatestHairCheckPreview({ roles, screening, eligibility }) {
+  const currentEligibility = eligibility || screening?.current_eligibility || null;
+  const isConfigurationError = Boolean(
+    currentEligibility?.configurationError || currentEligibility?.configuration_error
+  );
+  const requiresNewCheck = Boolean(currentEligibility?.requires_post_donation_analysis);
+  const isEligible = Boolean(currentEligibility?.isQualified);
+  const status = !screening
+    ? { label: 'No saved check', icon: 'alert-circle-outline', color: theme.colors.textWarning }
+    : isConfigurationError
+      ? { label: 'Requirements unavailable', icon: 'alert-circle-outline', color: theme.colors.textWarning }
+      : requiresNewCheck
+        ? { label: 'New check required', icon: 'refresh-circle', color: theme.colors.textWarning }
+        : isEligible
+          ? { label: 'Eligible', icon: 'check-circle-outline', color: theme.colors.textSuccess }
+          : { label: 'Ineligible', icon: 'close-circle-outline', color: theme.colors.textError };
+  const confidenceScore = Number(screening?.confidence_score);
+  const confidence = Number.isFinite(confidenceScore)
+    ? `${Math.round(confidenceScore <= 1 ? confidenceScore * 100 : confidenceScore)}%`
+    : 'N/A';
+  const metrics = [
+    { key: 'length', icon: 'ruler', label: 'Length', value: formatScreeningLengthInches(screening) },
+    { key: 'texture', icon: 'waves', label: 'Texture', value: screening?.detected_texture || 'N/A' },
+    { key: 'color', icon: 'palette-outline', label: 'Color', value: screening?.detected_color || 'N/A' },
+    { key: 'density', icon: 'dots-grid', label: 'Density', value: screening?.detected_density || 'N/A' },
+    { key: 'condition', icon: 'heart-pulse', label: 'Condition', value: screening?.detected_condition || 'N/A' },
+    { key: 'confidence', icon: 'chart-donut', label: 'Confidence', value: confidence },
+  ];
+  const eligibilityReason = String(currentEligibility?.reason || '').trim();
+
+  return (
+    <ManualSection
+      icon="checkHair"
+      title="Latest Hair Check"
+      body="Preview the saved AI analysis used for this donation."
+      roles={roles}
+    >
+      <View style={styles.latestScreeningHeader}>
+        <View style={styles.latestScreeningDateRow}>
+          <MaterialCommunityIcons name="clock-outline" size={16} color={roles.metaText} />
+          <Text style={[styles.latestScreeningDate, { color: roles.metaText }]}>
+            {screening?.created_at ? `Checked ${formatDateLabel(screening.created_at)}` : 'No Hair Check date'}
+          </Text>
+        </View>
+        <View style={[styles.latestScreeningStatus, { backgroundColor: withOpacity(status.color, 0.1) }]}>
+          <MaterialCommunityIcons name={status.icon} size={16} color={status.color} />
+          <Text style={[styles.latestScreeningStatusText, { color: status.color }]}>{status.label}</Text>
+        </View>
+      </View>
+
+      {screening ? (
+        <View style={styles.latestScreeningGrid}>
+          {metrics.map((metric) => (
+            <View
+              key={metric.key}
+              style={[styles.latestScreeningMetric, { backgroundColor: roles.supportCardBackground }]}
+            >
+              <View style={[styles.donorProfilePreviewIcon, { backgroundColor: roles.iconPrimarySurface }]}>
+                <MaterialCommunityIcons name={metric.icon} size={18} color={roles.iconPrimaryColor} />
+              </View>
+              <View style={styles.latestScreeningMetricCopy}>
+                <Text style={[styles.latestScreeningMetricLabel, { color: roles.metaText }]}>{metric.label}</Text>
+                <Text style={[styles.latestScreeningMetricValue, { color: roles.headingText }]} numberOfLines={2}>
+                  {metric.value}
+                </Text>
+              </View>
+            </View>
+          ))}
+        </View>
+      ) : null}
+
+      <View style={[styles.currentRequirementsNote, { borderColor: roles.defaultCardBorder }]}>
+        <MaterialCommunityIcons name="database-check-outline" size={18} color={roles.iconPrimaryColor} />
+        <Text style={[styles.currentRequirementsNoteText, { color: roles.bodyText }]}>
+          {eligibilityReason || (screening
+            ? 'Eligibility is recalculated from this saved analysis and the current wig requirements.'
+            : 'Complete a Hair Check before starting a donation.')}
+        </Text>
+      </View>
+    </ManualSection>
   );
 }
 
@@ -2332,9 +2874,128 @@ function DonationHomeOverview({
     </View>
   );
 }
+
 */
 
 }
+
+function ActiveDonationProgressCard({
+  roles,
+  donation,
+  timelineStages = [],
+  onViewTimeline,
+}) {
+  const stages = Array.isArray(timelineStages) ? timelineStages : [];
+  const currentStageIndex = stages.findIndex((stage) => (
+    ['current', 'attention', 'inprogress', 'ongoing'].includes(normalizeTimelineKey(stage?.state))
+  ));
+  const firstIncompleteIndex = stages.findIndex((stage) => normalizeTimelineKey(stage?.state) !== 'completed');
+  const resolvedStageIndex = currentStageIndex >= 0
+    ? currentStageIndex
+    : firstIncompleteIndex >= 0
+      ? firstIncompleteIndex
+      : Math.max(stages.length - 1, 0);
+  const progressPercent = stages.length > 1
+    ? Math.min(100, Math.round((resolvedStageIndex / (stages.length - 1)) * 100))
+    : stages.length ? 100 : 0;
+  const currentStage = stages[resolvedStageIndex] || null;
+  const eventTitle = donation?.drive?.event_title || donation?.title || 'Independent logistics donation';
+  const isEventDonation = Number(donation?.submission?.donation_drive_id || donation?.drive?.donation_drive_id) > 0;
+  const currentStageLabel = currentStage
+    ? getCompactTimelineStageLabel(currentStage)
+    : donation?.statusLabel || 'Donation received';
+  const currentStageStateKey = normalizeTimelineKey(currentStage?.state);
+  const currentStageStatusLabel = currentStage?.progressLabel
+    || (currentStageStateKey === 'completed'
+      ? 'Complete'
+      : currentStageStateKey === 'upcoming'
+        ? 'Waiting'
+        : 'Ongoing');
+
+  return (
+    <LinearGradient
+      colors={[theme.colors.palette.wine900, roles.primaryActionBackground, theme.colors.palette.wine700]}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 1 }}
+      style={styles.activeProgressCard}
+    >
+      <View pointerEvents="none" style={styles.activeProgressGlowLarge} />
+      <View pointerEvents="none" style={styles.activeProgressGlowSmall} />
+
+      <View style={styles.activeProgressTopRow}>
+        <View style={styles.activeProgressIcon}>
+          <MaterialCommunityIcons name="timeline-check-outline" size={24} color={roles.primaryActionText} />
+        </View>
+        <View style={styles.activeProgressLivePill}>
+          <View style={styles.activeProgressLiveDot} />
+          <Text style={[styles.activeProgressLiveText, { color: roles.primaryActionText }]}>ACTIVE DONATION</Text>
+        </View>
+      </View>
+
+      <Text style={[styles.activeProgressEyebrow, { color: roles.primaryActionText }]}>DONATION PROGRESS</Text>
+
+      <View style={styles.activeProgressEventRow}>
+        <MaterialCommunityIcons
+          name={isEventDonation ? 'calendar-heart' : 'truck-delivery-outline'}
+          size={17}
+          color={roles.primaryActionText}
+        />
+        <View style={styles.activeProgressEventCopy}>
+          <Text style={[styles.activeProgressEventLabel, { color: roles.primaryActionText }]}>
+            {isEventDonation ? 'EVENT DONATION' : 'LOGISTICS DONATION'}
+          </Text>
+          <Text numberOfLines={2} style={[styles.activeProgressEventName, { color: roles.primaryActionText }]}>
+            {eventTitle}
+          </Text>
+        </View>
+      </View>
+
+      <View style={styles.activeProgressSummaryRow}>
+        <View style={styles.activeProgressSummaryCopy}>
+          <Text style={[styles.activeProgressStageLabel, { color: roles.primaryActionText }]}>CURRENT MILESTONE</Text>
+          <Text numberOfLines={1} style={[styles.activeProgressStage, { color: roles.primaryActionText }]}>{currentStageLabel}</Text>
+          <View style={styles.activeProgressStageStatus}>
+            <View style={styles.activeProgressStageStatusDot} />
+            <Text style={[styles.activeProgressStageStatusText, { color: roles.primaryActionText }]}>
+              {currentStageStatusLabel}
+            </Text>
+          </View>
+        </View>
+        <Text style={[styles.activeProgressPercent, { color: roles.primaryActionText }]}>{progressPercent}%</Text>
+      </View>
+      <View style={styles.activeProgressTrack}>
+        <View style={[styles.activeProgressFill, { width: `${Math.max(progressPercent, 4)}%` }]} />
+      </View>
+
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`View donation details for ${eventTitle}`}
+        onPress={onViewTimeline}
+        style={({ pressed }) => [
+          styles.activeProgressAction,
+          pressed ? styles.eventFeedPressed : null,
+        ]}
+      >
+        <LinearGradient
+          pointerEvents="none"
+          colors={['#FFFDFD', '#F8E9ED', '#EFCBD4']}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.activeProgressActionSurface}
+        >
+          <View style={styles.activeProgressActionIcon}>
+            <MaterialCommunityIcons name="timeline-text-outline" size={19} color={theme.colors.palette.wine900} />
+          </View>
+          <Text style={styles.activeProgressActionText}>View donation details</Text>
+          <View style={styles.activeProgressActionArrow}>
+            <MaterialCommunityIcons name="arrow-right" size={18} color="#FFFFFF" />
+          </View>
+        </LinearGradient>
+      </Pressable>
+    </LinearGradient>
+  );
+}
+
 function JoinedDriveCard({ roles, drive }) {
   if (!drive?.registration) return null;
 
@@ -2447,7 +3108,7 @@ function HairLogCard({
           </Text>
         </View>
         <View style={[styles.hairLogTile, { backgroundColor: roles.supportCardBackground }]}>
-          <Text style={[styles.hairLogTileLabel, { color: roles.metaText }]}>Decision</Text>
+          <Text style={[styles.hairLogTileLabel, { color: roles.metaText }]}>Current requirement result</Text>
           <Text style={[styles.hairLogTileValue, { color: roles.headingText }]} numberOfLines={3}>
             {decisionText || 'â€”'}
           </Text>
@@ -2500,222 +3161,30 @@ function ManualInputCard({ roles, onOpen }) {
 // â”€â”€â”€ Manual entry modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function ManualEntryModal({
-  visible, form, errors, photo, feedback, isSaving, aiPrefilled,
-  isEditing = false,
-  minimumLengthPlaceholder = '',
-  minimumLengthHelperText = '',
-  onClose, onChangeField, onPickPhoto, onSave,
+  visible, feedback,
+  profile = null,
+  latestScreening = null,
+  latestEligibility = null,
 }) {
   const { resolvedTheme } = useAuth();
   const { width } = useWindowDimensions();
   const isMobileViewport = width < 768;
   const roles = resolveThemeRoles(resolvedTheme, { isMobile: isMobileViewport });
-  const isOtherPersonHair = form.donorType === 'different';
 
   if (!visible) return null;
 
   return (
     <View style={styles.manualEntryPage}>
-      <View style={styles.manualEntryPageHeader}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Back"
-          onPress={onClose}
-          style={[styles.manualEntryBackButton, { borderColor: roles.defaultCardBorder }]}
-        >
-          <MaterialCommunityIcons name="arrow-left" size={22} color={roles.headingText} />
-        </Pressable>
-        <View style={styles.manualEntryHeaderCopy}>
-          <Text style={[styles.manualEntryPageTitle, { color: roles.headingText }]}>
-            {isEditing ? 'Edit hair details' : 'Hair details'}
-          </Text>
-          <Text
-            numberOfLines={1}
-            adjustsFontSizeToFit
-            minimumFontScale={0.82}
-            style={[styles.manualEntryPageSubtitle, { color: roles.bodyText }]}
-          >
-            {isEditing
-              ? 'Update the hair item before generating its QR.'
-              : 'Enter donor and hair measurements.'}
-          </Text>
-        </View>
-      </View>
-
-      {aiPrefilled ? (
-        <View style={[
-          styles.manualEntryNotice,
-          {
-            backgroundColor: resolvedTheme?.backgroundColor || roles.pageBackground,
-            borderColor: roles.defaultCardBorder,
-          },
-        ]}>
-          <View style={[styles.manualEntryNoticeIcon, { backgroundColor: roles.iconPrimarySurface }]}>
-            <MaterialCommunityIcons
-              name="shield-check-outline"
-              size={20}
-              color={resolvedTheme?.primaryTextColor || roles.headingText}
-            />
-          </View>
-          <View style={styles.manualEntryNoticeCopy}>
-            <Text style={[styles.manualEntryNoticeTitle, { color: roles.headingText }]}>Notice</Text>
-            <Text style={[styles.manualEntryNoticeText, { color: roles.bodyText }]}>
-              {isOtherPersonHair
-                ? 'Latest scan values are used only to pre-fill this form.'
-                : 'Length was filled from your latest scan. Adjust if needed.'}
-            </Text>
-          </View>
-        </View>
-      ) : null}
       {feedback?.message ? (
         <StatusBanner message={feedback.message} variant={feedback.variant} style={styles.bannerSpacing} />
       ) : null}
 
-      <ManualSection
-        icon="account-circle-outline"
-        title="Hair owner"
-        body="Who owns this hair?"
+      <DonorProfilePreview roles={roles} profile={profile} />
+      <LatestHairCheckPreview
         roles={roles}
-      >
-        <ChoiceField
-          label="Donor type"
-          value={form.donorType}
-          options={[
-            { label: 'My hair', value: 'own' },
-            { label: 'Other person', value: 'different' },
-          ]}
-          onChange={(v) => onChangeField('donorType', v)}
-        />
-        {errors.donorType ? <Text style={styles.inputError}>{errors.donorType}</Text> : null}
-        {isOtherPersonHair ? (
-          <View style={styles.donorIdentityFields}>
-            <AppInput
-              label="Hair owner name/label"
-              required
-              value={form.donorName}
-              onChangeText={(v) => onChangeField('donorName', v)}
-              placeholder="Example: Sister"
-              error={errors.donorName}
-              helperText="Use the name of the person who owns this hair."
-              shellStyle={[
-                styles.manualEntryInputShell,
-                { backgroundColor: resolvedTheme?.backgroundColor || roles.pageBackground },
-              ]}
-            />
-            <AppInput
-              label="Relationship to submitter"
-              required
-              value={form.relationshipToSubmitter}
-              onChangeText={(v) => onChangeField('relationshipToSubmitter', v)}
-              placeholder="Example: Sister, parent, friend"
-              error={errors.relationshipToSubmitter}
-              helperText="Required when submitting another person's hair."
-              shellStyle={[
-                styles.manualEntryInputShell,
-                { backgroundColor: resolvedTheme?.backgroundColor || roles.pageBackground },
-              ]}
-            />
-            <Pressable
-              onPress={() => onChangeField('consentConfirmed', !form.consentConfirmed)}
-              style={[styles.consentRow, { borderColor: errors.consentConfirmed ? roles.errorText : roles.defaultCardBorder }]}
-            >
-              <MaterialCommunityIcons
-                name={form.consentConfirmed ? 'checkbox-marked' : 'checkbox-blank-outline'}
-                size={22}
-                color={form.consentConfirmed ? roles.iconPrimaryColor : roles.metaText}
-              />
-              <Text style={[styles.consentText, { color: roles.bodyText }]}>
-                I confirm that I have permission from this person to submit their hair donation and process the hair details/images if needed.
-              </Text>
-            </Pressable>
-            {errors.consentConfirmed ? <Text style={styles.inputError}>{errors.consentConfirmed}</Text> : null}
-          </View>
-        ) : null}
-      </ManualSection>
-
-      <ManualSection
-        icon="donations"
-        title="Hair measurements"
-        body="Enter the current length."
-        roles={roles}
-      >
-        <AppInput
-          label="Hair length"
-          required
-          value={form.lengthValue}
-          onChangeText={(v) => onChangeField('lengthValue', v.replace(/[^0-9.]/g, ''))}
-          keyboardType="decimal-pad"
-          placeholder={minimumLengthPlaceholder || 'Length'}
-          error={errors.lengthValue}
-          helperText={minimumLengthHelperText}
-          shellStyle={[
-            styles.manualEntryInputShell,
-            { backgroundColor: resolvedTheme?.backgroundColor || roles.pageBackground },
-          ]}
-        />
-        <ChoiceField
-          label="Unit"
-          value={form.lengthUnit}
-          options={LENGTH_UNIT_OPTIONS}
-          onChange={(v) => onChangeField('lengthUnit', v)}
-        />
-
-      </ManualSection>
-
-      <ManualSection
-        icon="checkHair"
-        title="Hair profile"
-        body="Set treatment and visible hair attributes."
-        roles={roles}
-      >
-        <View style={styles.manualChoiceGrid}>
-          <ChoiceField label="Treated" value={form.treated} options={YES_NO_OPTIONS} onChange={(v) => onChangeField('treated', v)} />
-          <ChoiceField label="Colored" value={form.colored} options={YES_NO_OPTIONS} onChange={(v) => onChangeField('colored', v)} />
-          <ChoiceField label="Trimmed" value={form.trimmed} options={YES_NO_OPTIONS} onChange={(v) => onChangeField('trimmed', v)} />
-        </View>
-
-        <View style={styles.manualChoiceGrid}>
-          <ChoiceField label="Hair color" value={form.hairColor} options={HAIR_COLOR_OPTIONS} onChange={(v) => onChangeField('hairColor', v)} />
-          <ChoiceField label="Density" value={form.density} options={MANUAL_DENSITY_OPTIONS} onChange={(v) => onChangeField('density', v)} />
-        </View>
-      </ManualSection>
-
-      <ManualSection
-        icon="camera"
-        title="Reference photo"
-        body={isEditing
-          ? 'Upload a new clear photo only if the existing reference needs to be changed.'
-          : 'Upload one clear photo with your hair fully visible.'}
-        roles={roles}
-      >
-        {photo?.uri ? (
-          <Image source={{ uri: photo.uri }} style={[styles.photoPreview, { backgroundColor: resolvedTheme?.backgroundColor || roles.pageBackground }]} resizeMode="cover" />
-        ) : (
-          <View style={[styles.photoPlaceholder, { backgroundColor: resolvedTheme?.backgroundColor || roles.pageBackground, borderColor: roles.defaultCardBorder }]}>
-            <AppIcon name="camera" size="md" state="muted" />
-            <Text style={styles.photoPlaceholderText}>No photo selected</Text>
-          </View>
-        )}
-        <View style={[styles.rowActions, styles.manualPhotoActions]}>
-          <AppButton title="Gallery" variant="outline" fullWidth={false} onPress={() => onPickPhoto('library')} style={styles.manualEntryButton} />
-          <AppButton title="Camera" fullWidth={false} onPress={() => onPickPhoto('camera')} style={styles.manualEntryButton} />
-        </View>
-        {errors.photo ? <Text style={styles.inputError}>{errors.photo}</Text> : null}
-      </ManualSection>
-
-      <View style={styles.manualEntryPageActions}>
-        <View style={styles.modalFooterActionHalf}>
-          <AppButton title="Cancel" variant="outline" onPress={onClose} style={styles.manualEntryButton} />
-        </View>
-        <View style={styles.modalFooterActionHalf}>
-          <AppButton
-            title={isSaving ? 'Saving...' : (isEditing ? 'Update hair' : 'Save hair')}
-            onPress={onSave}
-            loading={isSaving}
-            style={styles.manualEntryButton}
-          />
-        </View>
-      </View>
+        screening={latestScreening}
+        eligibility={latestEligibility}
+      />
     </View>
   );
 }
@@ -3578,17 +4047,26 @@ function WalkInScheduleScreen({
   readOnly = false,
   isScheduling = false,
   onBack,
+  onRefreshAvailability,
+  onChooseCourier,
+  onStartNewWalkIn,
   onSchedule,
 }) {
+  const [isEditingSchedule, setIsEditingSchedule] = React.useState(!readOnly);
+  const appointmentStatusKey = String(appointment?.status || '').trim().toLowerCase();
+  const submissionStatusKey = String(submission?.status || '').trim().toLowerCase();
+  const isClosedWalkIn = ['no show', 'cancelled', 'canceled'].includes(appointmentStatusKey)
+    || ['cancelled', 'canceled'].includes(submissionStatusKey);
+  const canReschedule = !isClosedWalkIn && ['confirmed', 'rescheduled'].includes(
+    String(appointment?.status || '').trim().toLowerCase()
+  );
+  const isViewingSchedule = readOnly && !isEditingSchedule;
   const savedDate = String(appointment?.appointment_start_at || '').slice(0, 10);
-  const savedWindow = React.useMemo(() => {
-    if (!appointment?.appointment_start_at || !appointment?.appointment_end_at) return '';
-    const formatTime = (value) => new Date(value).toLocaleTimeString('en-PH', {
-      hour: 'numeric',
-      minute: '2-digit',
-    });
-    return `${formatTime(appointment.appointment_start_at)} - ${formatTime(appointment.appointment_end_at)}`;
-  }, [appointment?.appointment_end_at, appointment?.appointment_start_at]);
+  const savedArrivalTime = React.useMemo(() => {
+    if (!appointment?.appointment_start_at) return '';
+    const date = new Date(appointment.appointment_start_at);
+    return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+  }, [appointment?.appointment_start_at]);
   const dateOptions = React.useMemo(() => {
     const options = Array.isArray(availability) ? availability : [];
     if (!savedDate || options.some((option) => option.value === savedDate)) return options;
@@ -3599,16 +4077,52 @@ function WalkInScheduleScreen({
         month: 'short',
         day: 'numeric',
       }),
-      windows: savedWindow ? [{ value: savedWindow, label: savedWindow }] : [],
     }, ...options];
-  }, [availability, savedDate, savedWindow]);
+  }, [availability, savedDate]);
   const [selectedDate, setSelectedDate] = React.useState(() => savedDate || dateOptions[0]?.value || '');
   const selectedDateOption = dateOptions.find((option) => option.value === selectedDate) || dateOptions[0] || null;
-  const timeOptions = React.useMemo(
-    () => selectedDateOption?.windows || [],
-    [selectedDateOption?.windows]
+  const [selectedArrivalTime, setSelectedArrivalTime] = React.useState(
+    () => savedArrivalTime || ''
   );
-  const [selectedWindow, setSelectedWindow] = React.useState(() => savedWindow || timeOptions[0]?.value || '');
+  const [isArrivalPickerOpen, setIsArrivalPickerOpen] = React.useState(false);
+
+  const clockToMinutes = (value = '') => {
+    const [hour, minute] = String(value).split(':').map(Number);
+    return Number.isFinite(hour) && Number.isFinite(minute) ? (hour * 60) + minute : null;
+  };
+  const formatClock = (value = '') => {
+    const minutes = clockToMinutes(value);
+    if (minutes == null) return 'Choose expected arrival';
+    const date = new Date(2000, 0, 1, Math.floor(minutes / 60), minutes % 60);
+    return date.toLocaleTimeString('en-PH', { hour: 'numeric', minute: '2-digit' });
+  };
+  const openingMinutes = clockToMinutes(selectedDateOption?.opening_time);
+  const closingMinutes = clockToMinutes(selectedDateOption?.closing_time);
+  const breakStartMinutes = clockToMinutes(selectedDateOption?.break_start_time);
+  const breakEndMinutes = clockToMinutes(selectedDateOption?.break_end_time);
+  const arrivalMinutes = clockToMinutes(selectedArrivalTime);
+  const selectedArrivalDate = selectedDate && selectedArrivalTime
+    ? new Date(`${selectedDate}T${selectedArrivalTime}:00`)
+    : null;
+  const isArrivalInFuture = selectedArrivalDate
+    ? Number.isFinite(selectedArrivalDate.getTime()) && selectedArrivalDate.getTime() > Date.now()
+    : false;
+  const isDuringBreak = arrivalMinutes != null
+    && breakStartMinutes != null
+    && breakEndMinutes != null
+    && arrivalMinutes >= breakStartMinutes
+    && arrivalMinutes < breakEndMinutes;
+  const isArrivalValid = arrivalMinutes != null
+    && openingMinutes != null
+    && closingMinutes != null
+    && arrivalMinutes >= openingMinutes
+    && arrivalMinutes <= closingMinutes
+    && !isDuringBreak
+    && isArrivalInFuture;
+  const pickerValue = React.useMemo(() => {
+    const minutes = arrivalMinutes ?? openingMinutes ?? 0;
+    return new Date(2000, 0, 1, Math.floor(minutes / 60), minutes % 60);
+  }, [arrivalMinutes, openingMinutes]);
 
   React.useEffect(() => {
     if (selectedDate && dateOptions.some((option) => option.value === selectedDate)) return;
@@ -3616,139 +4130,541 @@ function WalkInScheduleScreen({
   }, [dateOptions, savedDate, selectedDate]);
 
   React.useEffect(() => {
-    if (savedWindow && selectedDate === savedDate) {
-      setSelectedWindow(savedWindow);
-      return;
+    setIsEditingSchedule(!readOnly);
+  }, [appointment?.appointment_id, readOnly]);
+
+  React.useEffect(() => {
+    if (savedArrivalTime && selectedDate === savedDate) {
+      setSelectedArrivalTime(savedArrivalTime);
     }
-    if (timeOptions.some((option) => option.value === selectedWindow)) return;
-    setSelectedWindow(timeOptions[0]?.value || '');
-  }, [savedDate, savedWindow, selectedDate, selectedWindow, timeOptions]);
+  }, [savedArrivalTime, savedDate, selectedDate]);
+
+  const hasAvailableDates = isViewingSchedule
+    ? dateOptions.length > 0
+    : availability.length > 0;
+  const availabilityState = isLoadingAvailability
+    ? 'loading'
+    : availabilityError
+      ? 'error'
+      : hasAvailableDates
+        ? 'ready'
+        : 'empty';
 
   return (
-    <View style={styles.flowScreen}>
-      <View style={styles.manualEntryPageHeader}>
+    <View style={[styles.flowScreen, styles.walkInSchedulePage]}>
+      <LinearGradient
+        colors={[roles.primaryActionBackground, theme.colors.palette.wine900]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.walkInScheduleHero}
+      >
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Back to hair details"
           onPress={onBack}
-          style={[styles.manualEntryBackButton, { borderColor: roles.defaultCardBorder }]}
+          style={({ pressed }) => [
+            styles.walkInScheduleBackButton,
+            pressed ? styles.manualEntryHeaderControlPressed : null,
+          ]}
         >
-          <MaterialCommunityIcons name="arrow-left" size={22} color={roles.headingText} />
+          <MaterialCommunityIcons name="arrow-left" size={22} color={theme.colors.textOnBrand} />
         </Pressable>
-        <View style={styles.manualEntryHeaderCopy}>
-          <Text style={[styles.manualEntryPageTitle, { color: roles.headingText }]}>Schedule drop-off</Text>
-          <Text style={[styles.manualEntryPageSubtitle, { color: roles.bodyText }]}>
-            {readOnly ? 'Your confirmed drop-off appointment.' : 'Choose when you will bring your donation.'}
+        <View style={styles.walkInScheduleHeroCopy}>
+          <Text style={styles.walkInScheduleEyebrow}>LOGISTICS DONATION</Text>
+          <Text style={styles.walkInScheduleTitle}>Expected walk-in</Text>
+          <Text style={styles.walkInScheduleSubtitle}>
+            {isViewingSchedule ? 'Your saved expected arrival.' : 'Tell staff approximately when you plan to arrive.'}
           </Text>
         </View>
-      </View>
+        <View style={styles.walkInScheduleHeroIcon}>
+          <MaterialCommunityIcons name="calendar-clock-outline" size={23} color={theme.colors.textOnBrand} />
+        </View>
+      </LinearGradient>
 
-      <View style={[styles.walkInPagePanel, { borderColor: roles.defaultCardBorder }]}>
-        {readOnly ? (
-          <View style={styles.walkInWindowGrid}>
-            <View style={[styles.walkInWindowChip, {
-              backgroundColor: roles.pageBackground,
-              borderColor: roles.defaultCardBorder,
-            }]}>
-              <Text style={[styles.walkInLabel, { color: roles.metaText }]}>Date</Text>
-              <Text style={[styles.walkInChipText, { color: roles.headingText }]}>
-                {selectedDate
-                  ? new Date(`${selectedDate}T00:00:00`).toLocaleDateString('en-PH', {
-                      weekday: 'long',
-                      month: 'long',
-                      day: 'numeric',
-                      year: 'numeric',
-                    })
-                  : 'Not scheduled'}
-              </Text>
+      <View style={[
+        styles.walkInPagePanel,
+        { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder },
+      ]}>
+        {isViewingSchedule ? (
+          <>
+            <View style={[styles.walkInConfirmedBadge, { backgroundColor: withOpacity(theme.colors.textSuccess, 0.1) }]}>
+              <MaterialCommunityIcons name="check-circle-outline" size={18} color={theme.colors.textSuccess} />
+              <Text style={[styles.walkInConfirmedBadgeText, { color: theme.colors.textSuccess }]}>Walk-in expected</Text>
             </View>
-            <View style={[styles.walkInWindowChip, {
-              backgroundColor: roles.pageBackground,
-              borderColor: roles.defaultCardBorder,
-            }]}>
-              <Text style={[styles.walkInLabel, { color: roles.metaText }]}>Arrival time</Text>
-              <Text style={[styles.walkInChipText, { color: roles.headingText }]}>
-                {selectedWindow || 'Not scheduled'}
-              </Text>
+            <View style={styles.walkInAppointmentGrid}>
+              <View style={[styles.walkInAppointmentCard, { backgroundColor: roles.supportCardBackground }]}>
+                <View style={[styles.walkInAppointmentIcon, { backgroundColor: roles.iconPrimarySurface }]}>
+                  <MaterialCommunityIcons name="calendar-month-outline" size={20} color={roles.iconPrimaryColor} />
+                </View>
+                <Text style={[styles.walkInLabel, { color: roles.metaText }]}>Expected drop-off date</Text>
+                <Text style={[styles.walkInAppointmentValue, { color: roles.headingText }]}>
+                  {selectedDate
+                    ? new Date(`${selectedDate}T00:00:00`).toLocaleDateString('en-PH', {
+                        weekday: 'long',
+                        month: 'long',
+                        day: 'numeric',
+                        year: 'numeric',
+                      })
+                    : 'Not scheduled'}
+                </Text>
+              </View>
+              <View style={[styles.walkInAppointmentCard, { backgroundColor: roles.supportCardBackground }]}>
+                <View style={[styles.walkInAppointmentIcon, { backgroundColor: roles.iconPrimarySurface }]}>
+                  <MaterialCommunityIcons name="clock-outline" size={20} color={roles.iconPrimaryColor} />
+                </View>
+                <Text style={[styles.walkInLabel, { color: roles.metaText }]}>Expected arrival</Text>
+                <Text style={[styles.walkInAppointmentValue, { color: roles.headingText }]}>{formatClock(selectedArrivalTime)}</Text>
+              </View>
             </View>
+            <View style={[styles.walkInHelpNote, { borderColor: roles.defaultCardBorder }]}>
+              <MaterialCommunityIcons name="information-outline" size={18} color={roles.iconPrimaryColor} />
+              <Text style={[styles.walkInHelpNoteText, { color: roles.bodyText }]}>This time is approximate. Bring your waybill when you arrive; reasonable delays do not prevent check-in.</Text>
+            </View>
+            {canReschedule ? (
+              <AppButton
+                title="Change expected arrival"
+                variant="outline"
+                onPress={() => {
+                  const firstAvailableDate = availability[0] || null;
+                  setSelectedDate(firstAvailableDate?.value || '');
+                  setSelectedArrivalTime('');
+                  setIsEditingSchedule(true);
+                }}
+                leading={<MaterialCommunityIcons name="calendar-edit" size={18} color={roles.primaryActionBackground} />}
+                style={styles.walkInConfirmButton}
+                textColorOverride={roles.primaryActionBackground}
+              />
+            ) : null}
+            {isClosedWalkIn ? (
+              <AppButton
+                title="Start a new Walk-in Donation"
+                onPress={onStartNewWalkIn}
+                leading={<MaterialCommunityIcons name="calendar-plus" size={18} color={roles.primaryActionText} />}
+                style={styles.walkInConfirmButton}
+              />
+            ) : null}
+          </>
+        ) : availabilityState !== 'ready' ? (
+          <View style={styles.walkInAvailabilityState}>
+            <View style={[
+              styles.walkInAvailabilityIcon,
+              {
+                backgroundColor: availabilityState === 'error'
+                  ? withOpacity(theme.colors.textError, 0.1)
+                  : roles.iconPrimarySurface,
+              },
+            ]}>
+              {availabilityState === 'loading' ? (
+                <ActivityIndicator size="small" color={roles.primaryActionBackground} />
+              ) : (
+                <MaterialCommunityIcons
+                  name={availabilityState === 'error' ? 'alert-circle-outline' : 'calendar-remove-outline'}
+                  size={30}
+                  color={availabilityState === 'error' ? theme.colors.textError : roles.iconPrimaryColor}
+                />
+              )}
+            </View>
+            <Text style={[styles.walkInAvailabilityTitle, { color: roles.headingText }]}>
+              {availabilityState === 'loading'
+                ? 'Checking open walk-in dates'
+                : availabilityState === 'error'
+                  ? 'Walk-in dates could not be loaded'
+                  : 'No Available Walk-in Date'}
+            </Text>
+            <Text style={[styles.walkInAvailabilityBody, { color: roles.bodyText }]}>
+              {availabilityState === 'loading'
+                ? 'Please wait while we check the organization’s current receiving calendar.'
+                : availabilityState === 'error'
+                  ? availabilityError
+                  : 'There are currently no open walk-in receiving dates. Please check again later or choose Ship by Courier instead.'}
+            </Text>
+            {availabilityState !== 'loading' ? (
+              <View style={styles.walkInAvailabilityActions}>
+                <AppButton
+                  title="Check again"
+                  onPress={onRefreshAvailability}
+                  leading={<MaterialCommunityIcons name="refresh" size={18} color={roles.primaryActionText} />}
+                  style={styles.walkInAvailabilityAction}
+                />
+                <AppButton
+                  title="Ship by Courier"
+                  variant="outline"
+                  onPress={onChooseCourier}
+                  leading={<MaterialCommunityIcons name="truck-delivery-outline" size={18} color={roles.primaryActionBackground} />}
+                  style={styles.walkInAvailabilityAction}
+                  textColorOverride={roles.primaryActionBackground}
+                />
+              </View>
+            ) : null}
           </View>
         ) : (
           <>
-        {isLoadingAvailability ? (
-          <StatusBanner message="Loading available drop-off schedules..." variant="info" />
-        ) : availabilityError ? (
-          <StatusBanner message={availabilityError} variant="error" />
-        ) : !dateOptions.length ? (
-          <StatusBanner message="No drop-off schedules are available right now. Please check again later." variant="info" />
-        ) : null}
+            <View style={styles.walkInSectionHeading}>
+              <View style={[styles.walkInStepBadge, { backgroundColor: roles.iconPrimarySurface }]}>
+                <Text style={[styles.walkInStepBadgeText, { color: roles.iconPrimaryColor }]}>1</Text>
+              </View>
+              <View style={styles.walkInSectionHeadingCopy}>
+                <Text style={[styles.walkInSectionTitle, { color: roles.headingText }]}>Select a date</Text>
+                <Text style={[styles.walkInSectionBody, { color: roles.bodyText }]}>Choose an available drop-off day.</Text>
+              </View>
+            </View>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.walkInChipRow}>
+              {dateOptions.map((option) => {
+                const selected = selectedDate === option.value;
+                return (
+                  <Pressable
+                    key={option.value}
+                    accessibilityRole="radio"
+                    accessibilityState={{ checked: selected }}
+                    onPress={() => {
+                      setSelectedDate(option.value);
+                      setSelectedArrivalTime('');
+                    }}
+                    style={[
+                      styles.walkInChip,
+                      {
+                        backgroundColor: selected ? roles.primaryActionBackground : roles.supportCardBackground,
+                        borderColor: selected ? roles.primaryActionBackground : roles.defaultCardBorder,
+                      },
+                    ]}
+                  >
+                    <MaterialCommunityIcons
+                      name={selected ? 'calendar-check' : 'calendar-blank-outline'}
+                      size={18}
+                      color={selected ? roles.primaryActionText : roles.iconPrimaryColor}
+                    />
+                    <Text style={[styles.walkInChipText, { color: selected ? roles.primaryActionText : roles.headingText }]}>
+                      {option.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
 
-        <View style={styles.walkInChoiceGroup}>
-          <Text style={[styles.walkInLabel, { color: roles.headingText }]}>Date</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.walkInChipRow}>
-            {dateOptions.map((option) => {
-              const selected = selectedDate === option.value;
-              return (
-                <Pressable
-                  key={option.value}
-                  onPress={() => setSelectedDate(option.value)}
-                  style={[
-                    styles.walkInChip,
-                    {
-                      backgroundColor: selected ? roles.primaryActionBackground : roles.pageBackground,
-                      borderColor: selected ? roles.primaryActionBackground : roles.defaultCardBorder,
-                    },
-                  ]}
-                >
-                  <Text style={[styles.walkInChipText, { color: selected ? roles.primaryActionText : roles.headingText }]}>
-                    {option.label}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
+            <View style={[styles.walkInSectionDivider, { backgroundColor: roles.defaultCardBorder }]} />
+
+            <View style={styles.walkInSectionHeading}>
+              <View style={[styles.walkInStepBadge, { backgroundColor: roles.iconPrimarySurface }]}>
+                <Text style={[styles.walkInStepBadgeText, { color: roles.iconPrimaryColor }]}>2</Text>
+              </View>
+              <View style={styles.walkInSectionHeadingCopy}>
+                <Text style={[styles.walkInSectionTitle, { color: roles.headingText }]}>Choose an arrival time</Text>
+                <Text style={[styles.walkInSectionBody, { color: roles.bodyText }]}>Tell staff approximately when you plan to arrive.</Text>
+              </View>
+            </View>
+            <View style={styles.walkInWindowGrid}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Choose expected arrival time"
+                onPress={() => setIsArrivalPickerOpen(true)}
+                style={[
+                  styles.walkInWindowChip,
+                  {
+                    backgroundColor: roles.supportCardBackground,
+                    borderColor: isArrivalValid ? roles.defaultCardBorder : theme.colors.textError,
+                  },
+                ]}
+              >
+                <MaterialCommunityIcons name="clock-edit-outline" size={20} color={roles.iconPrimaryColor} />
+                <Text style={[styles.walkInChipText, styles.walkInArrivalTimeText, { color: roles.headingText }]}>
+                  {formatClock(selectedArrivalTime)}
+                </Text>
+                <MaterialCommunityIcons name="chevron-down" size={20} color={roles.metaText} />
+              </Pressable>
+              <View style={[styles.walkInInlineEmpty, { backgroundColor: roles.supportCardBackground }]}>
+                <MaterialCommunityIcons name="store-clock-outline" size={20} color={roles.iconPrimaryColor} />
+                <Text style={[styles.walkInEmptyText, { color: roles.bodyText }]}>
+                  Receiving hours: {formatClock(selectedDateOption?.opening_time)}–{formatClock(selectedDateOption?.closing_time)}
+                  {breakStartMinutes != null && breakEndMinutes != null
+                    ? ` · Break: ${formatClock(selectedDateOption?.break_start_time)}–${formatClock(selectedDateOption?.break_end_time)}`
+                    : ''}
+                </Text>
+              </View>
+              {!isArrivalValid ? (
+                <Text style={[styles.walkInSectionBody, { color: theme.colors.textError }]}>
+                  {isDuringBreak
+                    ? 'Choose a time outside the configured break.'
+                    : (arrivalMinutes != null && !isArrivalInFuture
+                        ? 'Choose a future expected arrival time.'
+                        : 'Choose a time within the configured receiving hours.')}
+                </Text>
+              ) : null}
+              {isArrivalPickerOpen ? (
+                <DateTimePicker
+                  value={pickerValue}
+                  mode="time"
+                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                  onChange={(event, value) => {
+                    if (Platform.OS !== 'ios') setIsArrivalPickerOpen(false);
+                    if (event.type === 'dismissed' || !value) return;
+                    setSelectedArrivalTime(
+                      `${String(value.getHours()).padStart(2, '0')}:${String(value.getMinutes()).padStart(2, '0')}`
+                    );
+                  }}
+                />
+              ) : null}
+              {Platform.OS === 'ios' && isArrivalPickerOpen ? (
+                <AppButton
+                  title="Use this time"
+                  variant="outline"
+                  onPress={() => setIsArrivalPickerOpen(false)}
+                  textColorOverride={roles.primaryActionBackground}
+                />
+              ) : null}
+            </View>
+
+            <AppButton
+              title={isScheduling
+                ? 'Saving expected arrival...'
+                : (appointment?.appointment_id ? 'Update expected arrival' : 'Confirm walk-in')}
+              onPress={() => {
+                onSchedule?.({
+                  submission,
+                  expectedArrivalAt: selectedDate && selectedArrivalTime
+                    ? `${selectedDate}T${selectedArrivalTime}:00`
+                    : '',
+                });
+              }}
+              loading={isScheduling}
+              disabled={!selectedDate || !isArrivalValid || isScheduling}
+              leading={!isScheduling
+                ? <MaterialCommunityIcons name="calendar-check-outline" size={19} color={roles.primaryActionText} />
+                : null}
+              style={styles.walkInConfirmButton}
+            />
+          </>
+        )}
+      </View>
+    </View>
+  );
+}
+
+function CourierDonationConfirmationScreen({
+  roles,
+  logisticsSettings = null,
+  isConfirming = false,
+  onBack,
+  onConfirm,
+}) {
+  const destinationLines = getLogisticsAddressLines(logisticsSettings);
+  const steps = [
+    {
+      icon: 'package-variant-closed',
+      title: 'Pack the donation securely',
+      body: 'Keep the clean, dry hair bundled and protected inside the parcel.',
+    },
+    {
+      icon: 'barcode-scan',
+      title: 'Use your Donivra waybill',
+      body: 'Your internal waybill is created only after this confirmation succeeds.',
+    },
+    {
+      icon: 'truck-delivery-outline',
+      title: 'Ship with your preferred courier',
+      body: 'You can add the courier name and external tracking number after sending the parcel.',
+    },
+  ];
+
+  return (
+    <View style={[styles.flowScreen, styles.walkInSchedulePage]}>
+      <LinearGradient
+        colors={[roles.primaryActionBackground, theme.colors.palette.wine900]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.walkInScheduleHero}
+      >
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Back to delivery methods"
+          onPress={onBack}
+          disabled={isConfirming}
+          style={({ pressed }) => [
+            styles.walkInScheduleBackButton,
+            pressed ? styles.manualEntryHeaderControlPressed : null,
+          ]}
+        >
+          <MaterialCommunityIcons name="arrow-left" size={22} color={theme.colors.textOnBrand} />
+        </Pressable>
+        <View style={styles.walkInScheduleHeroCopy}>
+          <Text style={styles.walkInScheduleEyebrow}>LOGISTICS DONATION</Text>
+          <Text style={styles.walkInScheduleTitle}>Ship by Courier</Text>
+          <Text style={styles.walkInScheduleSubtitle}>Review the shipping steps before confirming your donation.</Text>
+        </View>
+        <View style={styles.walkInScheduleHeroIcon}>
+          <MaterialCommunityIcons name="truck-fast-outline" size={23} color={theme.colors.textOnBrand} />
+        </View>
+      </LinearGradient>
+
+      <View style={[styles.walkInPagePanel, {
+        backgroundColor: roles.defaultCardBackground,
+        borderColor: roles.defaultCardBorder,
+      }]}>
+        <View style={[styles.walkInHelpNote, { borderColor: roles.defaultCardBorder }]}>
+          <MaterialCommunityIcons name="information-outline" size={18} color={roles.iconPrimaryColor} />
+          <Text style={[styles.walkInHelpNoteText, { color: roles.bodyText }]}>Courier donations do not require a salon appointment. No donation record is created until you confirm below.</Text>
         </View>
 
-        <View style={styles.walkInChoiceGroup}>
-          <Text style={[styles.walkInLabel, { color: roles.headingText }]}>Arrival time</Text>
-          <View style={styles.walkInWindowGrid}>
-            {timeOptions.map((window) => {
-              const selected = selectedWindow === window.value;
-              return (
-                <Pressable
-                  key={window.value}
-                  onPress={() => setSelectedWindow(window.value)}
-                  style={[
-                    styles.walkInWindowChip,
-                    {
-                      backgroundColor: selected ? roles.primaryActionBackground : roles.pageBackground,
-                      borderColor: selected ? roles.primaryActionBackground : roles.defaultCardBorder,
-                    },
-                  ]}
-                >
-                  <Text style={[styles.walkInChipText, { color: selected ? roles.primaryActionText : roles.headingText }]}>
-                    {window.label || window.value}
-                  </Text>
-                </Pressable>
-              );
-            })}
-            {!timeOptions.length && !isLoadingAvailability ? (
-              <Text style={[styles.walkInEmptyText, { color: roles.bodyText }]}>
-                No available arrival times for this date.
+        <View style={styles.logisticsConfirmationRows}>
+          {steps.map((step) => (
+            <View key={step.title} style={styles.logisticsConfirmationRow}>
+              <View style={[styles.logisticsConfirmationRowIcon, { backgroundColor: roles.iconPrimarySurface }]}>
+                <MaterialCommunityIcons name={step.icon} size={19} color={roles.iconPrimaryColor} />
+              </View>
+              <View style={styles.logisticsConfirmationRowCopy}>
+                <Text style={[styles.logisticsConfirmationValue, { color: roles.headingText }]}>{step.title}</Text>
+                <Text style={[styles.logisticsConfirmationMeta, { color: roles.bodyText }]}>{step.body}</Text>
+              </View>
+            </View>
+          ))}
+        </View>
+
+        <View style={[styles.logisticsWaybillPanel, { backgroundColor: roles.iconPrimarySurface }]}>
+          <View style={styles.logisticsWaybillHeading}>
+            <MaterialCommunityIcons name="map-marker-outline" size={20} color={roles.iconPrimaryColor} />
+            <Text style={[styles.logisticsConfirmationLabel, { color: roles.metaText }]}>SHIP TO</Text>
+          </View>
+          <Text style={[styles.logisticsConfirmationValue, { color: roles.headingText }]}>
+            {destinationLines.length ? destinationLines.join(', ') : 'Organization address unavailable'}
+          </Text>
+        </View>
+
+        <AppButton
+          title={isConfirming ? 'Confirming donation...' : 'Confirm courier donation'}
+          onPress={onConfirm}
+          loading={isConfirming}
+          disabled={isConfirming}
+          leading={!isConfirming
+            ? <MaterialCommunityIcons name="check-circle-outline" size={19} color={roles.primaryActionText} />
+            : null}
+        />
+        <AppButton
+          title="Choose another method"
+          variant="outline"
+          onPress={onBack}
+          disabled={isConfirming}
+          textColorOverride={roles.primaryActionBackground}
+        />
+      </View>
+    </View>
+  );
+}
+
+function LogisticsDonationConfirmationScreen({
+  roles,
+  confirmation,
+  onViewDonation,
+  onDone,
+}) {
+  const submission = confirmation?.submission || null;
+  const logistics = confirmation?.logistics || null;
+  const appointment = confirmation?.appointment || null;
+  const logisticsTypeKey = String(logistics?.logistics_type || '').trim().toLowerCase();
+  const isCourier = confirmation?.deliveryMethod === 'courier'
+    || logisticsTypeKey === 'ship by courier'
+    || logisticsTypeKey === 'courier';
+  const waybillCode = String(submission?.waybill_code || '').trim();
+  const startAt = appointment?.appointment_start_at || null;
+  const scheduleDate = startAt
+    ? new Date(startAt).toLocaleDateString('en-PH', {
+        month: 'long',
+        day: 'numeric',
+        year: 'numeric',
+      })
+    : 'Expected date unavailable';
+  const expectedArrivalTime = startAt
+    ? `About ${new Date(startAt).toLocaleTimeString('en-PH', { hour: 'numeric', minute: '2-digit' })}`
+    : 'Expected time unavailable';
+  const statusParts = [submission?.status, appointment?.status || logistics?.shipment_status]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .filter((value, index, values) => (
+      values.findIndex((candidate) => candidate.toLowerCase() === value.toLowerCase()) === index
+    ));
+  const statusText = statusParts.join(' / ') || 'Confirmed';
+  const isRescheduled = Boolean(confirmation?.rescheduled);
+
+  return (
+    <View style={[styles.flowScreen, styles.logisticsConfirmationPage]}>
+      <LinearGradient
+        colors={[roles.primaryActionBackground, theme.colors.palette.wine900]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.logisticsConfirmationHero}
+      >
+        <View style={styles.logisticsConfirmationIcon}>
+          <MaterialCommunityIcons name="check-decagram" size={34} color={theme.colors.textOnBrand} />
+        </View>
+        <Text style={styles.logisticsConfirmationEyebrow}>LOGISTICS DONATION</Text>
+        <Text style={styles.logisticsConfirmationTitle}>
+          {isRescheduled ? 'Expected arrival updated' : 'Donation confirmed'}
+        </Text>
+        <Text style={styles.logisticsConfirmationSubtitle}>
+          {isRescheduled
+            ? 'Your donation keeps the same tracking reference.'
+            : isCourier
+              ? 'Your courier donation is saved and ready for shipping.'
+              : 'Your walk-in drop-off is saved and ready for staff tracking.'}
+        </Text>
+      </LinearGradient>
+
+      <View style={[styles.logisticsConfirmationCard, {
+        backgroundColor: roles.defaultCardBackground,
+        borderColor: roles.defaultCardBorder,
+      }]}>
+        <View style={[styles.logisticsWaybillPanel, { backgroundColor: roles.iconPrimarySurface }] }>
+          <View style={styles.logisticsWaybillHeading}>
+            <MaterialCommunityIcons name="barcode-scan" size={21} color={roles.iconPrimaryColor} />
+            <Text style={[styles.logisticsConfirmationLabel, { color: roles.metaText }]}>WAYBILL</Text>
+          </View>
+          {waybillCode ? (
+            <View style={styles.logisticsConfirmationQrFrame}>
+              <Image
+                source={{ uri: buildQrImageUrl(waybillCode, 280) }}
+                style={styles.logisticsConfirmationQr}
+                resizeMode="contain"
+                accessibilityLabel={`Waybill QR ${waybillCode}`}
+              />
+            </View>
+          ) : null}
+          <Text selectable style={[styles.logisticsWaybillCode, { color: roles.headingText }]}>{waybillCode}</Text>
+          <Text style={[styles.logisticsWaybillHelp, { color: roles.bodyText }]}>Show this QR at receiving.</Text>
+        </View>
+
+        <View style={styles.logisticsConfirmationRows}>
+          <View style={styles.logisticsConfirmationRow}>
+            <View style={[styles.logisticsConfirmationRowIcon, { backgroundColor: roles.iconPrimarySurface }]}>
+              <MaterialCommunityIcons name={isCourier ? 'truck-delivery-outline' : 'calendar-outline'} size={19} color={roles.iconPrimaryColor} />
+            </View>
+            <View style={styles.logisticsConfirmationRowCopy}>
+              <Text style={[styles.logisticsConfirmationLabel, { color: roles.metaText }]}>{isCourier ? 'DELIVERY METHOD' : 'EXPECTED ARRIVAL'}</Text>
+              <Text style={[styles.logisticsConfirmationValue, { color: roles.headingText }]}>{isCourier ? 'Ship by Courier' : scheduleDate}</Text>
+              <Text style={[styles.logisticsConfirmationMeta, { color: roles.bodyText }]}>
+                {isCourier ? 'Add the courier tracking number after you ship the parcel.' : expectedArrivalTime}
               </Text>
-            ) : null}
+            </View>
+          </View>
+          <View style={styles.logisticsConfirmationRow}>
+            <View style={[styles.logisticsConfirmationRowIcon, { backgroundColor: roles.iconPrimarySurface }]}>
+              <MaterialCommunityIcons name="progress-check" size={19} color={roles.iconPrimaryColor} />
+            </View>
+            <View style={styles.logisticsConfirmationRowCopy}>
+              <Text style={[styles.logisticsConfirmationLabel, { color: roles.metaText }]}>STATUS</Text>
+              <Text style={[styles.logisticsConfirmationValue, { color: roles.headingText }]}>{statusText}</Text>
+            </View>
           </View>
         </View>
 
         <AppButton
-          title={isScheduling
-            ? 'Saving appointment...'
-            : (appointment?.appointment_id ? 'Update appointment' : 'Confirm appointment')}
-          onPress={() => onSchedule?.({ submission, scheduleDate: selectedDate, timeWindow: selectedWindow })}
-          loading={isScheduling}
-          disabled={!submission?.submission_id || !selectedDate || !selectedWindow || isScheduling || isLoadingAvailability}
+          title="View donation details"
+          onPress={onViewDonation}
+          leading={<MaterialCommunityIcons name="timeline-text-outline" size={19} color={roles.primaryActionText} />}
         />
-          </>
-        )}
+        <AppButton
+          title="Back to donations"
+          variant="outline"
+          onPress={onDone}
+          textColorOverride={roles.primaryActionBackground}
+        />
       </View>
     </View>
   );
@@ -3783,6 +4699,7 @@ function MyJoinedDonationsScreen({
     && !hasDonationLoadError
     && !hasActiveLogisticsDonation
     && independentDonationItems.length === 0;
+  const hasActiveLogistics = hasActiveLogisticsDonation || independentDonationItems.length > 0;
   return (
     <View style={[styles.flowScreen, styles.logisticHistoryScreen]}>
       <View style={styles.logisticScreenHeader}>
@@ -3796,11 +4713,17 @@ function MyJoinedDonationsScreen({
         </Pressable>
         <View style={styles.logisticScreenHeaderCopy}>
           <Text style={[styles.sectionEyebrow, { color: roles.primaryActionBackground }]}>LOGISTICS DONATION</Text>
-          <Text style={[styles.logisticScreenTitle, { color: roles.headingText }]}>Send your hair donation</Text>
-          <Text style={[styles.logisticScreenSubtitle, { color: roles.metaText }]}>Create and track a donation without joining an event.</Text>
+          <Text style={[styles.logisticScreenTitle, { color: roles.headingText }]}>
+            {hasActiveLogistics ? 'Your logistics donation' : 'Send your hair donation'}
+          </Text>
+          <Text style={[styles.logisticScreenSubtitle, { color: roles.metaText }]}>
+            {hasActiveLogistics ? 'Track its latest status.' : 'Donate without joining an event.'}
+          </Text>
         </View>
       </View>
 
+      {!hasActiveLogistics ? (
+      <>
       <LinearGradient
         colors={[theme.colors.palette.wine900, theme.colors.palette.wine700]}
         start={{ x: 0, y: 0 }}
@@ -3953,12 +4876,14 @@ function MyJoinedDonationsScreen({
           <Text style={[styles.logisticFeeText, { color: roles.bodyText }]}>{shippingFeeNote}</Text>
         </View>
       </View>
+      </>
+      ) : null}
 
       {independentDonationItems.length ? (
       <View style={styles.flowCardList}>
         <View style={styles.logisticSectionHeading}>
-          <Text style={[styles.sectionEyebrow, { color: roles.primaryActionBackground }]}>YOUR DONATIONS</Text>
-          <Text style={[styles.sectionHeading, { color: roles.headingText }]}>In progress</Text>
+          <Text style={[styles.sectionEyebrow, { color: roles.primaryActionBackground }]}>ACTIVE LOGISTICS</Text>
+          <Text style={[styles.sectionHeading, { color: roles.headingText }]}>Donation in progress</Text>
         </View>
         {independentDonationItems.map((item) => {
           const primaryPreview = item.previewItems?.[0] || null;
@@ -3969,24 +4894,32 @@ function MyJoinedDonationsScreen({
               accessibilityLabel={`Open timeline for ${item.title || 'logistic donation'}`}
               onPress={() => onViewDonation?.(item)}
               style={({ pressed }) => [
-                styles.summaryHairRow,
-                {
-                  backgroundColor: roles.defaultCardBackground,
-                  borderColor: roles.defaultCardBorder,
-                  opacity: pressed ? 0.82 : 1,
-                },
+                styles.activeLogisticsCard,
+                { borderColor: withOpacity(roles.primaryActionBackground, 0.18) },
+                pressed ? styles.activeLogisticsCardPressed : null,
               ]}
             >
+              <LinearGradient
+                pointerEvents="none"
+                colors={[roles.defaultCardBackground, roles.iconPrimarySurface]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.activeLogisticsCardSurface}
+              >
               <View style={styles.summaryHeaderRow}>
+                <View style={[styles.activeLogisticsIcon, { backgroundColor: roles.primaryActionBackground }]}>
+                  <MaterialCommunityIcons
+                    name={item.methodLabel === 'Walk-in Drop-off' ? 'walk' : 'truck-delivery-outline'}
+                    size={22}
+                    color={roles.primaryActionText}
+                  />
+                </View>
                 <View style={styles.upcomingDonationCopy}>
                   <Text style={[styles.summaryMainText, { color: roles.headingText }]} numberOfLines={2}>
                     {item.title || 'Independent hair donation'}
                   </Text>
-                  <Text style={[styles.flowMetaText, { color: roles.headingText }]}>
-                    {item.identifier}
-                  </Text>
                   <Text style={[styles.flowMetaText, { color: roles.bodyText }]}>
-                    {item.hairCount || item.previewItems?.length || 1} hair item{(item.hairCount || item.previewItems?.length || 1) === 1 ? '' : 's'}
+                    {item.submission?.waybill_code || item.identifier}
                   </Text>
                 </View>
                 <View style={[styles.summaryStatusChip, { backgroundColor: roles.iconPrimarySurface }]}>
@@ -3997,12 +4930,17 @@ function MyJoinedDonationsScreen({
               </View>
               {primaryPreview ? (
                 <Text style={[styles.flowMetaText, { color: roles.bodyText }]}>
-                  {primaryPreview.lengthLabel} - {primaryPreview.condition || 'Hair details saved'}
+                  {primaryPreview.lengthLabel} · {primaryPreview.condition || 'Hair details saved'}
                 </Text>
               ) : null}
-              <Text style={[styles.flowMetaText, { color: roles.metaText }]}>
-                {formatDateTimeLabel(item.updatedAt)}
-              </Text>
+              <View style={styles.activeLogisticsOpenRow}>
+                <Text style={[styles.flowMetaText, { color: roles.metaText }]}>Updated {formatDateLabel(item.updatedAt)}</Text>
+                <View style={[styles.activeLogisticsOpenButton, { backgroundColor: roles.primaryActionBackground }]}>
+                  <Text style={[styles.activeLogisticsOpenText, { color: roles.primaryActionText }]}>View details</Text>
+                  <MaterialCommunityIcons name="arrow-right" size={15} color={roles.primaryActionText} />
+                </View>
+              </View>
+              </LinearGradient>
             </Pressable>
           );
         })}
@@ -4318,7 +5256,7 @@ const buildEventDonationTimelineStages = ({ item, fallbackStages = [], certifica
       ...stage,
       displayEvidenceAt: stage.evidenceAt,
       state: isCompleted ? 'completed' : (isCurrent ? 'current' : 'upcoming'),
-      progressLabel: isCompleted ? 'Complete' : (isCurrent ? 'Ongoing' : 'On waiting'),
+      progressLabel: isCompleted ? 'Complete' : (isCurrent ? 'Ongoing' : 'Waiting'),
       statusLabel: stage.statusLabel || (isCompleted ? 'Complete' : ''),
     };
   });
@@ -4330,18 +5268,15 @@ const buildEventDonationTimelineStages = ({ item, fallbackStages = [], certifica
 function DonationTimelineStatusScreen({
   roles,
   item,
-  previewItems = [],
   timelineStages = [],
   timelineEvents = [],
   parcelImages = [],
   certificate,
   onBack,
-  onViewDonationQr,
   onViewAppointment,
   onViewCertificate,
-  onCancelDonation,
 }) {
-  const primaryPreview = previewItems[0] || item?.previewItems?.[0] || null;
+  const [isWaybillQrOpen, setIsWaybillQrOpen] = React.useState(false);
   const registration = item?.drive?.registration || item?.registration || null;
   const submittedAt = item?.submission?.created_at
     || item?.submission?.updated_at
@@ -4349,26 +5284,35 @@ function DonationTimelineStatusScreen({
     || registration?.updated_at
     || registration?.registered_at
     || '';
-  const canCancel = canCancelDonationSubmission({
-    submission: item?.submission || null,
-    registration,
-    certificate,
-    timelineStages,
-    timelineEvents,
-  });
   const isEventDonation = Boolean(item?.submission?.donation_drive_id || item?.drive?.donation_drive_id);
-  const canViewDonationQr = Boolean(
-    !isEventDonation
-    && isSubmittedDonationItem({ submission: item?.submission })
-    && previewItems.some((previewItem) => previewItem?.qrPayload)
+  const logisticsWaybillCode = String(item?.submission?.waybill_code || '').trim();
+  const walkInAppointment = item?.appointment || null;
+  const isWalkInDonation = !isEventDonation && Boolean(
+    walkInAppointment?.appointment_id
+    || ['walk-in drop-off', 'salon dropoff'].includes(
+      String(item?.logistics?.logistics_type || item?.methodLabel || '').trim().toLowerCase()
+    )
   );
+  const walkInStatusKey = String(walkInAppointment?.status || '').trim().toLowerCase();
+  const isClosedWalkIn = ['no show', 'cancelled', 'canceled'].includes(walkInStatusKey)
+    || ['cancelled', 'canceled'].includes(String(item?.submission?.status || '').trim().toLowerCase());
   const stages = isEventDonation
     ? buildEventDonationTimelineStages({ item, fallbackStages: timelineStages, certificate })
     : timelineStages;
+  const latestTimelineEvent = timelineEvents[0] || null;
+  const isLatestCertificateEvent = Boolean(
+    certificate?.certificate_id
+    && String(latestTimelineEvent?.key || '').startsWith('certificate-')
+  );
 
   return (
-    <View style={styles.flowScreen}>
-      <View style={[styles.timelineHero, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
+    <View style={[styles.flowScreen, styles.timelineStatusScreen]}>
+      <LinearGradient
+        colors={[roles.defaultCardBackground, roles.iconPrimarySurface]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={[styles.timelineHero, { borderColor: withOpacity(roles.primaryActionBackground, 0.16) }]}
+      >
         {onBack ? (
           <Pressable
             accessibilityRole="button"
@@ -4385,26 +5329,119 @@ function DonationTimelineStatusScreen({
         ) : null}
 
         <View style={styles.timelineHeroMetrics}>
-          <View style={styles.timelineMetricGridCompact}>
-            <View style={styles.timelineCompactMetric}>
-              <Text style={[styles.summaryMetricLabel, { color: roles.metaText }]}>Length</Text>
-              <Text style={[styles.summaryMetricValue, { color: roles.headingText }]}>{primaryPreview?.lengthLabel || 'Not recorded'}</Text>
-            </View>
-            <View style={[styles.timelineMetricDivider, { backgroundColor: roles.defaultCardBorder }]} />
-            <View style={styles.timelineCompactMetric}>
-              <Text style={[styles.summaryMetricLabel, { color: roles.metaText }]}>Submitted</Text>
-              <Text style={[styles.summaryMetricValue, { color: roles.headingText }]}>{submittedAt ? formatDateLabel(submittedAt) : 'Not submitted'}</Text>
-            </View>
+          <View style={styles.timelineHeroHeading}>
+            <Text style={[styles.timelineHeroTitle, { color: roles.headingText }]}>Donation progress</Text>
+            <Text style={[styles.timelineHeroSubtitle, { color: roles.metaText }]}>Track your latest updates.</Text>
           </View>
-          {canViewDonationQr ? (
-            <AppButton
-              title="View Donation QR"
-              leading={<MaterialCommunityIcons name="qrcode-scan" size={18} color={roles.primaryActionText} />}
-              onPress={onViewDonationQr}
+        </View>
+      </LinearGradient>
+
+      {latestTimelineEvent ? (
+        <LinearGradient
+          colors={[theme.colors.palette.blush100, roles.defaultCardBackground]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={[styles.summaryCard, styles.timelineSoftCard, { borderColor: withOpacity(roles.primaryActionBackground, 0.16) }]}
+        >
+          <View style={styles.timelineRecentHeading}>
+            <View style={[styles.timelineRecentIcon, { backgroundColor: roles.iconPrimarySurface }]}>
+              <MaterialCommunityIcons name="bell-check-outline" size={19} color={roles.iconPrimaryColor} />
+            </View>
+            <View style={styles.timelineRecentCopy}>
+              <Text style={[styles.timelineRecentEyebrow, { color: roles.metaText }]}>LATEST UPDATE</Text>
+              <Text style={[styles.summaryMainText, { color: roles.headingText }]} numberOfLines={2}>
+                {isLatestCertificateEvent ? 'Certificate ready' : latestTimelineEvent.title}
+              </Text>
+              {latestTimelineEvent.timestamp ? (
+                <Text style={[styles.flowMetaText, { color: roles.metaText }]}>{latestTimelineEvent.timestamp}</Text>
+              ) : null}
+            </View>
+            {isLatestCertificateEvent ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="View certificate"
+                onPress={onViewCertificate}
+                style={({ pressed }) => [
+                  styles.timelineRecentAction,
+                  { backgroundColor: roles.primaryActionBackground },
+                  pressed ? styles.timelineRecentActionPressed : null,
+                ]}
+              >
+                <Text style={[styles.timelineRecentActionText, { color: roles.primaryActionText }]}>View</Text>
+                <MaterialCommunityIcons name="arrow-right" size={16} color={roles.primaryActionText} />
+              </Pressable>
+            ) : null}
+          </View>
+          {latestTimelineEvent.imageUrl ? (
+            <Image
+              source={{ uri: latestTimelineEvent.imageUrl }}
+              style={styles.timelineEventImage}
+              resizeMode="cover"
             />
           ) : null}
-        </View>
-      </View>
+        </LinearGradient>
+      ) : null}
+
+      {!isEventDonation && logisticsWaybillCode ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Open waybill QR ${logisticsWaybillCode}`}
+          accessibilityHint="Shows a larger QR with print and download actions"
+          onPress={() => setIsWaybillQrOpen(true)}
+          style={({ pressed }) => [
+            styles.timelineWaybillPressable,
+            pressed ? styles.timelineWaybillPressablePressed : null,
+          ]}
+        >
+          <LinearGradient
+            colors={[roles.defaultCardBackground, roles.iconPrimarySurface]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={[styles.timelineWaybillCard, { borderColor: withOpacity(roles.primaryActionBackground, 0.18) }]}
+          >
+            <View style={[styles.timelineWaybillQrFrame, { backgroundColor: '#FFFFFF' }]}>
+              <Image
+                source={{ uri: buildQrImageUrl(logisticsWaybillCode, 260) }}
+                style={styles.timelineWaybillQr}
+                resizeMode="contain"
+                accessibilityLabel={`Waybill QR ${logisticsWaybillCode}`}
+              />
+            </View>
+            <View style={styles.timelineWaybillCopy}>
+              <Text style={[styles.timelineWaybillLabel, { color: roles.metaText }]}>DONATION WAYBILL</Text>
+              <Text selectable style={[styles.timelineWaybillCode, { color: roles.headingText }]}>{logisticsWaybillCode}</Text>
+              <Text style={[styles.timelineWaybillHelp, { color: roles.bodyText }]}>Tap to enlarge, save, or print.</Text>
+            </View>
+            <MaterialCommunityIcons name="open-in-new" size={18} color={roles.iconPrimaryColor} />
+          </LinearGradient>
+        </Pressable>
+      ) : null}
+
+      {isWalkInDonation && walkInAppointment?.appointment_start_at ? (
+        <LinearGradient
+          colors={[roles.defaultCardBackground, roles.iconPrimarySurface]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={[styles.summaryCard, styles.timelineSoftCard, { borderColor: withOpacity(roles.primaryActionBackground, 0.14) }]}
+        >
+          <View style={styles.timelineEventRow}>
+            <Text style={[styles.summarySectionTitle, { color: roles.headingText }]}>Expected walk-in</Text>
+            <Text style={[styles.summaryMainText, { color: roles.headingText }]}>
+              {formatDateTimeLabel(walkInAppointment.appointment_start_at)}
+            </Text>
+            <Text style={[styles.flowMetaText, { color: roles.bodyText }]}>
+              Approximate arrival | Status: {walkInAppointment.status || 'Confirmed'}
+            </Text>
+          </View>
+          <AppButton
+            title={isClosedWalkIn ? 'View arrival' : 'Manage arrival'}
+            variant="outline"
+            onPress={onViewAppointment}
+            leading={<MaterialCommunityIcons name="calendar-clock-outline" size={18} color={roles.primaryActionBackground} />}
+            textColorOverride={roles.primaryActionBackground}
+          />
+        </LinearGradient>
+      ) : null}
 
       {isEventDonation ? (
         <View style={[styles.timelineEventDetailsCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
@@ -4437,69 +5474,16 @@ function DonationTimelineStatusScreen({
         </View>
       ) : null}
 
-      {timelineEvents.length ? (
-        <View style={[styles.summaryCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
-          <Text style={[styles.summarySectionTitle, { color: roles.headingText }]}>Recent update</Text>
-          {timelineEvents.slice(0, 1).map((event) => {
-            const isCertificateEvent = certificate?.certificate_id
-              && String(event.key || '').startsWith('certificate-');
-
-            if (isCertificateEvent) {
-              return (
-                <View
-                  key={event.key}
-                  style={[styles.certificateUpdateRow, { backgroundColor: roles.supportCardBackground, borderColor: roles.supportCardBorder }]}
-                >
-                  <View style={[styles.certificateUpdateIcon, { backgroundColor: roles.iconPrimarySurface }]}>
-                    <MaterialCommunityIcons name="certificate-outline" size={22} color={roles.iconPrimaryColor} />
-                  </View>
-                  <View style={styles.certificateUpdateCopy}>
-                    <Text style={[styles.certificateUpdateTitle, { color: roles.headingText }]}>Certificate ready</Text>
-                    {event.timestamp ? (
-                      <Text style={[styles.certificateUpdateDate, { color: roles.metaText }]}>{event.timestamp}</Text>
-                    ) : null}
-                  </View>
-                  <AppButton
-                    title="View"
-                    size="sm"
-                    fullWidth={false}
-                    onPress={onViewCertificate}
-                  />
-                </View>
-              );
-            }
-
-            return (
-              <View key={event.key} style={styles.timelineEventRow}>
-                <Text style={[styles.summaryMainText, { color: roles.headingText }]}>{event.title}</Text>
-                <Text style={[styles.flowMetaText, { color: roles.bodyText }]}>{event.description}</Text>
-                {event.timestamp ? <Text style={[styles.flowMetaText, { color: roles.metaText }]}>{event.timestamp}</Text> : null}
-                {event.imageUrl ? (
-                  <Image
-                    source={{ uri: event.imageUrl }}
-                    style={styles.timelineEventImage}
-                    resizeMode="cover"
-                  />
-                ) : null}
-              </View>
-            );
-          })}
-        </View>
-      ) : null}
-
       <View style={styles.timelineSection}>
-        <Text style={[styles.summarySectionTitle, { color: roles.headingText }]}>Journey Timeline</Text>
+        <View style={styles.timelineSectionHeading}>
+          <Text style={[styles.summarySectionTitle, { color: roles.headingText }]}>Donation journey</Text>
+          <Text style={[styles.timelineSectionHint, { color: roles.metaText }]}>Track each step</Text>
+        </View>
         <View style={styles.timelineStageList}>
           {stages.length ? stages.map((stage, index) => {
             const isCompleted = stage.state === 'completed';
             const isCurrent = stage.state === 'current';
             const isCancelled = stage.state === 'cancelled';
-            const canOpenWaybill = !isEventDonation
-              && ['waybill_ready', 'donation_ready_to_send'].includes(stage.key)
-              && Boolean(onViewDonationQr);
-            const isActionableStage = canOpenWaybill;
-            const stageAction = onViewDonationQr;
-            const TimelineStageCard = isActionableStage ? Pressable : View;
             const stageDisplayDate = stage.displayEvidenceAt || stage.completedAt || stage.evidenceAt || '';
             const markerColor = isCancelled ? roles.errorText : roles.primaryActionBackground;
             const stageImages = index === 0
@@ -4529,36 +5513,29 @@ function DonationTimelineStatusScreen({
                     <View style={[styles.timelineStageConnector, { backgroundColor: isCompleted ? roles.primaryActionBackground : roles.defaultCardBorder }]} />
                   ) : null}
                 </View>
-                <TimelineStageCard
-                  accessibilityRole={isActionableStage ? 'button' : undefined}
-                  accessibilityLabel={canOpenWaybill ? 'Open waybill QR' : undefined}
-                  onPress={isActionableStage ? stageAction : undefined}
-                  style={isActionableStage
-                    ? ({ pressed }) => [
-                        styles.timelineStageCard,
-                        {
-                          backgroundColor: isCurrent ? roles.heroBackground : roles.defaultCardBackground,
-                          borderColor: isCancelled ? roles.errorText : (isCurrent ? roles.heroBorder : roles.defaultCardBorder),
-                          opacity: pressed ? 0.78 : 1,
-                        },
-                      ]
-                    : [
-                        styles.timelineStageCard,
-                        {
-                          backgroundColor: isCurrent ? roles.heroBackground : roles.defaultCardBackground,
-                          borderColor: isCancelled ? roles.errorText : (isCurrent ? roles.heroBorder : roles.defaultCardBorder),
-                        },
-                      ]}
+                <View
+                  style={[
+                    styles.timelineStageCard,
+                    {
+                      backgroundColor: isCurrent ? roles.heroBackground : roles.defaultCardBackground,
+                      borderColor: isCancelled ? roles.errorText : (isCurrent ? roles.heroBorder : roles.defaultCardBorder),
+                    },
+                  ]}
                 >
                   <View style={styles.timelineStageHeader}>
                     <Text style={[styles.timelineStageTitle, { color: isCancelled ? roles.errorText : (isCurrent ? roles.heroHeadingText : roles.headingText) }]}>
-                      {stage.label || stage.title || 'Donation update'}
+                      {getCompactTimelineStageLabel(stage)}
                     </Text>
                     <Text style={[styles.timelineStageDate, { color: isCurrent ? roles.heroMetaText : roles.metaText }]}>
                       {stageDisplayDate ? formatDateTimeLabel(stageDisplayDate) : (stage.progressLabel || 'Waiting')}
                     </Text>
                   </View>
-                  <Text style={[styles.flowMetaText, { color: isCurrent ? roles.heroBodyText : roles.bodyText }]}>{getTimelineStageDescription(stage)}</Text>
+                  <Text
+                    numberOfLines={2}
+                    style={[styles.flowMetaText, { color: isCurrent ? roles.heroBodyText : roles.bodyText }]}
+                  >
+                    {getCompactTimelineStageDescription(stage)}
+                  </Text>
                   {stageImages.length ? (
                     <ScrollView
                       horizontal
@@ -4583,17 +5560,20 @@ function DonationTimelineStatusScreen({
                     </ScrollView>
                   ) : null}
                   {stage.statusLabel ? (
-                    <Text style={[styles.timelineStageBadgeText, { color: isCancelled ? roles.errorText : (isCurrent ? roles.heroHeadingText : roles.iconPrimaryColor) }]}>{stage.statusLabel}</Text>
-                  ) : null}
-                  {isActionableStage ? (
-                    <View style={styles.timelineStageAction}>
-                      <Text style={[styles.timelineStageActionText, { color: roles.primaryActionBackground }]}>
-                        {stage.key === 'donation_ready_to_send' ? 'Open Waybill QR' : 'Open QR'}
+                    <View style={[
+                      styles.timelineStageBadge,
+                      {
+                        backgroundColor: isCancelled
+                          ? withOpacity(roles.errorText, 0.1)
+                          : withOpacity(roles.primaryActionBackground, isCurrent ? 0.14 : 0.08),
+                      },
+                    ]}>
+                      <Text style={[styles.timelineStageBadgeText, { color: isCancelled ? roles.errorText : roles.iconPrimaryColor }]}>
+                        {stage.statusLabel}
                       </Text>
-                      <MaterialCommunityIcons name="arrow-right" size={16} color={roles.primaryActionBackground} />
                     </View>
                   ) : null}
-                </TimelineStageCard>
+                </View>
               </View>
             );
           }) : (
@@ -4607,9 +5587,12 @@ function DonationTimelineStatusScreen({
         </View>
       </View>
 
-      {canCancel ? (
-        <AppButton title="Cancel My Donation" variant="danger" onPress={onCancelDonation} />
-      ) : null}
+      <WaybillQrModal
+        visible={isWaybillQrOpen}
+        roles={roles}
+        waybillCode={logisticsWaybillCode}
+        onClose={() => setIsWaybillQrOpen(false)}
+      />
     </View>
   );
 }
@@ -4891,7 +5874,7 @@ export function DonorDonationStatusScreen() {
   // â”€â”€ Manual form
   const [isManualModalOpen, setIsManualModalOpen] = React.useState(false);
   const [manualForm, setManualForm] = React.useState(MANUAL_FORM_DEFAULTS);
-  const [manualFormErrors, setManualFormErrors] = React.useState({});
+  const [, setManualFormErrors] = React.useState({});
   const [manualPhoto, setManualPhoto] = React.useState(null);
   const [manualFeedback, setManualFeedback] = React.useState({ message: '', variant: 'info' });
   const [isSavingManual, setIsSavingManual] = React.useState(false);
@@ -4935,9 +5918,12 @@ export function DonorDonationStatusScreen() {
   const [printingQrKey, setPrintingQrKey] = React.useState('');
   const [savingQrKey, setSavingQrKey] = React.useState('');
   const [isSchedulingDropoff, setIsSchedulingDropoff] = React.useState(false);
+  const [isConfirmingCourier, setIsConfirmingCourier] = React.useState(false);
   const [walkInAvailability, setWalkInAvailability] = React.useState([]);
   const [walkInAvailabilityError, setWalkInAvailabilityError] = React.useState('');
   const [isLoadingWalkInAvailability, setIsLoadingWalkInAvailability] = React.useState(false);
+  const [walkInAvailabilityRefreshKey, setWalkInAvailabilityRefreshKey] = React.useState(0);
+  const [confirmedLogisticsDonation, setConfirmedLogisticsDonation] = React.useState(null);
   const logisticsEligibilityRequestRef = React.useRef(0);
   // When the user picks a view manually, stop auto-routing away from it.
   const hasManualDonationViewSelectionRef = React.useRef(false);
@@ -5032,7 +6018,10 @@ export function DonorDonationStatusScreen() {
     return () => {
       isMounted = false;
     };
-  }, [donationModuleScreen]);
+  }, [
+    donationModuleScreen,
+    walkInAvailabilityRefreshKey,
+  ]);
 
   React.useEffect(() => () => {
     if (donationRealtimeRefreshRef.current) {
@@ -5117,9 +6106,6 @@ export function DonorDonationStatusScreen() {
   const isProfileComplete = donorProfileMeta.isComplete;
   const latestScreening = moduleData?.latestScreening || null;
   const currentRequirementMinimumInches = formatRequirementLengthInputValue(moduleData?.latestDonationRequirement || null);
-  const currentRequirementHelperText = currentRequirementMinimumInches
-    ? `Minimum required is ${currentRequirementMinimumInches} inches`
-    : 'Current minimum requirement is not configured';
   const screeningDate = latestScreening?.created_at || '';
   const screeningLabel = screeningDate ? formatDateLabel(screeningDate) : '';
   const isHairFresh = Boolean(
@@ -5139,8 +6125,12 @@ export function DonorDonationStatusScreen() {
     const screeningSummary = String(screening?.summary || '').trim();
     const checkedAt = screening?.created_at ? formatDateTimeLabel(screening.created_at) : '';
     const screeningDetails = [
-      screening?.decision
-        ? { icon: 'check-decagram-outline', title: 'Recorded decision', body: String(screening.decision) }
+      status === 'eligible' || status === 'ineligible'
+        ? {
+            icon: 'check-decagram-outline',
+            title: 'Current eligibility',
+            body: status === 'eligible' ? 'Eligible' : 'Ineligible',
+          }
         : null,
       screeningSummary
         ? { icon: 'text-box-outline', title: 'Analysis summary', body: screeningSummary }
@@ -5194,7 +6184,7 @@ export function DonorDonationStatusScreen() {
               {
                 icon: 'information-outline',
                 title: 'Screening result',
-                body: String(screening?.decision || 'Not eligible for donation'),
+                body: 'The analyzed hair does not satisfy the current donation requirements.',
               },
               ...screeningDetails,
             ],
@@ -5529,6 +6519,9 @@ export function DonorDonationStatusScreen() {
           ? moduleData?.appointment
           : null
       );
+      const itemTimelineStages = flowRecord?.timelineStages || moduleData?.timelineStages || [];
+      const itemTimelineEvents = flowRecord?.timelineEvents || moduleData?.timelineEvents || [];
+      const itemTrackingEntries = flowRecord?.trackingEntries || moduleData?.trackingEntries || [];
       const statusMeta = getDonationCardMeta({
         submission: primarySubmission,
         drive,
@@ -5536,7 +6529,7 @@ export function DonorDonationStatusScreen() {
         appointment: itemAppointment,
       });
       const isWalkInDonation = Boolean(itemAppointment?.appointment_id) || (
-        ['salon dropoff', 'onsite_delivery', 'walk_in', 'walk-in', 'dropoff', 'drop-off']
+        ['walk-in drop-off', 'salon dropoff', 'onsite_delivery', 'walk_in', 'walk-in', 'dropoff', 'drop-off']
           .includes(String(itemLogistics?.logistics_type || '').trim().toLowerCase())
       );
       const identifierPrefix = isWalkInDonation ? 'DROP' : 'SHIP';
@@ -5544,9 +6537,9 @@ export function DonorDonationStatusScreen() {
         submission: primarySubmission,
         registration: drive?.registration || null,
         certificate,
-        timelineStages: moduleData?.timelineStages || [],
-        timelineEvents: moduleData?.timelineEvents || [],
-        trackingEntries: moduleData?.trackingEntries || [],
+        timelineStages: itemTimelineStages,
+        timelineEvents: itemTimelineEvents,
+        trackingEntries: itemTrackingEntries,
       });
 
       return {
@@ -5556,9 +6549,9 @@ export function DonorDonationStatusScreen() {
         submissions,
         previewItems,
         drive,
-        title: drive?.event_title || (isWalkInDonation ? 'Walk-in Drop Off' : 'Ship to Organization'),
+        title: drive?.event_title || (isWalkInDonation ? 'Walk-in Drop-off' : 'Ship by Courier'),
         identifier: `${identifierPrefix}-${String(primarySubmission.submission_id).padStart(5, '0')}`,
-        methodLabel: isWalkInDonation ? 'Walk-in Drop Off' : 'Ship to Organization',
+        methodLabel: isWalkInDonation ? 'Walk-in Drop-off' : 'Ship by Courier',
         organizationName: drive ? getDriveOrganizationLabel(drive) : 'Partner organization',
         recipientName: selectedRecipient?.type === 'patient'
           ? selectedRecipient?.patient?.patient_name || ''
@@ -5569,6 +6562,11 @@ export function DonorDonationStatusScreen() {
         statusLabel: statusMeta.label,
         statusCategory: statusMeta.category,
         statusIcon: statusMeta.icon,
+        logistics: itemLogistics,
+        appointment: itemAppointment,
+        timelineStages: itemTimelineStages,
+        timelineEvents: itemTimelineEvents,
+        trackingEntries: itemTrackingEntries,
         canCancel,
         hairCount: groupQrItems.length || previewItems.length || submissions.length,
         updatedAt: primarySubmission?.updated_at || primarySubmission?.created_at || '',
@@ -5629,6 +6627,15 @@ export function DonorDonationStatusScreen() {
     selectedRecipient?.patient?.patient_name,
     selectedRecipient?.type,
   ]);
+  const activeDonationOverviewItem = React.useMemo(() => {
+    if (!hasOngoingDonation) return null;
+    const activeSubmissionId = Number(moduleData?.latestSubmission?.submission_id || 0);
+    return myDonationItems.find((item) => (
+      Number(item?.submission?.submission_id || 0) === activeSubmissionId
+    )) || myDonationItems.find((item) => (
+      item?.submission?.submission_id && !isClosedDonationStatus(item.submission.status)
+    )) || null;
+  }, [hasOngoingDonation, moduleData?.latestSubmission?.submission_id, myDonationItems]);
   const selectedDonationTimelineItem = React.useMemo(() => {
     if (selectedDonationStatusItem?.key) {
       return myDonationItems.find((item) => item.key === selectedDonationStatusItem.key) || selectedDonationStatusItem;
@@ -5781,10 +6788,24 @@ export function DonorDonationStatusScreen() {
     setActiveDonationTabKey('logistic');
     setSelectedDonationStatusItem({
       ...item,
-      originScreen: DONATION_MODULE_SCREEN.MY_DONATIONS,
+      originScreen: DONATION_MODULE_SCREEN.EVENTS,
     });
     setDonationModuleScreen(DONATION_MODULE_SCREEN.DONATION_STATUS);
   }, []);
+  const handleViewActiveDonationTimeline = React.useCallback(() => {
+    if (!activeDonationOverviewItem?.submission?.submission_id) return;
+
+    const driveId = Number(
+      activeDonationOverviewItem?.submission?.donation_drive_id
+      || activeDonationOverviewItem?.drive?.donation_drive_id
+    );
+    if (Number.isFinite(driveId) && driveId > 0) {
+      router.navigate(`/donor/donation-progress?driveId=${driveId}`);
+      return;
+    }
+
+    handleOpenLogisticDonationDetails(activeDonationOverviewItem);
+  }, [activeDonationOverviewItem, handleOpenLogisticDonationDetails, router]);
   const handleShowHairEventTab = React.useCallback(() => {
     hasManualDonationViewSelectionRef.current = true;
     setActiveDonationTabKey('hair-event');
@@ -5794,12 +6815,26 @@ export function DonorDonationStatusScreen() {
   }, []);
   const handleShowLogisticTab = React.useCallback(() => {
     hasManualDonationViewSelectionRef.current = true;
+    if (
+      moduleData?.activeFlowType === 'independent'
+      && activeDonationOverviewItem?.submission?.submission_id
+    ) {
+      handleOpenLogisticDonationDetails(activeDonationOverviewItem);
+      setIsHairEligibilityPromptOpen(false);
+      return;
+    }
     setActiveDonationTabKey('logistic');
     setSelectedDriveForDonation(null);
     setSelectedDonationStatusItem(null);
     setDonationModuleScreen(DONATION_MODULE_SCREEN.MY_DONATIONS);
     setIsHairEligibilityPromptOpen(false);
-  }, []);
+  }, [activeDonationOverviewItem, handleOpenLogisticDonationDetails, moduleData?.activeFlowType]);
+  React.useEffect(() => {
+    if (donationModuleScreen !== DONATION_MODULE_SCREEN.MY_DONATIONS) return;
+    if (moduleData?.activeFlowType !== 'independent') return;
+    if (!activeDonationOverviewItem?.submission?.submission_id) return;
+    handleOpenLogisticDonationDetails(activeDonationOverviewItem);
+  }, [activeDonationOverviewItem, donationModuleScreen, handleOpenLogisticDonationDetails, moduleData?.activeFlowType]);
   React.useEffect(() => {
     if (hasManualDonationViewSelectionRef.current) return;
     const routeDriveId = Array.isArray(routeParams.driveId) ? routeParams.driveId[0] : routeParams.driveId;
@@ -5903,6 +6938,119 @@ export function DonorDonationStatusScreen() {
     user?.id,
   ]);
 
+  const handleSaveLatestScreeningDonation = React.useCallback(async () => {
+    if (isSavingManual) return;
+
+    const hasPermission = await guardDonationPermission();
+    if (!hasPermission) return;
+
+    setIsSavingManual(true);
+    setManualFeedback({ message: 'Checking your latest Hair Check...', variant: 'info' });
+
+    const screeningResult = await fetchAiScreeningsByUserId(profile?.user_id || user?.id, 30);
+    const latestSavedScreening = resolveLatestCompletedScreening(screeningResult.data || []);
+    if (screeningResult.error || !latestSavedScreening?.ai_screening_id) {
+      setIsSavingManual(false);
+      setManualFeedback({
+        message: screeningResult.error?.message
+          || 'No saved Hair Check was found. Complete a Hair Check before starting a donation.',
+        variant: 'error',
+      });
+      return;
+    }
+
+    const eligibilityResult = await fetchCurrentHairEligibility(latestSavedScreening.ai_screening_id);
+    if (eligibilityResult.error || !eligibilityResult.data) {
+      setIsSavingManual(false);
+      setManualFeedback({
+        message: eligibilityResult.error?.message
+          || 'Your latest Hair Check could not be evaluated against the current requirements.',
+        variant: 'error',
+      });
+      return;
+    }
+
+    const currentEligibility = eligibilityResult.data;
+    const evaluatedScreening = {
+      ...latestSavedScreening,
+      current_eligibility: currentEligibility,
+      eligibility_reasons: currentEligibility.reasons,
+    };
+    setLogisticsEligibilityLookup({
+      status: currentEligibility.isQualified ? 'eligible' : 'ineligible',
+      screening: evaluatedScreening,
+      error: '',
+      context: 'logistics',
+    });
+
+    if (!currentEligibility.isQualified) {
+      setIsSavingManual(false);
+      setManualFeedback({
+        message: currentEligibility.reason
+          || 'Your latest Hair Check does not meet the current wig requirements.',
+        variant: 'error',
+      });
+      return;
+    }
+
+    if (selectedLogisticMethod === 'dropoff') {
+      setIsSavingManual(false);
+      setIsManualModalOpen(false);
+      setManualEditTarget(null);
+      setManualFeedback({ message: '', variant: 'info' });
+      setPendingWalkInSubmission(null);
+      setWalkInScheduleReturnScreen(DONATION_MODULE_SCREEN.MY_DONATIONS);
+      setWalkInAvailability([]);
+      setWalkInAvailabilityError('');
+      setDonationModuleScreen(DONATION_MODULE_SCREEN.WALK_IN_SCHEDULE);
+      return;
+    }
+
+    const draftResult = await startIndependentDonationDraft({
+      userId: user?.id,
+      submission: null,
+      databaseUserId: profile?.user_id || null,
+      donationDriveId: null,
+      logisticsMethod: selectedLogisticMethod,
+    });
+    setIsSavingManual(false);
+
+    if (!draftResult.success) {
+      setManualFeedback({
+        message: getFriendlyDonationActionError(
+          draftResult.error,
+          'Could not start the donation with your latest Hair Check.'
+        ),
+        variant: 'error',
+      });
+      return;
+    }
+
+    setIsManualModalOpen(false);
+    setManualEditTarget(null);
+    setManualFeedback({ message: '', variant: 'info' });
+    setModuleFeedback({
+      message: 'Your latest Hair Check was linked to this donation.',
+      variant: 'success',
+    });
+    await loadModuleData();
+
+    if (selectedLogisticMethod === 'dropoff') {
+      setPendingWalkInSubmission(draftResult.submission || null);
+      setWalkInScheduleReturnScreen(DONATION_MODULE_SCREEN.MY_DONATIONS);
+      setDonationModuleScreen(DONATION_MODULE_SCREEN.WALK_IN_SCHEDULE);
+    } else {
+      setDonationModuleScreen(DONATION_MODULE_SCREEN.SUMMARY);
+    }
+  }, [
+    guardDonationPermission,
+    isSavingManual,
+    loadModuleData,
+    profile?.user_id,
+    selectedLogisticMethod,
+    user?.id,
+  ]);
+
   // â”€â”€ Manual path
   void handleProceedWithHairLog;
 
@@ -5965,15 +7113,18 @@ export function DonorDonationStatusScreen() {
     setIsHairEligibilityPromptOpen(true);
     setIsPreparingLogisticDonation(true);
 
-    const screeningResult = await fetchAiScreeningsByUserId(profile?.user_id || user?.id, 30);
+    const [screeningResult, eligibilityResult] = await Promise.all([
+      fetchAiScreeningsByUserId(profile?.user_id || user?.id, 30),
+      fetchCurrentHairEligibility(),
+    ]);
     if (logisticsEligibilityRequestRef.current !== requestId) return;
     setIsPreparingLogisticDonation(false);
 
-    if (screeningResult.error) {
+    if (screeningResult.error || eligibilityResult.error) {
       setLogisticsEligibilityLookup({
         status: 'error',
         screening: null,
-        error: 'We could not load your Hair Check records right now. Check your connection and try again.',
+        error: 'We could not evaluate your Hair Check right now. Check your connection and try again.',
         context: 'logistics',
       });
       return;
@@ -5987,20 +7138,37 @@ export function DonorDonationStatusScreen() {
       return;
     }
 
-    const latestCompletedScreening = resolveLatestCompletedScreening(screenings);
+    const latestCompletedScreening = screenings.find((screening) => (
+      Number(screening?.ai_screening_id) === Number(eligibilityResult.data?.ai_screening_id)
+    )) || resolveLatestCompletedScreening(screenings);
     if (!latestCompletedScreening) {
       setLogisticsEligibilityLookup({
         status: 'error',
         screening: null,
-        error: 'Your Hair Check exists but does not have a completed eligibility result yet. Please open Analysis and try again when it is complete.',
+        error: 'Your latest Hair Check could not be evaluated. Please open Analysis and try again.',
         context: 'logistics',
       });
       return;
     }
 
+    const qualification = eligibilityResult.data;
+    if (qualification?.configurationError || qualification?.eligible == null) {
+      setLogisticsEligibilityLookup({
+        status: 'error',
+        screening: latestCompletedScreening,
+        error: qualification?.reason || 'Donation requirements are currently unavailable. Please try again later or contact the organization.',
+        context: 'logistics',
+      });
+      return;
+    }
+    const evaluatedScreening = {
+      ...latestCompletedScreening,
+      current_eligibility: qualification,
+      eligibility_reasons: qualification.reasons,
+    };
     setLogisticsEligibilityLookup({
-      status: isEligibleScreeningRecord(latestCompletedScreening) ? 'eligible' : 'ineligible',
-      screening: latestCompletedScreening,
+      status: qualification.isQualified ? 'eligible' : 'ineligible',
+      screening: evaluatedScreening,
       error: '',
       context: 'logistics',
     });
@@ -6039,6 +7207,8 @@ export function DonorDonationStatusScreen() {
       setSelectedDriveForDonation(null);
       setSelectedRecipient({ type: 'organization', patient: null });
       setSelectedDonationStatusItem(null);
+      setSelectedLogisticMethod('');
+      setPendingWalkInSubmission(null);
       setIsDonationMethodModalOpen(true);
       return;
     }
@@ -6053,24 +7223,57 @@ export function DonorDonationStatusScreen() {
   ]);
 
   const handleChooseLogisticMethod = React.useCallback((method) => {
+    if (!['dropoff', 'shipping'].includes(method)) return;
     setSelectedLogisticMethod(method);
     setIsDonationMethodModalOpen(false);
     setSelectedDriveForDonation(null);
     setSelectedRecipient({ type: 'organization', patient: null });
     setSelectedDonationStatusItem(null);
-    handleOpenManualModal({ eligibilityAlreadyConfirmed: true });
-  }, [handleOpenManualModal]);
+    setPendingWalkInSubmission(null);
+    setWalkInScheduleReturnScreen(DONATION_MODULE_SCREEN.MY_DONATIONS);
+
+    if (method === 'dropoff') {
+      setWalkInAvailability([]);
+      setWalkInAvailabilityError('');
+      setDonationModuleScreen(DONATION_MODULE_SCREEN.WALK_IN_SCHEDULE);
+      return;
+    }
+
+    setDonationModuleScreen(DONATION_MODULE_SCREEN.COURIER_CONFIRMATION);
+  }, []);
+
+  const handleConfirmCourierDonation = React.useCallback(async () => {
+    if (isConfirmingCourier) return;
+    setIsConfirmingCourier(true);
+    const result = await confirmCourierLogisticsDonation({
+      userId: user?.id || null,
+      notes: 'Courier donation confirmed from the mobile Donations module.',
+    });
+    setIsConfirmingCourier(false);
+
+    setModuleFeedback({
+      message: result.success
+        ? 'Courier donation confirmed. Your Donivra waybill is ready.'
+        : getFriendlyDonationActionError(result.error, 'Unable to confirm the courier donation.'),
+      variant: result.success ? 'success' : 'error',
+    });
+
+    if (!result.success) return;
+    await loadModuleData({ silent: true });
+    setSelectedLogisticMethod('');
+    setConfirmedLogisticsDonation(result);
+    setDonationModuleScreen(DONATION_MODULE_SCREEN.LOGISTICS_CONFIRMATION);
+  }, [isConfirmingCourier, loadModuleData, user?.id]);
 
   const handleScheduleWalkInDropoff = React.useCallback(async ({
     submission = null,
-    scheduleDate = '',
-    timeWindow = '',
+    expectedArrivalAt = '',
   } = {}) => {
-    const activeSubmission = submission || pendingWalkInSubmission || moduleData?.latestSubmission || null;
-    if (!activeSubmission?.submission_id || Number(activeSubmission?.donation_drive_id)) {
+    const activeSubmission = submission || pendingWalkInSubmission || null;
+    if (Number(activeSubmission?.donation_drive_id)) {
       setModuleFeedback({
-        message: 'Add a logistic donation first so this schedule can be linked to your QR.',
-        variant: 'info',
+        message: 'Expected walk-in arrival is only available for independent logistics donations.',
+        variant: 'error',
       });
       return;
     }
@@ -6078,10 +7281,8 @@ export function DonorDonationStatusScreen() {
     setIsSchedulingDropoff(true);
     const result = await scheduleWalkInDropoff({
       userId: user?.id || null,
-      databaseUserId: profile?.user_id || null,
       submission: activeSubmission,
-      scheduleDate,
-      timeWindow,
+      expectedArrivalAt,
       contactName: accountDonorName,
       contactEmail: user?.email || profile?.email || '',
       contactNumber: profile?.contact_number || profile?.phone || '',
@@ -6090,8 +7291,8 @@ export function DonorDonationStatusScreen() {
 
     setModuleFeedback({
       message: result.success
-        ? 'Walk-in drop-off schedule saved. Bring your QR when you visit the site.'
-        : (result.error || 'Unable to save the walk-in schedule.'),
+        ? 'Expected walk-in arrival saved. Bring your waybill when you visit the site.'
+        : (result.error || 'Unable to save the expected walk-in arrival.'),
       variant: result.success ? 'success' : 'error',
     });
 
@@ -6099,23 +7300,25 @@ export function DonorDonationStatusScreen() {
       await loadModuleData({ silent: true });
       setPendingWalkInSubmission(null);
       setSelectedLogisticMethod('');
-      setDonationModuleScreen(DONATION_MODULE_SCREEN.MY_DONATIONS);
+      setConfirmedLogisticsDonation(result);
+      setDonationModuleScreen(DONATION_MODULE_SCREEN.LOGISTICS_CONFIRMATION);
+    } else if (/closed|booking window|already passed|receiving hours|configured break|future/i.test(String(result.error || ''))) {
+      setWalkInAvailability([]);
+      setWalkInAvailabilityRefreshKey((current) => current + 1);
     }
   }, [
     accountDonorName,
     loadModuleData,
-    moduleData?.latestSubmission,
     pendingWalkInSubmission,
     profile?.contact_number,
     profile?.email,
     profile?.phone,
-    profile?.user_id,
     user?.email,
     user?.id,
   ]);
 
   const handleBackFromWalkInSchedule = React.useCallback(async () => {
-    const draftSubmission = pendingWalkInSubmission || moduleData?.latestSubmission || null;
+    const draftSubmission = pendingWalkInSubmission || null;
     if (draftSubmission?.submission_id && !selectedWalkInAppointment?.appointment_id) {
       const discardResult = await discardUnscheduledWalkInDonationDraft({
         submission: draftSubmission,
@@ -6134,7 +7337,6 @@ export function DonorDonationStatusScreen() {
     setDonationModuleScreen(walkInScheduleReturnScreen);
   }, [
     loadModuleData,
-    moduleData?.latestSubmission,
     pendingWalkInSubmission,
     selectedWalkInAppointment?.appointment_id,
     user?.id,
@@ -6156,6 +7358,7 @@ export function DonorDonationStatusScreen() {
       photo: '',
     }));
   }, []);
+  void updateManualField;
 
   const handlePickManualPhoto = React.useCallback(async (mode = 'library') => {
     const picker = mode === 'camera' ? ImagePicker.launchCameraAsync : ImagePicker.launchImageLibraryAsync;
@@ -6165,6 +7368,7 @@ export function DonorDonationStatusScreen() {
     setManualPhoto({ uri: asset.uri, base64: asset.base64 || '', mimeType: asset.mimeType || 'image/jpeg', fileName: asset.fileName || '' });
     setManualFormErrors((prev) => ({ ...prev, photo: '' }));
   }, []);
+  void handlePickManualPhoto;
 
   const handleSaveManualDetails = React.useCallback(async () => {
     const nextErrors = {};
@@ -6366,7 +7570,7 @@ export function DonorDonationStatusScreen() {
       setModuleFeedback({
         message: draftResult.success
           ? selectedLogisticMethod === 'dropoff'
-            ? 'Hair details saved. Choose your drop-off appointment.'
+            ? 'Hair details saved. Choose your expected drop-off date and arrival time.'
             : 'Hair details saved. Continue to submit donation details for staff waybill issuance.'
           : getFriendlyDonationActionError(draftResult.error, 'Details saved but donation flow could not be started.'),
         variant: draftResult.success ? 'success' : 'error',
@@ -6403,6 +7607,7 @@ export function DonorDonationStatusScreen() {
     selectedLogisticMethod,
     user?.id,
   ]);
+  void handleSaveManualDetails;
 
   const handleUpdateBundleField = React.useCallback((field, value) => {
     setBundleForm((prev) => {
@@ -7239,24 +8444,27 @@ export function DonorDonationStatusScreen() {
           submission: moduleData.latestSubmission,
           detail: moduleData.latestDetail || null,
         }] : []);
-    const openCancelItems = cancelItems.filter((item) => (
-      canCancelDonationSubmission({
+    const evaluatedCancelItems = cancelItems.map((item) => ({
+      item,
+      availability: getDonationCancellationAvailability({
         submission: item?.submission || null,
         registration: selectedDonationStatusItem?.drive?.registration || selectedDonationStatusItem?.registration || null,
         certificate,
-        timelineStages: moduleData?.timelineStages || [],
-        timelineEvents: moduleData?.timelineEvents || [],
-        trackingEntries: moduleData?.trackingEntries || [],
-      })
-    ));
-    if (!openCancelItems.length) {
+        timelineStages: selectedDonationStatusItem?.timelineStages || moduleData?.timelineStages || [],
+        timelineEvents: selectedDonationStatusItem?.timelineEvents || moduleData?.timelineEvents || [],
+        trackingEntries: selectedDonationStatusItem?.trackingEntries || moduleData?.trackingEntries || [],
+      }),
+    }));
+    const blockedCancellation = evaluatedCancelItems.find(({ availability }) => !availability.allowed);
+    if (blockedCancellation || !evaluatedCancelItems.length) {
       setModuleFeedback({
-        message: 'This donation can no longer be cancelled because Hair for Hope has already approved it.',
+        message: blockedCancellation?.availability?.reason || 'This donation can no longer be cancelled.',
         variant: 'info',
       });
       setIsCancelModalOpen(false);
       return;
     }
+    const openCancelItems = evaluatedCancelItems.map(({ item }) => item);
 
     setIsCancellingDonation(true);
     const results = [];
@@ -7440,18 +8648,74 @@ export function DonorDonationStatusScreen() {
       );
     }
 
+    if (effectiveDonationModuleScreen === DONATION_MODULE_SCREEN.LOGISTICS_CONFIRMATION) {
+      return (
+        <LogisticsDonationConfirmationScreen
+          roles={roles}
+          confirmation={confirmedLogisticsDonation}
+          onViewDonation={() => {
+            const confirmedSubmission = confirmedLogisticsDonation?.submission || null;
+            setSelectedDonationStatusItem({
+              key: confirmedSubmission?.submission_id
+                ? `submission-${confirmedSubmission.submission_id}`
+                : 'confirmed-logistics-donation',
+              submission: confirmedSubmission,
+              appointment: confirmedLogisticsDonation?.appointment || null,
+              originScreen: DONATION_MODULE_SCREEN.EVENTS,
+            });
+            setConfirmedLogisticsDonation(null);
+            setDonationModuleScreen(DONATION_MODULE_SCREEN.DONATION_STATUS);
+          }}
+          onDone={() => {
+            setConfirmedLogisticsDonation(null);
+            handleShowHairEventTab();
+          }}
+        />
+      );
+    }
+
+    if (effectiveDonationModuleScreen === DONATION_MODULE_SCREEN.COURIER_CONFIRMATION) {
+      return (
+        <CourierDonationConfirmationScreen
+          roles={roles}
+          logisticsSettings={moduleData?.logisticsSettings || null}
+          isConfirming={isConfirmingCourier}
+          onBack={() => {
+            setSelectedLogisticMethod('');
+            setDonationModuleScreen(DONATION_MODULE_SCREEN.MY_DONATIONS);
+            setIsDonationMethodModalOpen(true);
+          }}
+          onConfirm={handleConfirmCourierDonation}
+        />
+      );
+    }
+
     if (effectiveDonationModuleScreen === DONATION_MODULE_SCREEN.WALK_IN_SCHEDULE) {
       return (
         <WalkInScheduleScreen
           roles={roles}
-          submission={pendingWalkInSubmission || moduleData?.latestSubmission || null}
-          appointment={selectedWalkInAppointment}
+          submission={pendingWalkInSubmission || (
+            walkInScheduleReturnScreen === DONATION_MODULE_SCREEN.DONATION_STATUS
+              ? selectedDonationTimelineItem?.submission || null
+              : null
+          )}
+          appointment={walkInScheduleReturnScreen === DONATION_MODULE_SCREEN.DONATION_STATUS
+            ? selectedWalkInAppointment
+            : null}
           availability={walkInAvailability}
           availabilityError={walkInAvailabilityError}
           isLoadingAvailability={isLoadingWalkInAvailability}
           readOnly={walkInScheduleReturnScreen === DONATION_MODULE_SCREEN.DONATION_STATUS}
           isScheduling={isSchedulingDropoff}
           onBack={handleBackFromWalkInSchedule}
+          onRefreshAvailability={() => setWalkInAvailabilityRefreshKey((current) => current + 1)}
+          onChooseCourier={() => handleChooseLogisticMethod('shipping')}
+          onStartNewWalkIn={() => {
+            setPendingWalkInSubmission(null);
+            setWalkInScheduleReturnScreen(DONATION_MODULE_SCREEN.MY_DONATIONS);
+            setDonationModuleScreen(DONATION_MODULE_SCREEN.MY_DONATIONS);
+            void handleAddLogisticDonation();
+          }}
           onSchedule={handleScheduleWalkInDropoff}
         />
       );
@@ -7481,19 +8745,12 @@ export function DonorDonationStatusScreen() {
         <DonationTimelineStatusScreen
           roles={roles}
           item={selectedDonationTimelineItem}
-          previewItems={selectedDonationTimelineItem?.previewItems?.length ? selectedDonationTimelineItem.previewItems : donationPreviewItems}
           timelineStages={selectedSubmissionFlowRecord?.timelineStages || moduleData?.timelineStages || []}
           timelineEvents={selectedSubmissionFlowRecord?.timelineEvents || moduleData?.timelineEvents || []}
           parcelImages={selectedSubmissionFlowRecord?.parcelImages || moduleData?.parcelImages || []}
           certificate={certificate}
           accountDonorName={accountDonorName}
-          onBack={() => setDonationModuleScreen(
-            selectedDonationStatusItem?.originScreen || DONATION_MODULE_SCREEN.MY_DONATIONS
-          )}
-          onViewDonationQr={() => {
-            if (selectedDonationTimelineItem?.submission?.donation_drive_id) return;
-            setDonationModuleScreen(DONATION_MODULE_SCREEN.QR_CODES);
-          }}
+          onBack={handleShowHairEventTab}
           onViewAppointment={() => {
             setPendingWalkInSubmission(selectedDonationTimelineItem?.submission || null);
             setWalkInScheduleReturnScreen(DONATION_MODULE_SCREEN.DONATION_STATUS);
@@ -7506,7 +8763,6 @@ export function DonorDonationStatusScreen() {
               params: { certificateId: String(certificate.certificate_id) },
             });
           }}
-          onCancelDonation={() => setIsCancelModalOpen(true)}
         />
       );
     }
@@ -7538,6 +8794,7 @@ export function DonorDonationStatusScreen() {
     selectedFlowDrive,
     accountDonorName,
     certificate,
+    confirmedLogisticsDonation,
     handleEnsureEventRsvp,
     handleAddLogisticDonation,
     handleOpenEventDonationDetails,
@@ -7549,6 +8806,8 @@ export function DonorDonationStatusScreen() {
     handlePrintQrFromScreen,
     handleSaveQrFromScreen,
     handleBackFromWalkInSchedule,
+    handleChooseLogisticMethod,
+    handleConfirmCourierDonation,
     handleScheduleWalkInDropoff,
     handleSubmitDonationAndShowQr,
     handleSubmitSelectedEventDonation,
@@ -7562,9 +8821,9 @@ export function DonorDonationStatusScreen() {
     isPreparingLogisticDonation,
     isLoadingWalkInAvailability,
     isSchedulingDropoff,
+    isConfirmingCourier,
     isProfileComplete,
     latestScreening,
-    moduleData?.latestSubmission,
     moduleData?.activeFlowType,
     moduleData?.timelineEvents,
     moduleData?.timelineStages,
@@ -7604,7 +8863,31 @@ export function DonorDonationStatusScreen() {
         navVariant="donor"
         onNavPress={handleNavPress}
         screenVariant="default"
-        floatingOverlay={null}
+        pinnedContent={(
+          <ManualEntryPageHeader
+            roles={roles}
+            isEditing={false}
+            onClose={() => {
+              setIsManualModalOpen(false);
+              setManualEditTarget(null);
+              setSelectedLogisticMethod('');
+            }}
+          />
+        )}
+        floatingOverlay={(
+          <ManualEntryStickyActions
+            roles={roles}
+            isSaving={isSavingManual}
+            isEditing={false}
+            saveTitle="Start donation"
+            onClose={() => {
+              setIsManualModalOpen(false);
+              setManualEditTarget(null);
+              setSelectedLogisticMethod('');
+            }}
+            onSave={handleSaveLatestScreeningDonation}
+          />
+        )}
         header={(
           <DonorTabHeader
             unreadCount={unreadCount}
@@ -7616,27 +8899,13 @@ export function DonorDonationStatusScreen() {
       >
         <ManualEntryModal
           visible
-          form={manualForm}
-          errors={manualFormErrors}
-          photo={manualPhoto}
           feedback={manualFeedback}
-          isSaving={isSavingManual}
-          isEditing={Boolean(manualEditTarget)}
-          minimumLengthPlaceholder={currentRequirementMinimumInches}
-          minimumLengthHelperText={currentRequirementHelperText}
-          aiPrefilled={Boolean(
-            moduleData?.latestScreening
-            && manualForm.lengthValue
-            && manualForm.lengthValue !== MANUAL_FORM_DEFAULTS.lengthValue
-          )}
-          onClose={() => {
-            setIsManualModalOpen(false);
-            setManualEditTarget(null);
-            setSelectedLogisticMethod('');
-          }}
-          onChangeField={updateManualField}
-          onPickPhoto={handlePickManualPhoto}
-          onSave={handleSaveManualDetails}
+          profile={profile}
+          latestScreening={logisticsEligibilityLookup.screening || moduleData?.latestScreening}
+          latestEligibility={
+            logisticsEligibilityLookup.screening?.current_eligibility
+            || moduleData?.latestAiEligibility
+          }
         />
       </DashboardLayout>
     );
@@ -7652,8 +8921,24 @@ export function DonorDonationStatusScreen() {
       screenVariant="default"
       refreshing={isRefreshing}
       onRefresh={handleRefreshModuleData}
-      floatingOverlay={null}
-      pinnedContent={effectiveDonationModuleScreen === DONATION_MODULE_SCREEN.EVENTS ? (
+      floatingOverlay={effectiveDonationModuleScreen === DONATION_MODULE_SCREEN.DONATION_STATUS
+        && selectedDonationTimelineItem?.canCancel ? (
+          <DonationStickyCancelAction
+            roles={roles}
+            onCancel={() => setIsCancelModalOpen(true)}
+          />
+        ) : null}
+      leadingContent={effectiveDonationModuleScreen === DONATION_MODULE_SCREEN.EVENTS && activeDonationOverviewItem ? (
+        <View style={styles.activeProgressLeadingHost}>
+          <ActiveDonationProgressCard
+            roles={roles}
+            donation={activeDonationOverviewItem}
+            timelineStages={activeDonationOverviewItem?.timelineStages || moduleData?.timelineStages || []}
+            onViewTimeline={handleViewActiveDonationTimeline}
+          />
+        </View>
+      ) : null}
+      stickyContent={effectiveDonationModuleScreen === DONATION_MODULE_SCREEN.EVENTS ? (
         <View style={styles.eventSearchPinnedHost}>
           <DonationEventSearchControls
             roles={roles}
@@ -7734,27 +9019,13 @@ export function DonorDonationStatusScreen() {
 
       <ManualEntryModal
         visible={isManualModalOpen}
-        form={manualForm}
-        errors={manualFormErrors}
-        photo={manualPhoto}
         feedback={manualFeedback}
-        isSaving={isSavingManual}
-        isEditing={Boolean(manualEditTarget)}
-        minimumLengthPlaceholder={currentRequirementMinimumInches}
-        minimumLengthHelperText={currentRequirementHelperText}
-        aiPrefilled={Boolean(
-          moduleData?.latestScreening
-          && manualForm.lengthValue
-          && manualForm.lengthValue !== MANUAL_FORM_DEFAULTS.lengthValue
-        )}
-        onClose={() => {
-          setIsManualModalOpen(false);
-          setManualEditTarget(null);
-          setSelectedLogisticMethod('');
-        }}
-        onChangeField={updateManualField}
-        onPickPhoto={handlePickManualPhoto}
-        onSave={handleSaveManualDetails}
+        profile={profile}
+        latestScreening={logisticsEligibilityLookup.screening || moduleData?.latestScreening}
+        latestEligibility={
+          logisticsEligibilityLookup.screening?.current_eligibility
+          || moduleData?.latestAiEligibility
+        }
       />
 
       <PrivateEventCodeModal
@@ -7775,88 +9046,100 @@ export function DonorDonationStatusScreen() {
       <ModalShell
         visible={isDonationMethodModalOpen}
         title="How will you send your donation?"
-        subtitle="Choose the option that works best for you."
+        subtitle="Select the most convenient way to get your prepared hair donation to the organization."
         onClose={() => setIsDonationMethodModalOpen(false)}
         cardBackground={resolvedTheme?.backgroundColor || roles.pageBackground}
-        textColor={resolvedTheme?.primaryTextColor || roles.headingText}
+        textColor={roles.headingText}
         borderColor={roles.defaultCardBorder}
         compact
+        centered
+        eyebrow="DELIVERY METHOD"
+        headerIcon="gift-outline"
+        accentColor={roles.primaryActionBackground}
       >
         <View style={styles.donationMethodList}>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Choose walk-in drop-off"
+            accessibilityHint="Schedule a visit and personally bring your donation"
             onPress={() => handleChooseLogisticMethod('dropoff')}
             style={({ pressed }) => [
               styles.donationMethodCard,
               {
-                backgroundColor: resolvedTheme?.backgroundColor || roles.pageBackground,
                 borderColor: roles.defaultCardBorder,
                 opacity: pressed ? 0.78 : 1,
+                transform: [{ scale: pressed ? 0.985 : 1 }],
               },
             ]}
           >
-            <View style={[styles.donationMethodIcon, { backgroundColor: roles.iconPrimarySurface }]}>
-              <MaterialCommunityIcons name="walk" size={21} color={resolvedTheme?.primaryTextColor || roles.headingText} />
-            </View>
-            <View style={styles.donationMethodCopy}>
-              <Text style={[styles.donationMethodTitle, { color: resolvedTheme?.primaryTextColor || roles.headingText }]}>Walk-in drop-off</Text>
-              <Text style={[styles.donationMethodBody, { color: resolvedTheme?.primaryTextColor || roles.headingText }]}>
-                Schedule a visit and bring your donation.
-              </Text>
-            </View>
-            <MaterialCommunityIcons name="chevron-right" size={20} color={resolvedTheme?.primaryTextColor || roles.headingText} />
+            <LinearGradient
+              colors={[
+                withOpacity(roles.primaryActionBackground, 0.10),
+                withOpacity(roles.primaryActionBackground, 0.025),
+              ]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.donationMethodCardGradient}
+            >
+              <LinearGradient
+                colors={[roles.primaryActionBackground, theme.colors.palette.wine900]}
+                style={styles.donationMethodIcon}
+              >
+                <MaterialCommunityIcons name="walk" size={23} color={theme.colors.textOnBrand} />
+              </LinearGradient>
+              <View style={styles.donationMethodCopy}>
+                <Text style={[styles.donationMethodTitle, { color: roles.headingText }]}>Walk-in Drop-off</Text>
+                <Text style={[styles.donationMethodBody, { color: roles.bodyText }]}>Schedule a visit and personally bring your donation.</Text>
+              </View>
+              <View style={[styles.donationMethodArrow, { backgroundColor: roles.iconPrimarySurface }]}>
+                <MaterialCommunityIcons name="chevron-right" size={21} color={roles.primaryActionBackground} />
+              </View>
+            </LinearGradient>
           </Pressable>
 
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Choose shipping"
+            accessibilityHint="Send your packed donation using your preferred courier"
             onPress={() => handleChooseLogisticMethod('shipping')}
             style={({ pressed }) => [
               styles.donationMethodCard,
               {
-                backgroundColor: resolvedTheme?.backgroundColor || roles.pageBackground,
                 borderColor: roles.defaultCardBorder,
                 opacity: pressed ? 0.78 : 1,
+                transform: [{ scale: pressed ? 0.985 : 1 }],
               },
             ]}
           >
-            <View style={[styles.donationMethodIcon, { backgroundColor: roles.iconPrimarySurface }]}>
-              <MaterialCommunityIcons name="truck-delivery-outline" size={21} color={resolvedTheme?.primaryTextColor || roles.headingText} />
-            </View>
-            <View style={styles.donationMethodCopy}>
-              <Text style={[styles.donationMethodTitle, { color: resolvedTheme?.primaryTextColor || roles.headingText }]}>Ship to organization</Text>
-              <Text style={[styles.donationMethodBody, { color: resolvedTheme?.primaryTextColor || roles.headingText }]}>
-                Pack your donation and send it by courier.
-              </Text>
-            </View>
-            <MaterialCommunityIcons name="chevron-right" size={20} color={resolvedTheme?.primaryTextColor || roles.headingText} />
+            <LinearGradient
+              colors={[
+                withOpacity(roles.primaryActionBackground, 0.10),
+                withOpacity(roles.primaryActionBackground, 0.025),
+              ]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.donationMethodCardGradient}
+            >
+              <LinearGradient
+                colors={[roles.primaryActionBackground, theme.colors.palette.wine900]}
+                style={styles.donationMethodIcon}
+              >
+                <MaterialCommunityIcons name="truck-delivery-outline" size={23} color={theme.colors.textOnBrand} />
+              </LinearGradient>
+              <View style={styles.donationMethodCopy}>
+                <Text style={[styles.donationMethodTitle, { color: roles.headingText }]}>Ship by Courier</Text>
+                <Text style={[styles.donationMethodBody, { color: roles.bodyText }]}>Pack your donation and send it using your preferred courier.</Text>
+              </View>
+              <View style={[styles.donationMethodArrow, { backgroundColor: roles.iconPrimarySurface }]}>
+                <MaterialCommunityIcons name="chevron-right" size={21} color={roles.primaryActionBackground} />
+              </View>
+            </LinearGradient>
           </Pressable>
 
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Request pickup"
-            onPress={() => handleChooseLogisticMethod('pickup')}
-            style={({ pressed }) => [
-              styles.donationMethodCard,
-              {
-                backgroundColor: resolvedTheme?.backgroundColor || roles.pageBackground,
-                borderColor: roles.defaultCardBorder,
-                opacity: pressed ? 0.78 : 1,
-              },
-            ]}
-          >
-            <View style={[styles.donationMethodIcon, { backgroundColor: roles.iconPrimarySurface }]}>
-              <MaterialCommunityIcons name="truck-fast-outline" size={21} color={resolvedTheme?.primaryTextColor || roles.headingText} />
-            </View>
-            <View style={styles.donationMethodCopy}>
-              <Text style={[styles.donationMethodTitle, { color: resolvedTheme?.primaryTextColor || roles.headingText }]}>Request pickup</Text>
-              <Text style={[styles.donationMethodBody, { color: resolvedTheme?.primaryTextColor || roles.headingText }]}>
-                Start a pickup request. The pickup schedule and approval stay in logistics.
-              </Text>
-            </View>
-            <MaterialCommunityIcons name="chevron-right" size={20} color={resolvedTheme?.primaryTextColor || roles.headingText} />
-          </Pressable>
+          <View style={[styles.donationMethodNote, { backgroundColor: roles.iconPrimarySurface }]}>
+            <MaterialCommunityIcons name="information-outline" size={17} color={roles.primaryActionBackground} />
+            <Text style={[styles.donationMethodNoteText, { color: roles.bodyText }]}>You can review the next steps before confirming your selection.</Text>
+          </View>
         </View>
       </ModalShell>
 
@@ -7924,39 +9207,79 @@ export function DonorDonationStatusScreen() {
 
       <ModalShell
         visible={isCancelModalOpen}
-        title="Cancel donation submission"
-        subtitle={
-          activeDonationQrItems.length > 1
-            ? 'This action will mark all active hair donation submissions as cancelled.'
-            : 'This action will mark your active hair donation submission as cancelled.'
-        }
+        centered
+        compact
+        eyebrow="DONATION ACTION"
+        headerIcon="alert-circle-outline"
+        showCloseButton={false}
+        title="Cancel donation?"
+        subtitle={activeDonationQrItems.length > 1
+          ? 'This will close all active hair donations.'
+          : 'This will close your active hair donation.'}
         onClose={() => {
           if (!isCancellingDonation) setIsCancelModalOpen(false);
         }}
         cardBackground={roles.defaultCardBackground}
+        borderColor={withOpacity(roles.primaryActionBackground, 0.2)}
+        textColor={roles.headingText}
+        accentColor={roles.primaryActionBackground}
         footer={(
-          <View style={styles.rowActions}>
-            <AppButton
-              title="Keep donation"
-              variant="outline"
-              fullWidth={false}
-              onPress={() => setIsCancelModalOpen(false)}
+          <View style={styles.cancelModalActions}>
+            <View style={styles.modalFooterActionHalf}>
+              <AppButton
+                title="Keep donation"
+                variant="outline"
+                onPress={() => setIsCancelModalOpen(false)}
+                disabled={isCancellingDonation}
+                leading={<MaterialCommunityIcons name="heart-outline" size={18} color={roles.primaryActionBackground} />}
+                textColorOverride={roles.primaryActionBackground}
+                style={styles.cancelModalActionButton}
+              />
+            </View>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Confirm donation cancellation"
               disabled={isCancellingDonation}
-            />
-            <AppButton
-              title={isCancellingDonation ? 'Cancellingâ€¦' : 'Yes, cancel'}
-              variant="danger"
-              fullWidth={false}
               onPress={handleConfirmCancelDonation}
-              loading={isCancellingDonation}
-              disabled={isCancellingDonation}
-            />
+              style={({ pressed }) => [
+                styles.cancelModalConfirmButton,
+                pressed && !isCancellingDonation ? styles.cancelModalConfirmButtonPressed : null,
+                isCancellingDonation ? styles.cancelModalConfirmButtonDisabled : null,
+              ]}
+            >
+              <LinearGradient
+                pointerEvents="none"
+                colors={[theme.colors.palette.red600, theme.colors.palette.wine900]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.cancelModalConfirmGradient}
+              >
+                {isCancellingDonation ? (
+                  <ActivityIndicator size="small" color={theme.colors.textOnBrand} />
+                ) : (
+                  <MaterialCommunityIcons name="close-circle-outline" size={18} color={theme.colors.textOnBrand} />
+                )}
+                <Text style={styles.cancelModalConfirmText}>
+                  {isCancellingDonation ? 'Cancelling...' : 'Yes, cancel'}
+                </Text>
+              </LinearGradient>
+            </Pressable>
           </View>
         )}
       >
-        <Text style={styles.cancelModalText}>
-          You can start a new donation after cancellation. This will close the current hair submission records, logistics, and tracking flow.
-        </Text>
+        <LinearGradient
+          colors={[theme.colors.palette.blush100, roles.defaultCardBackground]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={[styles.cancelModalNotice, { borderColor: roles.defaultCardBorder }]}
+        >
+          <View style={[styles.cancelModalNoticeIcon, { backgroundColor: roles.iconPrimarySurface }]}>
+            <MaterialCommunityIcons name="information-outline" size={20} color={roles.iconPrimaryColor} />
+          </View>
+          <Text style={[styles.cancelModalText, { color: roles.bodyText }]}>
+            This cannot be undone. You can start a new donation later.
+          </Text>
+        </LinearGradient>
       </ModalShell>
     </DashboardLayout>
   );
@@ -7970,6 +9293,9 @@ const styles = StyleSheet.create({
   },
   flowScreen: {
     gap: theme.spacing.lg,
+  },
+  timelineStatusScreen: {
+    paddingBottom: 92,
   },
   donationStepHeader: {
     flexDirection: 'row',
@@ -8328,8 +9654,12 @@ const styles = StyleSheet.create({
   },
   donationEventBrowserContent: {
     gap: theme.spacing.lg,
-    paddingTop: 60,
+    paddingTop: theme.spacing.xs,
     paddingBottom: theme.spacing.xl,
+  },
+  activeProgressLeadingHost: {
+    paddingTop: theme.spacing.sm,
+    paddingBottom: theme.spacing.xs,
   },
   eventSearchPinnedHost: {
     zIndex: 20,
@@ -8393,6 +9723,214 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
     justifyContent: 'space-between',
     gap: theme.spacing.md,
+  },
+  activeProgressCard: {
+    position: 'relative',
+    minHeight: 292,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+    padding: theme.spacing.lg,
+    gap: theme.spacing.sm,
+    overflow: 'hidden',
+    ...theme.shadows.card,
+  },
+  activeProgressGlowLarge: {
+    position: 'absolute',
+    width: 180,
+    height: 180,
+    borderRadius: 90,
+    top: -94,
+    right: -54,
+    backgroundColor: 'rgba(255,255,255,0.11)',
+  },
+  activeProgressGlowSmall: {
+    position: 'absolute',
+    width: 128,
+    height: 128,
+    borderRadius: 64,
+    left: -68,
+    bottom: -76,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+  },
+  activeProgressTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+    marginBottom: 2,
+  },
+  activeProgressIcon: {
+    width: 46,
+    height: 46,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.13)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.18)',
+  },
+  activeProgressLivePill: {
+    minHeight: 28,
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.16)',
+  },
+  activeProgressLiveDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: '#F8D7DD',
+  },
+  activeProgressLiveText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 8,
+    fontWeight: theme.typography.weights.bold,
+    letterSpacing: 0.8,
+  },
+  activeProgressEyebrow: {
+    marginTop: 2,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 9,
+    fontWeight: theme.typography.weights.bold,
+    letterSpacing: 1.1,
+    opacity: 0.72,
+  },
+  activeProgressEventRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+    paddingVertical: theme.spacing.sm,
+  },
+  activeProgressEventCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  activeProgressEventLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 8,
+    fontWeight: theme.typography.weights.bold,
+    letterSpacing: 0.8,
+    opacity: 0.7,
+  },
+  activeProgressEventName: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    lineHeight: 18,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  activeProgressSummaryRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    gap: theme.spacing.md,
+  },
+  activeProgressSummaryCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  activeProgressStageLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 8,
+    fontWeight: theme.typography.weights.bold,
+    letterSpacing: 0.7,
+    opacity: 0.66,
+  },
+  activeProgressStage: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  activeProgressStageStatus: {
+    alignSelf: 'flex-start',
+    minHeight: 22,
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: theme.spacing.sm,
+    marginTop: 3,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: 'rgba(255,255,255,0.14)',
+  },
+  activeProgressStageStatusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#FFFFFF',
+  },
+  activeProgressStageStatusText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 9,
+    fontWeight: theme.typography.weights.bold,
+    letterSpacing: 0.35,
+  },
+  activeProgressPercent: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.bold,
+  },
+  activeProgressTrack: {
+    height: 7,
+    borderRadius: theme.radius.pill,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(255,255,255,0.18)',
+  },
+  activeProgressFill: {
+    height: '100%',
+    borderRadius: theme.radius.pill,
+    backgroundColor: '#FFFFFF',
+  },
+  activeProgressAction: {
+    minHeight: 56,
+    marginTop: theme.spacing.sm,
+    borderRadius: theme.radius.pill,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.72)',
+    overflow: 'hidden',
+    backgroundColor: '#FFFFFF',
+    ...theme.shadows.soft,
+  },
+  activeProgressActionSurface: {
+    minHeight: 56,
+    width: '100%',
+    paddingHorizontal: theme.spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+    borderRadius: theme.radius.pill,
+  },
+  activeProgressActionIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.72)',
+    borderWidth: 1,
+    borderColor: 'rgba(91,11,28,0.1)',
+  },
+  activeProgressActionText: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.bodySm,
+    fontWeight: theme.typography.weights.bold,
+    color: theme.colors.palette.wine900,
+  },
+  activeProgressActionArrow: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.palette.wine900,
   },
   sectionHeading: {
     fontFamily: theme.typography.fontFamilyDisplay,
@@ -8721,6 +10259,47 @@ const styles = StyleSheet.create({
   logisticHistoryScreen: {
     position: 'relative',
     paddingBottom: 108,
+  },
+  activeLogisticsCard: {
+    borderWidth: 1,
+    borderRadius: theme.radius.xl,
+    overflow: 'hidden',
+    ...theme.shadows.card,
+  },
+  activeLogisticsCardPressed: {
+    opacity: 0.84,
+    transform: [{ scale: 0.99 }],
+  },
+  activeLogisticsCardSurface: {
+    padding: theme.spacing.lg,
+    gap: theme.spacing.md,
+  },
+  activeLogisticsIcon: {
+    width: 46,
+    height: 46,
+    borderRadius: theme.radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  activeLogisticsOpenRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+  },
+  activeLogisticsOpenButton: {
+    minHeight: 34,
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: theme.spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  activeLogisticsOpenText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.bold,
   },
   logisticScreenHeader: {
     flexDirection: 'row',
@@ -9133,12 +10712,198 @@ const styles = StyleSheet.create({
     gap: theme.spacing.md,
     ...theme.shadows.soft,
   },
+  walkInSchedulePage: {
+    paddingTop: theme.spacing.sm,
+    paddingBottom: 120,
+  },
+  walkInScheduleHero: {
+    marginHorizontal: theme.spacing.md,
+    borderRadius: theme.radius.xl,
+    padding: theme.spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.md,
+    overflow: 'hidden',
+    ...theme.shadows.card,
+  },
+  walkInScheduleBackButton: {
+    width: 42,
+    height: 42,
+    borderRadius: theme.radius.md,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.24)',
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  walkInScheduleHeroCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  walkInScheduleEyebrow: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.bold,
+    letterSpacing: 1,
+    color: theme.colors.textHeroMuted,
+  },
+  walkInScheduleTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    fontWeight: theme.typography.weights.bold,
+    color: theme.colors.textOnBrand,
+  },
+  walkInScheduleSubtitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    lineHeight: theme.typography.semantic.caption * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textHeroSoft,
+  },
+  walkInScheduleHeroIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: theme.radius.md,
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
   walkInPagePanel: {
     marginHorizontal: theme.spacing.md,
-    borderTopWidth: 1,
-    borderBottomWidth: 1,
-    paddingVertical: theme.spacing.lg,
+    borderWidth: 1,
+    borderRadius: theme.radius.xl,
+    padding: theme.spacing.lg,
     gap: theme.spacing.xl,
+    ...theme.shadows.soft,
+  },
+  walkInConfirmedBadge: {
+    alignSelf: 'flex-start',
+    minHeight: 34,
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: theme.spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.xs,
+  },
+  walkInConfirmedBadgeText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.bold,
+  },
+  walkInAppointmentGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.spacing.sm,
+  },
+  walkInAppointmentCard: {
+    flex: 1,
+    minWidth: 132,
+    borderRadius: theme.radius.lg,
+    padding: theme.spacing.md,
+    gap: theme.spacing.xs,
+  },
+  walkInAppointmentIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: theme.radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: theme.spacing.xs,
+  },
+  walkInAppointmentValue: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+  },
+  walkInHelpNote: {
+    borderWidth: 1,
+    borderRadius: theme.radius.md,
+    padding: theme.spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.spacing.sm,
+  },
+  walkInHelpNoteText: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    lineHeight: theme.typography.semantic.caption * theme.typography.lineHeights.relaxed,
+  },
+  walkInAvailabilityState: {
+    minHeight: 270,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.xl,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: theme.spacing.sm,
+  },
+  walkInAvailabilityIcon: {
+    width: 64,
+    height: 64,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: theme.spacing.xs,
+  },
+  walkInAvailabilityTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    fontWeight: theme.typography.weights.bold,
+    textAlign: 'center',
+  },
+  walkInAvailabilityBody: {
+    maxWidth: 290,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+    textAlign: 'center',
+  },
+  walkInAvailabilityActions: {
+    width: '100%',
+    gap: theme.spacing.sm,
+    marginTop: theme.spacing.sm,
+  },
+  walkInAvailabilityAction: {
+    alignSelf: 'stretch',
+  },
+  walkInSectionHeading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  walkInStepBadge: {
+    width: 36,
+    height: 36,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  walkInStepBadgeText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.bold,
+  },
+  walkInSectionHeadingCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 1,
+  },
+  walkInSectionTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.bold,
+  },
+  walkInSectionBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    lineHeight: theme.typography.semantic.caption * theme.typography.lineHeights.relaxed,
+  },
+  walkInSectionDivider: {
+    height: 1,
   },
   walkInHeaderCopy: {
     flex: 1,
@@ -9167,23 +10932,27 @@ const styles = StyleSheet.create({
     paddingRight: theme.spacing.sm,
   },
   walkInChip: {
-    minHeight: 38,
+    minHeight: 44,
     borderWidth: 1,
     borderRadius: theme.radius.pill,
     paddingHorizontal: theme.spacing.md,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: theme.spacing.xs,
   },
   walkInWindowGrid: {
     gap: theme.spacing.sm,
   },
   walkInWindowChip: {
-    minHeight: 40,
+    minHeight: 46,
     borderWidth: 1,
-    borderRadius: 12,
+    borderRadius: theme.radius.md,
     paddingHorizontal: theme.spacing.md,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: theme.spacing.xs,
   },
   walkInChipText: {
     fontFamily: theme.typography.fontFamily,
@@ -9191,9 +10960,149 @@ const styles = StyleSheet.create({
     fontWeight: theme.typography.weights.semibold,
   },
   walkInEmptyText: {
+    flex: 1,
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.bodySm,
     lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+  },
+  walkInInlineEmpty: {
+    minHeight: 56,
+    borderRadius: theme.radius.md,
+    padding: theme.spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  walkInConfirmButton: {
+    marginTop: theme.spacing.xs,
+  },
+  logisticsConfirmationPage: {
+    paddingHorizontal: theme.spacing.md,
+    paddingTop: theme.spacing.sm,
+    paddingBottom: 120,
+    gap: theme.spacing.md,
+  },
+  logisticsConfirmationHero: {
+    borderRadius: theme.radius.xl,
+    paddingHorizontal: theme.spacing.lg,
+    paddingVertical: theme.spacing.xl,
+    alignItems: 'center',
+    gap: theme.spacing.xs,
+    overflow: 'hidden',
+    ...theme.shadows.card,
+  },
+  logisticsConfirmationIcon: {
+    width: 62,
+    height: 62,
+    borderRadius: theme.radius.full,
+    backgroundColor: 'rgba(255, 255, 255, 0.14)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.24)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: theme.spacing.xs,
+  },
+  logisticsConfirmationEyebrow: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.bold,
+    letterSpacing: 1.1,
+    color: theme.colors.textHeroMuted,
+  },
+  logisticsConfirmationTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.title,
+    fontWeight: theme.typography.weights.bold,
+    color: theme.colors.textOnBrand,
+    textAlign: 'center',
+  },
+  logisticsConfirmationSubtitle: {
+    maxWidth: 290,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textHeroSoft,
+    textAlign: 'center',
+  },
+  logisticsConfirmationCard: {
+    borderWidth: 1,
+    borderRadius: theme.radius.xl,
+    padding: theme.spacing.lg,
+    gap: theme.spacing.md,
+    ...theme.shadows.soft,
+  },
+  logisticsWaybillPanel: {
+    borderRadius: theme.radius.lg,
+    padding: theme.spacing.lg,
+    alignItems: 'center',
+    gap: theme.spacing.xs,
+  },
+  walkInArrivalTimeText: {
+    flex: 1,
+  },
+  logisticsWaybillHeading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.xs,
+  },
+  logisticsConfirmationQrFrame: {
+    width: 142,
+    height: 142,
+    borderRadius: theme.radius.lg,
+    padding: theme.spacing.sm,
+    backgroundColor: '#FFFFFF',
+    ...theme.shadows.soft,
+  },
+  logisticsConfirmationQr: {
+    width: '100%',
+    height: '100%',
+  },
+  logisticsWaybillCode: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: 28,
+    fontWeight: theme.typography.weights.bold,
+    letterSpacing: 2.2,
+  },
+  logisticsWaybillHelp: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    lineHeight: theme.typography.semantic.caption * theme.typography.lineHeights.relaxed,
+    textAlign: 'center',
+  },
+  logisticsConfirmationRows: {
+    gap: theme.spacing.sm,
+  },
+  logisticsConfirmationRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.spacing.sm,
+  },
+  logisticsConfirmationRowIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: theme.radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  logisticsConfirmationRowCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  logisticsConfirmationLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.bold,
+    letterSpacing: 0.8,
+  },
+  logisticsConfirmationValue: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.bold,
+  },
+  logisticsConfirmationMeta: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
   },
   logisticFabOverlay: {
     position: 'absolute',
@@ -9224,7 +11133,7 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     padding: theme.spacing.md,
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: theme.spacing.sm,
     ...theme.shadows.soft,
   },
@@ -9232,6 +11141,13 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
     gap: theme.spacing.md,
+  },
+  timelineHeroHeading: {
+    gap: 2,
+  },
+  timelineHeroSubtitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
   },
   timelineBackButton: {
     width: 40,
@@ -9341,6 +11257,16 @@ const styles = StyleSheet.create({
   timelineSection: {
     gap: theme.spacing.lg,
   },
+  timelineSectionHeading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+  },
+  timelineSectionHint: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+  },
   timelineStageList: {
     gap: theme.spacing.md,
   },
@@ -9380,41 +11306,35 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     padding: theme.spacing.md,
     gap: theme.spacing.sm,
+    ...theme.shadows.soft,
   },
   timelineStageHeader: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    gap: theme.spacing.sm,
+    width: '100%',
+    gap: 3,
   },
   timelineStageTitle: {
-    flex: 1,
+    width: '100%',
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.body,
     fontWeight: theme.typography.weights.semibold,
   },
   timelineStageDate: {
-    maxWidth: 116,
-    textAlign: 'right',
+    width: '100%',
+    textAlign: 'left',
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.caption,
+  },
+  timelineStageBadge: {
+    alignSelf: 'flex-start',
+    minHeight: 28,
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: theme.spacing.sm,
+    justifyContent: 'center',
   },
   timelineStageBadgeText: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.caption,
     fontWeight: theme.typography.weights.bold,
-  },
-  timelineStageAction: {
-    paddingTop: theme.spacing.xs,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-    gap: 4,
-  },
-  timelineStageActionText: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.caption,
-    fontWeight: theme.typography.weights.semibold,
   },
   qrDestinationRow: {
     flexDirection: 'row',
@@ -10284,46 +12204,81 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     gap: 0,
     paddingHorizontal: 0,
-    paddingTop: 0,
-    paddingBottom: 120,
+    paddingTop: 118,
+    paddingBottom: 180,
+  },
+  manualEntryStickyHeaderSurface: {
+    width: '100%',
+    paddingTop: theme.spacing.sm,
+    paddingBottom: 0,
+    backgroundColor: 'transparent',
+    zIndex: 40,
   },
   manualEntryPageHeader: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: theme.spacing.sm,
-    paddingHorizontal: theme.spacing.md,
-    paddingTop: theme.spacing.md,
-    paddingBottom: theme.spacing.lg,
+    alignItems: 'center',
+    gap: theme.spacing.md,
+    marginHorizontal: theme.spacing.xs,
+    marginTop: 0,
+    marginBottom: 0,
+    padding: theme.spacing.md,
+    borderRadius: theme.radius.xl,
+    overflow: 'hidden',
+    ...theme.shadows.card,
   },
   manualEntryBackButton: {
     width: 40,
     height: 40,
-    borderRadius: 10,
+    borderRadius: theme.radius.md,
     borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.26)',
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
+  },
+  manualEntryHeaderControlPressed: {
+    opacity: 0.76,
+    transform: [{ scale: 0.96 }],
   },
   manualEntryHeaderCopy: {
     flex: 1,
     gap: 3,
   },
+  manualEntryPageEyebrow: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.bold,
+    letterSpacing: 1.1,
+    color: theme.colors.textHeroMuted,
+  },
   manualEntryPageTitle: {
     fontFamily: theme.typography.fontFamilyDisplay,
     fontSize: theme.typography.semantic.bodyLg,
     fontWeight: theme.typography.weights.bold,
+    color: theme.colors.textOnBrand,
   },
   manualEntryPageSubtitle: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.caption,
     lineHeight: theme.typography.semantic.caption * theme.typography.lineHeights.relaxed,
+    color: theme.colors.textHeroSoft,
+  },
+  manualEntryHeaderIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: theme.radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
   },
   manualEntryNotice: {
-    marginHorizontal: theme.spacing.md,
-    marginBottom: theme.spacing.sm,
-    padding: theme.spacing.sm,
+    marginHorizontal: theme.spacing.xs,
+    marginBottom: theme.spacing.md,
+    padding: theme.spacing.md,
     borderWidth: 1,
-    borderRadius: 8,
+    borderRadius: theme.radius.lg,
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.spacing.sm,
@@ -10350,32 +12305,20 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.semantic.caption,
     lineHeight: theme.typography.semantic.caption * theme.typography.lineHeights.relaxed,
   },
-  manualEntryPageActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.spacing.sm,
-    paddingHorizontal: theme.spacing.md,
-    paddingTop: theme.spacing.lg,
-  },
   manualEntryInputShell: {
-    borderRadius: 10,
-    elevation: 0,
-    shadowOpacity: 0,
-    shadowRadius: 0,
-  },
-  manualEntryButton: {
-    borderRadius: 9,
+    borderRadius: theme.radius.md,
     elevation: 0,
     shadowOpacity: 0,
     shadowRadius: 0,
   },
   manualSectionCard: {
-    borderWidth: 0,
-    borderBottomWidth: 1,
-    borderRadius: 0,
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.lg,
-    gap: theme.spacing.sm,
+    borderWidth: 1,
+    borderRadius: theme.radius.lg,
+    marginHorizontal: theme.spacing.xs,
+    marginBottom: theme.spacing.md,
+    padding: theme.spacing.md,
+    gap: theme.spacing.md,
+    ...theme.shadows.none,
   },
   manualSectionHeader: {
     flexDirection: 'row',
@@ -10383,9 +12326,9 @@ const styles = StyleSheet.create({
     gap: theme.spacing.sm,
   },
   manualSectionIconWrap: {
-    width: 34,
-    height: 34,
-    borderRadius: 9,
+    width: 40,
+    height: 40,
+    borderRadius: theme.radius.md,
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
@@ -10405,7 +12348,146 @@ const styles = StyleSheet.create({
     lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
   },
   manualSectionContent: {
+    gap: theme.spacing.md,
+    marginTop: theme.spacing.xs,
+  },
+  donorProfilePreviewGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: theme.spacing.sm,
+  },
+  donorProfilePreviewItem: {
+    flexBasis: '46%',
+    flexGrow: 1,
+    minWidth: 130,
+    minHeight: 64,
+    borderRadius: theme.radius.md,
+    padding: theme.spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.spacing.sm,
+  },
+  donorProfilePreviewItemWide: {
+    flexBasis: '100%',
+  },
+  donorProfilePreviewIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: theme.radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  donorProfilePreviewCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  donorProfilePreviewLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.semibold,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  donorProfilePreviewValue: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+  },
+  profileReadOnlyNote: {
+    borderWidth: 1,
+    borderRadius: theme.radius.md,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: theme.spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.spacing.xs,
+  },
+  profileReadOnlyNoteText: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    lineHeight: theme.typography.semantic.caption * theme.typography.lineHeights.relaxed,
+  },
+  latestScreeningHeader: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+  },
+  latestScreeningDateRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.xs,
+  },
+  latestScreeningDate: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.medium,
+  },
+  latestScreeningStatus: {
+    minHeight: 32,
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: theme.spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  latestScreeningStatusText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.bold,
+  },
+  latestScreeningGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.spacing.sm,
+  },
+  latestScreeningMetric: {
+    flexBasis: '46%',
+    flexGrow: 1,
+    minWidth: 130,
+    minHeight: 64,
+    borderRadius: theme.radius.md,
+    padding: theme.spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  latestScreeningMetricCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  latestScreeningMetricLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.semibold,
+    letterSpacing: 0.45,
+    textTransform: 'uppercase',
+  },
+  latestScreeningMetricValue: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+  },
+  currentRequirementsNote: {
+    borderWidth: 1,
+    borderRadius: theme.radius.md,
+    padding: theme.spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.spacing.sm,
+  },
+  currentRequirementsNoteText: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    lineHeight: theme.typography.semantic.caption * theme.typography.lineHeights.relaxed,
   },
   donorIdentityFields: {
     gap: theme.spacing.sm,
@@ -10436,23 +12518,176 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   donationMethodList: {
+    width: '100%',
     gap: theme.spacing.sm,
-    paddingBottom: theme.spacing.lg,
+    paddingBottom: theme.spacing.md,
   },
   donationMethodCard: {
-    minHeight: 78,
+    width: '100%',
+    minHeight: 88,
     borderWidth: 1,
-    borderRadius: 12,
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.sm,
+    borderRadius: theme.radius.lg,
+    overflow: 'hidden',
+    ...theme.shadows.soft,
+  },
+  timelineSoftCard: {
+    borderRadius: theme.radius.xl,
+    overflow: 'hidden',
+    ...theme.shadows.soft,
+  },
+  timelineWaybillCard: {
+    borderWidth: 1,
+    borderRadius: theme.radius.lg,
+    padding: theme.spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.md,
+    ...theme.shadows.soft,
+  },
+  timelineWaybillPressable: {
+    width: '100%',
+    borderRadius: theme.radius.lg,
+  },
+  timelineWaybillPressablePressed: {
+    opacity: 0.82,
+    transform: [{ scale: 0.99 }],
+  },
+  timelineWaybillIcon: {
+    width: 46,
+    height: 46,
+    borderRadius: theme.radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  timelineWaybillQrFrame: {
+    width: 92,
+    height: 92,
+    borderRadius: theme.radius.md,
+    padding: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+    ...theme.shadows.soft,
+  },
+  timelineWaybillQr: {
+    width: '100%',
+    height: '100%',
+  },
+  timelineWaybillCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  timelineWaybillLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.bold,
+    letterSpacing: 0.8,
+  },
+  timelineWaybillCode: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    fontWeight: theme.typography.weights.bold,
+    letterSpacing: 1.5,
+  },
+  timelineWaybillHelp: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+  },
+  waybillModalActions: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.spacing.sm,
   },
-  donationMethodIcon: {
+  waybillModalQrPanel: {
+    borderWidth: 1,
+    borderRadius: theme.radius.xl,
+    padding: theme.spacing.lg,
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+    overflow: 'hidden',
+  },
+  waybillModalQrFrame: {
+    width: 252,
+    height: 252,
+    maxWidth: '100%',
+    padding: theme.spacing.sm,
+    borderRadius: theme.radius.lg,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...theme.shadows.soft,
+  },
+  waybillModalQrImage: {
+    width: '100%',
+    height: '100%',
+  },
+  waybillModalCode: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.titleSm,
+    fontWeight: theme.typography.weights.bold,
+    letterSpacing: 2,
+  },
+  waybillModalHelp: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    textAlign: 'center',
+  },
+  timelineRecentHeading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  timelineRecentIcon: {
     width: 42,
     height: 42,
-    borderRadius: 10,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  timelineRecentCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  timelineRecentEyebrow: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.bold,
+    letterSpacing: 0.8,
+  },
+  timelineRecentAction: {
+    minHeight: 38,
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: theme.spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+  },
+  timelineRecentActionPressed: {
+    opacity: 0.78,
+    transform: [{ scale: 0.98 }],
+  },
+  timelineRecentActionText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.bold,
+  },
+  donationMethodCardGradient: {
+    width: '100%',
+    minHeight: 88,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.md,
+  },
+  donationMethodIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: theme.radius.md,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -10463,10 +12698,32 @@ const styles = StyleSheet.create({
   },
   donationMethodTitle: {
     fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
+    fontSize: theme.typography.semantic.bodyMd,
     fontWeight: theme.typography.weights.semibold,
   },
   donationMethodBody: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    lineHeight: theme.typography.semantic.caption * theme.typography.lineHeights.relaxed,
+  },
+  donationMethodArrow: {
+    width: 34,
+    height: 34,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  donationMethodNote: {
+    minHeight: 44,
+    borderRadius: theme.radius.md,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  donationMethodNoteText: {
+    flex: 1,
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.caption,
     lineHeight: theme.typography.semantic.caption * theme.typography.lineHeights.relaxed,
@@ -10483,17 +12740,21 @@ const styles = StyleSheet.create({
   },
   choiceChipRow: {
     flexDirection: 'row',
-    flexWrap: 'nowrap',
+    flexWrap: 'wrap',
     gap: theme.spacing.xs,
-    paddingRight: theme.spacing.md,
   },
   choiceChip: {
     paddingHorizontal: theme.spacing.md,
     paddingVertical: theme.spacing.sm,
-    borderRadius: 9,
+    minHeight: 42,
+    borderRadius: theme.radius.md,
     borderWidth: 1,
     borderColor: theme.colors.borderSubtle,
     backgroundColor: theme.colors.backgroundPrimary,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
   },
   choiceChipActive: {
     borderColor: theme.colors.brandPrimary,
@@ -10543,12 +12804,12 @@ const styles = StyleSheet.create({
   photoPreview: {
     width: '100%',
     height: 228,
-    borderRadius: 8,
+    borderRadius: theme.radius.lg,
     backgroundColor: theme.colors.backgroundPrimary,
   },
   photoPlaceholder: {
-    minHeight: 168,
-    borderRadius: 8,
+    minHeight: 184,
+    borderRadius: theme.radius.lg,
     alignItems: 'center',
     justifyContent: 'center',
     gap: theme.spacing.sm,
@@ -10958,7 +13219,95 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-start',
   },
   manualPhotoActions: {
+    width: '100%',
+    flexWrap: 'nowrap',
+    justifyContent: 'space-between',
+  },
+  manualPhotoActionItem: {
+    flex: 1,
+    minWidth: 0,
+  },
+  manualPhotoActionButton: {
+    borderRadius: theme.radius.md,
+    elevation: 0,
+    shadowOpacity: 0,
+    shadowRadius: 0,
+  },
+  manualEntryStickyActionHost: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    paddingHorizontal: theme.spacing.xs,
+    alignItems: 'center',
+  },
+  manualEntryStickyActions: {
+    width: '100%',
+    maxWidth: theme.layout.contentMaxWidth,
+    minHeight: 76,
+    borderWidth: 1,
+    borderRadius: theme.radius.lg,
+    padding: theme.spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+    ...theme.shadows.hero,
+  },
+  manualEntryStickyButton: {
+    minHeight: 54,
+    borderRadius: theme.radius.md,
+  },
+  donationCancelStickyHost: {
+    position: 'absolute',
+    left: theme.spacing.lg,
+    right: theme.spacing.lg,
+    zIndex: 24,
+    alignItems: 'stretch',
+  },
+  donationCancelStickyButton: {
+    width: '100%',
+    maxWidth: theme.layout.contentMaxWidth,
+    alignSelf: 'center',
+    borderRadius: 22,
+    overflow: 'hidden',
+    ...theme.shadows.hero,
+  },
+  donationCancelStickyButtonPressed: {
+    opacity: 0.86,
+    transform: [{ scale: 0.985 }],
+  },
+  donationCancelStickyGradient: {
+    minHeight: 60,
+    borderRadius: 22,
+    paddingHorizontal: theme.spacing.lg,
+    paddingVertical: theme.spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  donationCancelStickyIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: theme.radius.full,
+    backgroundColor: withOpacity(theme.colors.textOnBrand, 0.14),
+    alignItems: 'center',
     justifyContent: 'center',
+    flexShrink: 0,
+  },
+  donationCancelStickyCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 1,
+  },
+  donationCancelStickyTitle: {
+    color: theme.colors.textOnBrand,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.bold,
+  },
+  donationCancelStickyText: {
+    color: withOpacity(theme.colors.textOnBrand, 0.84),
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
   },
   modalFooterActions: {
     flexDirection: 'row',
@@ -10971,7 +13320,63 @@ const styles = StyleSheet.create({
   bannerSpacing: {
     marginBottom: theme.spacing.md,
   },
+  cancelModalActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  cancelModalActionButton: {
+    minHeight: 52,
+    borderRadius: theme.radius.lg,
+  },
+  cancelModalConfirmButton: {
+    flex: 1,
+    minWidth: 0,
+    borderRadius: theme.radius.lg,
+    overflow: 'hidden',
+    ...theme.shadows.soft,
+  },
+  cancelModalConfirmButtonPressed: {
+    opacity: 0.82,
+    transform: [{ scale: 0.98 }],
+  },
+  cancelModalConfirmButtonDisabled: {
+    opacity: 0.68,
+  },
+  cancelModalConfirmGradient: {
+    minHeight: 52,
+    borderRadius: theme.radius.lg,
+    paddingHorizontal: theme.spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: theme.spacing.xs,
+  },
+  cancelModalConfirmText: {
+    color: theme.colors.textOnBrand,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.bold,
+  },
+  cancelModalNotice: {
+    borderWidth: 1,
+    borderRadius: theme.radius.lg,
+    padding: theme.spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+    overflow: 'hidden',
+  },
+  cancelModalNoticeIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
   cancelModalText: {
+    flex: 1,
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.bodySm,
     color: theme.colors.textSecondary,
@@ -11615,6 +14020,11 @@ const styles = StyleSheet.create({
     paddingBottom: 0,
     backgroundColor: theme.colors.overlay,
   },
+  modalOverlayCentered: {
+    justifyContent: 'center',
+    paddingHorizontal: theme.spacing.lg,
+    paddingVertical: theme.spacing.xxl,
+  },
   modalBackdrop: {
     ...StyleSheet.absoluteFillObject,
   },
@@ -11638,6 +14048,18 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 14,
     paddingTop: theme.spacing.sm,
   },
+  modalCardCentered: {
+    width: '100%',
+    maxWidth: 440,
+    maxHeight: '88%',
+    borderRadius: theme.radius.xl,
+    borderTopLeftRadius: theme.radius.xl,
+    borderTopRightRadius: theme.radius.xl,
+    borderBottomLeftRadius: theme.radius.xl,
+    borderBottomRightRadius: theme.radius.xl,
+    paddingTop: theme.spacing.sm,
+    ...theme.shadows.hero,
+  },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -11650,9 +14072,29 @@ const styles = StyleSheet.create({
     marginBottom: theme.spacing.md,
     paddingTop: theme.spacing.xs,
   },
+  modalHeaderCentered: {
+    alignItems: 'center',
+    marginBottom: theme.spacing.lg,
+    paddingHorizontal: theme.spacing.lg,
+    paddingTop: theme.spacing.sm,
+  },
+  modalHeaderIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: theme.radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...theme.shadows.sm,
+  },
   modalHeaderCopy: {
     flex: 1,
     gap: 4,
+  },
+  modalEyebrow: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.bold,
+    letterSpacing: 1.1,
   },
   modalTitle: {
     fontFamily: theme.typography.fontFamily,
@@ -11705,5 +14147,10 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: theme.colors.borderSubtle,
     backgroundColor: theme.colors.backgroundPrimary,
+  },
+  modalFooterCentered: {
+    borderBottomLeftRadius: theme.radius.xl,
+    borderBottomRightRadius: theme.radius.xl,
+    overflow: 'hidden',
   },
 });

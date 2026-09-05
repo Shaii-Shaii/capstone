@@ -3,14 +3,21 @@ import { Platform } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import {
+  acceptPatientWigRelease,
+  beginPatientWigRequestFlow,
   cancelPatientWigRequest,
+  confirmPatientWigTryOnCandidates,
+  discardPatientWigRequestDraft,
+  finalizePatientWigRequestFlow,
   getActiveWigTryOnFilters,
   getPatientWigRequestContext,
   getWigPreferenceOptions,
-  savePatientWigRequestFlow,
+  savePatientWigCapSize,
+  savePatientWigTryOnResults,
+  submitPatientWigAppeal,
 } from '../features/wigRequest.service';
 import { detectWigHeadFrame } from '../features/wigHeadDetection.service';
-import { generatePatientWigPreview } from '../features/wigGeneration.service';
+import { generatePatientWigPreview, rankPatientWigsForPhoto } from '../features/wigGeneration.service';
 import { createAppError, getErrorMessage, logAppError, logAppEvent } from '../utils/appErrors';
 
 const IMAGE_MEDIA_TYPES = ['images'];
@@ -309,6 +316,31 @@ const buildStoredPreview = (specification, wigRequest) => {
   };
 };
 
+const buildStoredTryOnPreview = (selections = []) => {
+  const ranked = (selections || [])
+    .filter((selection) => selection?.generated_image_url && selection?.ai_rank)
+    .sort((left, right) => Number(left.ai_rank) - Number(right.ai_rank));
+  if (ranked.length !== 3) return null;
+  const options = ranked.map((selection) => ({
+    id: String(selection.wig_id),
+    option_index: selection.ai_rank,
+    name: selection?.wig?.wig_name || `Wig ${selection.ai_rank}`,
+    note: selection.ai_reason || '',
+    suitability_reason: selection.ai_reason || '',
+    generated_image_data_url: selection.generated_image_url,
+    preview_url: selection.generated_image_url,
+    selected_wig: selection.wig || { wig_id: selection.wig_id },
+  }));
+  return {
+    provider: 'openrouter',
+    options,
+    previews: options,
+    generated_image_data_url: options[0].generated_image_data_url,
+    preview_url: options[0].preview_url,
+    selected_wig: options[0].selected_wig,
+  };
+};
+
 const buildSelectedPreview = (preview, selectedOptionId) => {
   if (!preview) return null;
 
@@ -351,6 +383,9 @@ export const usePatientWigRequest = ({
     requestWig: null,
     latestReleaseSchedule: null,
     safetyAssessment: null,
+    tryOnSelections: [],
+    releaseReceipt: null,
+    releaseAppeal: null,
   });
   const [error, setError] = useState(null);
   const [successMessage, setSuccessMessage] = useState('');
@@ -358,6 +393,8 @@ export const usePatientWigRequest = ({
   const [hasLoadedContext, setHasLoadedContext] = useState(false);
   const [isPickingReference, setIsPickingReference] = useState(false);
   const [isGeneratingPreview, setIsGeneratingPreview] = useState(false);
+  const [isRankingWigs, setIsRankingWigs] = useState(false);
+  const [wigRankings, setWigRankings] = useState(null);
   const [isSavingRequest, setIsSavingRequest] = useState(false);
   const [isCancellingRequest, setIsCancellingRequest] = useState(false);
   const [availableWigs, setAvailableWigs] = useState([]);
@@ -373,7 +410,18 @@ export const usePatientWigRequest = ({
   const [isLoadingWigPreferenceOptions, setIsLoadingWigPreferenceOptions] = useState(false);
   const [, setRequestedSavedPreviewId] = useState(null);
 
-  const hasSubmittedRequest = isOngoingWigRequest(context.latestWigRequest);
+  const hasDraftRequest = Boolean(
+    isOngoingWigRequest(context.latestWigRequest)
+    && String(context.latestWigRequest?.status || '').trim().toLowerCase() === 'pending'
+    && !context.latestWigRequest?.requested_wig_id
+  );
+  const hasSubmittedRequest = Boolean(
+    context.latestWigRequest?.req_id
+    && !hasDraftRequest
+    && !['cancelled', 'canceled', 'rejected', 'closed'].includes(
+      String(context.latestWigRequest?.status || '').trim().toLowerCase()
+    )
+  );
 
   const progressLabel = useMemo(() => {
     if (isSavingRequest) return 'Submitting wig request';
@@ -425,6 +473,9 @@ export const usePatientWigRequest = ({
       requestWig: result.requestWig,
       latestReleaseSchedule: result.latestReleaseSchedule,
       safetyAssessment: result.safetyAssessment,
+      tryOnSelections: result.tryOnSelections || [],
+      releaseReceipt: result.releaseReceipt || null,
+      releaseAppeal: result.releaseAppeal || null,
     });
     setHasLoadedContext(true);
 
@@ -444,7 +495,8 @@ export const usePatientWigRequest = ({
     }
 
     const storedPreview = isOngoingWigRequest(result.latestWigRequest)
-      ? buildStoredPreview(result.latestWigSpecification, result.latestWigRequest)
+      ? buildStoredTryOnPreview(result.tryOnSelections)
+        || buildStoredPreview(result.latestWigSpecification, result.latestWigRequest)
       : null;
     if (storedPreview) {
       setPreview((current) => current || storedPreview);
@@ -572,6 +624,7 @@ export const usePatientWigRequest = ({
 
     setReferenceImage(capturedImage);
     setPreview(null);
+    setWigRankings(null);
     setError(null);
     setSuccessMessage('');
     return { success: true, image: capturedImage };
@@ -580,6 +633,7 @@ export const usePatientWigRequest = ({
   const clearReferenceImage = () => {
     setReferenceImage(null);
     setPreview(null);
+    setWigRankings(null);
     setError(null);
     setSuccessMessage('');
   };
@@ -591,15 +645,89 @@ export const usePatientWigRequest = ({
     setSuccessMessage('');
   };
 
-  const generatePreview = async (preferences, selectedWig = null, referenceImageOverride = null) => {
+  const beginRequest = async () => {
+    setIsSavingRequest(true);
+    setError(null);
+    const result = await beginPatientWigRequestFlow({ userId });
+    setIsSavingRequest(false);
+    if (result.error) {
+      const mappedError = mapPatientWigRequestError('save', result.error);
+      setError(mappedError);
+      return { success: false, error: mappedError.message };
+    }
+    setContext((current) => ({ ...current, latestWigRequest: result.wigRequest }));
+    wigContextCache.delete(userId);
+    return { success: true, wigRequest: result.wigRequest };
+  };
+
+  const rankAvailableWigs = async (preferences, candidateWigs = [], referenceImageOverride = null) => {
+    const sourceReferenceImage = referenceImageOverride || referenceImage;
+    if (!sourceReferenceImage?.uri) {
+      return { success: false, error: FRONT_PHOTO_REQUIRED_ERROR.message };
+    }
+    if (candidateWigs.length < 3) {
+      return { success: false, error: 'At least three matching wigs are needed for AI recommendations.' };
+    }
+
+    setIsRankingWigs(true);
+    setError(null);
+
+    let result;
+    try {
+      result = await rankPatientWigsForPhoto({
+        preferences,
+        referenceImage: sourceReferenceImage,
+        candidateWigs,
+      });
+    } catch (rankingError) {
+      result = {
+        ranking: null,
+        error: getErrorMessage(rankingError) || 'Wig recommendations could not be prepared.',
+        errorTitle: 'Recommendations unavailable',
+      };
+    } finally {
+      setIsRankingWigs(false);
+    }
+
+    if (result.error || !result.ranking) {
+      return {
+        success: false,
+        error: result.error || 'Wig recommendations could not be prepared.',
+        title: result.errorTitle || 'Recommendations unavailable',
+      };
+    }
+
+    setWigRankings(result.ranking);
+    return { success: true, ranking: result.ranking, recommendations: result.recommendations };
+  };
+
+  const saveCapSize = async (capSize) => {
+    const reqId = context.latestWigRequest?.req_id;
+    const result = await savePatientWigCapSize({ userId, reqId, capSize });
+    if (result.error) return { success: false, error: result.error };
+    setContext((current) => ({ ...current, latestWigRequest: result.wigRequest }));
+    return { success: true, wigRequest: result.wigRequest };
+  };
+
+  const confirmTryOnCandidates = async (wigs) => {
+    const result = await confirmPatientWigTryOnCandidates({
+      userId,
+      reqId: context.latestWigRequest?.req_id,
+      wigs,
+    });
+    if (result.error) return { success: false, error: result.error };
+    return { success: true, selections: result.selections };
+  };
+
+  const generatePreview = async (preferences, candidateWigs = [], referenceImageOverride = null) => {
     const sourceReferenceImage = referenceImageOverride || referenceImage;
     if (!sourceReferenceImage?.uri) {
       setError(FRONT_PHOTO_REQUIRED_ERROR);
       return { success: false, error: FRONT_PHOTO_REQUIRED_ERROR.message };
     }
 
-    if (availableWigs.length < 3) {
-      const mappedError = createAppError('Wigs Unavailable', 'At least three active wigs are needed for AI recommendations.');
+    if (candidateWigs.length !== 3 || new Set(candidateWigs.map((wig) => String(wig?.wig_id))).size !== 3) {
+      const mappedError = createAppError('Choose Three Wigs', 'Select exactly three unique wigs for your virtual try-on.');
       setError(mappedError);
       return { success: false, error: mappedError.message };
     }
@@ -618,8 +746,7 @@ export const usePatientWigRequest = ({
     const result = await generatePatientWigPreview({
       preferences,
       referenceImage: preparedReferenceImage,
-      selectedWig,
-      availableWigs,
+      candidateWigs,
     });
 
     setIsGeneratingPreview(false);
@@ -638,11 +765,24 @@ export const usePatientWigRequest = ({
       };
     }
 
+    const persisted = await savePatientWigTryOnResults({
+      userId,
+      reqId: context.latestWigRequest?.req_id,
+      referenceImage: preparedReferenceImage,
+      preview: result.preview,
+    });
+    if (persisted.error) {
+      setIsGeneratingPreview(false);
+      const mappedError = mapPatientWigRequestError('save', persisted.error);
+      setError(mappedError);
+      return { success: false, error: mappedError.message };
+    }
+
     setPreview(result.preview);
 
     logAppEvent('patient_wig_request.preview', 'Generated ranked AI wig recommendations.', {
       userId,
-      selectedWigId: selectedWig?.wig_id || null,
+      candidateWigIds: candidateWigs.map((wig) => wig.wig_id),
       recommendationCount: result.preview?.options?.length || 0,
       previewKeys: Object.keys(result.preview),
       hasGeneratedImage: Boolean(result.preview?.generated_image_data_url),
@@ -679,13 +819,12 @@ export const usePatientWigRequest = ({
       hasReferenceImage: Boolean(referenceImage?.uri),
     });
 
-    const result = await savePatientWigRequestFlow({
+    const result = await finalizePatientWigRequestFlow({
       userId,
-      preferences,
+      reqId: context.latestWigRequest?.req_id,
       preview: selectedPreview,
-      previewImage,
-      referenceImage,
       selectedWigId,
+      specialNotes: preferences?.specialNotes || '',
     });
 
     setIsSavingRequest(false);
@@ -700,18 +839,15 @@ export const usePatientWigRequest = ({
     setContext((current) => ({
       ...current,
       latestWigRequest: result.wigRequest || current.latestWigRequest,
-      latestWigSpecification: result.wigSpecification || current.latestWigSpecification,
       requestWig: selectedWigId ? (current.requestWig || { wig_id: selectedWigId }) : current.requestWig,
     }));
     setSuccessMessage(
-      result.alreadyExists
-        ? 'You already have a pending request.'
-        : 'Wig request submitted successfully. Waiting for organization approval.'
+      'Wig request submitted successfully. Waiting for organization approval.'
     );
     void refreshContext({ silent: true, force: true }).catch((refreshError) => {
       logAppError('patientWigRequest.refreshAfterSave', refreshError, { userId });
     });
-    return { success: true, wigRequest: result.wigRequest, alreadyExists: Boolean(result.alreadyExists) };
+    return { success: true, wigRequest: result.wigRequest, alreadyExists: false };
   };
 
   const cancelRequest = async () => {
@@ -746,6 +882,63 @@ export const usePatientWigRequest = ({
     return { success: true, wigRequest: result.wigRequest };
   };
 
+  const discardDraftRequest = async () => {
+    const reqId = context.latestWigRequest?.req_id || null;
+    if (!reqId || !hasDraftRequest) {
+      setReferenceImage(null);
+      setPreview(null);
+      setWigRankings(null);
+      return { success: true, discarded: false };
+    }
+
+    setIsSavingRequest(true);
+    setError(null);
+    setSuccessMessage('');
+    const result = await discardPatientWigRequestDraft({ userId, reqId });
+    setIsSavingRequest(false);
+
+    if (result.error) {
+      const mappedError = mapPatientWigRequestError('save', new Error(result.error));
+      setError(mappedError);
+      return { success: false, error: mappedError.message };
+    }
+
+    setReferenceImage(null);
+    setPreview(null);
+    setWigRankings(null);
+    setRequestedSavedPreviewId(null);
+    setContext((current) => ({
+      ...current,
+      latestAllocation: null,
+      latestWigRequest: null,
+      latestWigSpecification: null,
+      requestWig: null,
+      latestReleaseSchedule: null,
+      safetyAssessment: null,
+      tryOnSelections: [],
+    }));
+    wigContextCache.delete(userId);
+    return { success: true, discarded: true };
+  };
+
+  const acceptReleaseReceipt = async () => {
+    const receiptId = context.releaseReceipt?.receipt_id;
+    if (!receiptId) return { success: false, error: 'Release receipt not found.' };
+    const result = await acceptPatientWigRelease({ receiptId });
+    if (result.error) return { success: false, error: result.error };
+    setContext((current) => ({ ...current, releaseReceipt: result.receipt }));
+    return { success: true, receipt: result.receipt };
+  };
+
+  const submitReleaseAppeal = async ({ reason, description, evidencePaths = [] }) => {
+    const receiptId = context.releaseReceipt?.receipt_id;
+    if (!receiptId) return { success: false, error: 'Release receipt not found.' };
+    const result = await submitPatientWigAppeal({ receiptId, reason, description, evidencePaths });
+    if (result.error) return { success: false, error: result.error };
+    setContext((current) => ({ ...current, releaseAppeal: result.appeal }));
+    return { success: true, appeal: result.appeal };
+  };
+
   return {
     patientDetails: context.patientDetails,
     latestAllocation: context.latestAllocation,
@@ -755,15 +948,21 @@ export const usePatientWigRequest = ({
     requestWig: context.requestWig,
     latestReleaseSchedule: context.latestReleaseSchedule,
     safetyAssessment: context.safetyAssessment,
+    tryOnSelections: context.tryOnSelections,
+    releaseReceipt: context.releaseReceipt,
+    releaseAppeal: context.releaseAppeal,
+    hasDraftRequest,
     hasSubmittedRequest,
     referenceImage,
     preview,
+    wigRankings,
     error,
     successMessage,
     isLoadingContext,
     hasLoadedContext,
     isPickingReference,
     isGeneratingPreview,
+    isRankingWigs,
     isSavingRequest,
     isCancellingRequest,
     availableWigs,
@@ -775,10 +974,17 @@ export const usePatientWigRequest = ({
     saveCapturedReferenceImage,
     clearReferenceImage,
     clearPreview,
+    rankAvailableWigs,
+    beginRequest,
+    saveCapSize,
+    confirmTryOnCandidates,
     generatePreview,
     regenerateSavedRecommendation,
     saveRequest,
+    discardDraftRequest,
     cancelRequest,
+    acceptReleaseReceipt,
+    submitReleaseAppeal,
     refreshContext,
     refreshAvailableWigs,
     refreshWigPreferenceOptions,

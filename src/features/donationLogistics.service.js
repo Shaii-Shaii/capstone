@@ -20,7 +20,8 @@ import {
     createHairSubmissionImages,
     createHairSubmissionLogistics,
     fetchHairSubmissionForEventByUserId,
-    fetchLatestEligibleAiScreeningByUserId,
+    fetchAiScreeningsByUserId,
+    fetchCurrentHairEligibility,
     updateHairSubmissionById,
     uploadHairSubmissionImage,
 } from './hairSubmission.api';
@@ -103,10 +104,19 @@ export const submitDonation = async ({
       throw new Error('Missing required donation information');
     }
 
-    const screeningResult = await fetchLatestEligibleAiScreeningByUserId(userId);
-    if (screeningResult.error || !screeningResult.data?.ai_screening_id) {
-      throw screeningResult.error || new Error('Pass Hair Analysis before starting a donation.');
+    const [screeningsResult, eligibilityResult] = await Promise.all([
+      fetchAiScreeningsByUserId(userId, 30),
+      fetchCurrentHairEligibility(),
+    ]);
+    const screening = (screeningsResult.data || []).find((item) => (
+      Number(item?.ai_screening_id) === Number(eligibilityResult.data?.ai_screening_id)
+    )) || null;
+    if (screeningsResult.error || eligibilityResult.error || !eligibilityResult.data?.isQualified) {
+      throw screeningsResult.error
+        || eligibilityResult.error
+        || new Error(eligibilityResult.data?.reason || 'Pass Hair Analysis before starting a donation.');
     }
+    const screeningResult = { data: screening };
 
     // Event submissions are created by the database only after staff check-in.
     // Logistics submissions begin here because this action confirms the method.
@@ -217,7 +227,7 @@ export const submitDonation = async ({
       ? { data: null, error: null }
       : await createHairSubmissionLogistics({
           submission_id: createdSubmission.submission_id,
-          logistics_type: 'Courier',
+          logistics_type: 'Ship by Courier',
           shipment_status: 'Pending',
           notes: 'Donation submitted via logistics flow. QR attached.',
         });

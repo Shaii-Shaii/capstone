@@ -5,7 +5,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { HairLogDetailModal } from '../../src/components/hair/HairLogDetailModal';
 import { DonorTopBar } from '../../src/components/donor/DonorTopBar';
 import { DashboardHeaderSurface } from '../../src/components/layout/DashboardHeaderSurface';
-import { fetchHairScreeningEntryById, fetchLatestDonationRequirement } from '../../src/features/hairSubmission.api';
+import { fetchHairScreeningEntryById } from '../../src/features/hairSubmission.api';
 import { useNotifications } from '../../src/hooks/useNotifications';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { resolveThemeRoles, theme } from '../../src/design-system/theme';
@@ -32,7 +32,6 @@ export default function DonorHairCheckDetailsScreen() {
     mode: 'badge',
   });
   const [entry, setEntry] = React.useState(null);
-  const [donationRequirement, setDonationRequirement] = React.useState(null);
   const [error, setError] = React.useState('');
 
   React.useEffect(() => {
@@ -44,12 +43,8 @@ export default function DonorHairCheckDetailsScreen() {
         return;
       }
 
-      const [result, requirementResult] = await Promise.all([
-        fetchHairScreeningEntryById({ userId: user.id, screeningId }),
-        fetchLatestDonationRequirement(),
-      ]);
+      const result = await fetchHairScreeningEntryById({ userId: user.id, screeningId });
       if (!mounted) return;
-      setDonationRequirement(requirementResult.data || null);
 
       if (result.data) {
         setEntry(result.data);
@@ -83,7 +78,6 @@ export default function DonorHairCheckDetailsScreen() {
           pageMode
           dateKey={toDateKey(entry.screening?.created_at)}
           entries={[entry]}
-          donationRequirement={donationRequirement}
           onClose={() => router.back()}
           onStartAnalysis={() => router.replace('/donor/donations?mode=scan')}
         />
