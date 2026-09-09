@@ -990,7 +990,7 @@ export const createHairSubmissionDetail = async (payload) => {
     columns: ['Submission_ID', 'Declared_Length', 'Declared_Texture', 'Declared_Density', 'Declared_Condition', 'Detail_Notes', 'Status'],
   });
 
-  const result = await supabase
+  const insertResult = await supabase
     .from(hairSubmissionDetailsTable)
     .upsert([{
       Submission_ID: payload?.submission_id || null,
@@ -1009,13 +1009,28 @@ export const createHairSubmissionDetail = async (payload) => {
       Updated_By: payload?.updated_by || null,
       Created_At: getPhilippineDatabaseTimestamp(),
       Updated_At: getPhilippineDatabaseTimestamp(),
-    }], { onConflict: 'Submission_ID' })
+    }], { onConflict: 'Submission_ID', ignoreDuplicates: true })
     .select(hairSubmissionDetailSelect)
-    .single();
+    .maybeSingle();
+
+  if (insertResult.error || insertResult.data) {
+    return {
+      data: insertResult.data ? normalizeHairSubmissionDetail(insertResult.data) : null,
+      error: insertResult.error,
+    };
+  }
+
+  // This is a create/ensure operation. If the submission already has a detail
+  // row, return it unchanged instead of overwriting staff-reviewed values.
+  const existingResult = await supabase
+    .from(hairSubmissionDetailsTable)
+    .select(hairSubmissionDetailSelect)
+    .eq('Submission_ID', payload?.submission_id)
+    .maybeSingle();
 
   return {
-    data: result.data ? normalizeHairSubmissionDetail(result.data) : null,
-    error: result.error,
+    data: existingResult.data ? normalizeHairSubmissionDetail(existingResult.data) : null,
+    error: existingResult.error,
   };
 };
 
@@ -1218,19 +1233,31 @@ const normalizeCurrentHairEligibility = (payload = null) => {
   const result = payload && typeof payload === 'object' && !Array.isArray(payload)
     ? payload
     : {};
-  const reasons = Array.isArray(result.reasons)
+  const providedReasons = Array.isArray(result.reasons)
     ? result.reasons.map((reason) => String(reason || '').trim()).filter(Boolean)
     : [];
+  const eligible = typeof result.eligible === 'boolean' ? result.eligible : null;
+  const availableForNewDonation = result.available_for_new_donation === true;
+  const availabilityReason = eligible === true && !availableForNewDonation
+    ? 'This eligible Hair Check is already linked to another donation. Complete or cancel that donation, or run Hair Analysis again before joining as a donor.'
+    : '';
+  const reasons = providedReasons.length || !availabilityReason
+    ? providedReasons
+    : [availabilityReason];
 
   return {
     screeningExists: result.screening_exists === true,
     screening_exists: result.screening_exists === true,
     aiScreeningId: result.ai_screening_id || null,
     ai_screening_id: result.ai_screening_id || null,
-    eligible: typeof result.eligible === 'boolean' ? result.eligible : null,
-    isQualified: result.eligible === true && result.available_for_new_donation === true,
-    availableForNewDonation: result.available_for_new_donation === true,
-    available_for_new_donation: result.available_for_new_donation === true,
+    eligible,
+    // RSVP qualification is the current wig_requirements comparison. Whether
+    // the screening is still unconsumed is a separate donation-start concern.
+    meetsCurrentRequirements: eligible === true,
+    meets_current_requirements: eligible === true,
+    isQualified: eligible === true && availableForNewDonation,
+    availableForNewDonation,
+    available_for_new_donation: availableForNewDonation,
     submissionId: result.submission_id || null,
     submission_id: result.submission_id || null,
     decision: result.decision || null,
@@ -1611,7 +1638,7 @@ export const fetchDonationTimelineProductionByBundleId = async (bundleId) => {
   if (wigResult.data?.Wig_ID) {
     const allocationResult = await supabase
       .from(wigAllocationsTable)
-      .select('Allocation_ID, Wig_ID, Patient_ID, Wig_Request_ID, Release_Status, Allocated_At, Released_At, Notes')
+      .select('Release_Status, Allocated_At, Released_At')
       .eq('Wig_ID', wigResult.data.Wig_ID)
       .order('Allocated_At', { ascending: false })
       .limit(1)
@@ -1648,17 +1675,11 @@ export const fetchDonationTimelineProductionByBundleId = async (bundleId) => {
         completed_at: wigResult.data.Completed_At || null,
         wig_name: wigResult.data.Wig_Name || '',
         wig_code: wigResult.data.Wig_Code || '',
-        req_id: allocation?.Wig_Request_ID || null,
       } : null,
       allocation: allocation ? {
-        allocation_id: allocation.Allocation_ID,
-        wig_id: allocation.Wig_ID,
-        patient_id: allocation.Patient_ID || null,
-        wig_request_id: allocation.Wig_Request_ID || null,
         release_status: allocation.Release_Status || '',
         allocated_at: allocation.Allocated_At || null,
         released_at: allocation.Released_At || null,
-        notes: allocation.Notes || '',
       } : null,
     },
     error: null,
@@ -1867,6 +1888,39 @@ export const getHairSubmissionImageSignedUrl = async (path, expiresIn = 3600) =>
 
   return {
     data: result.data?.signedUrl || directUrlFallback,
+    error: result.error,
+  };
+};
+
+export const fetchDonorTimelineWigProgressBySubmissionId = async (submissionId) => {
+  const normalizedSubmissionId = Number(submissionId);
+  if (!Number.isInteger(normalizedSubmissionId) || normalizedSubmissionId <= 0) {
+    return { data: null, error: new Error('A valid donation is required to load wig progress.') };
+  }
+
+  const result = await supabase.rpc('get_donor_timeline_wig_progress', {
+    p_submission_id: normalizedSubmissionId,
+  });
+  const payload = result.data && typeof result.data === 'object' && !Array.isArray(result.data)
+    ? result.data
+    : {};
+  const milestoneIndex = Number(payload.milestone_index);
+  const releaseCycle = payload.release_cycle === null || payload.release_cycle === undefined || payload.release_cycle === ''
+    ? null
+    : Number(payload.release_cycle);
+
+  return {
+    data: result.error ? null : {
+      milestoneIndex: Number.isInteger(milestoneIndex) ? milestoneIndex : null,
+      milestoneKey: String(payload.milestone_key || '').trim() || null,
+      milestoneAt: payload.milestone_at || null,
+      milestoneCompleted: payload.milestone_completed === true,
+      requestStatus: String(payload.request_status || '').trim() || null,
+      released: payload.released === true,
+      receiptConfirmed: payload.receipt_confirmed === true,
+      receivedConfirmedAt: payload.received_confirmed_at || null,
+      releaseCycle: Number.isInteger(releaseCycle) ? releaseCycle : null,
+    },
     error: result.error,
   };
 };
@@ -2214,15 +2268,20 @@ export const fetchLatestHairAnalysisSummaryByUserId = async (userId, submissionL
   };
 };
 
-export const fetchHairSubmissionForEventByUserId = async ({ userId, eventRequestId } = {}) => {
+export const fetchHairSubmissionForEventByUserId = async ({ userId, eventRequestId, submissionId = null } = {}) => {
   const resolvedUserId = await resolveSubmissionUserId(userId);
   if (resolvedUserId.error) return { data: null, error: resolvedUserId.error };
 
-  const result = await supabase
+  let query = supabase
     .from(hairSubmissionsTable)
     .select(hairSubmissionSelect)
     .eq('User_ID', resolvedUserId.userId)
-    .eq('Event_Request_ID', eventRequestId)
+    .eq('Event_Request_ID', eventRequestId);
+  const normalizedSubmissionId = Number(submissionId);
+  if (Number.isInteger(normalizedSubmissionId) && normalizedSubmissionId > 0) {
+    query = query.eq('Submission_ID', normalizedSubmissionId);
+  }
+  const result = await query
     .order('Created_At', { ascending: false })
     .limit(5);
 

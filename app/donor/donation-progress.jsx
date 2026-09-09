@@ -23,29 +23,59 @@ import { useAuth } from '../../src/providers/AuthProvider';
 import { resolveThemeRoles, theme } from '../../src/design-system/theme';
 
 const STAGE_COPY = {
-  cut_and_ship: {
-    title: 'Hair received',
-    description: 'Staff checked you in and accepted your hair donation.',
+  donation_submitted: {
+    title: 'Donation Submitted',
+    description: 'Your hair donation has been recorded by the organization.',
+    icon: 'file-check-outline',
+  },
+  hair_received: {
+    title: 'Hair Received',
+    description: 'The organization has received your donated hair.',
     icon: 'hand-heart-outline',
   },
-  qa_assessment: {
-    title: 'Quality assessment',
-    description: 'The organization checks the donated hair before production.',
+  hair_accepted: {
+    title: 'Hair Accepted',
+    description: 'Your donated hair passed assessment and can be prepared for wig production.',
     icon: 'clipboard-check-outline',
   },
-  wig_production: {
-    title: 'Wig production',
-    description: 'Approved hair is prepared and made into a wig.',
+  hair_bundled: {
+    title: 'Hair Bundled',
+    description: 'Your donated hair has been included in a production bundle.',
+    icon: 'package-variant-closed-check',
+  },
+  wig_in_production: {
+    title: 'Wig in Production',
+    description: 'The hair bundle is being transformed into a wig.',
     icon: 'creation-outline',
   },
-  assigned_to_patient: {
-    title: 'Assigned to a patient',
-    description: 'The completed wig is matched with an approved patient.',
+  wig_created: {
+    title: 'Wig Created',
+    description: 'A wig made with the contributed hair has been completed.',
+    icon: 'creation',
+  },
+  wig_assigned: {
+    title: 'Wig Assigned',
+    description: 'The wig created with your donated hair has been assigned for distribution.',
     icon: 'account-heart-outline',
   },
-  received_by_patient: {
-    title: 'Received by the patient',
-    description: 'The patient confirms that the wig has been received.',
+  wig_ready_for_release: {
+    title: 'Wig Ready for Release',
+    description: 'The wig is ready to begin its release process.',
+    icon: 'package-check',
+  },
+  preparing_for_release: {
+    title: 'Preparing for Release',
+    description: 'The organization is preparing the wig for release.',
+    icon: 'package-variant',
+  },
+  wig_being_released: {
+    title: 'Wig Being Released',
+    description: 'The wig is currently going through the release process.',
+    icon: 'truck-fast-outline',
+  },
+  wig_received: {
+    title: 'Wig Received',
+    description: 'The patient confirmed physical receipt of the wig.',
     icon: 'gift-outline',
   },
 };
@@ -244,6 +274,8 @@ export default function DonorEventDonationProgressScreen() {
   const params = useLocalSearchParams();
   const driveIdParam = Array.isArray(params.driveId) ? params.driveId[0] : params.driveId;
   const driveId = Number(driveIdParam);
+  const submissionIdParam = Array.isArray(params.submissionId) ? params.submissionId[0] : params.submissionId;
+  const submissionId = Number(submissionIdParam);
   const { user, profile, resolvedTheme } = useAuth();
   const roles = resolveThemeRoles(resolvedTheme);
   const insets = useSafeAreaInsets();
@@ -268,13 +300,14 @@ export default function DonorEventDonationProgressScreen() {
       userId: user?.id || null,
       databaseUserId: profile?.user_id || null,
       driveId,
+      submissionId: Number.isInteger(submissionId) && submissionId > 0 ? submissionId : null,
     });
 
     setProgressData(result.data || null);
     if (result.error) setErrorMessage(result.error.message || 'Donation progress could not be loaded.');
     setIsLoading(false);
     setIsRefreshing(false);
-  }, [driveId, profile?.user_id, user?.id]);
+  }, [driveId, profile?.user_id, submissionId, user?.id]);
 
   useFocusEffect(React.useCallback(() => {
     void loadProgress();
@@ -305,9 +338,10 @@ export default function DonorEventDonationProgressScreen() {
   }, [driveId, router]);
 
   const stages = progressData?.timelineStages || [];
-  const completedCount = stages.filter((stage) => normalizeStageState(stage?.state) === 'completed').length;
-  const currentCount = stages.some((stage) => normalizeStageState(stage?.state) === 'current') ? 0.5 : 0;
-  const progressPercent = stages.length ? Math.min(100, Math.round(((completedCount + currentCount) / stages.length) * 100)) : 0;
+  const journey = progressData?.donorJourney || null;
+  const completedCount = journey?.completedCount || 0;
+  const totalCount = journey?.totalCount || stages.length;
+  const progressPercent = journey?.progressPercent || 0;
   const accessMessage = ACCESS_MESSAGES[progressData?.reason] || ACCESS_MESSAGES.submission_unavailable;
   const eventTitle = progressData?.drive?.event_title || 'Donation event';
   const reference = progressData?.submission?.donation_reference || `Event #${driveId || ''}`;
@@ -401,7 +435,7 @@ export default function DonorEventDonationProgressScreen() {
                   </View>
                 </View>
                 <Text style={[styles.heroEyebrow, { color: roles.primaryActionText }]}>YOUR HAIR DONATION</Text>
-                <Text style={[styles.heroTitle, { color: roles.primaryActionText }]}>Making its way to someone</Text>
+                <Text style={[styles.heroTitle, { color: roles.primaryActionText }]}>{journey?.headline || 'Your donation journey has started'}</Text>
                 <Text style={[styles.heroSubtitle, { color: roles.primaryActionText }]}>
                   Follow each milestone as the organization turns your donation into care.
                 </Text>
@@ -439,7 +473,7 @@ export default function DonorEventDonationProgressScreen() {
                 <Text style={[styles.sectionTitle, { color: roles.headingText }]}>Where your donation is now</Text>
               </View>
               <View style={[styles.stepCountPill, { backgroundColor: roles.iconPrimarySurface }]}>
-                <Text style={[styles.stepCountText, { color: roles.primaryActionBackground }]}>{completedCount}/{stages.length}</Text>
+                <Text style={[styles.stepCountText, { color: roles.primaryActionBackground }]}>{completedCount}/{totalCount}</Text>
               </View>
             </View>
 

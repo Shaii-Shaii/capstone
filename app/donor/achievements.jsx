@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
-  Linking,
+  Animated,
+  Easing,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -11,6 +13,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Print from 'expo-print';
+import Constants from 'expo-constants';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -34,8 +37,7 @@ import {
   buildDonorCertificateModel,
   buildDonorFullName,
   generateDonorCertificatePdf,
-  isCertificateSharingSupported,
-  shareDonorCertificatePdf,
+  saveDonorCertificatePdfToDownloads,
 } from '../../src/features/donorCertificate.service';
 import { resolveThemeRoles, theme } from '../../src/design-system/theme';
 import { useAuth } from '../../src/providers/AuthProvider';
@@ -58,6 +60,18 @@ const withOpacity = (color, opacity) => {
   return color;
 };
 
+const resolvePdfViewer = () => {
+  if (Platform.OS === 'web' || Constants?.appOwnership === 'expo') return null;
+  try {
+    const pdfModule = require('react-native-pdf');
+    return pdfModule?.default || pdfModule;
+  } catch (_error) {
+    return null;
+  }
+};
+
+const Pdf = resolvePdfViewer();
+
 const buildCertificateColors = (resolvedTheme) => {
   const roles = resolveThemeRoles(resolvedTheme);
   const primary = roles.primaryActionBackground;
@@ -70,7 +84,6 @@ const buildCertificateColors = (resolvedTheme) => {
     surface,
     surfaceLow: supportSurface,
     surfaceHigh: accentSurface,
-    surfaceHighest: roles.defaultCardBorder,
     primary,
     primaryContainer: roles.primaryActionBackground,
     onPrimary: roles.primaryActionText,
@@ -105,28 +118,9 @@ const formatDateLabel = (value) => {
   }
 };
 
-const toNumber = (value) => {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-};
-
-const getLengthLabel = (certificate) => {
-  const length = toNumber(certificate?.declaredLength ?? certificate?.estimatedLength);
-  return length > 0 ? `${length.toFixed(length % 1 ? 1 : 0)} inches` : 'Recorded';
-};
-
-const getBundleLabel = (certificate) => (
-  certificate?.bundleId ? `Bundle #${certificate.bundleId}` : 'No bundle yet'
-);
-
 const SORT_OPTIONS = [
   { key: 'recent', label: 'Most Recent' },
   { key: 'oldest', label: 'Oldest' },
-];
-
-const ACHIEVEMENT_TABS = [
-  { key: 'certificates', label: 'Certificates' },
-  { key: 'milestones', label: 'Milestones' },
 ];
 
 const sortCertificateRows = (rows, sortKey) => {
@@ -138,64 +132,109 @@ const sortCertificateRows = (rows, sortKey) => {
   });
 };
 
-const getConditionLabel = (certificate) => certificate?.detectedCondition || 'Verified donation';
+function AnimatedSection({ children, delay = 0, style }) {
+  const progress = React.useRef(new Animated.Value(0)).current;
 
-const getCertificateCanvasNameFontSize = (value = '') => {
-  const length = String(value || '').trim().length;
-  if (length > 30) return 16;
-  if (length > 24) return 18;
-  if (length > 18) return 20;
-  return 22;
-};
-
-function CertificateCanvas({ certificate, colors, styles }) {
-  const recipientName = certificate?.donorName || 'Full name required';
-  const recipientNameFontSize = getCertificateCanvasNameFontSize(recipientName);
+  React.useEffect(() => {
+    progress.setValue(0);
+    Animated.timing(progress, {
+      toValue: 1,
+      duration: theme.motion.cardEnter,
+      delay,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [delay, progress]);
 
   return (
-    <View collapsable={false} style={styles.certificateCanvas}>
-      <View style={styles.certificatePattern} pointerEvents="none" />
-      <View style={styles.canvasHeader}>
-        <Text style={styles.canvasBrand}>Donivra</Text>
-        <Text style={styles.canvasTitle}>Certificate of Donation</Text>
-        <View style={styles.goldRule} />
-      </View>
+    <Animated.View
+      style={[
+        style,
+        {
+          opacity: progress,
+          transform: [{
+            translateY: progress.interpolate({
+              inputRange: [0, 1],
+              outputRange: [14, 0],
+            }),
+          }],
+        },
+      ]}
+    >
+      {children}
+    </Animated.View>
+  );
+}
 
-      <View style={styles.canvasBody}>
-        <Text style={styles.canvasIntro}>This is to certify that</Text>
-        <Text
-          style={[
-            styles.canvasName,
-            {
-              fontSize: recipientNameFontSize,
-              lineHeight: recipientNameFontSize + 6,
-            },
-          ]}
-          numberOfLines={2}
-          adjustsFontSizeToFit
-          minimumFontScale={0.48}
+function FloatingToast({ feedback, colors, styles, onDismiss }) {
+  const insets = useSafeAreaInsets();
+  const opacity = React.useRef(new Animated.Value(0)).current;
+  const translateY = React.useRef(new Animated.Value(-18)).current;
+
+  React.useEffect(() => {
+    if (!feedback) return undefined;
+
+    opacity.setValue(0);
+    translateY.setValue(-18);
+    Animated.parallel([
+      Animated.timing(opacity, {
+        toValue: 1,
+        duration: theme.motion.normal,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.timing(translateY, {
+        toValue: 0,
+        duration: theme.motion.normal,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+    ]).start();
+
+    const timer = setTimeout(onDismiss, 3200);
+    return () => clearTimeout(timer);
+  }, [feedback, onDismiss, opacity, translateY]);
+
+  if (!feedback) return null;
+
+  const isError = feedback.type === 'error';
+  const icon = isError ? 'alert-circle-outline' : feedback.type === 'success' ? 'check-circle-outline' : 'information-outline';
+
+  return (
+    <Modal
+      transparent
+      visible
+      animationType="none"
+      presentationStyle="overFullScreen"
+      statusBarTranslucent
+      onRequestClose={onDismiss}
+    >
+      <View pointerEvents="box-none" style={[styles.toastOverlay, { paddingTop: Math.max(insets.top + 10, 20) }]}>
+        <Animated.View
+          accessible
+          accessibilityRole="alert"
+          accessibilityLiveRegion="polite"
+          style={[styles.toastCard, { opacity, transform: [{ translateY }] }]}
         >
-          {recipientName}
-        </Text>
-        <Text style={styles.canvasCopy}>
-          Has generously donated {getLengthLabel(certificate)} of hair on {certificate?.donationDateLabel || certificate?.issuedAtLabel}.
-          {'\n'}Your contribution brings hope and confidence to patients experiencing hair loss.
-        </Text>
+          <View style={[styles.toastIcon, isError ? styles.toastIconError : null]}>
+            <MaterialCommunityIcons name={icon} size={22} color={isError ? colors.onSurface : colors.primary} />
+          </View>
+          <View style={styles.toastCopy}>
+            <Text style={styles.toastTitle}>{feedback.title}</Text>
+            <Text style={styles.toastMessage}>{feedback.message}</Text>
+          </View>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Dismiss notification"
+            hitSlop={10}
+            onPress={onDismiss}
+            style={({ pressed }) => [styles.toastClose, pressed ? styles.linkPressed : null]}
+          >
+            <MaterialCommunityIcons name="close" size={18} color={colors.onSurfaceVariant} />
+          </Pressable>
+        </Animated.View>
       </View>
-
-      <View style={styles.canvasFooter}>
-        <View style={styles.signatureBlock}>
-          <View style={styles.signatureLine} />
-          <Text style={styles.signatureLabel}>Authorized Signature</Text>
-        </View>
-        <View style={styles.seal}>
-          <MaterialCommunityIcons name="check-decagram" size={40} color={colors.gold} />
-        </View>
-        <View style={styles.qrBox}>
-          <MaterialCommunityIcons name="qrcode" size={30} color={colors.onSurfaceVariant} />
-        </View>
-      </View>
-    </View>
+    </Modal>
   );
 }
 
@@ -207,51 +246,90 @@ function CertificateDetailModal({
   styles,
   onClose,
   onPrint,
-  onSharePdf,
+  onSavePdf,
 }) {
   const insets = useSafeAreaInsets();
-  const [activeDetailTab, setActiveDetailTab] = React.useState('details');
+  const [previewPdfUri, setPreviewPdfUri] = React.useState('');
+  const [previewState, setPreviewState] = React.useState('idle');
+  const [previewError, setPreviewError] = React.useState('');
+  const [isPreviewExpanded, setIsPreviewExpanded] = React.useState(false);
 
   React.useEffect(() => {
-    if (visible) {
-      setActiveDetailTab('details');
+    let active = true;
+
+    if (!visible || !certificate) {
+      setPreviewPdfUri('');
+      setPreviewState('idle');
+      setPreviewError('');
+      setIsPreviewExpanded(false);
+      return () => {
+        active = false;
+      };
     }
-  }, [certificate?.certificateNumber, visible]);
+
+    const preparePreview = async () => {
+      try {
+        setPreviewPdfUri('');
+        setPreviewState('preparing');
+        setPreviewError('');
+        const file = await generateDonorCertificatePdf(certificate, { colors });
+        if (!active) return;
+        setPreviewPdfUri(file.uri);
+        setPreviewState(Pdf ? 'rendering' : 'unavailable');
+      } catch (error) {
+        if (!active) return;
+        setPreviewState('error');
+        setPreviewError(error?.message || 'Unable to prepare the certificate PDF preview.');
+      }
+    };
+
+    preparePreview();
+    return () => {
+      active = false;
+    };
+  }, [certificate, colors, visible]);
 
   if (!certificate) return null;
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
       <View style={styles.detailScreen}>
-        <View
+        <LinearGradient
+          colors={[theme.colors.palette.wine900, colors.primary, theme.colors.palette.wine600]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
           style={[
             styles.detailHeader,
             {
               paddingTop: insets.top,
-              minHeight: insets.top + 56,
-              backgroundColor: colors.primary,
+              minHeight: insets.top + 60,
             },
           ]}
         >
+          <View pointerEvents="none" style={styles.detailHeaderGlow} />
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Go back"
             onPress={onClose}
             style={({ pressed }) => [
               styles.headerIconButton,
-              { backgroundColor: 'rgba(255, 255, 255, 0.10)' },
               pressed ? styles.headerButtonPressed : null,
             ]}
           >
             <AppIcon name="arrowLeft" state="inverse" color={colors.onPrimary} />
           </Pressable>
           <View style={styles.detailHeaderCopy}>
-            <Text style={[styles.detailHeaderTitle, { color: colors.onPrimary }]}>Certificate</Text>
+            <Text style={[styles.detailHeaderTitle, { color: colors.onPrimary }]}>Your certificate</Text>
+            <Text style={styles.detailHeaderSubtitle}>Donation recognition</Text>
           </View>
           <View style={styles.headerSpacer} />
-        </View>
+        </LinearGradient>
 
-        <ScrollView contentContainerStyle={styles.detailContent} showsVerticalScrollIndicator={false}>
+        <ScrollView
+          style={styles.detailScroll}
+          contentContainerStyle={styles.detailContent}
+          showsVerticalScrollIndicator={false}
+        >
           {!certificate.donorName ? (
             <StatusBanner
               variant="info"
@@ -260,149 +338,189 @@ function CertificateDetailModal({
             />
           ) : null}
 
-          <View style={styles.canvasWrap}>
-            <CertificateCanvas certificate={certificate} colors={colors} styles={styles} />
-          </View>
-
-          <View style={[styles.detailTabs, { borderBottomColor: colors.outlineVariant }]}>
+          <AnimatedSection delay={40} style={styles.pdfPreviewEntry}>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Open donation details"
-              onPress={() => setActiveDetailTab('details')}
+              accessibilityLabel="Enlarge certificate PDF preview"
+              accessibilityHint="Opens a full-screen zoomable certificate"
+              disabled={!previewPdfUri || !Pdf || previewState === 'error'}
+              onPress={() => setIsPreviewExpanded(true)}
               style={({ pressed }) => [
-                styles.detailTab,
-                activeDetailTab === 'details' ? [styles.detailTabActive, { borderBottomColor: colors.primary }] : null,
-                pressed ? styles.detailTabPressed : null,
+                styles.pdfPreviewShell,
+                pressed ? styles.pdfPreviewPressed : null,
               ]}
             >
-              <Text
-                style={[
-                  styles.detailTabText,
-                  activeDetailTab === 'details' ? [styles.detailTabTextActive, { color: colors.primary }] : null,
-                ]}
-              >
-                Donation Details
-              </Text>
-              <View
-                style={[
-                  styles.detailTabIndicator,
-                  activeDetailTab === 'details' ? { backgroundColor: colors.primary } : null,
-                ]}
-              />
-            </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Open actions"
-              onPress={() => setActiveDetailTab('actions')}
-              style={({ pressed }) => [
-                styles.detailTab,
-                activeDetailTab === 'actions' ? [styles.detailTabActive, { borderBottomColor: colors.primary }] : null,
-                pressed ? styles.detailTabPressed : null,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.detailTabText,
-                  activeDetailTab === 'actions' ? [styles.detailTabTextActive, { color: colors.primary }] : null,
-                ]}
-              >
-                Actions
-              </Text>
-              <View
-                style={[
-                  styles.detailTabIndicator,
-                  activeDetailTab === 'actions' ? { backgroundColor: colors.primary } : null,
-                ]}
-              />
-            </Pressable>
-          </View>
-
-          {activeDetailTab === 'details' ? (
-            <View style={styles.tabContent}>
-              <View style={styles.impactCard}>
-                <View style={styles.impactIconWrap}>
-                  <MaterialCommunityIcons name="heart" size={24} color={colors.primary} />
-                </View>
-                <View style={styles.impactCopy}>
-                  <Text style={styles.impactTitle}>Your Impact</Text>
-                  <Text style={styles.impactText}>
-                    Your {getLengthLabel(certificate)} donation contributes toward creating a medical-grade wig for a patient in need.
+              {previewPdfUri && Pdf ? (
+                <Pdf
+                  pointerEvents="none"
+                  source={{ uri: previewPdfUri, cache: true }}
+                  page={1}
+                  singlePage
+                  trustAllCerts={false}
+                  fitPolicy={0}
+                  style={styles.pdfPreview}
+                  onLoadComplete={() => setPreviewState('ready')}
+                  onError={(error) => {
+                    setPreviewState('error');
+                    setPreviewError(error?.message || 'Unable to display the certificate PDF preview.');
+                  }}
+                />
+              ) : (
+                <View style={styles.pdfPreviewFallback}>
+                  {previewState === 'preparing' ? (
+                    <ActivityIndicator color={colors.primary} />
+                  ) : (
+                    <MaterialCommunityIcons name="file-pdf-box" size={38} color={colors.primary} />
+                  )}
+                  <Text style={styles.pdfPreviewFallbackTitle}>
+                    {previewState === 'error'
+                      ? 'Preview unavailable'
+                      : previewState === 'unavailable'
+                        ? 'PDF viewer unavailable'
+                        : 'Preparing PDF preview'}
                   </Text>
+                  {previewError ? <Text style={styles.pdfPreviewFallbackText}>{previewError}</Text> : null}
                 </View>
-              </View>
+              )}
+              {previewState === 'rendering' ? (
+                <View pointerEvents="none" style={styles.pdfLoadingOverlay}>
+                  <ActivityIndicator color={colors.primary} />
+                  <Text style={styles.pdfLoadingText}>Rendering certificate...</Text>
+                </View>
+              ) : null}
+              {previewState === 'ready' ? (
+                <View pointerEvents="none" style={styles.expandPreviewBadge}>
+                  <MaterialCommunityIcons name="fullscreen" size={16} color={colors.onPrimary} />
+                  <Text style={styles.expandPreviewBadgeText}>Enlarge</Text>
+                </View>
+              ) : null}
+            </Pressable>
+          </AnimatedSection>
 
-              <View style={styles.infoPanel}>
-                <InfoPair label="Donor Name" value={certificate.donorName || 'Full name required'} styles={styles} />
-                <View style={styles.infoGridRow}>
-                  <View style={styles.infoColumn}>
-                    <InfoPair label="Donation Date" value={certificate.donationDateLabel || certificate.issuedAtLabel} styles={styles} />
-                  </View>
-                  <View style={styles.infoColumn}>
-                    <InfoPair label="Length Donated" value={getLengthLabel(certificate)} styles={styles} />
-                  </View>
-                </View>
-                <View style={styles.infoGridRow}>
-                  <View style={styles.infoColumn}>
-                    <InfoPair label="Hair Condition" value={getConditionLabel(certificate)} chip styles={styles} />
-                  </View>
-                  <View style={styles.infoColumn}>
-                    <InfoPair label="Receiving Organization" value={certificate.organizationName || 'Hair for Hope'} styles={styles} />
-                  </View>
-                </View>
-              </View>
-            </View>
-          ) : (
-            <View style={styles.tabContent}>
-              <View style={styles.actionsPanel}>
-                <Pressable disabled={isBusy} style={styles.primaryAction} onPress={() => onPrint(certificate)}>
-                  <MaterialCommunityIcons name="printer-outline" size={20} color={colors.onPrimary} />
-                  <Text style={styles.primaryActionText}>{isBusy ? 'Preparing...' : 'Print'}</Text>
-                </Pressable>
-                <Pressable
-                  disabled={isBusy || !certificate.donorName}
-                  style={[styles.secondaryAction, (!certificate.donorName || isBusy) ? styles.disabledAction : null]}
-                  onPress={() => onSharePdf(certificate)}
-                >
-                  <MaterialCommunityIcons name="file-pdf-box" size={20} color={colors.primary} />
-                  <Text style={styles.secondaryActionText}>Export to PDF</Text>
-                </Pressable>
-              </View>
-            </View>
-          )}
+          <AnimatedSection delay={110} style={styles.previewCaption}>
+            <MaterialCommunityIcons name="file-check-outline" size={18} color={colors.primary} />
+            <Text style={styles.previewCaptionText}>PDF certificate preview</Text>
+          </AnimatedSection>
         </ScrollView>
+
+        <View style={[styles.stickyActionArea, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+          <View style={styles.stickyActionDock}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Print certificate"
+              disabled={isBusy}
+              onPress={() => onPrint(certificate)}
+              style={({ pressed }) => [
+                styles.primaryAction,
+                pressed ? styles.actionPressed : null,
+                isBusy ? styles.disabledAction : null,
+              ]}
+            >
+              <LinearGradient
+                colors={[colors.primary, theme.colors.palette.wine700, theme.colors.palette.wine900]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={styles.actionButtonContent}
+              >
+                {isBusy ? (
+                  <ActivityIndicator size="small" color={colors.onPrimary} />
+                ) : (
+                  <MaterialCommunityIcons name="printer-outline" size={19} color={colors.onPrimary} />
+                )}
+                <Text style={styles.primaryActionText}>{isBusy ? 'Preparing...' : 'Print'}</Text>
+              </LinearGradient>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Save certificate PDF"
+              disabled={isBusy || !certificate.donorName}
+              style={({ pressed }) => [
+                styles.secondaryAction,
+                pressed ? styles.actionPressed : null,
+                (!certificate.donorName || isBusy) ? styles.disabledAction : null,
+              ]}
+              onPress={() => onSavePdf(certificate, previewPdfUri)}
+            >
+              <LinearGradient
+                colors={[withOpacity(colors.primary, 0.12), withOpacity(colors.primary, 0.04)]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={styles.actionButtonContent}
+              >
+                <MaterialCommunityIcons name="tray-arrow-down" size={19} color={colors.primary} />
+                <Text style={styles.secondaryActionText}>Save PDF</Text>
+              </LinearGradient>
+            </Pressable>
+          </View>
+        </View>
+
+        <Modal
+          visible={isPreviewExpanded}
+          animationType="fade"
+          presentationStyle="fullScreen"
+          onRequestClose={() => setIsPreviewExpanded(false)}
+        >
+          <View style={[styles.expandedPreviewScreen, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+            <View style={styles.expandedPreviewHeader}>
+              <View>
+                <Text style={styles.expandedPreviewTitle}>Certificate preview</Text>
+                <Text style={styles.expandedPreviewSubtitle}>Pinch to zoom and drag to inspect</Text>
+              </View>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Close certificate preview"
+                onPress={() => setIsPreviewExpanded(false)}
+                style={({ pressed }) => [styles.expandedPreviewClose, pressed ? styles.actionPressed : null]}
+              >
+                <MaterialCommunityIcons name="close" size={23} color={colors.onSurface} />
+              </Pressable>
+            </View>
+            <View style={styles.expandedPdfStage}>
+              {previewPdfUri && Pdf ? (
+                <Pdf
+                  source={{ uri: previewPdfUri, cache: true }}
+                  page={1}
+                  trustAllCerts={false}
+                  fitPolicy={0}
+                  minScale={1}
+                  maxScale={5}
+                  style={styles.expandedPdf}
+                />
+              ) : null}
+            </View>
+          </View>
+        </Modal>
       </View>
     </Modal>
   );
 }
 
-function InfoPair({ label, value, chip = false, styles }) {
-  return (
-    <View style={styles.infoPair}>
-      <Text style={styles.infoLabel}>{label}</Text>
-      {chip ? (
-        <View style={styles.conditionChip}>
-          <View style={styles.conditionDot} />
-          <Text style={styles.infoValue}>{value}</Text>
-        </View>
-      ) : (
-        <Text style={styles.infoValue}>{value}</Text>
-      )}
-    </View>
-  );
-}
-
 function MilestoneBadge({ icon, label, locked = false, colors, styles }) {
   return (
-    <View style={[styles.milestoneItem, locked ? styles.lockedMilestone : null]}>
+    <LinearGradient
+      accessibilityLabel={`${label} milestone ${locked ? 'locked' : 'unlocked'}`}
+      colors={locked
+        ? [colors.surface, colors.background]
+        : [colors.surfaceHigh, colors.surface]}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 1 }}
+      style={[styles.milestoneItem, locked ? styles.lockedMilestone : null]}
+    >
       <View style={[styles.milestoneCircle, locked ? styles.milestoneCircleLocked : null]}>
-        <MaterialCommunityIcons name={locked ? 'lock-outline' : icon} size={30} color={locked ? colors.outline : colors.primary} />
+        <MaterialCommunityIcons name={locked ? 'lock-outline' : icon} size={24} color={locked ? colors.outline : colors.primary} />
+        {!locked ? (
+          <View style={styles.milestoneCheck}>
+            <MaterialCommunityIcons name="check" size={10} color={colors.onPrimary} />
+          </View>
+        ) : null}
       </View>
       <Text style={[styles.milestoneLabel, locked ? styles.lockedText : null]}>{label}</Text>
-    </View>
+      <Text style={[styles.milestoneState, locked ? styles.lockedText : null]}>{locked ? 'Keep going' : 'Unlocked'}</Text>
+    </LinearGradient>
   );
 }
 
-function CertificateRow({ item, onView, onOpenStoredFile, colors, styles }) {
+function CertificateRow({ item, onView, colors, styles }) {
   return (
     <Pressable
       accessibilityRole="button"
@@ -410,65 +528,46 @@ function CertificateRow({ item, onView, onOpenStoredFile, colors, styles }) {
       onPress={() => onView(item)}
       style={({ pressed }) => [
         styles.certificateCard,
-        {
-          backgroundColor: colors.background,
-          borderColor: colors.outlineVariant,
-        },
         pressed ? styles.certificateCardPressed : null,
       ]}
     >
-      <View style={styles.certificateThumb}>
-        <MaterialCommunityIcons name="certificate-outline" size={30} color={colors.primary} />
-        <View style={styles.thumbLine} />
-        <View style={[styles.thumbLine, styles.thumbLineShort]} />
-      </View>
-
-      <View style={styles.cardDetails}>
-        <View style={styles.cardTopRow}>
-          <Text style={styles.cardDate}>{item.issuedAtLabel}</Text>
+      <LinearGradient
+        colors={[colors.surface, colors.surfaceLow, colors.background]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.certificateCardGradient}
+      >
+        <View style={styles.certificateThumb}>
+          <MaterialCommunityIcons name="certificate-outline" size={30} color={colors.primary} />
+          <View style={styles.thumbLine} />
+          <View style={[styles.thumbLine, styles.thumbLineShort]} />
         </View>
 
-        <View>
-          <Text style={styles.cardTitle}>{item.certificateType || 'Certificate of Donation'}</Text>
-          <Text style={styles.cardSubtitle}>{item.organizationName || 'Hair for Hope'}</Text>
-          <Text style={styles.cardMetaValue} numberOfLines={1}>
-            Certificate No. {item.certificateNumber || 'Pending'}
-          </Text>
-        </View>
-
-        <View style={styles.cardMetaRow}>
-          <View style={styles.cardMetaItem}>
-            <Text style={styles.cardMetaLabel}>Length</Text>
-            <Text style={styles.cardMetaValue}>{getLengthLabel(item)}</Text>
-          </View>
-          <View style={[styles.cardMetaItem, styles.cardMetaWide]}>
-            <Text style={styles.cardMetaLabel}>Bundle</Text>
-            <Text style={styles.cardMetaValue} numberOfLines={1}>{getBundleLabel(item)}</Text>
-          </View>
-        </View>
-
-        <View style={styles.cardActions}>
-          {item.fileUrl ? (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Open stored file"
-              onPress={() => onOpenStoredFile(item.fileUrl)}
-              style={({ pressed }) => [
-                styles.openStoredButton,
-                pressed ? styles.linkPressed : null,
-              ]}
-            >
-              <MaterialCommunityIcons name="download-outline" size={16} color={colors.primary} />
-              <Text style={styles.openStoredLink}>Stored file</Text>
-            </Pressable>
-          ) : (
-            <View style={[styles.openStoredButton, styles.disabledAction]}>
-              <MaterialCommunityIcons name="file-alert-outline" size={16} color={colors.outline} />
-              <Text style={[styles.openStoredLink, { color: colors.outline }]}>File unavailable</Text>
+        <View style={styles.cardDetails}>
+          <View style={styles.cardTopRow}>
+            <View style={styles.issuedPill}>
+              <MaterialCommunityIcons name="check-decagram" size={13} color={colors.primary} />
+              <Text style={styles.issuedPillText}>Issued</Text>
             </View>
-          )}
+            <Text style={styles.cardDate}>{item.issuedAtLabel}</Text>
+          </View>
+
+          <View>
+            <Text style={styles.cardTitle}>{item.certificateType || 'Certificate of Donation'}</Text>
+            <Text style={styles.cardSubtitle}>{item.organizationName || 'Hair for Hope'}</Text>
+            <Text style={styles.cardCertificateNumber} numberOfLines={2}>
+              Certificate No. {item.certificateNumber || 'Pending'}
+            </Text>
+          </View>
+
+          <View style={styles.cardActions}>
+            <View style={styles.viewCertificateLink}>
+              <Text style={styles.viewCertificateText}>View</Text>
+              <MaterialCommunityIcons name="chevron-right" size={17} color={colors.primary} />
+            </View>
+          </View>
         </View>
-      </View>
+      </LinearGradient>
     </Pressable>
   );
 }
@@ -488,9 +587,8 @@ export default function DonorAchievementsScreen() {
   const [feedback, setFeedback] = useState(null);
   const [selectedCertificate, setSelectedCertificate] = useState(null);
   const [isBusy, setIsBusy] = useState(false);
-  const [isSharingAvailable, setIsSharingAvailable] = useState(false);
   const [activeSort, setActiveSort] = useState('recent');
-  const [activeAchievementTab, setActiveAchievementTab] = useState('certificates');
+  const dismissFeedback = React.useCallback(() => setFeedback(null), []);
 
   useEffect(() => {
     if (!certificateId || state.isLoading || selectedCertificate) return;
@@ -501,24 +599,9 @@ export default function DonorAchievementsScreen() {
     ));
 
     if (matchingCertificate) {
-      setActiveAchievementTab('certificates');
       setSelectedCertificate(matchingCertificate);
     }
   }, [certificateId, selectedCertificate, state.certificates, state.isLoading]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const loadCapabilities = async () => {
-      const supported = await isCertificateSharingSupported();
-      if (!cancelled) setIsSharingAvailable(supported);
-    };
-
-    loadCapabilities();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -635,6 +718,7 @@ export default function DonorAchievementsScreen() {
   const activeSortLabel = SORT_OPTIONS.find((option) => option.key === activeSort)?.label || SORT_OPTIONS[0].label;
   const totalAchievements = state.certificates.length;
   const patientsHelped = state.patientHelpedCount;
+  const unlockedMilestoneCount = [1, 5, 10].filter((target) => totalAchievements >= target).length;
 
   const toggleSort = () => {
     setActiveSort((current) => (current === 'recent' ? 'oldest' : 'recent'));
@@ -643,21 +727,6 @@ export default function DonorAchievementsScreen() {
   const handleNavPress = (item) => {
     if (!item?.route) return;
     router.replace(item.route);
-  };
-
-  const handleOpenStoredCertificate = async (url) => {
-    if (!url) {
-      setFeedback({ type: 'info', title: 'No stored file', message: 'There is no uploaded certificate file for this record yet.' });
-      return;
-    }
-
-    const supported = await Linking.canOpenURL(url);
-    if (supported) {
-      await Linking.openURL(url);
-      return;
-    }
-
-    setFeedback({ type: 'error', title: 'Cannot open file', message: 'This certificate file could not be opened on this device.' });
   };
 
   const handleViewCertificate = async (certificate) => {
@@ -696,17 +765,22 @@ export default function DonorAchievementsScreen() {
     }
   };
 
-  const handleSharePdf = async (certificate) => {
+  const handleSavePdf = async (certificate, preparedFileUri = '') => {
     try {
       ensureDonorName(certificate);
-      if (!isSharingAvailable) throw new Error('Sharing is not available on this device right now.');
       setIsBusy(true);
       setFeedback(null);
-      const file = await generateDonorCertificatePdf(certificate, { colors });
-      await shareDonorCertificatePdf(file.uri);
-      setFeedback({ type: 'success', title: 'Certificate ready', message: 'Your certificate PDF has been opened in the share sheet.' });
+      const fileUri = preparedFileUri || (await generateDonorCertificatePdf(certificate, { colors })).uri;
+      const savedFile = await saveDonorCertificatePdfToDownloads(fileUri, certificate);
+      setFeedback({
+        type: 'success',
+        title: savedFile.location === 'Downloads' ? 'PDF saved' : 'Certificate ready',
+        message: savedFile.location === 'Downloads'
+          ? `${savedFile.fileName} was saved to your Downloads folder.`
+          : 'Choose Save to Files to keep the certificate on your device.',
+      });
     } catch (error) {
-      setFeedback({ type: 'error', title: 'Certificate unavailable', message: error.message || 'Unable to prepare the certificate right now.' });
+      setFeedback({ type: 'error', title: 'Unable to save PDF', message: error.message || 'Unable to save the certificate right now.' });
     } finally {
       setIsBusy(false);
     }
@@ -749,67 +823,72 @@ export default function DonorAchievementsScreen() {
       )}
     >
       <View style={styles.screen}>
-        {feedback ? (
-          <StatusBanner
-            variant={feedback.type}
-            title={feedback.title}
-            message={feedback.message}
-            dismissible
-            onDismiss={() => setFeedback(null)}
-          />
-        ) : null}
-
+        <AnimatedSection delay={20}>
           <LinearGradient
             colors={[colors.primaryContainer, theme.colors.palette.wine700, theme.colors.palette.wine600]}
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 1 }}
             style={styles.impactBanner}
           >
-            <View pointerEvents="none" style={styles.impactBannerGlow} />
-            <View style={styles.bannerHeader}>
-              <View style={styles.bannerIconWrap}>
-                <MaterialCommunityIcons name="trophy-outline" size={25} color={colors.onPrimary} />
+              <View pointerEvents="none" style={styles.impactBannerGlow} />
+              <View style={styles.bannerHeader}>
+                <View style={styles.bannerIconWrap}>
+                  <MaterialCommunityIcons name="trophy-outline" size={25} color={colors.onPrimary} />
+                </View>
+                <View style={styles.bannerHeadingCopy}>
+                  <Text style={styles.bannerEyebrow}>YOUR GIVING JOURNEY</Text>
+                  <Text style={styles.bannerTitle}>Donation impact</Text>
+                </View>
               </View>
-              <Text style={styles.bannerTitle}>Donation Impact</Text>
-            </View>
-            <View style={styles.statsGrid}>
-              <StatBlock value={String(totalAchievements)} label="Achievements" styles={styles} />
-              <StatBlock value={String(patientsHelped)} label="Patients Helped" styles={styles} />
-            </View>
-            <MaterialCommunityIcons name="trophy" size={128} color={colors.bannerWatermark} style={styles.bannerWatermark} />
+              <View style={styles.statsGrid}>
+                <StatBlock value={String(totalAchievements)} label="Certificates earned" styles={styles} />
+                <StatBlock value={String(patientsHelped)} label="Patients helped" styles={styles} />
+              </View>
+              <MaterialCommunityIcons name="trophy" size={128} color={colors.bannerWatermark} style={styles.bannerWatermark} />
           </LinearGradient>
+        </AnimatedSection>
 
-        <View style={[styles.achievementTabs, { borderBottomColor: colors.outlineVariant }]}>
-          {ACHIEVEMENT_TABS.map((tab) => {
-            const isActive = activeAchievementTab === tab.key;
-            return (
-              <Pressable
-                key={tab.key}
-                onPress={() => setActiveAchievementTab(tab.key)}
-                style={[
-                  styles.achievementTab,
-                  isActive ? [styles.achievementTabActive, { borderBottomColor: colors.primary }] : null,
-                ]}
+        {state.isLoading ? (
+          <View style={styles.stateWrap}>
+            <ActivityIndicator color={colors.primary} />
+            <Text style={styles.stateText}>Loading donor achievements...</Text>
+          </View>
+        ) : state.error ? (
+          <View style={styles.stateWrap}>
+            <Text style={styles.stateText}>{state.error}</Text>
+          </View>
+        ) : (
+          <View style={styles.contentStack}>
+            <AnimatedSection delay={100}>
+              <LinearGradient
+                colors={[colors.surface, colors.surfaceLow, colors.background]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.milestonePanel}
               >
-                <Text
-                  numberOfLines={1}
-                  adjustsFontSizeToFit
-                  minimumFontScale={0.9}
-                  style={[
-                    styles.achievementTabText,
-                    { color: isActive ? colors.primary : colors.outline },
-                  ]}
-                >
-                  {tab.label}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
+                <View style={styles.sectionHeadingRow}>
+                  <SectionTitleRow
+                    title="Milestones"
+                    icon="trophy-award"
+                    color={colors.onSurface}
+                    iconColor={colors.primary}
+                    accentColor={colors.primary}
+                    titleStyle={styles.sectionTitle}
+                  />
+                  <View style={styles.progressPill}>
+                    <Text style={styles.progressPillText}>{unlockedMilestoneCount} of 3 unlocked</Text>
+                  </View>
+                </View>
+                <Text style={styles.sectionSupportText}>Every verified donation moves your impact forward.</Text>
+                <View style={styles.milestonesRow}>
+                  <MilestoneBadge icon="certificate" label="First donation" locked={totalAchievements < 1} colors={colors} styles={styles} />
+                  <MilestoneBadge icon="star-four-points" label="5 donations" locked={totalAchievements < 5} colors={colors} styles={styles} />
+                  <MilestoneBadge icon="trophy-award" label="10 donations" locked={totalAchievements < 10} colors={colors} styles={styles} />
+                </View>
+              </LinearGradient>
+            </AnimatedSection>
 
-        {activeAchievementTab === 'certificates' ? (
-          <View style={styles.tabPanelStack}>
-            <View style={styles.section}>
+            <AnimatedSection delay={170} style={styles.section}>
               <View style={styles.sectionHeadingRow}>
                 <SectionTitleRow
                   title="Certificates"
@@ -819,72 +898,42 @@ export default function DonorAchievementsScreen() {
                   accentColor={colors.primary}
                   titleStyle={styles.sectionTitle}
                 />
-                <Pressable style={styles.sortPill} onPress={toggleSort}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`Sort certificates. Current order: ${activeSortLabel}`}
+                  style={({ pressed }) => [styles.sortPill, pressed ? styles.sortPillPressed : null]}
+                  onPress={toggleSort}
+                >
                   <Text style={styles.sortText}>{activeSortLabel}</Text>
                   <MaterialCommunityIcons name="chevron-down" size={18} color={colors.onSurfaceVariant} />
                 </Pressable>
               </View>
-            </View>
+              <Text style={styles.sectionSupportText}>Your verified donation records, ready to view or share.</Text>
+            </AnimatedSection>
 
-            {state.isLoading ? (
-              <View style={styles.stateWrap}>
-                <ActivityIndicator color={colors.primary} />
-                <Text style={styles.stateText}>Loading donor achievements...</Text>
-              </View>
-            ) : state.error ? (
-              <View style={styles.stateWrap}>
-                <Text style={styles.stateText}>{state.error}</Text>
-              </View>
-            ) : certificateRows.length ? (
+            {certificateRows.length ? (
               <View style={styles.cardsGrid}>
-                {certificateRows.map((item) => (
-                  <CertificateRow
-                    key={String(item.id)}
-                    item={item}
-                    onView={handleViewCertificate}
-                    onOpenStoredFile={handleOpenStoredCertificate}
-                    colors={colors}
-                    styles={styles}
-                  />
+                {certificateRows.map((item, index) => (
+                  <AnimatedSection key={String(item.id)} delay={220 + Math.min(index, 4) * theme.motion.stagger}>
+                    <CertificateRow
+                      item={item}
+                      onView={handleViewCertificate}
+                      colors={colors}
+                      styles={styles}
+                    />
+                  </AnimatedSection>
                 ))}
               </View>
             ) : (
-              <EmptyDataState
-                compact
-                showCountBadge={false}
-                title="No achievements yet"
-                message="Your certificates will appear here once available."
-                style={styles.emptyState}
-              />
-            )}
-          </View>
-        ) : (
-          <View style={styles.tabPanelStack}>
-            {state.isLoading ? (
-              <View style={styles.stateWrap}>
-                <ActivityIndicator color={colors.primary} />
-                <Text style={styles.stateText}>Loading donor achievements...</Text>
-              </View>
-            ) : state.error ? (
-              <View style={styles.stateWrap}>
-                <Text style={styles.stateText}>{state.error}</Text>
-              </View>
-            ) : (
-              <View style={styles.section}>
-                <SectionTitleRow
-                  title="Milestones"
-                  icon="trophy-award"
-                  color={colors.onSurface}
-                  iconColor={colors.primary}
-                  accentColor={colors.primary}
-                  titleStyle={styles.sectionTitle}
+              <AnimatedSection delay={220}>
+                <EmptyDataState
+                  compact
+                  showCountBadge={false}
+                  title="No certificates yet"
+                  message="Your first verified donation certificate will appear here."
+                  style={styles.emptyState}
                 />
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.milestonesRow}>
-                  <MilestoneBadge icon="certificate" label="First Donation" locked={totalAchievements < 1} colors={colors} styles={styles} />
-                  <MilestoneBadge icon="star-four-points" label="5 Donations" locked={totalAchievements < 5} colors={colors} styles={styles} />
-                  <MilestoneBadge icon="trophy-award" label="10 Donations" locked={totalAchievements < 10} colors={colors} styles={styles} />
-                </ScrollView>
-              </View>
+              </AnimatedSection>
             )}
           </View>
         )}
@@ -898,7 +947,13 @@ export default function DonorAchievementsScreen() {
         styles={styles}
         onClose={() => setSelectedCertificate(null)}
         onPrint={handlePrintCertificate}
-        onSharePdf={handleSharePdf}
+        onSavePdf={handleSavePdf}
+      />
+      <FloatingToast
+        feedback={feedback}
+        colors={colors}
+        styles={styles}
+        onDismiss={dismissFeedback}
       />
     </DashboardLayout>
   );
@@ -915,45 +970,15 @@ function StatBlock({ value, label, styles }) {
 
 const makeStyles = (colors) => StyleSheet.create({
   screen: {
-    gap: 20,
-    paddingBottom: 24,
-  },
-  achievementTabs: {
-    minHeight: 44,
-    marginHorizontal: -theme.spacing.md,
-    marginTop: -theme.spacing.sm,
-    paddingHorizontal: theme.spacing.lg,
-    borderBottomWidth: 1,
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    justifyContent: 'space-around',
-  },
-  achievementTab: {
-    flex: 1,
-    minHeight: 40,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderBottomWidth: 2,
-    borderBottomColor: 'transparent',
-    paddingTop: 4,
-    paddingBottom: 8,
-    paddingHorizontal: theme.spacing.md,
-  },
-  achievementTabActive: {
-    borderBottomWidth: 2,
-  },
-  achievementTabText: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.compact.caption,
-    fontWeight: theme.typography.weights.bold,
-    textAlign: 'center',
+    gap: 18,
+    paddingBottom: 28,
   },
   impactBanner: {
     position: 'relative',
     overflow: 'hidden',
     gap: theme.spacing.md,
     padding: theme.spacing.lg,
-    borderRadius: 22,
+    borderRadius: 26,
     borderWidth: 1,
     borderColor: withOpacity(colors.onPrimary, 0.2),
     shadowColor: colors.shadow,
@@ -975,6 +1000,18 @@ const makeStyles = (colors) => StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.spacing.sm,
+  },
+  bannerHeadingCopy: {
+    flex: 1,
+    gap: 1,
+  },
+  bannerEyebrow: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 9,
+    lineHeight: 12,
+    fontWeight: '800',
+    letterSpacing: 1.1,
+    color: colors.statLabel,
   },
   bannerIconWrap: {
     width: 42,
@@ -1029,8 +1066,8 @@ const makeStyles = (colors) => StyleSheet.create({
   section: {
     gap: 8,
   },
-  tabPanelStack: {
-    gap: theme.spacing.lg,
+  contentStack: {
+    gap: 18,
   },
   sectionTitle: {
     fontFamily: theme.typography.fontFamily,
@@ -1040,29 +1077,46 @@ const makeStyles = (colors) => StyleSheet.create({
     color: colors.onSurface,
   },
   milestonesRow: {
-    gap: 12,
-    paddingVertical: 6,
-  },
-  milestoneItem: {
-    width: 80,
-    alignItems: 'center',
+    flexDirection: 'row',
     gap: 8,
+    paddingTop: 6,
   },
-  lockedMilestone: {
-    opacity: 0.55,
-  },
-  milestoneCircle: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.surfaceHigh,
+  milestonePanel: {
+    gap: 8,
+    padding: 16,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: colors.outlineVariant,
     shadowColor: colors.shadow,
-    shadowOpacity: 1,
+    shadowOpacity: 0.12,
     shadowRadius: 14,
     shadowOffset: { width: 0, height: 6 },
     elevation: 3,
+  },
+  milestoneItem: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 126,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    paddingHorizontal: 6,
+    paddingVertical: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.outlineVariant,
+  },
+  lockedMilestone: {
+    opacity: 0.68,
+  },
+  milestoneCircle: {
+    position: 'relative',
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.impactIconSurface,
   },
   milestoneCircleLocked: {
     backgroundColor: colors.surface,
@@ -1072,14 +1126,33 @@ const makeStyles = (colors) => StyleSheet.create({
     shadowOpacity: 0,
     elevation: 0,
   },
+  milestoneCheck: {
+    position: 'absolute',
+    right: -1,
+    bottom: -1,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.primary,
+    borderWidth: 2,
+    borderColor: colors.surface,
+  },
   milestoneLabel: {
     textAlign: 'center',
     fontFamily: theme.typography.fontFamily,
     fontSize: 10,
-    lineHeight: 14,
+    lineHeight: 13,
     fontWeight: '700',
-    textTransform: 'uppercase',
     color: colors.onSurfaceVariant,
+  },
+  milestoneState: {
+    textAlign: 'center',
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 9,
+    lineHeight: 12,
+    color: colors.primary,
   },
   lockedText: {
     color: colors.outline,
@@ -1089,6 +1162,26 @@ const makeStyles = (colors) => StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 12,
+  },
+  sectionSupportText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 12,
+    lineHeight: 18,
+    color: colors.onSurfaceVariant,
+  },
+  progressPill: {
+    flexShrink: 0,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: colors.impactIconSurface,
+  },
+  progressPillText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 10,
+    lineHeight: 13,
+    fontWeight: '700',
+    color: colors.primary,
   },
   sortPill: {
     flexDirection: 'row',
@@ -1101,6 +1194,9 @@ const makeStyles = (colors) => StyleSheet.create({
     borderColor: colors.outlineVariant,
     backgroundColor: colors.surface,
   },
+  sortPillPressed: {
+    opacity: 0.72,
+  },
   sortText: {
     fontFamily: theme.typography.fontFamily,
     fontSize: 11,
@@ -1110,26 +1206,30 @@ const makeStyles = (colors) => StyleSheet.create({
     gap: 14,
   },
   certificateCard: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 16,
-    padding: 16,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: colors.outlineVariant,
-    backgroundColor: colors.surface,
+    borderRadius: 24,
     shadowColor: colors.shadow,
-    shadowOpacity: 0.14,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 3,
+    shadowOpacity: 0.12,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 7 },
+    elevation: 4,
   },
   certificateCardPressed: {
-    opacity: 0.96,
+    opacity: 0.86,
+    transform: [{ scale: 0.992 }],
+  },
+  certificateCardGradient: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 14,
+    padding: 14,
+    overflow: 'hidden',
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: colors.outlineVariant,
   },
   certificateThumb: {
-    width: 92,
-    height: 124,
+    width: 82,
+    height: 112,
     flexShrink: 0,
     alignItems: 'center',
     justifyContent: 'center',
@@ -1160,6 +1260,22 @@ const makeStyles = (colors) => StyleSheet.create({
     alignItems: 'flex-start',
     gap: 8,
   },
+  issuedPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: colors.impactIconSurface,
+  },
+  issuedPillText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 9,
+    lineHeight: 12,
+    fontWeight: '700',
+    color: colors.primary,
+  },
   cardDate: {
     flexShrink: 1,
     textAlign: 'right',
@@ -1180,55 +1296,35 @@ const makeStyles = (colors) => StyleSheet.create({
     lineHeight: 18,
     color: colors.secondary,
   },
-  cardMetaRow: {
-    flexDirection: 'row',
-    gap: 12,
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: colors.surfaceHighest,
-  },
-  cardMetaItem: {
-    gap: 2,
-  },
-  cardMetaWide: {
-    flex: 1,
-  },
-  cardMetaLabel: {
+  cardCertificateNumber: {
+    marginTop: 3,
     fontFamily: theme.typography.fontFamily,
     fontSize: 10,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    color: colors.outline,
-  },
-  cardMetaValue: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: 12,
-    fontWeight: '700',
-    color: colors.onSurface,
+    lineHeight: 14,
+    color: colors.onSurfaceVariant,
   },
   cardActions: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-end',
     alignItems: 'center',
-    gap: 12,
-    flexWrap: 'wrap',
-  },
-  openStoredButton: {
-    minHeight: 36,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 4,
-    paddingVertical: 4,
+    marginTop: 'auto',
   },
   linkPressed: {
     opacity: 0.72,
   },
-  openStoredLink: {
+  viewCertificateLink: {
+    minHeight: 36,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 1,
+    paddingHorizontal: 4,
+  },
+  viewCertificateText: {
     fontFamily: theme.typography.fontFamily,
     fontSize: 12,
+    lineHeight: 16,
     fontWeight: '700',
-    color: colors.secondary,
+    color: colors.primary,
   },
   stateWrap: {
     alignItems: 'center',
@@ -1273,6 +1369,8 @@ const makeStyles = (colors) => StyleSheet.create({
     backgroundColor: colors.background,
   },
   detailHeader: {
+    position: 'relative',
+    overflow: 'hidden',
     minHeight: 56,
     paddingHorizontal: 16,
     paddingVertical: theme.spacing.xs,
@@ -1281,11 +1379,20 @@ const makeStyles = (colors) => StyleSheet.create({
     justifyContent: 'space-between',
     gap: 8,
   },
+  detailHeaderGlow: {
+    position: 'absolute',
+    width: 150,
+    height: 150,
+    borderRadius: 75,
+    right: -42,
+    top: -90,
+    backgroundColor: withOpacity(colors.onPrimary, 0.12),
+  },
   detailHeaderCopy: {
     flex: 1,
     minWidth: 0,
     alignItems: 'center',
-    gap: 0,
+    gap: 1,
   },
   headerSpacer: {
     width: 40,
@@ -1297,6 +1404,9 @@ const makeStyles = (colors) => StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: 20,
+    borderWidth: 1,
+    borderColor: withOpacity(colors.onPrimary, 0.22),
+    backgroundColor: withOpacity(colors.onPrimary, 0.1),
   },
   headerButtonPressed: {
     opacity: 0.82,
@@ -1308,290 +1418,181 @@ const makeStyles = (colors) => StyleSheet.create({
     fontWeight: '700',
     color: colors.primary,
   },
+  detailHeaderSubtitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 9,
+    lineHeight: 12,
+    color: withOpacity(colors.onPrimary, 0.78),
+  },
+  detailScroll: {
+    flex: 1,
+  },
   detailContent: {
-    gap: 14,
+    gap: 18,
     padding: 16,
-    paddingBottom: 36,
+    paddingTop: 18,
+    paddingBottom: 112,
   },
-  canvasWrap: {
-    alignItems: 'center',
-  },
-  certificateCanvas: {
-    position: 'relative',
+  pdfPreviewEntry: {
     width: '100%',
     maxWidth: 800,
     aspectRatio: 1.414,
+    alignSelf: 'center',
+    borderRadius: 20,
+    shadowColor: colors.shadow,
+    shadowOpacity: 0.16,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 4,
+  },
+  pdfPreviewShell: {
+    position: 'relative',
+    flex: 1,
+    width: '100%',
+    height: '100%',
     overflow: 'hidden',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 16,
-    borderRadius: 12,
-    borderWidth: 3,
-    borderColor: colors.gold,
+    borderRadius: 20,
     backgroundColor: colors.surface,
   },
-  certificatePattern: {
-    ...StyleSheet.absoluteFillObject,
-    opacity: 0.08,
-    backgroundColor: colors.surfaceLow,
+  pdfPreviewPressed: {
+    opacity: 0.9,
+    transform: [{ scale: 0.992 }],
   },
-  canvasHeader: {
+  pdfPreview: {
     width: '100%',
+    height: '100%',
+    backgroundColor: colors.surface,
+  },
+  pdfPreviewFallback: {
+    flex: 1,
     alignItems: 'center',
-    zIndex: 1,
-    gap: 2,
+    justifyContent: 'center',
+    gap: 8,
+    padding: 24,
+    backgroundColor: colors.surface,
   },
-  canvasBrand: {
-    fontFamily: theme.typography.fontFamilyDisplay,
-    fontSize: 20,
-    lineHeight: 24,
-    fontWeight: '800',
-    color: colors.primary,
-  },
-  canvasTitle: {
+  pdfPreviewFallbackTitle: {
     textAlign: 'center',
-    fontFamily: theme.typography.fontFamilyDisplay,
+    fontFamily: theme.typography.fontFamily,
     fontSize: 14,
-    lineHeight: 18,
-    fontWeight: '800',
-    textTransform: 'uppercase',
-    letterSpacing: 1.2,
-    color: colors.onSurface,
-  },
-  goldRule: {
-    width: 72,
-    height: 2,
-    marginTop: 4,
-    borderRadius: 2,
-    backgroundColor: colors.gold,
-  },
-  canvasBody: {
-    zIndex: 1,
-    width: '100%',
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 2,
-  },
-  canvasIntro: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: 11,
-    lineHeight: 14,
-    fontStyle: 'italic',
-    color: colors.secondary,
-  },
-  canvasName: {
-    width: '100%',
-    textAlign: 'center',
-    fontFamily: theme.typography.fontFamilyDisplay,
-    fontSize: 22,
-    lineHeight: 24,
-    fontWeight: '800',
-    color: colors.primary,
-  },
-  canvasCopy: {
-    maxWidth: 520,
-    textAlign: 'center',
-    fontFamily: theme.typography.fontFamily,
-    fontSize: 10,
-    lineHeight: 14,
-    color: colors.secondary,
-  },
-  canvasFooter: {
-    zIndex: 1,
-    width: '100%',
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    justifyContent: 'space-between',
-    paddingTop: 2,
-  },
-  signatureBlock: {
-    alignItems: 'center',
-  },
-  signatureLine: {
-    width: 88,
-    height: 1,
-    marginBottom: 6,
-    backgroundColor: colors.outline,
-  },
-  signatureLabel: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: 7,
-    lineHeight: 11,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    color: colors.secondary,
-  },
-  seal: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  qrBox: {
-    width: 44,
-    height: 44,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.surfaceHigh,
-  },
-  impactCard: {
-    flexDirection: 'row',
-    gap: 10,
-    padding: 14,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: colors.outlineVariant,
-    backgroundColor: colors.background,
-  },
-  impactIconWrap: {
-    width: 44,
-    height: 44,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.impactIconSurface,
-  },
-  impactCopy: {
-    flex: 1,
-    gap: 4,
-  },
-  impactTitle: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: 15,
+    lineHeight: 19,
     fontWeight: '700',
     color: colors.onSurface,
   },
-  impactText: {
+  pdfPreviewFallbackText: {
+    textAlign: 'center',
     fontFamily: theme.typography.fontFamily,
     fontSize: 11,
     lineHeight: 16,
     color: colors.onSurfaceVariant,
   },
-  detailTabs: {
-    flexDirection: 'row',
-    alignItems: 'stretch',
-    gap: 0,
-    paddingHorizontal: 4,
-    paddingTop: 2,
-    borderBottomWidth: 1,
-  },
-  detailTab: {
-    flex: 1,
-    minHeight: 40,
+  pdfLoadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
     alignItems: 'center',
-    justifyContent: 'flex-start',
-    paddingHorizontal: 10,
-    paddingTop: 8,
-    paddingBottom: 4,
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: withOpacity(colors.surface, 0.92),
   },
-  detailTabActive: {
-    borderBottomColor: colors.primary,
-  },
-  detailTabPressed: {
-    opacity: 0.88,
-  },
-  detailTabText: {
+  pdfLoadingText: {
     fontFamily: theme.typography.fontFamily,
-    fontSize: 13,
-    lineHeight: 18,
-    fontWeight: '600',
+    fontSize: 11,
+    lineHeight: 16,
     color: colors.onSurfaceVariant,
-    textAlign: 'center',
   },
-  detailTabTextActive: {
-    fontWeight: '700',
-  },
-  detailTabIndicator: {
-    width: '100%',
-    height: 3,
-    marginTop: 10,
-    borderRadius: 999,
-    backgroundColor: 'transparent',
-  },
-  tabContent: {
-    gap: 14,
-  },
-  infoPanel: {
-    gap: 12,
-    padding: 14,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: colors.outlineVariant,
-    backgroundColor: colors.background,
-  },
-  actionsPanel: {
-    gap: 12,
-    padding: 14,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: colors.outlineVariant,
-    backgroundColor: colors.background,
-  },
-  infoPair: {
-    gap: 2,
-  },
-  infoGridRow: {
+  expandPreviewBadge: {
+    position: 'absolute',
+    right: 10,
+    bottom: 10,
     flexDirection: 'row',
-    gap: 12,
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: withOpacity(colors.primary, 0.92),
   },
-  infoColumn: {
-    flex: 1,
-    minWidth: 0,
-  },
-  infoLabel: {
+  expandPreviewBadgeText: {
     fontFamily: theme.typography.fontFamily,
     fontSize: 9,
+    lineHeight: 12,
     fontWeight: '700',
-    textTransform: 'uppercase',
-    color: colors.secondary,
+    color: colors.onPrimary,
   },
-  infoValue: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: 12,
-    color: colors.onSurface,
-  },
-  conditionChip: {
-    alignSelf: 'flex-start',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 7,
-    paddingHorizontal: 9,
-    paddingVertical: 5,
-    borderRadius: 12,
-    backgroundColor: colors.surfaceHigh,
-  },
-  conditionDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: colors.primary,
-  },
-  primaryAction: {
-    minHeight: 46,
-    borderRadius: 999,
+  previewCaption: {
+    alignSelf: 'center',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
+    paddingHorizontal: 12,
+  },
+  previewCaptionText: {
+    textAlign: 'center',
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 11,
+    lineHeight: 16,
+    color: colors.onSurfaceVariant,
+  },
+  stickyActionArea: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    bottom: 0,
+    zIndex: 10,
+    paddingTop: 12,
+    backgroundColor: 'transparent',
+  },
+  stickyActionDock: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+  },
+  primaryAction: {
+    flex: 1,
+    height: 52,
+    borderRadius: 20,
+    overflow: 'hidden',
     backgroundColor: colors.primary,
+    elevation: 3,
+  },
+  actionButtonContent: {
+    flex: 1,
+    alignSelf: 'stretch',
+    height: 52,
+    borderRadius: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
   },
   primaryActionText: {
     fontFamily: theme.typography.fontFamily,
     fontSize: 12,
+    lineHeight: 16,
     fontWeight: '700',
     textTransform: 'uppercase',
     color: colors.onPrimary,
   },
   secondaryAction: {
-    minHeight: 46,
-    borderRadius: 999,
+    flex: 1,
+    height: 52,
+    borderRadius: 20,
+    overflow: 'hidden',
     borderWidth: 1,
     borderColor: colors.primary,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
+    backgroundColor: 'transparent',
+    shadowColor: colors.shadow,
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 2,
+  },
+  actionPressed: {
+    opacity: 0.84,
+    transform: [{ scale: 0.988 }],
   },
   disabledAction: {
     opacity: 0.48,
@@ -1599,8 +1600,118 @@ const makeStyles = (colors) => StyleSheet.create({
   secondaryActionText: {
     fontFamily: theme.typography.fontFamily,
     fontSize: 12,
+    lineHeight: 16,
     fontWeight: '700',
     textTransform: 'uppercase',
     color: colors.primary,
+  },
+  expandedPreviewScreen: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
+  expandedPreviewHeader: {
+    minHeight: 68,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.outlineVariant,
+  },
+  expandedPreviewTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: 17,
+    lineHeight: 22,
+    fontWeight: '700',
+    color: colors.onSurface,
+  },
+  expandedPreviewSubtitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 10,
+    lineHeight: 14,
+    color: colors.onSurfaceVariant,
+  },
+  expandedPreviewClose: {
+    width: 42,
+    height: 42,
+    flexShrink: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 21,
+    backgroundColor: colors.surfaceLow,
+  },
+  expandedPdfStage: {
+    flex: 1,
+    overflow: 'hidden',
+    margin: 14,
+    borderRadius: 20,
+    backgroundColor: colors.surface,
+  },
+  expandedPdf: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: colors.surface,
+  },
+  toastOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    paddingHorizontal: 16,
+  },
+  toastCard: {
+    width: '100%',
+    maxWidth: 520,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 11,
+    padding: 14,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: colors.outlineVariant,
+    backgroundColor: colors.surface,
+    shadowColor: colors.shadow,
+    shadowOpacity: 0.24,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 10,
+  },
+  toastIcon: {
+    width: 42,
+    height: 42,
+    flexShrink: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 16,
+    backgroundColor: colors.successBg,
+  },
+  toastIconError: {
+    backgroundColor: colors.surfaceHigh,
+  },
+  toastCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  toastTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 14,
+    lineHeight: 19,
+    fontWeight: '700',
+    color: colors.onSurface,
+  },
+  toastMessage: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 11,
+    lineHeight: 16,
+    color: colors.onSurfaceVariant,
+  },
+  toastClose: {
+    width: 32,
+    height: 32,
+    flexShrink: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 16,
   },
 });

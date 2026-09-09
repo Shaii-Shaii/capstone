@@ -32,7 +32,8 @@ import {
     fetchHairSubmissionDetailsBySubmissionId,
     fetchHairSubmissionImagesByDetailIds,
     fetchHairSubmissionLogisticsBySubmissionId,
-    fetchHairSubmissionDetailCountsBySubmissionIds,
+    fetchHairSubmissionProgressSummariesByUserId,
+    fetchHairSubmissionWorkflowEvidenceByIds,
     fetchHairSubmissionForEventByUserId,
     fetchHairSubmissionSummariesByUserId,
     fetchHairSubmissionsByUserId,
@@ -40,6 +41,8 @@ import {
     fetchCurrentHairEligibility,
     fetchLatestHairAnalysisSummaryByUserId,
     fetchDonationCertificateBySubmissionId,
+    fetchDonationCertificatesByUserId,
+    fetchDonorTimelineWigProgressBySubmissionId,
     fetchDonationTimelineProductionByBundleId,
     fetchLatestDonationCertificateByUserId,
     fetchLatestDonationRequirement,
@@ -611,7 +614,7 @@ export const confirmCourierLogisticsDonation = async ({
       buildDonationNotification({
         dedupeKey: `${notificationTypes.logisticsUpdated}:${savedSubmission.submission_id}:courier-confirmed`,
         title: 'Courier donation confirmed',
-        message: `Your Donivra waybill is ${savedSubmission.waybill_code}. Add the courier tracking number after shipping your parcel.`,
+        message: `Your Donivra waybill is ${savedSubmission.waybill_code}. Attach it and upload package proof before adding courier details.`,
         createdAt: new Date().toISOString(),
         referenceId: savedSubmission.submission_id,
       }),
@@ -626,6 +629,41 @@ export const confirmCourierLogisticsDonation = async ({
     deliveryMethod: 'courier',
     rescheduled: false,
   };
+};
+
+export const saveCourierShippingDetails = async ({
+  submissionId = null,
+  courierName = '',
+  trackingNumber = '',
+} = {}) => {
+  const normalizedSubmissionId = Number(submissionId);
+  const normalizedCourierName = String(courierName || '').trim();
+  const normalizedTrackingNumber = String(trackingNumber || '').trim();
+
+  if (!Number.isInteger(normalizedSubmissionId) || normalizedSubmissionId <= 0) {
+    return { success: false, error: 'A valid courier donation is required.' };
+  }
+  if (!normalizedCourierName) {
+    return { success: false, error: 'Enter the courier name.' };
+  }
+  if (!normalizedTrackingNumber) {
+    return { success: false, error: 'Enter the tracking number provided by the courier.' };
+  }
+
+  const result = await supabase.rpc('update_own_courier_shipping_details', {
+    p_submission_id: normalizedSubmissionId,
+    p_courier_name: normalizedCourierName,
+    p_tracking_number: normalizedTrackingNumber,
+  });
+
+  if (result.error || !result.data?.submission_logistics_id) {
+    return {
+      success: false,
+      error: result.error?.message || 'Unable to save the courier details right now.',
+    };
+  }
+
+  return { success: true, logistics: result.data };
 };
 
 export const discardUnscheduledWalkInDonationDraft = async ({
@@ -1261,29 +1299,211 @@ const buildDonationHistory = ({ submissions = [], activeSubmission = null }) => 
     }))
 );
 
-/** Page-specific history loader; avoids initializing logistics, events, QR, and tracking. */
-export const getDonorDonationHistory = async ({ userId, limit = 100 } = {}) => {
-  if (!userId) return { donationHistory: [], error: 'Your session is not ready.' };
+const DONOR_HISTORY_STATUS_LABELS = {
+  pending: 'Submitted',
+  cut: 'Hair received',
+  accepted: 'Hair accepted',
+  wiginproduction: 'Wig in production',
+  wigcreated: 'Wig created',
+  cancelled: 'Cancelled',
+  canceled: 'Cancelled',
+  rejected: 'Not accepted',
+};
 
-  const submissionsResult = await fetchHairSubmissionSummariesByUserId(userId, limit);
-  if (submissionsResult.error) {
-    return {
-      donationHistory: [],
-      error: submissionsResult.error.message || 'Unable to load donation history.',
-    };
-  }
-
-  const history = buildDonationHistory({ submissions: submissionsResult.data || [] });
-  const countsResult = await fetchHairSubmissionDetailCountsBySubmissionIds(
-    history.map((item) => item.submission_id)
+const buildDonorActivityHistory = ({
+  submissions = [],
+  workflowEvidence = [],
+  screenings = [],
+  registeredDrives = [],
+  certificates = [],
+} = {}) => {
+  const activities = [];
+  const realDonations = submissions.filter((submission) => (
+    submission?.submission_id && !isHairCheckOnlySubmission(submission)
+  ));
+  const submissionById = new Map(
+    realDonations.map((submission) => [Number(submission.submission_id), submission])
   );
 
+  registeredDrives.forEach((drive) => {
+    const registration = drive?.registration;
+    if (!registration?.registration_id) return;
+    const attended = isMarkedPresentRegistration(registration);
+    const registeredAt = registration.registered_at || registration.updated_at || null;
+    const attendedAt = registration.rsvp_scanned_at || registration.attendance_marked_at || null;
+    const eventName = String(drive?.event_title || 'donation event').trim();
+
+    activities.push({
+      id: `event-rsvp-${registration.registration_id}`,
+      type: 'event',
+      title: 'Event RSVP confirmed',
+      description: `You registered to attend ${eventName}.`,
+      status: 'Registered',
+      timestamp: registeredAt,
+      date_label: formatHistoryDateLabel(registeredAt),
+      icon: 'calendar-check-outline',
+    });
+    if (attended) {
+      activities.push({
+        id: `event-attended-${registration.registration_id}`,
+        type: 'event',
+        title: 'Event attended',
+        description: `Your attendance at ${eventName} was confirmed.`,
+        status: 'Attended',
+        timestamp: attendedAt || registration.updated_at || null,
+        date_label: formatHistoryDateLabel(attendedAt || registration.updated_at || null),
+        icon: 'account-check-outline',
+      });
+    }
+  });
+
+  realDonations.forEach((submission) => {
+    const submittedAt = submission.created_at || submission.submitted_at || null;
+    const statusKey = normalizeTimelineStatusKey(submission.status);
+    const statusLabel = DONOR_HISTORY_STATUS_LABELS[statusKey] || 'Updated';
+    activities.push({
+      id: `donation-submitted-${submission.submission_id}`,
+      type: 'donation',
+      title: 'Donation submitted',
+      description: 'Your hair donation journey was started.',
+      status: 'Submitted',
+      timestamp: submittedAt,
+      date_label: formatHistoryDateLabel(submittedAt),
+      reference: submission.donation_reference || '',
+      icon: 'hand-heart-outline',
+    });
+
+    const statusAt = submission.updated_at || submission.cut_at || null;
+    if (statusKey && statusKey !== 'pending' && statusAt) {
+      activities.push({
+        id: `donation-status-${submission.submission_id}-${statusKey}`,
+        type: 'timeline',
+        title: 'Donation timeline updated',
+        description: `Your donation reached: ${statusLabel}.`,
+        status: statusLabel,
+        timestamp: statusAt,
+        date_label: formatHistoryDateLabel(statusAt),
+        reference: submission.donation_reference || '',
+        icon: 'timeline-check-outline',
+      });
+    }
+  });
+
+  workflowEvidence.forEach((record) => {
+    const submission = submissionById.get(Number(record?.submission?.submission_id));
+    if (!submission) return;
+    (record?.trackingEntries || []).forEach((entry) => {
+      const timestamp = entry?.updated_at || null;
+      activities.push({
+        id: `timeline-${entry?.tracking_id || entry?.id || `${submission.submission_id}-${timestamp || 'update'}`}`,
+        type: 'timeline',
+        title: String(entry?.title || 'Donation timeline updated').trim(),
+        description: String(entry?.description || 'A new donation milestone was recorded.').trim(),
+        status: String(entry?.status || 'Updated').trim(),
+        timestamp,
+        date_label: formatHistoryDateLabel(timestamp),
+        reference: submission.donation_reference || '',
+        icon: 'timeline-check-outline',
+      });
+    });
+  });
+
+  certificates.forEach((certificate) => {
+    if (!submissionById.has(Number(certificate?.submission_id))) return;
+    const timestamp = certificate?.issued_at || null;
+    activities.push({
+      id: `certificate-${certificate?.certificate_id || certificate?.id}`,
+      type: 'certificate',
+      title: 'Donation certificate issued',
+      description: 'Your donation certificate is ready to view in Achievements.',
+      status: 'Certificate ready',
+      timestamp,
+      date_label: formatHistoryDateLabel(timestamp),
+      reference: certificate?.certificate_number || '',
+      icon: 'certificate-outline',
+    });
+  });
+
+  screenings.forEach((screening) => {
+    const timestamp = screening?.created_at || null;
+    const linkedSubmission = submissionById.get(Number(screening?.submission_id));
+    activities.push({
+      id: `analysis-${screening?.ai_screening_id || screening?.id}`,
+      type: 'analysis',
+      title: 'Hair Analysis completed',
+      description: 'Your Hair Analysis result and recommendations were saved.',
+      status: String(screening?.decision || 'Analysis saved').trim(),
+      timestamp,
+      date_label: formatHistoryDateLabel(timestamp),
+      icon: 'creation-outline',
+    });
+    if (linkedSubmission) {
+      const usedAt = linkedSubmission.created_at || linkedSubmission.submitted_at || null;
+      activities.push({
+        id: `analysis-used-${screening?.ai_screening_id || screening?.id}-${linkedSubmission.submission_id}`,
+        type: 'analysis',
+        title: 'Hair Analysis used for donation',
+        description: 'A saved Hair Analysis was used to verify your donation journey.',
+        status: 'Used for donation',
+        timestamp: usedAt,
+        date_label: formatHistoryDateLabel(usedAt),
+        reference: linkedSubmission.donation_reference || '',
+        icon: 'check-decagram-outline',
+      });
+    }
+  });
+
+  return activities
+    .sort((left, right) => {
+      const leftTime = left?.timestamp ? new Date(left.timestamp).getTime() : 0;
+      const rightTime = right?.timestamp ? new Date(right.timestamp).getTime() : 0;
+      return rightTime - leftTime;
+    });
+};
+
+/**
+ * Page-only activity loader. Call this only after the donor opens History; it
+ * deliberately does not participate in profile/dashboard initialization.
+ */
+export const getDonorDonationHistory = async ({ userId, databaseUserId, limit = 100 } = {}) => {
+  if (!userId || !databaseUserId) return { historyItems: [], donationHistory: [], error: 'Your session is not ready.' };
+
+  const [submissionsResult, screeningsResult, drivesResult, certificatesResult] = await Promise.all([
+    fetchHairSubmissionProgressSummariesByUserId(userId, limit),
+    fetchAiScreeningsByUserId(databaseUserId, limit),
+    fetchRegisteredDonationDrivesByUserId({ databaseUserId, limit }),
+    fetchDonationCertificatesByUserId(userId, limit),
+  ]);
+  const submissions = submissionsResult.data || [];
+  const realSubmissionIds = submissions
+    .filter((submission) => !isHairCheckOnlySubmission(submission))
+    .map((submission) => submission.submission_id)
+    .filter(Boolean);
+  const workflowResult = realSubmissionIds.length
+    ? await fetchHairSubmissionWorkflowEvidenceByIds({
+        userId,
+        submissionIds: realSubmissionIds,
+        trackingLimitPerSubmission: 24,
+      })
+    : { data: [], error: null };
+  const historyItems = buildDonorActivityHistory({
+    submissions,
+    workflowEvidence: workflowResult.data || [],
+    screenings: screeningsResult.data || [],
+    registeredDrives: drivesResult.data || [],
+    certificates: certificatesResult.data || [],
+  });
+  const error = submissionsResult.error
+    || screeningsResult.error
+    || drivesResult.error
+    || certificatesResult.error
+    || workflowResult.error
+    || null;
+
   return {
-    donationHistory: history.map((item) => ({
-      ...item,
-      bundle_quantity: countsResult.data?.[Number(item.submission_id)] || 0,
-    })),
-    error: countsResult.error?.message || null,
+    historyItems,
+    donationHistory: historyItems,
+    error: error?.message || error || null,
   };
 };
 
@@ -1422,6 +1642,325 @@ const getLatestEvidenceAt = (stages = [], fromIndex = 0) => (
     .sort((left, right) => new Date(right || 0).getTime() - new Date(left || 0).getTime())[0] || null
 );
 
+const DONOR_IMPACT_TIMELINE_STAGES = [
+  { key: 'donation_submitted', label: 'Donation Submitted', savedNote: 'Your hair donation has been recorded by the organization.' },
+  { key: 'hair_received', label: 'Hair Received', savedNote: 'The organization has received your donated hair.' },
+  { key: 'hair_accepted', label: 'Hair Accepted', savedNote: 'Your donated hair passed assessment and can be prepared for wig production.' },
+  { key: 'hair_bundled', label: 'Hair Bundled', savedNote: 'Your donated hair has been included in a production bundle.' },
+  { key: 'wig_in_production', label: 'Wig in Production', savedNote: 'The hair bundle is being transformed into a wig.' },
+  { key: 'wig_created', label: 'Wig Created', savedNote: 'A wig made with the contributed hair has been completed.' },
+  { key: 'wig_assigned', label: 'Wig Assigned', savedNote: 'The wig created with your donated hair has been assigned for distribution.' },
+  { key: 'wig_ready_for_release', label: 'Wig Ready for Release', savedNote: 'The wig is ready to begin its release process.' },
+  { key: 'preparing_for_release', label: 'Preparing for Release', savedNote: 'The organization is preparing the wig for release.' },
+  { key: 'wig_being_released', label: 'Wig Being Released', savedNote: 'The wig is currently going through the release process.' },
+  { key: 'wig_received', label: 'Wig Received', savedNote: 'The patient confirmed physical receipt of the wig.' },
+];
+
+const buildJourneyProjection = (stages = [], groups = []) => groups.map((group) => {
+  const groupedStages = group.stageKeys
+    .map((key) => stages.find((stage) => stage.key === key))
+    .filter(Boolean);
+  const states = groupedStages.map((stage) => stage.state);
+  const state = states.includes('attention')
+    ? 'attention'
+    : states.includes('current')
+      ? 'current'
+      : groupedStages.length && states.every((value) => value === 'completed')
+        ? 'completed'
+        : states.includes('completed')
+          ? 'current'
+          : 'upcoming';
+  const evidenceAt = groupedStages
+    .map((stage) => stage.displayEvidenceAt || stage.completedAt || null)
+    .filter(Boolean)
+    .sort((left, right) => new Date(right).getTime() - new Date(left).getTime())[0] || null;
+  return {
+    key: group.key,
+    label: group.label,
+    stageKeys: group.stageKeys,
+    savedNote: group.savedNote,
+    state,
+    completedAt: state === 'completed' ? evidenceAt : null,
+    displayEvidenceAt: evidenceAt,
+    timestampLabel: evidenceAt ? `Updated ${formatDateTime(evidenceAt)}` : '',
+    statusLabel: state === 'completed' ? 'Complete' : state === 'current' ? 'Ongoing' : '',
+    progressLabel: state === 'completed' ? 'Complete' : state === 'current' ? 'Ongoing' : 'Waiting',
+  };
+});
+
+const getDonorJourneyHeadline = ({ currentStageKey = '', isComplete = false, released = false } = {}) => {
+  if (isComplete) return 'Your donation completed its journey';
+  if (released) return 'The wig has been released';
+  if (currentStageKey === 'hair_received') return 'Your donation has arrived';
+  if (currentStageKey === 'hair_accepted') return 'Your hair has been accepted';
+  if (currentStageKey === 'hair_not_accepted') return 'Your hair review is complete';
+  if (currentStageKey === 'hair_bundled' || currentStageKey === 'wig_in_production') return 'Your donation is becoming a wig';
+  if (currentStageKey === 'wig_created') return 'A wig has been created';
+  if (['wig_assigned', 'wig_ready_for_release', 'preparing_for_release', 'wig_being_released'].includes(currentStageKey)) {
+    return 'Your donation is helping someone';
+  }
+  return 'Your donation journey has started';
+};
+
+export const buildCanonicalEventDonorJourney = ({
+  submission = null,
+  registration = null,
+  trackingEntries = [],
+  production = null,
+  wigRequestProgress = null,
+} = {}) => {
+  const statusKey = normalizeTimelineStatusKey(submission?.status);
+  const detail = getLatestSubmissionDetailSnapshot(submission);
+  const detailStatusKey = normalizeTimelineStatusKey(detail?.status);
+  const receivedEntry = findTimelineMatch(trackingEntries, isReceivedByOrganizationEntry);
+  const acceptedEntry = findTimelineMatch(trackingEntries, (entry) => (
+    isQualityAssessmentEntry(entry)
+    && matchesAnyToken(
+      `${entry?.status || ''} ${entry?.title || ''} ${entry?.description || ''}`,
+      ['accepted', 'approved', 'qa passed', 'quality passed', 'passed qa', 'passed quality']
+    )
+  ));
+  const bundledEntry = findTimelineMatch(trackingEntries, (entry) => (
+    matchesAnyToken(`${entry?.status || ''} ${entry?.title || ''} ${entry?.description || ''}`, ['bundled', 'bundle created'])
+  ));
+  const productionEntry = findTimelineMatch(trackingEntries, (entry) => (
+    matchesAnyToken(`${entry?.status || ''} ${entry?.title || ''} ${entry?.description || ''}`, ['wig production', 'in production'])
+  ));
+  const createdEntry = findTimelineMatch(trackingEntries, (entry) => (
+    matchesAnyToken(`${entry?.status || ''} ${entry?.title || ''} ${entry?.description || ''}`, ['wig created', 'wig completed'])
+  ));
+  const bundleStatusKey = normalizeTimelineStatusKey(production?.bundle?.status);
+  const wigStatusKey = normalizeTimelineStatusKey(production?.wig?.wig_status);
+  const hasApprovedDetail = ['approved', 'accepted'].includes(detailStatusKey);
+  const hasRejectedDetail = ['rejected', 'rejectedcut'].includes(detailStatusKey);
+  const attendanceAt = isMarkedPresentRegistration(registration)
+    ? registration?.rsvp_scanned_at || registration?.attendance_marked_at || null
+    : null;
+  const evidenceAt = Array(DONOR_IMPACT_TIMELINE_STAGES.length).fill(null);
+
+  evidenceAt[0] = submission?.created_at || submission?.submitted_at || null;
+  evidenceAt[1] = submission?.cut_at || receivedEntry?.updated_at || attendanceAt || null;
+  evidenceAt[2] = hasApprovedDetail || hasRejectedDetail
+    ? detail?.updated_at || detail?.created_at || acceptedEntry?.updated_at || null
+    : null;
+  evidenceAt[3] = hasApprovedDetail ? production?.bundle?.created_at || bundledEntry?.updated_at || null : null;
+  evidenceAt[4] = hasApprovedDetail ? productionEntry?.updated_at
+    || production?.wig?.created_at
+    || (bundleStatusKey === 'inproduction' ? production?.bundle?.updated_at || null : null) : null;
+  evidenceAt[5] = hasApprovedDetail ? production?.wig?.completed_at
+    || production?.bundle?.wig_completed_at
+    || createdEntry?.updated_at
+    || null : null;
+
+  let highestMilestoneIndex = submission?.submission_id ? 0 : -1;
+  if (evidenceAt[1] || ['cut', 'accepted', 'wiginproduction', 'wigcreated'].includes(statusKey)) {
+    highestMilestoneIndex = Math.max(highestMilestoneIndex, 1);
+  }
+  if (hasApprovedDetail) {
+    highestMilestoneIndex = Math.max(highestMilestoneIndex, 2);
+  }
+  if (hasRejectedDetail) {
+    highestMilestoneIndex = Math.max(highestMilestoneIndex, 2);
+  }
+  if (hasApprovedDetail && (submission?.bundle_id || evidenceAt[3])) highestMilestoneIndex = Math.max(highestMilestoneIndex, 3);
+  if (
+    hasApprovedDetail
+    && (statusKey === 'wiginproduction'
+    || evidenceAt[4]
+    || bundleStatusKey === 'inproduction'
+    || wigStatusKey === 'inproduction')
+  ) {
+    highestMilestoneIndex = Math.max(highestMilestoneIndex, 4);
+  }
+  if (
+    hasApprovedDetail
+    && (statusKey === 'wigcreated'
+    || evidenceAt[5]
+    || bundleStatusKey === 'wigcompleted'
+    || ['completed', 'created', 'readyforrelease', 'released'].includes(wigStatusKey))
+  ) {
+    highestMilestoneIndex = Math.max(highestMilestoneIndex, 5);
+  }
+
+  const requestMilestoneIndex = Number(wigRequestProgress?.milestoneIndex);
+  if (hasApprovedDetail && Number.isInteger(requestMilestoneIndex) && requestMilestoneIndex >= 4 && requestMilestoneIndex <= 10) {
+    highestMilestoneIndex = Math.max(highestMilestoneIndex, requestMilestoneIndex);
+    if (wigRequestProgress?.milestoneAt) evidenceAt[requestMilestoneIndex] = wigRequestProgress.milestoneAt;
+  }
+
+  const isComplete = Boolean(wigRequestProgress?.receiptConfirmed && highestMilestoneIndex === 10);
+  const highestMilestoneCompleted = Boolean(wigRequestProgress?.milestoneCompleted);
+  const stages = DONOR_IMPACT_TIMELINE_STAGES.map((stage, index) => {
+    const isRejectedStage = index === 2 && hasRejectedDetail;
+    const state = isRejectedStage
+      ? 'attention'
+      : isComplete
+        ? 'completed'
+        : index < highestMilestoneIndex
+          ? 'completed'
+          : index === highestMilestoneIndex
+            ? highestMilestoneCompleted ? 'completed' : 'current'
+            : 'upcoming';
+    return {
+      ...stage,
+      ...(isRejectedStage ? {
+        key: 'hair_not_accepted',
+        label: 'Hair Not Accepted',
+        savedNote: detail?.rejection_reason || 'The physical hair assessment did not pass.',
+      } : {}),
+      state,
+      completedAt: state === 'completed' ? evidenceAt[index] : null,
+      displayEvidenceAt: evidenceAt[index],
+      statusLabel: state === 'completed' ? 'Complete' : '',
+      progressLabel: state === 'completed' ? 'Complete' : ['current', 'attention'].includes(state) ? 'Ongoing' : 'Waiting',
+      timestampLabel: evidenceAt[index] ? `Updated ${formatDateTime(evidenceAt[index])}` : '',
+    };
+  });
+  const completedCount = stages.filter((stage) => stage.state === 'completed').length;
+  const currentWeight = stages.some((stage) => ['current', 'attention'].includes(stage.state)) ? 0.5 : 0;
+  const progressPercent = stages.length
+    ? Math.min(100, Math.round(((completedCount + currentWeight) / stages.length) * 100))
+    : 0;
+  const currentStage = stages.find((stage) => ['current', 'attention'].includes(stage.state))
+    || [...stages].reverse().find((stage) => stage.state === 'completed')
+    || stages[0]
+    || null;
+  const compactStages = buildJourneyProjection(stages, [
+    { key: 'hair_received', label: 'Hair received', stageKeys: ['donation_submitted', 'hair_received'], savedNote: 'Your donation was recorded and received.' },
+    { key: 'hair_review', label: 'Hair review', stageKeys: ['hair_accepted', 'hair_not_accepted'], savedNote: 'Your donated hair completed physical review.' },
+    { key: 'wig_production', label: 'Wig production', stageKeys: ['hair_bundled', 'wig_in_production', 'wig_created'], savedNote: 'Your donated hair is prepared and made into a wig.' },
+    { key: 'assigned_to_patient', label: 'Recipient assigned', stageKeys: ['wig_assigned', 'wig_ready_for_release', 'preparing_for_release', 'wig_being_released'], savedNote: 'The wig is assigned and prepared for release.' },
+    { key: 'received_by_patient', label: 'Received by patient', stageKeys: ['wig_received'], savedNote: 'The patient confirmed physical receipt of the wig.' },
+  ]).map((stage) => (
+    currentStage?.key && stage.stageKeys.includes(currentStage.key)
+      ? { ...stage, label: currentStage.label }
+      : stage
+  ));
+
+  return {
+    submissionId: submission?.submission_id || null,
+    stages,
+    compactStages,
+    detailStages: compactStages,
+    currentStageKey: currentStage?.key || '',
+    currentStageLabel: currentStage?.label || '',
+    completedCount,
+    totalCount: stages.length,
+    progressPercent,
+    isComplete,
+    headline: getDonorJourneyHeadline({
+      currentStageKey: currentStage?.key || '',
+      isComplete,
+      released: Boolean(wigRequestProgress?.released),
+    }),
+    sourceState: {
+      submissionStatus: submission?.status || '',
+      detailStatus: detail?.status || '',
+      requestMilestoneKey: wigRequestProgress?.milestoneKey || null,
+      requestStatus: wigRequestProgress?.requestStatus || null,
+      receiptConfirmed: Boolean(wigRequestProgress?.receiptConfirmed),
+      releaseCycle: wigRequestProgress?.releaseCycle ?? null,
+    },
+  };
+};
+
+const resolveCourierTimelineStages = ({ submission, logistics, parcelImages = [] } = {}) => {
+  const detail = getLatestSubmissionDetailSnapshot(submission);
+  const detailStatusKey = normalizeTimelineStatusKey(detail?.status);
+  const proof = (parcelImages || []).find((image) => image?.image_type === 'independent_parcel_photo') || null;
+  const proofAt = proof?.uploaded_at || null;
+  const courierName = String(logistics?.courier_name || '').trim();
+  const trackingNumber = String(logistics?.tracking_number || '').trim();
+  const hasShippingDetails = Boolean(courierName && trackingNumber);
+  const shippingDetailsAt = hasShippingDetails ? logistics?.updated_at || logistics?.created_at || null : null;
+  const receivedAt = logistics?.received_at || null;
+  const hasQualityResult = ['approved', 'accepted', 'rejected', 'rejectedcut'].includes(detailStatusKey);
+  const qualityResultAt = hasQualityResult ? detail?.updated_at || detail?.created_at || null : null;
+  const isRejected = ['rejected', 'rejectedcut'].includes(detailStatusKey);
+
+  const stages = [
+    {
+      key: 'donation_confirmed',
+      label: 'Donation Confirmed',
+      savedNote: 'Your courier donation and Donivra waybill were created.',
+      evidenceAt: submission?.created_at || submission?.updated_at || null,
+      entry: submission,
+    },
+    {
+      key: 'package_preparation',
+      label: 'Package Preparation',
+      savedNote: 'Securely pack the hair and attach the Donivra waybill label.',
+      evidenceAt: proofAt,
+      entry: proof || submission,
+    },
+    {
+      key: 'package_proof_uploaded',
+      label: 'Package Proof Uploaded',
+      savedNote: 'A clear photo of the prepared package is saved with this donation.',
+      evidenceAt: proofAt,
+      entry: proof,
+      parcelImages: proof ? [proof] : [],
+    },
+    {
+      key: 'courier_details_added',
+      label: 'Courier Details Added',
+      savedNote: hasShippingDetails
+        ? `${courierName} tracking number ${trackingNumber} is saved separately from the Donivra waybill.`
+        : 'Add the courier name and the external tracking number after shipping.',
+      evidenceAt: shippingDetailsAt,
+      entry: logistics,
+    },
+    {
+      key: 'waiting_for_package_arrival',
+      label: 'Waiting for Package Arrival',
+      savedNote: 'The organization has not yet confirmed physical receipt of the parcel.',
+      evidenceAt: receivedAt,
+      entry: logistics,
+    },
+    {
+      key: 'package_received',
+      label: 'Package Received',
+      savedNote: 'The organization confirmed receipt of the hair donation package.',
+      evidenceAt: receivedAt,
+      entry: logistics,
+    },
+    {
+      key: 'hair_under_verification',
+      label: 'Hair Under Verification',
+      savedNote: 'Staff is completing the physical hair assessment.',
+      evidenceAt: qualityResultAt,
+      entry: detail,
+    },
+    {
+      key: isRejected ? 'hair_not_accepted' : 'hair_accepted',
+      label: isRejected ? 'Hair Not Accepted' : 'Hair Accepted',
+      savedNote: isRejected
+        ? (detail?.rejection_reason || 'The physical hair assessment did not pass.')
+        : 'The physical hair assessment has been approved.',
+      evidenceAt: hasQualityResult ? qualityResultAt : null,
+      entry: detail,
+    },
+  ];
+
+  let currentIndex = 1;
+  if (proofAt) currentIndex = 3;
+  if (hasShippingDetails) currentIndex = 4;
+  if (receivedAt) currentIndex = 6;
+  if (hasQualityResult) currentIndex = 7;
+
+  return stages.map((stage, index) => {
+    const completed = index < currentIndex || (index === currentIndex && hasQualityResult);
+    return {
+      ...stage,
+      state: completed ? 'completed' : (index === currentIndex ? 'current' : 'upcoming'),
+      completedAt: completed ? stage.evidenceAt : null,
+      displayEvidenceAt: stage.evidenceAt,
+      statusLabel: completed ? 'Complete' : (index === currentIndex ? 'Ongoing' : ''),
+      progressLabel: completed ? 'Complete' : (index === currentIndex ? 'Ongoing' : 'Waiting'),
+    };
+  });
+};
+
 const resolveTimelineStages = ({
   submission = null,
   logistics,
@@ -1432,6 +1971,7 @@ const resolveTimelineStages = ({
   registration = null,
   production = null,
   appointment = null,
+  wigRequestProgress = null,
 }) => {
   const isEventFlow = flowType === 'drive' || Boolean(submission?.donation_drive_id);
   const isWalkInFlow = !isEventFlow && (
@@ -1442,6 +1982,22 @@ const resolveTimelineStages = ({
     appointment?.appointment_id
     || appointment?.appointment_start_at
   );
+  const isCourierFlow = !isEventFlow && !isWalkInFlow && matchesAnyToken(
+    logistics?.logistics_type,
+    ['ship by courier', 'courier']
+  );
+  if (isCourierFlow) {
+    return resolveCourierTimelineStages({ submission, logistics, parcelImages });
+  }
+  if (isEventFlow) {
+    return buildCanonicalEventDonorJourney({
+      submission,
+      registration,
+      trackingEntries,
+      production,
+      wigRequestProgress,
+    }).stages;
+  }
   const attendanceEvidenceAt = isEventFlow && isMarkedPresentRegistration(registration)
     ? registration?.rsvp_scanned_at
       || registration?.attendance_marked_at
@@ -1528,7 +2084,8 @@ const resolveTimelineStages = ({
   ));
   const assignedToPatientEvidenceAt = assignedToPatientEntry?.updated_at
     || allocatedDbAt
-    || (production?.allocation?.patient_id ? production?.allocation?.allocated_at || production?.allocation?.released_at || null : null);
+    || production?.allocation?.released_at
+    || null;
   const receivedByPatientEntry = findTimelineMatch(trackingEntries, (entry) => (
     matchesAnyToken(entry?.status, ['received by patient', 'released to patient', 'delivered to patient'])
     || matchesAnyToken(entry?.title, ['received by patient', 'released to patient', 'delivered to patient'])
@@ -2391,7 +2948,14 @@ export const getDonorEventParticipationData = async ({
     latestAnalysisEntry,
     latestScreening,
     latestAiEligibility,
-    isAiEligible: Boolean(!requiresPostDonationAnalysis && latestAiEligibility?.isQualified),
+    // Event RSVP is based on whether the latest AI observations satisfy the
+    // current wig_requirements. Screening availability is enforced later when
+    // an actual donation is started, and must not downgrade an eligible RSVP
+    // to guest-only attendance.
+    isAiEligible: Boolean(
+      !requiresPostDonationAnalysis
+      && latestAiEligibility?.meetsCurrentRequirements === true
+    ),
     requiresPostDonationAnalysis,
     hasOngoingDonation: Boolean(ongoingSubmission),
     ongoingDonationMessage: ongoingSubmission
@@ -2565,6 +3129,8 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
   let parcelImages = [];
   let productionTimeline = null;
   let productionTimelineError = null;
+  let wigRequestProgress = null;
+  let wigRequestProgressError = null;
   let appointment = null;
   let appointmentError = null;
   let appointmentHistory = [];
@@ -2612,9 +3178,14 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
   }
 
   if (activeSubmission?.bundle_id && !prefetchedActiveFlowRecord) {
-    const productionTimelineResult = await fetchDonationTimelineProductionByBundleId(activeSubmission.bundle_id);
+    const [productionTimelineResult, wigRequestProgressResult] = await Promise.all([
+      fetchDonationTimelineProductionByBundleId(activeSubmission.bundle_id),
+      fetchDonorTimelineWigProgressBySubmissionId(activeSubmission.submission_id),
+    ]);
     productionTimeline = productionTimelineResult.data || null;
     productionTimelineError = productionTimelineResult.error || null;
+    wigRequestProgress = wigRequestProgressResult.data || null;
+    wigRequestProgressError = wigRequestProgressResult.error || null;
   }
 
   const matchingDriveFromList = (drivesResult.data || [])
@@ -2648,8 +3219,19 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
     registration: activeDrive?.registration || null,
   });
   const activeFlowType = hasDriveFlow ? 'drive' : hasIndependentFlow ? 'independent' : '';
+  const donorJourney = activeSubmission && activeFlowType === 'drive'
+    ? buildCanonicalEventDonorJourney({
+        submission: activeDetail
+          ? { ...activeSubmission, submission_details: [activeDetail] }
+          : activeSubmission,
+        registration: activeDrive?.registration || null,
+        trackingEntries,
+        production: productionTimeline,
+        wigRequestProgress,
+      })
+    : null;
   const timelineStages = activeSubmission
-    ? resolveTimelineStages({
+    ? donorJourney?.stages || resolveTimelineStages({
         submission: activeSubmission,
         logistics,
         trackingEntries,
@@ -2659,6 +3241,7 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
         registration: activeDrive?.registration || null,
         production: productionTimeline,
         appointment,
+        wigRequestProgress,
       })
     : [];
   const timelineEvents = activeSubmission
@@ -2696,7 +3279,8 @@ export const getDonorDonationsModuleData = async ({ userId, databaseUserId, driv
   });
   const latestStage = timelineStages[timelineStages.length - 1] || null;
 const hasCompletedDonation = Boolean(
-    latestStage?.key === 'bundling' && latestStage?.state === 'completed'
+    donorJourney?.isComplete
+    || latestStage?.key === 'bundling' && latestStage?.state === 'completed'
     || isTerminalDonationStatus(activeSubmission?.status)
   );
   const activeQrState = activeFlowType === 'drive'
@@ -2802,6 +3386,7 @@ const hasCompletedDonation = Boolean(
     trackingEntries,
     parcelImages,
     timelineStages,
+    donorJourney,
     timelineEvents,
     certificate,
     error: submissionsResult.error?.message
@@ -2812,6 +3397,7 @@ const hasCompletedDonation = Boolean(
       || appointmentHistoryError?.message
       || trackingError?.message
       || productionTimelineError?.message
+      || wigRequestProgressError?.message
       || activeDriveError?.message
       || certificateResult.error?.message
       || donationRequirementResult.error?.message
@@ -2823,6 +3409,7 @@ export const getEventDonationProgressData = async ({
   userId,
   databaseUserId,
   driveId,
+  submissionId = null,
 } = {}) => {
   const normalizedDriveId = Number(driveId);
   if (!userId || !databaseUserId || !Number.isFinite(normalizedDriveId) || normalizedDriveId <= 0) {
@@ -2837,6 +3424,7 @@ export const getEventDonationProgressData = async ({
     fetchHairSubmissionForEventByUserId({
       userId: databaseUserId,
       eventRequestId: normalizedDriveId,
+      submissionId,
     }),
   ]);
 
@@ -2896,7 +3484,7 @@ export const getEventDonationProgressData = async ({
     ...detailResult.data,
     images: detailImagesResult.data || [],
   } : null;
-  const [logisticsResult, trackingResult, parcelImages, productionResult, appointmentResult, certificateResult] = await Promise.all([
+  const [logisticsResult, trackingResult, parcelImages, productionResult, wigRequestProgressResult, appointmentResult, certificateResult] = await Promise.all([
     fetchHairSubmissionLogisticsBySubmissionId(submission.submission_id),
     detail?.submission_detail_id
       ? fetchHairBundleTrackingHistory({
@@ -2909,21 +3497,22 @@ export const getEventDonationProgressData = async ({
     submission?.bundle_id
       ? fetchDonationTimelineProductionByBundleId(submission.bundle_id)
       : Promise.resolve({ data: null, error: null }),
+    submission?.bundle_id
+      ? fetchDonorTimelineWigProgressBySubmissionId(submission.submission_id)
+      : Promise.resolve({ data: null, error: null }),
     fetchSalonDonationAppointmentBySubmissionId(submission.submission_id),
     fetchDonationCertificateBySubmissionId(submission.submission_id),
   ]);
 
-  const timelineStages = resolveTimelineStages({
-    submission,
-    logistics: logisticsResult.data || null,
+  const timelineSubmission = detail ? { ...submission, submission_details: [detail] } : submission;
+  const donorJourney = buildCanonicalEventDonorJourney({
+    submission: timelineSubmission,
     trackingEntries: trackingResult.data || [],
-    parcelImages: parcelImages || [],
-    certificate: certificateResult.data || null,
-    flowType: 'drive',
     registration,
     production: productionResult.data || null,
-    appointment: appointmentResult.data || null,
+    wigRequestProgress: wigRequestProgressResult.data || null,
   });
+  const timelineStages = donorJourney.stages;
 
   return {
     data: {
@@ -2932,6 +3521,7 @@ export const getEventDonationProgressData = async ({
       submission,
       canTrack: true,
       reason: '',
+      donorJourney,
       timelineStages,
       timelineEvents: buildTimelineEvents({
         logistics: logisticsResult.data || null,
@@ -2947,6 +3537,7 @@ export const getEventDonationProgressData = async ({
       || detailImagesResult.error
       || trackingResult.error
       || productionResult.error
+      || wigRequestProgressResult.error
       || appointmentResult.error
       || certificateResult.error
       || null,
@@ -3022,26 +3613,69 @@ export const saveIndependentDonationParcelLog = async ({
   submission,
   detail,
   photo,
-  qrPayloadText,
-  qrState: currentQrState = null,
 }) => {
   if (!userId || !databaseUserId) {
     return { success: false, error: 'Your session is not ready.' };
   }
-  if (!submission?.submission_id || !detail?.submission_detail_id) {
+  if (!submission?.submission_id) {
     return { success: false, error: 'A qualified donation record is required before parcel logging.' };
   }
   if (!photo) {
     return { success: false, error: 'Please upload a parcel image before continuing.' };
   }
 
-  const qrState = currentQrState || getIndependentDonationQrState({ submission });
-  if (!qrState?.is_activated) {
-    return { success: false, error: 'Scan your saved donation QR first to activate donation tracking before uploading the parcel photo.' };
+  const logisticsResult = await fetchHairSubmissionLogisticsBySubmissionId(submission.submission_id);
+  if (logisticsResult.error) {
+    return { success: false, error: logisticsResult.error.message || 'Unable to verify this courier donation.' };
+  }
+  const logisticsType = String(logisticsResult.data?.logistics_type || '').trim().toLowerCase();
+  if (!['ship by courier', 'courier'].includes(logisticsType)) {
+    return { success: false, error: 'Package proof is only available for Ship by Courier donations.' };
+  }
+  if (logisticsResult.data?.received_at) {
+    return { success: false, error: 'This package has already been received and its proof can no longer be changed.' };
   }
 
-  const uploadPayload = await getPhotoUploadPayload(photo);
-  const filePath = `${userId}/${submission.submission_id}/parcel-${detail.submission_detail_id}-${Date.now()}.jpg`;
+  let resolvedDetail = detail?.submission_detail_id ? detail : null;
+  if (!resolvedDetail) {
+    const existingDetailResult = await fetchLatestHairSubmissionDetailBySubmissionId(submission.submission_id);
+    if (existingDetailResult.error) {
+      return { success: false, error: existingDetailResult.error.message || 'Unable to load the donation details.' };
+    }
+    resolvedDetail = existingDetailResult.data || null;
+  }
+
+  if (!resolvedDetail?.submission_detail_id) {
+    const detailResult = await supabase.rpc('prepare_own_courier_package_proof', {
+      p_submission_id: Number(submission.submission_id),
+    });
+    if (detailResult.error || !detailResult.data?.submission_detail_id) {
+      return {
+        success: false,
+        error: detailResult.error?.message || 'Unable to prepare the donation record for package proof.',
+      };
+    }
+    resolvedDetail = detailResult.data;
+  }
+
+  const existingImagesResult = await fetchHairSubmissionImagesByDetailIds([resolvedDetail.submission_detail_id]);
+  if (existingImagesResult.error) {
+    return { success: false, error: existingImagesResult.error.message || 'Unable to verify existing package proof.' };
+  }
+  const existingProof = (existingImagesResult.data || []).find(
+    (image) => image?.image_type === 'independent_parcel_photo'
+  );
+  if (existingProof) {
+    return { success: true, alreadyUploaded: true, detail: resolvedDetail, image: existingProof };
+  }
+
+  let uploadPayload;
+  try {
+    uploadPayload = await getPhotoUploadPayload(photo);
+  } catch (error) {
+    return { success: false, error: error?.message || 'The selected package photo could not be prepared.' };
+  }
+  const filePath = `${userId}/${submission.submission_id}/parcel-${resolvedDetail.submission_detail_id}-${Date.now()}.jpg`;
   const uploadResult = await uploadHairSubmissionImage({
     path: filePath,
     fileBody: uploadPayload.fileBody,
@@ -3057,74 +3691,16 @@ export const saveIndependentDonationParcelLog = async ({
   }
 
   const imageInsertResult = await createHairSubmissionImages([{
-    submission_detail_id: detail.submission_detail_id,
+    submission_detail_id: resolvedDetail.submission_detail_id,
     file_path: filePath,
     image_type: 'independent_parcel_photo',
   }]);
 
   if (imageInsertResult.error) {
+    await removeHairSubmissionImagesFromStorage({ paths: [filePath] });
     return {
       success: false,
       error: imageInsertResult.error.message || 'Unable to save the parcel image record.',
-    };
-  }
-
-  const logisticsResult = await fetchHairSubmissionLogisticsBySubmissionId(submission.submission_id);
-  const logisticsPayload = {
-    logistics_type: 'Ship by Courier',
-    shipment_status: 'Pending',
-    notes: `Independent donor parcel prepared. QR payload attached for monitoring. ${qrPayloadText ? 'QR reference generated.' : ''}`.trim(),
-  };
-
-  const saveLogisticsResult = logisticsResult.data?.submission_logistics_id
-    ? await updateHairSubmissionLogisticsById(logisticsResult.data.submission_logistics_id, {
-        ...logisticsResult.data,
-        ...logisticsPayload,
-      })
-    : await createHairSubmissionLogistics({
-        submission_id: submission.submission_id,
-        ...logisticsPayload,
-      });
-
-  if (saveLogisticsResult.error) {
-    return {
-      success: false,
-      error: saveLogisticsResult.error.message || 'Unable to save shipment status.',
-    };
-  }
-
-  const trackingResult = await createHairBundleTrackingEntry({
-    submission_id: submission.submission_id,
-    submission_detail_id: detail.submission_detail_id,
-    status: 'waybill_ready',
-    title: 'Parcel logged by donor',
-    description: 'The donor uploaded a parcel image and prepared the independent donation QR for shipment.',
-    changed_by: databaseUserId,
-  });
-
-  if (trackingResult.error) {
-    return {
-      success: false,
-      error: trackingResult.error.message || 'Unable to save the timeline update.',
-    };
-  }
-
-  const submissionUpdateResult = await updateHairSubmissionById(submission.submission_id, {
-    donation_source: INDEPENDENT_DONATION_SOURCE,
-    donor_notes: mergeDonationNotes(
-      submission?.donor_notes || '',
-      ['Donation path: independent donation.', 'Parcel image uploaded by donor before shipment.'],
-      null,
-    ),
-    qr_status: qrState.is_activated ? 'Scanned' : (submission?.qr_status || 'Generated'),
-    qr_generated_at: submission?.qr_generated_at || qrState.generated_at || new Date().toISOString(),
-    status: 'Cut',
-  });
-
-  if (submissionUpdateResult.error) {
-    return {
-      success: false,
-      error: submissionUpdateResult.error.message || 'Unable to update the donation submission state.',
     };
   }
 
@@ -3133,8 +3709,8 @@ export const saveIndependentDonationParcelLog = async ({
     notifications: [
       buildDonationNotification({
         dedupeKey: `${notificationTypes.logisticsUpdated}:${submission.submission_id}:parcel-ready`,
-        title: 'Parcel ready for shipment',
-        message: 'Your parcel image was saved and your donation is ready for shipment.',
+        title: 'Package proof uploaded',
+        message: 'Your package photo was saved. Add the courier name and external tracking number after shipping.',
         createdAt: new Date().toISOString(),
         referenceId: submission.submission_id,
       }),
@@ -3143,8 +3719,10 @@ export const saveIndependentDonationParcelLog = async ({
 
   return {
     success: true,
-    submission: submissionUpdateResult.data || submission,
-    logistics: saveLogisticsResult.data || null,
+    submission,
+    detail: resolvedDetail,
+    logistics: logisticsResult.data,
+    image: imageInsertResult.data?.[0] || null,
   };
 };
 

@@ -34,11 +34,6 @@ import {
 import { changePasswordSchema, profileUpdateSchema } from '../src/features/profile/profile.schema';
 import { donorDashboardNavItems, patientDashboardNavItems } from '../src/constants/dashboard';
 import {
-  fetchDonationCertificatesByUserId,
-  fetchHairSubmissionProgressSummariesByUserId,
-  hasDonationFlowProgress,
-} from '../src/features/hairSubmission.api';
-import {
   fetchActiveGuardianConsent,
   fetchActiveMinorConsentDocument,
   getDonorProfileBadge,
@@ -346,10 +341,6 @@ export default function ProfileScreen() {
     guardianAgreementAccepted: false,
   });
   const [guardianConsentErrors, setGuardianConsentErrors] = useState({});
-  const [donorStats, setDonorStats] = useState({
-    donations: 0,
-    achievements: 0,
-  });
   const successTimerRef = useRef(null);
   const logoutRequestRef = useRef(false);
   const guardianConsentPromptedBirthdateRef = useRef('');
@@ -400,46 +391,6 @@ export default function ProfileScreen() {
       isMounted = false;
     };
   }, [profile?.user_id, role]);
-
-  useEffect(() => {
-    let isMounted = true;
-
-    const loadDonorStats = async () => {
-      if (role !== 'donor' || !user?.id) {
-        if (isMounted) {
-          setDonorStats({ donations: 0, achievements: 0 });
-        }
-        return;
-      }
-
-      const [submissionsResult, certificatesResult] = await Promise.all([
-        fetchHairSubmissionProgressSummariesByUserId(user.id, 100),
-        fetchDonationCertificatesByUserId(user.id, 100),
-      ]);
-
-      if (!isMounted) return;
-
-      const submissionsById = new Map(
-        (submissionsResult.data || [])
-          .filter((submission) => submission?.submission_id)
-          .map((submission) => [Number(submission.submission_id), submission])
-      );
-      const issuedCertificates = (certificatesResult.data || []).filter((certificate) => (
-        submissionsById.has(Number(certificate?.submission_id))
-      ));
-
-      setDonorStats({
-        donations: (submissionsResult.data || []).filter((submission) => hasDonationFlowProgress(submission)).length,
-        achievements: issuedCertificates.length,
-      });
-    };
-
-    loadDonorStats();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [profile?.user_id, role, user?.id]);
 
   useEffect(() => () => {
     if (successTimerRef.current) {
@@ -943,7 +894,7 @@ export default function ProfileScreen() {
             {
               key: 'donations',
               label: t('profile.donations'),
-              value: donorStats.donations,
+              value: null,
               icon: 'donations',
               route: '/donor/donation-history',
               emphasized: false,
@@ -951,7 +902,7 @@ export default function ProfileScreen() {
             {
               key: 'achievements',
               label: t('profile.achievements'),
-              value: donorStats.achievements,
+              value: null,
               icon: 'sparkle',
               route: '/donor/achievements',
               emphasized: true,
@@ -960,7 +911,7 @@ export default function ProfileScreen() {
             <Pressable
               key={item.key}
               accessibilityRole="button"
-              accessibilityLabel={`${item.value} ${item.label}`}
+              accessibilityLabel={item.label}
               onPress={() => router.navigate(item.route)}
               style={({ pressed }) => [styles.profileHeroMetricPressable, pressed ? styles.profileHeroMetricCardPressed : null]}
             >
@@ -993,15 +944,17 @@ export default function ProfileScreen() {
                 >
                   {item.label}
                 </Text>
-                <View style={[
-                  styles.profileHeroMetricCount,
-                  item.emphasized ? styles.profileHeroMetricCountEmphasized : null,
-                ]}>
-                  <Text style={[
-                    styles.profileHeroMetricCountText,
-                    item.emphasized ? styles.profileHeroMetricCountTextEmphasized : null,
-                  ]}>{item.value}</Text>
-                </View>
+                {item.value != null ? (
+                  <View style={[
+                    styles.profileHeroMetricCount,
+                    item.emphasized ? styles.profileHeroMetricCountEmphasized : null,
+                  ]}>
+                    <Text style={[
+                      styles.profileHeroMetricCountText,
+                      item.emphasized ? styles.profileHeroMetricCountTextEmphasized : null,
+                    ]}>{item.value}</Text>
+                  </View>
+                ) : null}
               </LinearGradient>
             </Pressable>
           ))}
@@ -1040,7 +993,6 @@ export default function ProfileScreen() {
             icon="updates"
             title={t('profile.history')}
             subtitle={t('profile.historySubtitle')}
-            badge={donorStats.donations}
             textColor={primaryTextColor}
             onPress={() => router.navigate('/donor/donation-history')}
           />
@@ -1049,7 +1001,6 @@ export default function ProfileScreen() {
             icon="sparkle"
             title={t('profile.achievements')}
             subtitle={t('profile.achievementsSubtitle')}
-            badge={donorStats.achievements}
             isLast
             textColor={primaryTextColor}
             onPress={() => router.navigate('/donor/achievements')}

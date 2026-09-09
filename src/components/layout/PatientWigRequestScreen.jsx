@@ -50,7 +50,7 @@ import { AppInput } from "../ui/AppInput";
 import { StatusBanner } from "../ui/StatusBanner";
 import { DashboardHeaderSurface } from "./DashboardHeaderSurface";
 import { DashboardLayout } from "./DashboardLayout";
-import { fetchActiveLegalDocuments } from "../../features/donorCompliance.service";
+import { fetchActiveLegalDocument, fetchActiveLegalDocuments } from "../../features/donorCompliance.service";
 
 let NativeVisionCamera = null;
 let useNativeCameraDevice = null;
@@ -1606,6 +1606,23 @@ const normalizeCapSizeValue = (value) => {
   return normalizeRecommendationKey(normalized);
 };
 
+const formatExpectedRelease = (value) => {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return {
+    date: new Intl.DateTimeFormat("en-PH", {
+      month: "long",
+      day: "numeric",
+      year: "numeric",
+    }).format(date),
+    time: new Intl.DateTimeFormat("en-PH", {
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(date),
+  };
+};
+
 const getWigPreferenceValue = (wig, name) => {
   const specification = wig?.physical_specification || {};
 
@@ -2340,9 +2357,58 @@ const wigJourneyIcons = {
   preparing: "creation-outline",
   dropoff: "truck-delivery-outline",
   received: "account-check-outline",
+  "request-submitted": "file-document-check-outline",
+  "under-review": "clipboard-search-outline",
+  production: "creation-outline",
+  allocated: "check-decagram-outline",
+  "expected-release": "calendar-clock-outline",
+  "ready-pickup": "package-variant-closed-check",
+  "preparing-release": "package-variant",
+  releasing: "truck-delivery-outline",
+  released: "package-check",
+  "confirm-receipt": "gesture-tap-button",
+  "problem-reported": "message-alert-outline",
+  "appeal-review": "clipboard-clock-outline",
+  "appeal-approved": "check-decagram-outline",
+  "appeal-rejected": "close-circle-outline",
 };
 
-function WigJourneyTimeline({ tracker, roles }) {
+const getPatientAppealStatusLabel = (status = "") => {
+  const normalized = String(status || "").trim().toLowerCase();
+  if (normalized === "pending staff review") return "Appeal Under Review";
+  if (normalized === "approved for replacement") return "Appeal Approved";
+  if (normalized === "rejected") return "Appeal Rejected";
+  return "Appeal submitted";
+};
+
+const formatHistoryDateTime = (value, fallback = "Not available") => {
+  if (!value) return fallback;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return fallback;
+  return new Intl.DateTimeFormat("en-PH", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
+};
+
+const getHistoryRequestStatus = (request) => {
+  const status = String(request?.status || "").trim().toLowerCase();
+  const receipt = request?.latest_release_receipt;
+  if (status === "released" && receipt?.received_confirmed_at) return "Received";
+  if (status === "released") return "Released - Confirmation Required";
+  if (status === "returned - completed") return "Return Completed";
+  if (status === "cancelled" || status === "canceled") return "Cancelled";
+  if (status === "rejected") return "Rejected";
+  return formatRequestStatus(request?.status || "Request completed");
+};
+
+const HISTORY_RELEASE_CYCLE_CARD_WIDTH = 278;
+const HISTORY_RELEASE_CYCLE_GAP = 12;
+
+export function WigJourneyTimeline({ tracker, roles }) {
   const enterAnimation = useRef(new Animated.Value(0)).current;
   const pulseAnimation = useRef(new Animated.Value(0)).current;
   const steps = tracker?.steps?.length ? tracker.steps : [{
@@ -2388,6 +2454,9 @@ function WigJourneyTimeline({ tracker, roles }) {
   return (
     <Animated.View style={[
       styles.wigJourneyAnimatedHost,
+      Platform.OS === "web" ? {
+        backgroundColor: roles.pageBackground,
+      } : null,
       {
         opacity: enterAnimation,
         transform: [{
@@ -2436,7 +2505,8 @@ function WigJourneyTimeline({ tracker, roles }) {
           {steps.map((step, index) => {
             const isCompleted = step.state === "completed";
             const isCurrent = index === effectiveCurrentIndex;
-            const isReached = isCompleted || isCurrent;
+            const isExpectedRelease = step.key === "expected-release";
+            const isReached = isCompleted || isCurrent || isExpectedRelease;
             const iconName = isCompleted ? "check" : (wigJourneyIcons[step.key] || "circle-small");
             const marker = (
               <View style={[
@@ -2471,6 +2541,9 @@ function WigJourneyTimeline({ tracker, roles }) {
                 <Text numberOfLines={2} style={[styles.wigJourneyStageLabel, { color: roles.primaryActionText }]}>
                   {step.title}
                 </Text>
+                {isExpectedRelease && step.description ? (
+                  <Text numberOfLines={3} style={styles.wigJourneyStageEstimate}>{step.description}</Text>
+                ) : null}
               </View>
             );
           })}
@@ -2480,23 +2553,346 @@ function WigJourneyTimeline({ tracker, roles }) {
   );
 }
 
+function WigReceiptConfirmationModal({ visible, request, receipt, wig, isSaving, onClose, onConfirm, roles }) {
+  const [photo, setPhoto] = useState(null);
+  const [accepted, setAccepted] = useState(false);
+  const [releaseTermsDocument, setReleaseTermsDocument] = useState(null);
+  const [isLoadingReleaseTerms, setIsLoadingReleaseTerms] = useState(false);
+  const [releaseTermsError, setReleaseTermsError] = useState("");
+
+  useEffect(() => {
+    if (!visible) return;
+    setPhoto(null);
+    setAccepted(false);
+  }, [visible, receipt?.receipt_id]);
+
+  const loadReleaseTerms = React.useCallback(async () => {
+    setIsLoadingReleaseTerms(true);
+    setReleaseTermsError("");
+    setReleaseTermsDocument(null);
+
+    const preferredResult = await fetchActiveLegalDocument("wig_release_terms");
+    const result = preferredResult.data
+      ? preferredResult
+      : await fetchActiveLegalDocument("wig_request_terms");
+    const selectedDocument = result.data || null;
+
+    setIsLoadingReleaseTerms(false);
+    if (result.error || !selectedDocument) {
+      setReleaseTermsError(
+        result.error?.message || "No active wig release terms document is available right now.",
+      );
+      return;
+    }
+
+    setReleaseTermsDocument(selectedDocument);
+  }, []);
+
+  useEffect(() => {
+    if (!visible) return;
+    void loadReleaseTerms();
+  }, [loadReleaseTerms, receipt?.receipt_id, visible]);
+
+  const choosePhoto = async (camera = false) => {
+    const permission = camera
+      ? await ImagePicker.requestCameraPermissionsAsync()
+      : await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert("Permission needed", `Allow ${camera ? "camera" : "photo library"} access to add the received wig photo.`);
+      return;
+    }
+    const result = camera
+      ? await ImagePicker.launchCameraAsync({ mediaTypes: ["images"], quality: 0.86 })
+      : await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], quality: 0.86, selectionLimit: 1 });
+    if (!result.canceled && result.assets?.[0]) setPhoto(result.assets[0]);
+  };
+
+  return (
+    <Modal transparent visible={visible} animationType="slide" onRequestClose={isSaving ? undefined : onClose}>
+      <View style={styles.releaseModalRoot}>
+        <Pressable style={styles.cancelRequestModalBackdrop} disabled={isSaving} onPress={onClose} />
+        <View style={[styles.releaseModalCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.releaseModalContent}>
+            <Text style={[styles.releaseModalTitle, { color: roles.headingText }]}>Confirm Wig Receipt</Text>
+            <Text style={[styles.releaseModalSubtitle, { color: roles.bodyText }]}>Please confirm that you physically received your wig. You may also upload a photo for your records.</Text>
+            <View style={[styles.releaseSummary, { borderColor: roles.defaultCardBorder }]}>
+              <Text style={[styles.releaseSummaryText, { color: roles.headingText }]}>Request {request?.request_code || ""}</Text>
+              <Text style={[styles.releaseSummaryText, { color: roles.bodyText }]}>{wig?.wig_name || "Allocated wig"}{wig?.wig_code ? ` • ${wig.wig_code}` : ""}</Text>
+              <Text style={[styles.releaseSummaryText, { color: roles.metaText }]}>Released {receipt?.released_at ? new Date(receipt.released_at).toLocaleDateString("en-PH") : "date unavailable"} • Cycle {receipt?.release_cycle || 1}</Text>
+            </View>
+            <Text style={[styles.releaseSectionLabel, { color: roles.headingText }]}>1. RECEIVED WIG PHOTO (OPTIONAL)</Text>
+            {photo?.uri ? <Image source={{ uri: photo.uri }} style={styles.receiptPhotoPreview} /> : null}
+            <View style={styles.releasePhotoActions}>
+              <View style={styles.releasePhotoActionCell}><AppButton title={photo ? "Retake Photo" : "Take Photo"} variant="outline" onPress={() => choosePhoto(true)} fullWidth={true} /></View>
+              <View style={styles.releasePhotoActionCell}><AppButton title={photo ? "Replace Photo" : "Choose Gallery"} variant="outline" onPress={() => choosePhoto(false)} fullWidth={true} /></View>
+            </View>
+            <Text style={[styles.releaseSectionLabel, { color: roles.headingText }]}>2. RELEASE TERMS</Text>
+            {isLoadingReleaseTerms ? (
+              <View style={[styles.releaseTermsLoadingCard, { backgroundColor: roles.supportCardBackground }]}>
+                <ActivityIndicator color={roles.primaryActionBackground} />
+                <Text style={[styles.releaseTermsLoadingText, { color: roles.bodyText }]}>Loading release terms...</Text>
+              </View>
+            ) : releaseTermsDocument ? (
+              <LegalDocumentPreview
+                document={releaseTermsDocument}
+                roles={roles}
+                viewportHeight={142}
+                actionLabel="Enlarge"
+                showContentPreview
+              />
+            ) : (
+              <View style={[styles.releaseTermsErrorCard, { backgroundColor: roles.supportCardBackground, borderColor: roles.defaultCardBorder }]}>
+                <MaterialCommunityIcons name="file-alert-outline" size={22} color={roles.primaryActionBackground} />
+                <View style={styles.releaseTermsErrorCopy}>
+                  <Text style={[styles.releaseTermsErrorTitle, { color: roles.headingText }]}>Release terms unavailable</Text>
+                  <Text style={[styles.releaseTermsErrorText, { color: roles.bodyText }]}>{releaseTermsError}</Text>
+                </View>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Retry loading release terms"
+                  onPress={() => void loadReleaseTerms()}
+                  style={[styles.releaseTermsRetry, { backgroundColor: roles.iconPrimarySurface }]}
+                >
+                  <MaterialCommunityIcons name="refresh" size={19} color={roles.primaryActionBackground} />
+                </Pressable>
+              </View>
+            )}
+            <Pressable
+              disabled={!releaseTermsDocument || isLoadingReleaseTerms || isSaving}
+              onPress={() => setAccepted((value) => !value)}
+              style={[
+                styles.releaseCheckboxRow,
+                !releaseTermsDocument || isLoadingReleaseTerms ? styles.releaseCheckboxRowDisabled : null,
+              ]}
+            >
+              <MaterialCommunityIcons name={accepted ? "checkbox-marked" : "checkbox-blank-outline"} size={24} color={roles.primaryActionBackground} />
+              <Text style={[styles.releaseCheckboxText, { color: roles.bodyText }]}>I confirm that I received this wig and accept the active release terms{releaseTermsDocument?.version ? ` (Version ${releaseTermsDocument.version})` : ""}.</Text>
+            </Pressable>
+            <View style={styles.cancelRequestModalActions}>
+              <AppButton title="Not Yet" variant="outline" onPress={onClose} disabled={isSaving} fullWidth={true} />
+              <AppButton title="Confirm Receipt" onPress={() => onConfirm?.({ confirmationPhoto: photo })} loading={isSaving} disabled={isSaving || !accepted || !releaseTermsDocument} fullWidth={true} />
+            </View>
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function FinishedWigRequestDetailsModal({ visible, details, isLoading, onClose, onDownload, onReportProblem, roles }) {
+  const [releaseCycleIndex, setReleaseCycleIndex] = useState(0);
+  const request = details?.request || null;
+  const wig = details?.wig || null;
+  const actualWigImageUrl = wig?.catalog_image_url || "";
+  const specification = wig?.physical_specification || details?.specification || null;
+  const receipts = details?.receipts || [];
+  const appeals = details?.appeals || [];
+  const latestReceipt = receipts[0] || null;
+  const latestAppeal = latestReceipt
+    ? appeals.find((appeal) => String(appeal.receipt_id) === String(latestReceipt.receipt_id)) || null
+    : null;
+  const canReportProblem = Boolean(
+    latestReceipt?.received_confirmed_at
+    && !latestAppeal
+    && new Date(latestReceipt.appeal_deadline).getTime() >= Date.now()
+  );
+  const wigRows = [
+    { label: "Wig name", value: wig?.wig_name || "Not available" },
+    { label: "Wig code", value: wig?.wig_code || "Not available" },
+    { label: "Cap size", value: specification?.cap_size || request?.requested_cap_size || "Not provided" },
+    { label: "Hair color", value: specification?.color || specification?.preferred_color || "Not provided" },
+    { label: "Hair length", value: specification?.length != null ? `${specification.length} inches` : specification?.preferred_length || "Not provided" },
+    { label: "Hair texture", value: specification?.hair_texture || "Not provided" },
+    { label: "Style", value: specification?.style || specification?.style_preference || "Not provided" },
+  ];
+
+  useEffect(() => {
+    if (visible) setReleaseCycleIndex(0);
+  }, [visible, request?.req_id]);
+
+  return (
+    <Modal transparent visible={visible} animationType="slide" onRequestClose={onClose}>
+      <View style={styles.releaseModalRoot}>
+        <Pressable style={styles.cancelRequestModalBackdrop} onPress={onClose} />
+        <View
+          style={[styles.releaseModalCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}
+        >
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.releaseModalContent}>
+            <View style={styles.historyDetailsHeader}>
+              <View style={styles.historyDetailsHeaderCopy}>
+                <Text style={[styles.releaseModalTitle, { color: roles.headingText }]}>Request Details</Text>
+                <Text style={[styles.historyRequestCode, { color: roles.primaryActionBackground }]}>{request?.request_code || "Wig request"}</Text>
+              </View>
+              <Pressable accessibilityRole="button" accessibilityLabel="Close request details" onPress={onClose} style={[styles.historyCloseButton, { backgroundColor: roles.iconPrimarySurface }]}>
+                <MaterialCommunityIcons name="close" size={20} color={roles.primaryActionBackground} />
+              </Pressable>
+            </View>
+            {isLoading ? (
+              <ActivityIndicator color={roles.primaryActionBackground} style={styles.historyDetailsLoading} />
+            ) : request ? (
+              <>
+                <View style={[styles.historyStatusPanel, { borderColor: roles.defaultCardBorder }]}>
+                  <Text style={[styles.historyStatusTitle, { color: roles.headingText }]}>{getHistoryRequestStatus({ ...request, latest_release_receipt: latestReceipt })}</Text>
+                  <Text style={[styles.releaseModalSubtitle, { color: roles.bodyText }]}>Requested {formatHistoryDateTime(request.request_date)}</Text>
+                  {request.status_reason ? <Text style={[styles.releaseModalSubtitle, { color: roles.bodyText }]}>{request.status_reason}</Text> : null}
+                </View>
+                <View style={[styles.historyWigHero, {
+                  backgroundColor: roles.supportCardBackground,
+                  borderColor: roles.defaultCardBorder,
+                }]}
+                >
+                  <View style={[styles.historyWigImageFrame, { backgroundColor: roles.defaultCardBackground }]}>
+                    {actualWigImageUrl ? (
+                      <Image source={{ uri: actualWigImageUrl }} style={styles.historyWigImage} resizeMode="contain" />
+                    ) : (
+                      <MaterialCommunityIcons name="account" size={42} color={roles.metaText} />
+                    )}
+                  </View>
+                  <View style={styles.historyWigHeroCopy}>
+                    <Text style={[styles.historyWigEyebrow, { color: roles.metaText }]}>ACTUAL SELECTED WIG</Text>
+                    <Text numberOfLines={2} style={[styles.historyWigName, { color: roles.headingText }]}>{wig?.wig_name || "Selected wig"}</Text>
+                    {wig?.wig_code ? <Text style={[styles.historyWigCode, { color: roles.primaryActionBackground }]}>{wig.wig_code}</Text> : null}
+                    <Text numberOfLines={2} style={[styles.historyWigSummary, { color: roles.bodyText }]}>
+                      {[specification?.style || specification?.style_preference, specification?.color || specification?.preferred_color, specification?.cap_size || request.requested_cap_size]
+                        .filter(Boolean)
+                        .join(" • ") || "Wig details are shown below."}
+                    </Text>
+                  </View>
+                </View>
+                <Text style={[styles.releaseSectionLabel, { color: roles.headingText }]}>REQUEST INFORMATION</Text>
+                <WigInfoList rows={[
+                  { label: "Status", value: getHistoryRequestStatus({ ...request, latest_release_receipt: latestReceipt }) },
+                  { label: "Approved", value: formatHistoryDateTime(request.approved_at) },
+                  { label: "Fulfillment", value: formatRequestStatus(request.fulfillment_status || "Not available") },
+                ]} roles={roles} />
+                <Text style={[styles.releaseSectionLabel, { color: roles.headingText }]}>WIG INFORMATION</Text>
+                <WigInfoList rows={wigRows} roles={roles} />
+                {receipts.length ? (
+                  <>
+                    <View style={styles.historyReleaseHeader}>
+                      <View style={styles.historyDetailsHeaderCopy}>
+                        <Text style={[styles.releaseSectionLabel, { color: roles.headingText }]}>RELEASE HISTORY</Text>
+                        <Text style={[styles.releaseModalSubtitle, { color: roles.metaText }]}>Swipe sideways to view each release cycle.</Text>
+                      </View>
+                      <View style={[styles.historyCycleCounter, { backgroundColor: roles.iconPrimarySurface }]}>
+                        <Text style={[styles.historyCycleCounterText, { color: roles.primaryActionBackground }]}>{releaseCycleIndex + 1}/{receipts.length}</Text>
+                      </View>
+                    </View>
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      decelerationRate="fast"
+                      snapToInterval={HISTORY_RELEASE_CYCLE_CARD_WIDTH + HISTORY_RELEASE_CYCLE_GAP}
+                      snapToAlignment="start"
+                      contentContainerStyle={styles.historyReleaseCarousel}
+                      onMomentumScrollEnd={(event) => {
+                        const offset = event.nativeEvent.contentOffset.x;
+                        const index = Math.round(offset / (HISTORY_RELEASE_CYCLE_CARD_WIDTH + HISTORY_RELEASE_CYCLE_GAP));
+                        setReleaseCycleIndex(Math.max(0, Math.min(index, receipts.length - 1)));
+                      }}
+                    >
+                {receipts.map((receipt) => {
+                  const appeal = appeals.find((item) => String(item.receipt_id) === String(receipt.receipt_id));
+                  return (
+                    <View key={receipt.receipt_id} style={[styles.historyReceiptCard, { backgroundColor: roles.supportCardBackground, borderColor: roles.defaultCardBorder }]}>
+                      <View style={styles.historyReceiptTopRow}>
+                        <View style={[styles.historyReceiptIcon, { backgroundColor: roles.iconPrimarySurface }]}>
+                          <MaterialCommunityIcons name="package-variant-closed-check" size={21} color={roles.primaryActionBackground} />
+                        </View>
+                        <View style={styles.historyReceiptHeadingCopy}>
+                          <Text style={[styles.historyReceiptTitle, { color: roles.headingText }]}>Release Cycle {receipt.release_cycle || 1}</Text>
+                          <Text style={[styles.releaseModalSubtitle, { color: roles.metaText }]}>{receipt.received_confirmed_at ? "Receipt confirmed" : "Confirmation pending"}</Text>
+                        </View>
+                      </View>
+                      <WigInfoList rows={[
+                        { label: "Released", value: formatHistoryDateTime(receipt.released_at) },
+                        { label: "Received", value: formatHistoryDateTime(receipt.received_confirmed_at, "Not confirmed") },
+                        { label: "Terms accepted", value: formatHistoryDateTime(receipt.terms_accepted_at, "Not confirmed") },
+                        { label: "Appeal deadline", value: formatHistoryDateTime(receipt.appeal_deadline) },
+                      ]} roles={roles} />
+                      {receipt.pdf_path ? <AppButton title="Download Receipt PDF" variant="outline" onPress={() => onDownload?.(receipt)} fullWidth={true} /> : null}
+                      {appeal ? (
+                        <View style={[styles.historyAppealPanel, { backgroundColor: roles.iconPrimarySurface }]}>
+                          <Text style={[styles.historyReceiptTitle, { color: roles.headingText }]}>{getPatientAppealStatusLabel(appeal.status)}</Text>
+                          <Text style={[styles.releaseModalSubtitle, { color: roles.bodyText }]}>{appeal.reason} · {appeal.requested_resolution}</Text>
+                          <Text style={[styles.releaseModalSubtitle, { color: roles.bodyText }]}>{appeal.description}</Text>
+                          <Text style={[styles.releaseModalSubtitle, { color: roles.metaText }]}>Submitted: {formatHistoryDateTime(appeal.submitted_at)}</Text>
+                          {appeal.decision_note ? <Text style={[styles.releaseModalSubtitle, { color: roles.bodyText }]}>Decision: {appeal.decision_note}</Text> : null}
+                          {appeal.return_status ? <Text style={[styles.releaseModalSubtitle, { color: roles.bodyText }]}>Return status: {appeal.return_status}</Text> : null}
+                          {appeal.return_courier || appeal.return_tracking_number ? <Text style={[styles.releaseModalSubtitle, { color: roles.bodyText }]}>Tracking: {[appeal.return_courier, appeal.return_tracking_number].filter(Boolean).join(" · ")}</Text> : null}
+                          {appeal.return_shipped_at ? <Text style={[styles.releaseModalSubtitle, { color: roles.bodyText }]}>Return shipped: {formatHistoryDateTime(appeal.return_shipped_at)}</Text> : null}
+                          {appeal.return_received_at ? <Text style={[styles.releaseModalSubtitle, { color: roles.bodyText }]}>Return received: {formatHistoryDateTime(appeal.return_received_at)}</Text> : null}
+                          {appeal.repair_started_at ? <Text style={[styles.releaseModalSubtitle, { color: roles.bodyText }]}>Repair started: {formatHistoryDateTime(appeal.repair_started_at)}</Text> : null}
+                          {appeal.repair_completed_at ? <Text style={[styles.releaseModalSubtitle, { color: roles.bodyText }]}>Repair completed: {formatHistoryDateTime(appeal.repair_completed_at)}</Text> : null}
+                        </View>
+                      ) : null}
+                    </View>
+                  );
+                })}
+                    </ScrollView>
+                    {receipts.length > 1 ? (
+                      <View style={styles.historyCycleDots}>
+                        {receipts.map((receipt, index) => (
+                          <View
+                            key={`release-dot-${receipt.receipt_id}`}
+                            style={[styles.historyCycleDot, {
+                              backgroundColor: index === releaseCycleIndex ? roles.primaryActionBackground : roles.defaultCardBorder,
+                              width: index === releaseCycleIndex ? 20 : 7,
+                            }]}
+                          />
+                        ))}
+                      </View>
+                    ) : null}
+                  </>
+                ) : null}
+                {canReportProblem ? <AppButton title="Report a Wig Problem" onPress={() => onReportProblem?.({ request, receipt: latestReceipt })} fullWidth={true} /> : null}
+              </>
+            ) : (
+              <Text style={[styles.releaseModalSubtitle, { color: roles.bodyText }]}>Request details are unavailable.</Text>
+            )}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 function WigReleaseAppealModal({ visible, isSaving, onClose, onSubmit, roles }) {
-  const [reason, setReason] = useState("Damaged on Receipt");
+  const [reason, setReason] = useState("");
+  const [requestedResolution, setRequestedResolution] = useState("");
   const [description, setDescription] = useState("");
+  const [photos, setPhotos] = useState([]);
   const reasons = ["Damaged on Receipt", "Wrong Wig", "Poor Fit", "Other"];
+
+  useEffect(() => {
+    if (!visible) return;
+    setReason("");
+    setRequestedResolution("");
+    setDescription("");
+    setPhotos([]);
+  }, [visible]);
+
+  const addPhotos = async (camera = false) => {
+    if (photos.length >= 4) return;
+    const permission = camera
+      ? await ImagePicker.requestCameraPermissionsAsync()
+      : await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) return;
+    const result = camera
+      ? await ImagePicker.launchCameraAsync({ mediaTypes: ["images"], quality: 0.84 })
+      : await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], quality: 0.84, allowsMultipleSelection: true, selectionLimit: 4 - photos.length });
+    if (!result.canceled) setPhotos((current) => [...current, ...(result.assets || [])].slice(0, 4));
+  };
 
   return (
     <Modal transparent visible={visible} animationType="fade" onRequestClose={isSaving ? undefined : onClose}>
       <View style={styles.cancelRequestModalRoot}>
         <Pressable style={styles.cancelRequestModalBackdrop} disabled={isSaving} onPress={onClose} />
-        <View style={[styles.cancelRequestModalCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
-          <View style={styles.cancelRequestModalIcon}>
-            <MaterialCommunityIcons name="message-alert-outline" size={27} color={roles.primaryActionBackground} />
-          </View>
-          <View style={styles.cancelRequestModalCopy}>
-            <Text style={[styles.cancelRequestModalTitle, { color: roles.headingText }]}>Report a wig issue</Text>
-            <Text style={[styles.cancelRequestModalText, { color: roles.bodyText }]}>Tell staff what happened before the appeal deadline.</Text>
-          </View>
+        <View style={[styles.releaseModalCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.releaseModalContent}>
+          <Text style={[styles.releaseModalTitle, { color: roles.headingText }]}>Report a wig problem</Text>
+          <Text style={[styles.releaseModalSubtitle, { color: roles.bodyText }]}>Tell us the problem, choose what you need, and attach at least one photo.</Text>
+          <Text style={[styles.releaseSectionLabel, { color: roles.headingText }]}>1. CHOOSE A REASON</Text>
           <View style={styles.photoTipsRow}>
             {reasons.map((item) => (
               <Pressable
@@ -2511,24 +2907,48 @@ function WigReleaseAppealModal({ visible, isSaving, onClose, onSubmit, roles }) 
               </Pressable>
             ))}
           </View>
+          <Text style={[styles.releaseSectionLabel, { color: roles.headingText }]}>2. WHAT WOULD YOU LIKE US TO DO?</Text>
+          {["Repair or Replace", "Return and Close"].map((resolution) => (
+            <Pressable key={resolution} onPress={() => setRequestedResolution(resolution)} style={[styles.appealResolution, { borderColor: requestedResolution === resolution ? roles.primaryActionBackground : roles.defaultCardBorder }]}>
+              <Text style={[styles.appealResolutionTitle, { color: roles.headingText }]}>{resolution}</Text>
+              <Text style={[styles.appealResolutionText, { color: roles.metaText }]}>{resolution === "Repair or Replace" ? "Return the wig so Staff can repair or replace it." : "Return the wig and permanently close this request."}</Text>
+            </Pressable>
+          ))}
           <AppInput
-            label="What happened?"
+            label="Describe the problem"
             value={description}
             onChangeText={setDescription}
-            placeholder="Add a short description"
+            placeholder="Tell us what happened and provide any important details."
             multiline
             numberOfLines={4}
           />
+          <Text style={[styles.releaseSectionLabel, { color: roles.headingText }]}>3. ATTACH WIG PHOTOS (REQUIRED)</Text>
+          <Text style={[styles.releaseModalSubtitle, { color: roles.metaText }]}>Attach 1 to 4 clear photos. {photos.length} selected.</Text>
+          <View style={styles.appealPhotoGrid}>
+            {photos.map((photo, index) => (
+              <View key={`${photo.uri}-${index}`} style={styles.appealPhotoItem}>
+                <Image source={{ uri: photo.uri }} style={styles.appealPhotoImage} />
+                <Pressable onPress={() => setPhotos((current) => current.filter((_, itemIndex) => itemIndex !== index))} style={styles.appealPhotoRemove}>
+                  <MaterialCommunityIcons name="close" size={16} color="#FFFFFF" />
+                </Pressable>
+              </View>
+            ))}
+          </View>
+          <View style={styles.releasePhotoActions}>
+            <View style={styles.releasePhotoActionCell}><AppButton title="Camera" variant="outline" onPress={() => addPhotos(true)} disabled={photos.length >= 4} fullWidth={true} /></View>
+            <View style={styles.releasePhotoActionCell}><AppButton title="Gallery" variant="outline" onPress={() => addPhotos(false)} disabled={photos.length >= 4} fullWidth={true} /></View>
+          </View>
           <View style={styles.cancelRequestModalActions}>
-            <AppButton title="Keep Receipt" variant="outline" onPress={onClose} disabled={isSaving} fullWidth={true} />
+            <AppButton title="Cancel" variant="outline" onPress={onClose} disabled={isSaving} fullWidth={true} />
             <AppButton
               title="Submit Appeal"
-              onPress={() => onSubmit?.({ reason, description: description.trim() })}
+              onPress={() => onSubmit?.({ reason, requestedResolution, description: description.trim(), photos })}
               loading={isSaving}
-              disabled={isSaving || !description.trim()}
+              disabled={isSaving || !reason || !requestedResolution || !description.trim() || !photos.length}
               fullWidth={true}
             />
           </View>
+          </ScrollView>
         </View>
       </View>
     </Modal>
@@ -5706,8 +6126,14 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
   const [selectedOptionId, setSelectedOptionId] = useState("");
   const [selectedWigFilterIds, setSelectedWigFilterIds] = useState([]);
   const [isCancelRequestModalOpen, setIsCancelRequestModalOpen] = useState(false);
+  const [isReleaseReceiptModalOpen, setIsReleaseReceiptModalOpen] = useState(false);
+  const [receiptConfirmationTarget, setReceiptConfirmationTarget] = useState(null);
   const [isReleaseAppealModalOpen, setIsReleaseAppealModalOpen] = useState(false);
   const [isSavingReleaseAction, setIsSavingReleaseAction] = useState(false);
+  const [selectedHistoryRequest, setSelectedHistoryRequest] = useState(null);
+  const [historyRequestDetails, setHistoryRequestDetails] = useState(null);
+  const [isLoadingHistoryDetails, setIsLoadingHistoryDetails] = useState(false);
+  const [historyAppealTarget, setHistoryAppealTarget] = useState(null);
   const [flowStep, setFlowStep] = useState("patient");
   const [photoValidation, setPhotoValidation] = useState(null);
   const [certificateVerification, setCertificateVerification] = useState(null);
@@ -5797,6 +6223,8 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
     tryOnSelections,
     releaseReceipt,
     releaseAppeal,
+    activeRequestMode,
+    previousRequests,
     hasDraftRequest,
     hasSubmittedRequest,
     referenceImage,
@@ -5826,9 +6254,22 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
     saveRequest,
     cancelRequest,
     acceptReleaseReceipt,
+    downloadReleaseReceipt,
+    loadPreviousRequestDetails,
     submitReleaseAppeal,
     refreshContext,
   } = usePatientWigRequest({ userId: user?.id });
+
+  const promptedReceiptIdRef = useRef(null);
+  useEffect(() => {
+    const isReleased = String(latestWigRequest?.status || "").trim().toLowerCase() === "released";
+    const receiptId = releaseReceipt?.receipt_id || null;
+    if (!showFlowOnly && isReleased && receiptId && !releaseReceipt?.received_confirmed_at && promptedReceiptIdRef.current !== receiptId) {
+      promptedReceiptIdRef.current = receiptId;
+      setReceiptConfirmationTarget(null);
+      setIsReleaseReceiptModalOpen(true);
+    }
+  }, [latestWigRequest?.status, releaseReceipt?.receipt_id, releaseReceipt?.received_confirmed_at, showFlowOnly]);
 
   useFocusEffect(
     React.useCallback(() => {
@@ -5932,6 +6373,39 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
     { label: "Density", value: requestedWigDensityValue },
     { label: "Cap size", value: requestedWigCapSizeValue },
   ];
+  const requestStatusKey = String(latestWigRequest?.status || "").trim().toLowerCase();
+  const expectedRelease = formatExpectedRelease(latestWigRequest?.expected_release_at);
+  const expectedReleaseTime = latestWigRequest?.expected_release_at
+    ? new Date(latestWigRequest.expected_release_at).getTime()
+    : Number.NaN;
+  const latestActualReleaseTime = releaseReceipt?.released_at
+    ? new Date(releaseReceipt.released_at).getTime()
+    : Number.NaN;
+  const expectedReleaseUpdatedTime = latestWigRequest?.expected_release_updated_at
+    ? new Date(latestWigRequest.expected_release_updated_at).getTime()
+    : Number.NaN;
+  const requestIsTerminal = ["cancelled", "canceled", "rejected", "closed"].includes(requestStatusKey);
+  const expectedWasUpdatedAfterActualRelease = Number.isFinite(latestActualReleaseTime)
+    && Number.isFinite(expectedReleaseUpdatedTime)
+    && expectedReleaseUpdatedTime > latestActualReleaseTime;
+  const expectedReleaseIsActive = Boolean(
+    expectedRelease
+    && !requestIsTerminal
+    && (!Number.isFinite(latestActualReleaseTime) || expectedWasUpdatedAfterActualRelease)
+    && requestStatusKey !== "released"
+  );
+  const canHaveExpectedRelease = [
+    "accepted - wig allocated",
+    "accepted - in production",
+    "ready for pick-up",
+    "to be release",
+    "releasing",
+  ].includes(requestStatusKey);
+  const showExpectedReleaseCard = expectedReleaseIsActive
+    || (!expectedRelease && !requestIsTerminal && canHaveExpectedRelease);
+  const expectedReleaseHasPassed = expectedReleaseIsActive
+    && Number.isFinite(expectedReleaseTime)
+    && expectedReleaseTime < Date.now();
   void requestedWigCode;
   void requestedWigStatus;
   void requestedWigSummary;
@@ -6411,35 +6885,84 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
     setIsCancelRequestModalOpen(true);
   };
 
-  const handleAcceptReleaseReceipt = () => {
+  const handleAcceptReleaseReceipt = async ({ confirmationPhoto }) => {
+    setIsSavingReleaseAction(true);
+    const result = await acceptReleaseReceipt({
+      confirmationPhoto,
+      request: receiptConfirmationTarget?.request || null,
+      receipt: receiptConfirmationTarget?.receipt || null,
+      wig: receiptConfirmationTarget?.wig || null,
+    });
+    setIsSavingReleaseAction(false);
+    if (!result?.success) {
+      Alert.alert("Receipt not confirmed", result?.error || "Please try again.");
+      return;
+    }
+    setIsReleaseReceiptModalOpen(false);
+    setReceiptConfirmationTarget(null);
+    await Promise.all([
+      refreshContext({ silent: true, force: true }),
+      refreshTracking(),
+    ]);
     Alert.alert(
-      "Confirm wig receipt?",
-      releaseReceipt?.terms_snapshot || "Confirm that you received the released wig and accept the receipt terms.",
+      "Wig Receipt Confirmed",
+      result?.pdfWarning || "Thank you for confirming that you received your wig.",
       [
-        { text: "Not Yet", style: "cancel" },
-        {
-          text: "Confirm Receipt",
-          onPress: async () => {
-            setIsSavingReleaseAction(true);
-            const result = await acceptReleaseReceipt();
-            setIsSavingReleaseAction(false);
-            if (!result?.success) Alert.alert("Receipt not confirmed", result?.error || "Please try again.");
-          },
-        },
+        ...(result?.receipt?.pdf_path ? [{ text: "Download Receipt PDF", onPress: () => void handleDownloadReleaseReceipt(result.receipt) }] : []),
+        { text: "Done" },
       ],
     );
   };
 
-  const handleSubmitReleaseAppeal = async ({ reason, description }) => {
+  const handleDownloadReleaseReceipt = async (receipt = null) => {
+    const result = await downloadReleaseReceipt(receipt);
+    if (!result?.success) Alert.alert("Download unavailable", result?.error || "Please try again.");
+  };
+
+  const handleSubmitReleaseAppeal = async ({ reason, description, requestedResolution, photos }) => {
     setIsSavingReleaseAction(true);
-    const result = await submitReleaseAppeal({ reason, description });
+    const result = await submitReleaseAppeal({
+      reason,
+      description,
+      requestedResolution,
+      photos,
+      request: historyAppealTarget?.request || null,
+      receipt: historyAppealTarget?.receipt || null,
+    });
     setIsSavingReleaseAction(false);
     if (!result?.success) {
       Alert.alert("Appeal not submitted", result?.error || "Please try again.");
       return;
     }
     setIsReleaseAppealModalOpen(false);
+    setHistoryAppealTarget(null);
+    await refreshContext({ silent: true, force: true });
     Alert.alert("Appeal submitted", "Staff will review your report.");
+  };
+
+  const handleViewHistoryRequest = async (request) => {
+    setSelectedHistoryRequest(request);
+    setHistoryRequestDetails(null);
+    setIsLoadingHistoryDetails(true);
+    const result = await loadPreviousRequestDetails(request);
+    setIsLoadingHistoryDetails(false);
+    if (result?.error) {
+      Alert.alert("Request details unavailable", result.error);
+      return;
+    }
+    setHistoryRequestDetails(result.details);
+  };
+
+  const handleCloseHistoryDetails = () => {
+    setSelectedHistoryRequest(null);
+    setHistoryRequestDetails(null);
+    setIsLoadingHistoryDetails(false);
+  };
+
+  const handleReportHistoryProblem = ({ request, receipt }) => {
+    setHistoryAppealTarget({ request, receipt });
+    handleCloseHistoryDetails();
+    setIsReleaseAppealModalOpen(true);
   };
 
   const handleConfirmCancelLatestRequest = async () => {
@@ -6780,8 +7303,32 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
               hasSubmittedRequest ? styles.requestedWigSummaryActive : null,
               !hasSubmittedRequest && hasLoadedContext && !isLoadingContext ? styles.requestedWigSummaryPlain : null,
             ]}>
-              {hasSubmittedRequest ? (
+              {hasSubmittedRequest ? activeRequestMode === "receipt_confirmation" ? (
+                <View style={[styles.receiptActionCard, {
+                  backgroundColor: roles.defaultCardBackground,
+                  borderColor: roles.defaultCardBorder,
+                }]}
+                >
+                  <View
+                    style={[styles.receiptActionIcon, { backgroundColor: roles.iconPrimarySurface }]}
+                  >
+                    <MaterialCommunityIcons name="package-check" size={30} color={roles.primaryActionBackground} />
+                  </View>
+                  <Text style={[styles.receiptActionEyebrow, { color: roles.metaText }]}>CURRENT ACTION</Text>
+                  <Text style={[styles.receiptActionTitle, { color: roles.headingText }]}>Your wig has been released</Text>
+                  <Text style={[styles.receiptActionDescription, { color: roles.bodyText }]}>Please confirm when you have physically received your wig.</Text>
+                  <View style={[styles.receiptActionMeta, { backgroundColor: roles.iconPrimarySurface }]}>
+                    <Text style={[styles.receiptActionMetaText, { color: roles.bodyText }]}>Request {latestWigRequest?.request_code || ""}</Text>
+                    <Text style={[styles.receiptActionMetaText, { color: roles.bodyText }]}>Released {formatHistoryDateTime(releaseReceipt?.released_at)}</Text>
+                  </View>
+                  <AppButton title="Confirm Wig Receipt" onPress={() => {
+                    setReceiptConfirmationTarget(null);
+                    setIsReleaseReceiptModalOpen(true);
+                  }} loading={isSavingReleaseAction} fullWidth={true} />
+                </View>
+              ) : (
                 <>
+                  <Text style={[styles.activeRequestHeading, { color: roles.headingText }]}>Current Wig Request</Text>
                   <WigJourneyTimeline tracker={tracker} roles={roles} />
 
                   <View style={styles.requestQuickActions}>
@@ -6792,6 +7339,39 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
                       selectedStyle={requestedWigDisplayName}
                       roles={roles}
                     />
+
+                    {showExpectedReleaseCard ? (
+                      <View style={[styles.expectedReleaseCard, {
+                        backgroundColor: roles.defaultCardBackground,
+                        borderColor: roles.defaultCardBorder,
+                      }]}
+                      >
+                        <View
+                          style={[styles.expectedReleaseIcon, { backgroundColor: roles.iconPrimarySurface }]}
+                        >
+                          <MaterialCommunityIcons name="calendar-clock-outline" size={22} color={roles.primaryActionBackground} />
+                        </View>
+                        <View style={styles.expectedReleaseCopy}>
+                          <Text style={[styles.expectedReleaseEyebrow, { color: roles.metaText }]}>EXPECTED WIG RELEASE</Text>
+                          {expectedReleaseIsActive ? (
+                            <>
+                              <Text style={[styles.expectedReleaseDate, { color: roles.headingText }]}>{expectedRelease.date}</Text>
+                              <Text style={[styles.expectedReleaseTime, { color: roles.primaryActionBackground }]}>Around {expectedRelease.time}</Text>
+                              <Text style={[styles.expectedReleaseDescription, { color: expectedReleaseHasPassed ? theme.colors.textError : roles.bodyText }]}>
+                                {expectedReleaseHasPassed
+                                  ? "This estimated schedule has passed. Please wait for an updated schedule."
+                                  : "This is the current estimate and may change while your wig is being prepared."}
+                              </Text>
+                              {latestWigRequest?.expected_release_note ? (
+                                <Text style={[styles.expectedReleaseNote, { color: roles.bodyText }]}>{latestWigRequest.expected_release_note}</Text>
+                              ) : null}
+                            </>
+                          ) : (
+                            <Text style={[styles.expectedReleaseDescription, { color: roles.bodyText }]}>Release schedule will be provided once available.</Text>
+                          )}
+                        </View>
+                      </View>
+                    ) : null}
 
                     {savedSafetyAssessment ? (
                       <Pressable
@@ -6830,7 +7410,7 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
                       </Pressable>
                     ) : null}
 
-                    {releaseReceipt ? (
+                    {releaseReceipt && ["released", "appealed"].includes(requestStatusKey) ? (
                       <LinearGradient
                         colors={[roles.defaultCardBackground, roles.supportCardBackground]}
                         start={{ x: 0, y: 0 }}
@@ -6849,14 +7429,23 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
                           </View>
                         </View>
                         <Text numberOfLines={3} style={[styles.flowBody, { color: roles.bodyText }]}>{releaseReceipt.terms_snapshot}</Text>
+                        {releaseReceipt.received_confirmed_at && releaseReceipt.pdf_path ? (
+                          <AppButton title="Download Receipt PDF" onPress={() => void handleDownloadReleaseReceipt()} fullWidth={true} />
+                        ) : null}
                         {!releaseReceipt.received_confirmed_at ? (
-                          <AppButton title="Confirm Wig Received" onPress={handleAcceptReleaseReceipt} loading={isSavingReleaseAction} fullWidth={true} />
+                          <AppButton title="Confirm Wig Receipt" onPress={() => {
+                            setReceiptConfirmationTarget(null);
+                            setIsReleaseReceiptModalOpen(true);
+                          }} loading={isSavingReleaseAction} fullWidth={true} />
                         ) : releaseAppeal ? (
                           <View style={[styles.documentStatusPill, { backgroundColor: roles.iconPrimarySurface, alignSelf: "flex-start" }]}>
-                            <Text style={[styles.documentRowStatus, { color: roles.primaryActionBackground }]}>Appeal: {releaseAppeal.status}</Text>
+                            <Text style={[styles.documentRowStatus, { color: roles.primaryActionBackground }]}>{getPatientAppealStatusLabel(releaseAppeal.status)}</Text>
                           </View>
                         ) : new Date(releaseReceipt.appeal_deadline).getTime() >= Date.now() ? (
-                          <AppButton title="Report a Wig Issue" variant="outline" onPress={() => setIsReleaseAppealModalOpen(true)} fullWidth={true} />
+                          <AppButton title="Report a Wig Problem" variant="outline" onPress={() => {
+                            setHistoryAppealTarget(null);
+                            setIsReleaseAppealModalOpen(true);
+                          }} fullWidth={true} />
                         ) : (
                           <Text style={[styles.requestQuickActionHint, { color: roles.metaText }]}>The appeal period has ended.</Text>
                         )}
@@ -6943,7 +7532,7 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
                         { color: requestFlowPrimaryTextColor },
                       ]}
                     >
-                      {hasDraftRequest ? "Continue your wig request" : "Find a wig made for you"}
+                      {hasDraftRequest ? "Continue your wig request" : "Ready to request a wig?"}
                     </Text>
                     <Text
                       style={[
@@ -6995,7 +7584,7 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
                   </View>
 
                   <AppButton
-                    title={hasDraftRequest ? "Resume wig request" : "Start wig request"}
+                    title={hasDraftRequest ? "Resume wig request" : "Request a Wig"}
                     onPress={openRequestFlow}
                     leading={<AppIcon name="requests" state="inverse" />}
                     trailing={
@@ -7026,6 +7615,53 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
                 </LinearGradient>
               )}
             </View>
+
+            {previousRequests?.length ? (
+              <View style={styles.previousRequestsSection}>
+                <View style={[
+                  styles.previousRequestsHeader,
+                  Platform.OS === "web" ? { backgroundColor: roles.pageBackground } : null,
+                ]}>
+                  <Text style={[styles.previousRequestsTitle, { color: roles.headingText }]}>Previous Requests</Text>
+                  <Text style={[styles.previousRequestsCount, { color: roles.metaText }]}>{previousRequests.length}</Text>
+                </View>
+                {previousRequests.map((request) => {
+                  const historyStatus = getHistoryRequestStatus(request);
+                  const needsConfirmation = historyStatus === "Released - Confirmation Required";
+                  const historyDateLabel = request.latest_release_receipt?.received_confirmed_at ? "Received" : "Requested";
+                  const historyDateValue = request.latest_release_receipt?.received_confirmed_at || request.request_date;
+                  return (
+                    <View key={request.req_id} style={[styles.previousRequestCard, {
+                      backgroundColor: roles.defaultCardBackground,
+                      borderColor: roles.defaultCardBorder,
+                    }]}
+                    >
+                      <View style={styles.previousRequestTopRow}>
+                        <View style={styles.previousRequestCopy}>
+                          <Text style={[styles.previousRequestCode, { color: roles.headingText }]}>{request.request_code || "Wig request"}</Text>
+                          {request.wig?.wig_name ? <Text numberOfLines={1} style={[styles.previousRequestWigName, { color: roles.bodyText }]}>{request.wig.wig_name}</Text> : null}
+                          <Text style={[styles.previousRequestStatus, { color: needsConfirmation ? theme.colors.textError : roles.primaryActionBackground }]}>{historyStatus}</Text>
+                        </View>
+                        <MaterialCommunityIcons name="history" size={22} color={roles.metaText} />
+                      </View>
+                      {request.requested_cap_size ? <Text style={[styles.previousRequestMeta, { color: roles.bodyText }]}>{request.requested_cap_size} cap</Text> : null}
+                      <Text style={[styles.previousRequestMeta, { color: roles.metaText }]}>{historyDateLabel} {formatHistoryDateTime(historyDateValue)}</Text>
+                      {needsConfirmation ? (
+                        <AppButton title="Confirm Receipt" onPress={() => {
+                          setReceiptConfirmationTarget({
+                            request,
+                            receipt: request.latest_release_receipt,
+                            wig: null,
+                          });
+                          setIsReleaseReceiptModalOpen(true);
+                        }} fullWidth={true} />
+                      ) : null}
+                      <AppButton title="View Details" variant="outline" onPress={() => handleViewHistoryRequest(request)} fullWidth={true} />
+                    </View>
+                  );
+                })}
+              </View>
+            ) : null}
           </View>
 
         </>
@@ -7111,8 +7747,33 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
       <WigReleaseAppealModal
         visible={isReleaseAppealModalOpen}
         isSaving={isSavingReleaseAction}
-        onClose={() => setIsReleaseAppealModalOpen(false)}
+        onClose={() => {
+          setIsReleaseAppealModalOpen(false);
+          setHistoryAppealTarget(null);
+        }}
         onSubmit={handleSubmitReleaseAppeal}
+        roles={roles}
+      />
+      <WigReceiptConfirmationModal
+        visible={isReleaseReceiptModalOpen}
+        request={receiptConfirmationTarget?.request || latestWigRequest}
+        receipt={receiptConfirmationTarget?.receipt || releaseReceipt}
+        wig={receiptConfirmationTarget?.wig || requestWig}
+        isSaving={isSavingReleaseAction}
+        onClose={() => {
+          setIsReleaseReceiptModalOpen(false);
+          setReceiptConfirmationTarget(null);
+        }}
+        onConfirm={handleAcceptReleaseReceipt}
+        roles={roles}
+      />
+      <FinishedWigRequestDetailsModal
+        visible={Boolean(selectedHistoryRequest)}
+        details={historyRequestDetails}
+        isLoading={isLoadingHistoryDetails}
+        onClose={handleCloseHistoryDetails}
+        onDownload={handleDownloadReleaseReceipt}
+        onReportProblem={handleReportHistoryProblem}
         roles={roles}
       />
     </DashboardLayout>
@@ -7120,6 +7781,310 @@ export function PatientWigRequestScreen({ showFlowOnly = false } = {}) {
 }
 
 const styles = StyleSheet.create({
+  historyDetailsHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.md,
+  },
+  historyDetailsHeaderCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  historyRequestCode: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.bold,
+  },
+  historyCloseButton: {
+    width: 38,
+    height: 38,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 14,
+  },
+  historyDetailsLoading: {
+    marginVertical: theme.spacing.xl,
+  },
+  historyStatusPanel: {
+    borderWidth: 1,
+    borderRadius: 18,
+    padding: theme.spacing.md,
+    gap: theme.spacing.xs,
+  },
+  historyStatusTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    fontWeight: theme.typography.weights.bold,
+  },
+  historyWigHero: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderRadius: 20,
+    padding: theme.spacing.sm,
+    gap: theme.spacing.md,
+  },
+  historyWigImageFrame: {
+    width: 112,
+    height: 112,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
+  },
+  historyWigImage: {
+    width: "100%",
+    height: "100%",
+  },
+  historyWigHeroCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 3,
+  },
+  historyWigEyebrow: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.bold,
+    letterSpacing: 0.5,
+  },
+  historyWigName: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    fontWeight: theme.typography.weights.bold,
+  },
+  historyWigCode: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.bold,
+  },
+  historyWigSummary: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+  },
+  historyReleaseHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.sm,
+  },
+  historyCycleCounter: {
+    minWidth: 46,
+    height: 30,
+    paddingHorizontal: theme.spacing.sm,
+    borderRadius: 15,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  historyCycleCounterText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.bold,
+  },
+  historyReleaseCarousel: {
+    gap: HISTORY_RELEASE_CYCLE_GAP,
+    paddingRight: theme.spacing.lg,
+  },
+  historyReceiptCard: {
+    width: HISTORY_RELEASE_CYCLE_CARD_WIDTH,
+    flexShrink: 0,
+    borderWidth: 1,
+    borderRadius: 18,
+    padding: theme.spacing.md,
+    gap: theme.spacing.sm,
+  },
+  historyReceiptTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.sm,
+  },
+  historyReceiptIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  historyReceiptHeadingCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  historyCycleDots: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
+  historyCycleDot: {
+    height: 7,
+    borderRadius: 4,
+  },
+  historyReceiptTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.bold,
+  },
+  historyAppealPanel: {
+    borderRadius: 14,
+    padding: theme.spacing.md,
+    gap: theme.spacing.xs,
+  },
+  releaseModalRoot: {
+    flex: 1,
+    justifyContent: "flex-end",
+  },
+  releaseModalCard: {
+    maxHeight: "92%",
+    borderWidth: 1,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    overflow: "hidden",
+  },
+  releaseModalContent: {
+    padding: theme.spacing.lg,
+    paddingBottom: theme.spacing.xl,
+    gap: theme.spacing.md,
+  },
+  releaseModalTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.titleMd,
+    fontWeight: theme.typography.weights.bold,
+  },
+  releaseModalSubtitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+  },
+  releaseSummary: {
+    borderWidth: 1,
+    borderRadius: 16,
+    padding: theme.spacing.md,
+    gap: 5,
+  },
+  releaseSummaryText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+  },
+  releaseSectionLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.bold,
+    letterSpacing: 0.6,
+  },
+  receiptPhotoPreview: {
+    width: "100%",
+    height: 190,
+    borderRadius: 16,
+    resizeMode: "cover",
+  },
+  releasePhotoActions: {
+    flexDirection: "row",
+    gap: theme.spacing.sm,
+  },
+  releasePhotoActionCell: {
+    flex: 1,
+    minWidth: 0,
+  },
+  releaseTermsLoadingCard: {
+    minHeight: 112,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: theme.spacing.sm,
+  },
+  releaseTermsLoadingText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+  },
+  releaseTermsErrorCard: {
+    minHeight: 88,
+    borderWidth: 1,
+    borderRadius: 18,
+    padding: theme.spacing.md,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.sm,
+  },
+  releaseTermsErrorCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 3,
+  },
+  releaseTermsErrorTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.bold,
+  },
+  releaseTermsErrorText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    lineHeight: theme.typography.semantic.caption * theme.typography.lineHeights.relaxed,
+  },
+  releaseTermsRetry: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  releaseCheckboxRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: theme.spacing.sm,
+  },
+  releaseCheckboxRowDisabled: {
+    opacity: 0.48,
+  },
+  releaseCheckboxText: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
+  },
+  appealResolution: {
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: theme.spacing.md,
+    gap: 4,
+  },
+  appealResolutionTitle: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  appealResolutionText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+  },
+  appealPhotoGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: theme.spacing.sm,
+  },
+  appealPhotoItem: {
+    width: 76,
+    height: 76,
+    position: "relative",
+  },
+  appealPhotoImage: {
+    width: "100%",
+    height: "100%",
+    borderRadius: 12,
+  },
+  appealPhotoRemove: {
+    position: "absolute",
+    top: -6,
+    right: -6,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: theme.colors.palette.wine900,
+  },
+  releaseReceiptActions: {
+    gap: theme.spacing.sm,
+  },
   wigIntroSection: {
     gap: theme.spacing.xs,
     marginBottom: theme.spacing.sm,
@@ -7186,6 +8151,12 @@ const styles = StyleSheet.create({
   },
   wigJourneyAnimatedHost: {
     width: "100%",
+    ...(Platform.OS === "web" ? {
+      position: "sticky",
+      top: 0,
+      zIndex: 24,
+      paddingBottom: theme.spacing.sm,
+    } : null),
   },
   wigJourneyCard: {
     position: "relative",
@@ -7314,6 +8285,14 @@ const styles = StyleSheet.create({
     fontWeight: theme.typography.weights.semibold,
     textAlign: "center",
   },
+  wigJourneyStageEstimate: {
+    width: 88,
+    color: "rgba(255,255,255,0.78)",
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 8,
+    lineHeight: 11,
+    textAlign: "center",
+  },
   inlineWigDetailsSection: {
     width: "100%",
     gap: theme.spacing.md,
@@ -7435,6 +8414,170 @@ const styles = StyleSheet.create({
   requestQuickActions: {
     width: "100%",
     gap: theme.spacing.sm,
+  },
+  receiptActionCard: {
+    width: "100%",
+    alignItems: "center",
+    borderWidth: 1,
+    borderRadius: 24,
+    padding: theme.spacing.lg,
+    gap: theme.spacing.sm,
+    ...theme.shadows.soft,
+  },
+  activeRequestHeading: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.titleSm,
+    fontWeight: theme.typography.weights.bold,
+  },
+  receiptActionIcon: {
+    width: 60,
+    height: 60,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 20,
+  },
+  receiptActionEyebrow: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 10,
+    fontWeight: theme.typography.weights.bold,
+    letterSpacing: 1,
+  },
+  receiptActionTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.titleSm,
+    fontWeight: theme.typography.weights.bold,
+    textAlign: "center",
+  },
+  receiptActionDescription: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: 19,
+    textAlign: "center",
+  },
+  receiptActionMeta: {
+    width: "100%",
+    borderRadius: 14,
+    padding: theme.spacing.md,
+    gap: 3,
+  },
+  receiptActionMetaText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    textAlign: "center",
+  },
+  previousRequestsSection: {
+    width: "100%",
+    gap: theme.spacing.sm,
+    marginTop: theme.spacing.lg,
+  },
+  previousRequestsHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: theme.spacing.xs,
+    paddingVertical: theme.spacing.sm,
+    ...(Platform.OS === "web" ? {
+      position: "sticky",
+      top: 0,
+      zIndex: 25,
+    } : null),
+  },
+  previousRequestsTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.titleSm,
+    fontWeight: theme.typography.weights.bold,
+  },
+  previousRequestsCount: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+  },
+  previousRequestCard: {
+    width: "100%",
+    borderWidth: 1,
+    borderRadius: 20,
+    padding: theme.spacing.md,
+    gap: theme.spacing.sm,
+  },
+  previousRequestTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: theme.spacing.md,
+  },
+  previousRequestCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  previousRequestCode: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    fontWeight: theme.typography.weights.bold,
+  },
+  previousRequestStatus: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  previousRequestWigName: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+  },
+  previousRequestMeta: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    lineHeight: 16,
+  },
+  expectedReleaseCard: {
+    width: "100%",
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: theme.spacing.md,
+    borderWidth: 1,
+    borderRadius: 22,
+    padding: theme.spacing.md,
+    ...theme.shadows.soft,
+  },
+  expectedReleaseIcon: {
+    width: 44,
+    height: 44,
+    flexShrink: 0,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 15,
+  },
+  expectedReleaseCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 3,
+  },
+  expectedReleaseEyebrow: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 9,
+    fontWeight: theme.typography.weights.bold,
+    letterSpacing: 0.8,
+  },
+  expectedReleaseDate: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    fontWeight: theme.typography.weights.bold,
+  },
+  expectedReleaseTime: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  expectedReleaseDescription: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    lineHeight: 16,
+  },
+  expectedReleaseNote: {
+    marginTop: theme.spacing.xs,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.compact.caption,
+    lineHeight: 16,
+    fontStyle: "italic",
   },
   requestQuickAction: {
     position: "relative",

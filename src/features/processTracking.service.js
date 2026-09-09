@@ -5,7 +5,9 @@ import {
 } from './hairSubmission.api';
 import {
   fetchLatestWigAllocationTrackingByPatientId,
-  fetchLatestWigRequestTrackingByPatientId,
+  fetchPatientWigRequestsByPatientId,
+  fetchPatientWigReleaseAppeal,
+  fetchWigReleaseReceiptsByRequestIds,
 } from './wigRequest.api';
 import { fetchPatientDetailsByUserId } from './profile/api/profile.api';
 
@@ -331,7 +333,66 @@ const buildDonorTracker = ({ submission, detail, logistics }) => {
   };
 };
 
-const buildPatientTracker = ({ patientDetails, wigRequest, latestAllocation }) => {
+const buildPatientAppealTimelineSteps = (appeal, wigRequest) => {
+  const appealStatus = normalizeTrackingStatusKey(appeal?.status);
+  const returnStatus = normalizeTrackingStatusKey(appeal?.return_status);
+  const isApproved = appealStatus === 'approved for replacement';
+  const isRejected = appealStatus === 'rejected';
+  const returnRanks = {
+    'awaiting return': 1,
+    'in transit': 2,
+    'return received': 3,
+    'under repair': 4,
+    'ready for re release': 5,
+    'return completed': 6,
+    completed: 6,
+  };
+  const returnRank = returnRanks[returnStatus] || 0;
+  const returnStepState = (rank) => returnRank > rank ? 'completed' : returnRank === rank ? 'current' : 'pending';
+  const steps = [
+    {
+      key: 'problem-reported', title: 'Problem Reported', label: 'Submitted',
+      description: formatDateTime(appeal?.submitted_at), state: 'completed',
+    },
+    {
+      key: 'appeal-review', title: 'Appeal Under Review',
+      label: appealStatus === 'pending staff review' ? 'In review' : 'Reviewed',
+      description: appealStatus === 'pending staff review' ? 'Staff is reviewing your report.' : formatDateTime(appeal?.reviewed_at),
+      state: appealStatus === 'pending staff review' ? 'current' : 'completed',
+    },
+  ];
+  if (isRejected) {
+    steps.push({
+      key: 'appeal-rejected', title: 'Appeal Rejected', label: 'Rejected',
+      description: appeal?.decision_note || 'Staff completed the appeal review.', state: 'attention',
+    });
+  }
+  if (isApproved) {
+    steps.push({
+      key: 'appeal-approved', title: 'Appeal Approved', label: appeal?.requested_resolution || 'Approved',
+      description: appeal?.decision_note || 'Follow the return instructions provided by staff.', state: returnRank ? 'completed' : 'current',
+    });
+    steps.push(
+      { key: 'awaiting-return', title: 'Awaiting Wig Return', label: returnRank >= 1 ? 'Ready' : 'Waiting', description: appeal?.return_note || '', state: returnStepState(1) },
+      { key: 'return-transit', title: 'Return In Transit', label: returnRank >= 2 ? 'In transit' : 'Waiting', description: appeal?.return_tracking_number || formatDateTime(appeal?.return_shipped_at), state: returnStepState(2) },
+      { key: 'return-received', title: 'Return Received', label: returnRank >= 3 ? 'Received' : 'Waiting', description: formatDateTime(appeal?.return_received_at), state: returnStepState(3) },
+    );
+    if (appeal?.requested_resolution === 'Repair or Replace') {
+      steps.push(
+        { key: 'under-repair', title: 'Under Repair or Replacement', label: returnRank >= 4 ? 'In progress' : 'Waiting', description: formatDateTime(appeal?.repair_started_at), state: returnStepState(4) },
+        { key: 'ready-rerelease', title: 'Ready for Re-release', label: returnRank >= 5 ? 'Ready' : 'Waiting', description: formatDateTime(appeal?.repair_completed_at), state: returnStepState(5) },
+      );
+    } else {
+      steps.push({
+        key: 'request-closed', title: 'Request Closed', label: normalizeTrackingStatusKey(wigRequest?.status) === 'returned completed' ? 'Closed' : 'Waiting',
+        description: 'The request closes after the returned wig is received.', state: normalizeTrackingStatusKey(wigRequest?.status) === 'returned completed' ? 'completed' : returnStepState(6),
+      });
+    }
+  }
+  return steps;
+};
+
+const buildPatientTracker = ({ patientDetails, wigRequest, latestAllocation, releaseReceipt, releaseAppeal }) => {
   if (!patientDetails?.patient_id) {
     return {
       tracker: null,
@@ -345,8 +406,26 @@ const buildPatientTracker = ({ patientDetails, wigRequest, latestAllocation }) =
   const fulfillmentStatus = normalizeTrackingStatusKey(wigRequest?.fulfillment_status);
   const wigStatus = normalizeTrackingStatusKey(wig?.wig_status);
   const normalizedReleaseStatus = normalizeTrackingStatusKey(releaseStatus);
+  const hasReleased = Boolean(releaseReceipt?.released_at || ['released', 'appealed', 'returned completed'].includes(requestStatus));
+  const hasConfirmedReceipt = Boolean(releaseReceipt?.received_confirmed_at);
   const currentStatus = wigRequest?.status || wigRequest?.fulfillment_status || releaseStatus || wig?.wig_status || '';
   const isRequestStopped = ['rejected', 'cancelled', 'canceled', 'closed'].includes(requestStatus);
+  const expectedReleaseAt = wigRequest?.expected_release_at || null;
+  const expectedReleaseUpdatedAt = wigRequest?.expected_release_updated_at || null;
+  const expectedWasUpdatedAfterLatestRelease = Boolean(
+    releaseReceipt?.released_at
+    && expectedReleaseUpdatedAt
+    && new Date(expectedReleaseUpdatedAt).getTime() > new Date(releaseReceipt.released_at).getTime()
+  );
+  const showActiveExpectedRelease = Boolean(
+    expectedReleaseAt
+    && !isRequestStopped
+    && (!hasReleased || expectedWasUpdatedAfterLatestRelease)
+  );
+  const expectedReleaseHasPassed = Boolean(
+    showActiveExpectedRelease
+    && new Date(expectedReleaseAt).getTime() < Date.now()
+  );
   const isApproved = Boolean(
     wigRequest?.approved_at
     || requestStatus.startsWith('accepted')
@@ -454,62 +533,99 @@ const buildPatientTracker = ({ patientDetails, wigRequest, latestAllocation }) =
     },
   ];
 
-  const patientCurrentIndex = isReadyForClaiming
-    ? 3
-    : isSentToHospital
-      ? 2
-      : isApproved || hasAllocation || hasWig || isInProduction
-        ? 1
-        : 0;
-  const patientSteps = steps.length ? [
+  void steps;
+
+  const successfulStatusRank = {
+    pending: 1,
+    'accepted in production': 2,
+    'accepted wig allocated': 3,
+    'ready for pick up': 4,
+    'to be release': 5,
+    releasing: 6,
+    released: 7,
+    appealed: 7,
+    'returned completed': 7,
+  };
+  const currentRank = successfulStatusRank[requestStatus] || 0;
+  const stageState = (rank) => {
+    if (isRequestStopped) return rank === 1 ? 'attention' : 'pending';
+    if (currentRank > rank || hasReleased || hasConfirmedReceipt) return 'completed';
+    if (currentRank === rank) return 'current';
+    return 'pending';
+  };
+  const usesProductionPath = isInProduction || fulfillmentStatus.includes('production');
+  const expectedReleaseStep = showActiveExpectedRelease ? {
+    key: 'expected-release',
+    title: 'Expected Wig Release',
+    label: expectedReleaseHasPassed ? 'Awaiting update' : 'Estimate',
+    description: expectedReleaseHasPassed
+      ? `${formatDateTime(expectedReleaseAt)} · This estimated schedule has passed; your request status has not changed.`
+      : formatDateTime(expectedReleaseAt),
+    note: wigRequest?.expected_release_note || '',
+    state: 'scheduled',
+  } : null;
+  const requestLifecycleSteps = wigRequest?.req_id ? [
     {
-      key: 'approval',
-      title: isRequestStopped ? normalizeStatusLabel(wigRequest?.status, 'Request closed') : 'Waiting for approval',
-      label: isApproved ? 'Approved' : normalizeStatusLabel(wigRequest?.status, 'Pending'),
+      key: 'request-submitted', title: 'Request Submitted', label: 'Submitted',
+      description: wigRequest.request_date ? formatDateTime(wigRequest.request_date) : '', state: 'completed',
+    },
+    {
+      key: 'under-review',
+      title: isRequestStopped
+        ? (requestStatus === 'rejected' ? 'Request Rejected' : 'Request Cancelled')
+        : (isApproved ? 'Request Approved' : 'Request Under Review'),
+      label: isRequestStopped ? normalizeStatusLabel(wigRequest.status, 'Request closed') : (currentRank > 1 ? 'Reviewed' : 'In review'),
       description: isRequestStopped
-        ? wigRequest?.status_reason || 'This request is no longer active.'
+        ? wigRequest.status_reason || 'This request is no longer active.'
         : isApproved
-        ? `Approved ${formatDateTime(wigRequest?.approved_at || wigRequest?.updated_at)}`
-        : 'Reviewing your request.',
-      state: getStepState({
-        index: 0,
-        currentIndex: patientCurrentIndex,
-        highlightedIndex: isRequestStopped ? 0 : null,
-        hasData: Boolean(wigRequest),
-      }),
+          ? (wigRequest.approved_at ? formatDateTime(wigRequest.approved_at) : 'Your request was approved.')
+          : 'The organization is reviewing your request.',
+      state: stageState(1),
+    },
+    ...(!isRequestStopped ? [
+    ...(usesProductionPath ? [{
+      key: 'production', title: 'Wig In Production', label: currentRank >= 2 ? 'In production' : 'Waiting',
+      description: 'Your wig is being prepared.', state: stageState(2),
+    }, ...(expectedReleaseStep ? [expectedReleaseStep] : [])] : []),
+    {
+      key: 'allocated', title: 'Wig Allocated', label: hasAllocation || currentRank >= 3 ? 'Allocated' : 'Waiting',
+      description: wig?.wig_name || 'A matching wig will be linked to your request.', state: stageState(3),
+    },
+    ...(!usesProductionPath && expectedReleaseStep ? [expectedReleaseStep] : []),
+    {
+      key: 'ready-pickup', title: 'Ready for Pick-up', label: currentRank >= 4 ? 'Ready' : 'Waiting',
+      description: 'Your wig is ready for the release process.', state: stageState(4),
     },
     {
-      key: 'preparing',
-      title: 'Preparing wig',
-      label: normalizeStatusLabel(
-        isInProduction ? wigRequest?.status : wigRequest?.fulfillment_status,
-        hasAllocation || hasWig ? 'In progress' : 'Waiting'
-      ),
-      description: wigRequest?.status_reason || latestAllocation?.notes
-        || (latestAllocation?.allocated_at
-          ? `Allocated ${formatDateTime(latestAllocation.allocated_at)}`
-          : wig?.wig_name || 'Preparing your wig.'),
-      state: getStepState({ index: 1, currentIndex: patientCurrentIndex, hasData: Boolean(isApproved || hasAllocation || hasWig || isInProduction) }),
+      key: 'preparing-release', title: 'Preparing for Release', label: currentRank >= 5 ? 'Preparing' : 'Waiting',
+      description: 'Release arrangements are being prepared.', state: stageState(5),
     },
     {
-      key: 'dropoff',
-      title: 'Distributing to dropoff point',
-      label: normalizeStatusLabel(wigRequest?.status || releaseStatus, 'Waiting'),
-      description: latestAllocation?.released_at
-        ? `Sent ${formatDateTime(latestAllocation.released_at)}`
-        : 'Delivery update will appear here.',
-      state: getStepState({ index: 2, currentIndex: patientCurrentIndex, hasData: isSentToHospital }),
+      key: 'releasing', title: 'Wig Being Released', label: currentRank >= 6 ? 'Releasing' : 'Waiting',
+      description: 'The organization is completing the wig release.', state: stageState(6),
     },
     {
-      key: 'received',
-      title: 'Received by patient',
-      label: isReadyForClaiming ? 'Received' : 'Not yet',
-      description: isReadyForClaiming
-        ? 'Wig received.'
-        : 'Marked once you receive it.',
-      state: getStepState({ index: 3, currentIndex: patientCurrentIndex, hasData: isReadyForClaiming }),
+      key: 'released', title: 'Wig Released', label: hasReleased ? 'Released' : 'Waiting',
+      description: releaseReceipt?.released_at ? formatDateTime(releaseReceipt.released_at) : 'Waiting for staff release.',
+      state: hasReleased ? 'completed' : stageState(7),
     },
+    {
+      key: 'confirm-receipt',
+      title: hasConfirmedReceipt ? 'Receipt Confirmed' : 'Confirm Wig Receipt',
+      label: hasConfirmedReceipt ? 'Confirmed' : (hasReleased ? 'Action needed' : 'Waiting'),
+      description: hasConfirmedReceipt ? 'You confirmed physical receipt of this release.' : 'Confirm after you physically receive the wig.',
+      state: hasConfirmedReceipt ? 'completed' : (hasReleased ? 'current' : 'pending'),
+    },
+    {
+      key: 'received', title: 'Wig Received', label: hasConfirmedReceipt ? 'Received' : 'Not yet',
+      description: hasConfirmedReceipt ? formatDateTime(releaseReceipt.received_confirmed_at) : 'Completed only after your confirmation.',
+      state: hasConfirmedReceipt ? 'completed' : 'pending',
+    },
+    ] : []),
   ] : [];
+  const patientSteps = requestStatus === 'appealed' && releaseAppeal
+    ? buildPatientAppealTimelineSteps(releaseAppeal, wigRequest)
+    : requestLifecycleSteps;
 
   const events = [
     wigRequest
@@ -613,19 +729,45 @@ export const getProcessTracking = async ({ role, userId }) => {
         return { tracker: null, error: null };
       }
 
-      const [{ data: wigRequest, error: wigRequestError }, { data: latestAllocation, error: allocationError }] =
-        await Promise.all([
-          fetchLatestWigRequestTrackingByPatientId(patientDetails.patient_id),
-          fetchLatestWigAllocationTrackingByPatientId(patientDetails.patient_id),
-        ]);
-
+      const { data: requests, error: wigRequestError } = await fetchPatientWigRequestsByPatientId(patientDetails.patient_id);
       if (wigRequestError) throw new Error(wigRequestError.message || 'Unable to load wig request tracking.');
+      const { data: receipts, error: receiptError } = await fetchWigReleaseReceiptsByRequestIds(
+        (requests || []).map((request) => request.req_id)
+      );
+      if (receiptError) throw new Error(receiptError.message || 'Unable to load release receipt tracking.');
+      const latestReceiptByRequestId = new Map();
+      (receipts || []).forEach((receipt) => {
+        if (!latestReceiptByRequestId.has(String(receipt.req_id))) {
+          latestReceiptByRequestId.set(String(receipt.req_id), receipt);
+        }
+      });
+      const terminalStatuses = new Set(['released', 'returned completed', 'rejected', 'cancelled', 'canceled']);
+      const activeRequest = (requests || []).find((request) => !terminalStatuses.has(normalizeTrackingStatusKey(request.status))) || null;
+      const confirmationRequest = !activeRequest
+        ? (requests || []).find((request) => {
+            const receipt = latestReceiptByRequestId.get(String(request.req_id));
+            return normalizeTrackingStatusKey(request.status) === 'released' && receipt && !receipt.received_confirmed_at;
+          }) || null
+        : null;
+      const wigRequest = activeRequest || confirmationRequest;
+      const releaseReceipt = wigRequest?.req_id
+        ? latestReceiptByRequestId.get(String(wigRequest.req_id)) || null
+        : null;
+      const { data: latestAllocation, error: allocationError } = wigRequest?.req_id
+        ? await fetchLatestWigAllocationTrackingByPatientId(patientDetails.patient_id, wigRequest.req_id)
+        : { data: null, error: null };
       if (allocationError) throw new Error(allocationError.message || 'Unable to load wig allocation tracking.');
+      const { data: releaseAppeal, error: appealError } = releaseReceipt?.receipt_id
+        ? await fetchPatientWigReleaseAppeal(releaseReceipt.receipt_id)
+        : { data: null, error: null };
+      if (appealError) throw new Error(appealError.message || 'Unable to load appeal tracking.');
 
       return buildPatientTracker({
         patientDetails,
         wigRequest,
         latestAllocation,
+        releaseReceipt,
+        releaseAppeal,
       });
     }
 

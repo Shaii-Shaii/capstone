@@ -1,5 +1,7 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { createJsonResponse, handleCorsPreflight } from '../_shared/cors.ts';
+import { sendTransactionalEmail } from '../_shared/email/smtp-client.ts';
+import { renderHairAnalysisReminderEmail } from '../_shared/email/templates/hair-analysis-reminder.ts';
 
 const REMINDER_AUDIT_ACTION = 'notification.hair_analysis_reminder_email';
 
@@ -17,22 +19,6 @@ const normalizeLocalDate = (value: unknown) => {
 
   return new Date().toISOString().slice(0, 10);
 };
-
-const buildReminderEmailHtml = () => `
-  <div style="font-family: Arial, sans-serif; color: #1f2937; line-height: 1.6;">
-    <h2 style="margin-bottom: 8px;">Daily Hair Analysis Reminder</h2>
-    <p style="margin: 0 0 12px;">You have not completed your Donivra hair analysis yet today.</p>
-    <p style="margin: 0 0 12px;">Open CheckHair in the Donivra app to upload your current hair photos and receive updated guidance based on today's images.</p>
-    <p style="margin: 0;">This reminder is sent once per day when your latest analysis has not been completed yet.</p>
-  </div>
-`;
-
-const buildReminderEmailText = () => (
-  'Daily Hair Analysis Reminder\n\n'
-  + 'You have not completed your Donivra hair analysis yet today.\n'
-  + 'Open CheckHair in the Donivra app to upload your current hair photos and receive updated guidance based on today\'s images.\n'
-  + 'This reminder is sent once per day when your latest analysis has not been completed yet.'
-);
 
 const insertAuditLog = async ({
   supabase,
@@ -95,8 +81,6 @@ Deno.serve(async (request) => {
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL') || '';
   const supabaseServiceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
-  const resendApiKey = Deno.env.get('RESEND_API_KEY') || '';
-  const resendFromEmail = Deno.env.get('RESEND_FROM_EMAIL') || '';
 
   if (!supabaseUrl || !supabaseServiceRoleKey) {
     return createJsonResponse({ message: 'Supabase server configuration is missing.' }, 500);
@@ -145,7 +129,9 @@ Deno.serve(async (request) => {
   }
 
   const resolvedUserId = Number(systemUserResult.data.user_id);
-  const resolvedEmail = String(systemUserResult.data.email || '').trim().toLowerCase();
+  const resolvedEmail = String(
+    authUserResult.data?.user?.email || systemUserResult.data.email || '',
+  ).trim().toLowerCase();
 
   if (!resolvedEmail) {
     return createJsonResponse({ message: 'The donor account does not have a registered email address.' }, 400);
@@ -195,32 +181,23 @@ Deno.serve(async (request) => {
     });
   }
 
-  if (!resendApiKey || !resendFromEmail) {
-    return createJsonResponse({ message: 'Reminder email is not configured on the server.' }, 500);
-  }
-
   console.info('[send-donor-hair-analysis-reminder] sending reminder email', {
     userId: resolvedUserId,
     localDate,
   });
 
-  const resendResponse = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${resendApiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      from: resendFromEmail,
-      to: [resolvedEmail],
-      subject: 'Donivra: complete your hair analysis today',
-      html: buildReminderEmailHtml(),
-      text: buildReminderEmailText(),
-    }),
-  });
-
-  if (!resendResponse.ok) {
-    const errorText = await resendResponse.text().catch(() => '');
+  try {
+    const appUrl = String(Deno.env.get('DONIVRA_APP_URL') || '').replace(/\/$/, '');
+    await sendTransactionalEmail({
+      recipient: resolvedEmail,
+      email: renderHairAnalysisReminderEmail({
+        recipientName: 'Donor',
+        checkHairUrl: appUrl ? `${appUrl}/donor/donations` : '',
+        logoUrl: String(Deno.env.get('DONIVRA_LOGO_URL') || ''),
+      }),
+    });
+  } catch (error) {
+    const errorText = error instanceof Error ? error.message : 'Reminder email could not be sent.';
     await insertAuditLog({
       supabase,
       userId: resolvedUserId,

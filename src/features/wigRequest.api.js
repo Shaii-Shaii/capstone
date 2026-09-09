@@ -1,5 +1,5 @@
 import { supabase } from '../api/supabase/client';
-import { wigReferenceStorageBucket } from './wigRequest.constants';
+import { wigReferenceStorageBucket, wigReleaseDocumentsStorageBucket } from './wigRequest.constants';
 import { logAppError, logAppEvent } from '../utils/appErrors';
 
 const wigRequestsTable = 'Wig_Requests';
@@ -37,7 +37,11 @@ const wigRequestSelect = `
   requested_cap_size:Requested_Cap_Size,
   is_wish_request:Is_Wish_Request,
   fulfillment_status:Fulfillment_Status,
-  fulfillment_bundle_id:Fulfillment_Bundle_ID
+  fulfillment_bundle_id:Fulfillment_Bundle_ID,
+  expected_release_at:Expected_Release_At,
+  expected_release_updated_at:Expected_Release_Updated_At,
+  expected_release_updated_by:Expected_Release_Updated_By,
+  expected_release_note:Expected_Release_Note
 `;
 
 const wigSpecificationSelect = `
@@ -68,6 +72,7 @@ const wigSelect = `
   wig_id:Wig_ID,
   wig_code:Wig_Code,
   wig_name:Wig_Name,
+  catalog_image_path:Catalog_Image_Path,
   wig_status:Wig_Status,
   stock_count:Stock_Count,
   production_notes:Production_Notes,
@@ -234,6 +239,8 @@ const normalizeWigDetails = (wig, physicalSpec = null) => (
         wig_id: wig?.wig_id || wig?.Wig_ID || null,
         wig_code: wig?.wig_code || wig?.Wig_Code || '',
         wig_name: wig?.wig_name || wig?.Wig_Name || physicalSpec?.style || 'Selected Wig',
+        catalog_image_path: wig?.catalog_image_path || wig?.Catalog_Image_Path || '',
+        catalog_image_url: buildWigFilterPublicUrl(wig?.catalog_image_path || wig?.Catalog_Image_Path || ''),
         wig_status: wig?.wig_status || wig?.Wig_Status || '',
         stock_count: wig?.stock_count ?? wig?.Stock_Count ?? null,
         completed_at: wig?.completed_at || wig?.Completed_At || null,
@@ -283,6 +290,10 @@ const normalizeWigRequest = (row) => {
     is_wish_request: Boolean(row?.is_wish_request ?? row?.Is_Wish_Request),
     fulfillment_status: row?.fulfillment_status || row?.Fulfillment_Status || '',
     fulfillment_bundle_id: row?.fulfillment_bundle_id || row?.Fulfillment_Bundle_ID || null,
+    expected_release_at: row?.expected_release_at || row?.Expected_Release_At || null,
+    expected_release_updated_at: row?.expected_release_updated_at || row?.Expected_Release_Updated_At || null,
+    expected_release_updated_by: row?.expected_release_updated_by || row?.Expected_Release_Updated_By || null,
+    expected_release_note: row?.expected_release_note || row?.Expected_Release_Note || '',
     notes: specification?.special_notes || '',
     ai_wig_preview_url: specification?.ai_wig_preview_url || '',
   };
@@ -719,14 +730,36 @@ export const fetchPatientWigReleaseReceipt = async (reqId) => {
     .select('*')
     .eq('req_id', reqId)
     .order('release_cycle', { ascending: false })
+    .order('receipt_id', { ascending: false })
     .limit(1)
     .maybeSingle();
   return { data: result.data || null, error: result.error };
 };
 
-export const acceptPatientWigReleaseReceipt = async (receiptId) => {
+export const setWigRequestExpectedRelease = async ({ reqId, expectedReleaseAt, note = '' }) => {
+  const result = await supabase.rpc('staff_set_wig_request_expected_release', {
+    p_req_id: reqId,
+    p_expected_release_at: expectedReleaseAt,
+    p_expected_release_note: note || null,
+  });
+  return {
+    data: result.data ? normalizeWigRequest(result.data) : null,
+    error: result.error,
+  };
+};
+
+export const acceptPatientWigReleaseReceipt = async ({ receiptId, confirmationPhotoPath }) => {
   const result = await supabase.rpc('patient_accept_wig_release_receipt', {
     p_receipt_id: receiptId,
+    p_confirmation_photo_path: confirmationPhotoPath,
+  });
+  return { data: result.data || null, error: result.error };
+};
+
+export const savePatientWigReleaseReceiptPdfPath = async ({ receiptId, pdfPath }) => {
+  const result = await supabase.rpc('patient_set_wig_release_receipt_pdf_path', {
+    p_receipt_id: receiptId,
+    p_pdf_path: pdfPath,
   });
   return { data: result.data || null, error: result.error };
 };
@@ -741,12 +774,13 @@ export const fetchPatientWigReleaseAppeal = async (receiptId) => {
   return { data: result.data || null, error: result.error };
 };
 
-export const submitPatientWigReleaseAppeal = async ({ receiptId, reason, description, evidencePaths = [] }) => {
+export const submitPatientWigReleaseAppeal = async ({ receiptId, reason, description, evidencePaths = [], requestedResolution }) => {
   const result = await supabase.rpc('patient_submit_wig_release_appeal', {
     p_receipt_id: receiptId,
     p_reason: reason,
     p_description: description,
     p_evidence_paths: evidencePaths,
+    p_requested_resolution: requestedResolution,
   });
   return { data: result.data || null, error: result.error };
 };
@@ -765,6 +799,53 @@ export const fetchLatestWigRequestTrackingByPatientId = async (patientId) => {
     data: result.data ? normalizeWigRequest(result.data) : null,
     error: result.error,
   };
+};
+
+export const fetchPatientWigRequestsByPatientId = async (patientId) => {
+  if (!patientId) return { data: [], error: null };
+  const result = await supabase
+    .from(wigRequestsTable)
+    .select(wigRequestSelect)
+    .eq('Patient_ID', patientId)
+    .order('Request_Date', { ascending: false })
+    .order('Req_ID', { ascending: false });
+  return {
+    data: (result.data || []).map(normalizeWigRequest),
+    error: result.error,
+  };
+};
+
+export const fetchWigReleaseReceiptsByRequestIds = async (reqIds = []) => {
+  const ids = [...new Set(reqIds.filter(Boolean))];
+  if (!ids.length) return { data: [], error: null };
+  const result = await supabase
+    .from(wigReleaseReceiptsTable)
+    .select('*')
+    .in('req_id', ids)
+    .order('release_cycle', { ascending: false })
+    .order('receipt_id', { ascending: false });
+  return { data: result.data || [], error: result.error };
+};
+
+export const fetchPatientWigReleaseReceipts = async (reqId) => {
+  if (!reqId) return { data: [], error: null };
+  const result = await supabase
+    .from(wigReleaseReceiptsTable)
+    .select('*')
+    .eq('req_id', reqId)
+    .order('release_cycle', { ascending: false })
+    .order('receipt_id', { ascending: false });
+  return { data: result.data || [], error: result.error };
+};
+
+export const fetchPatientWigReleaseAppealsByRequestId = async (reqId) => {
+  if (!reqId) return { data: [], error: null };
+  const result = await supabase
+    .from(wigReleaseAppealsTable)
+    .select('*')
+    .eq('req_id', reqId)
+    .order('submitted_at', { ascending: false });
+  return { data: result.data || [], error: result.error };
 };
 
 export const fetchLatestWigSpecificationByRequestId = async (wigRequestId) => {
@@ -884,6 +965,21 @@ export const getStoragePublicUrl = ({ path, bucket = wigReferenceStorageBucket }
   supabase.storage
     .from(bucket)
     .getPublicUrl(path)
+);
+
+export const uploadWigReleaseDocument = async ({ path, fileBody, contentType }) => (
+  await supabase.storage
+    .from(wigReleaseDocumentsStorageBucket)
+    .upload(path, fileBody, { contentType, upsert: false })
+);
+
+export const removeWigReleaseDocuments = async (paths = []) => {
+  if (!paths.length) return { data: [], error: null };
+  return await supabase.storage.from(wigReleaseDocumentsStorageBucket).remove(paths);
+};
+
+export const createWigReleaseDocumentSignedUrl = async (path, expiresIn = 120) => (
+  await supabase.storage.from(wigReleaseDocumentsStorageBucket).createSignedUrl(path, expiresIn)
 );
 
 export const fetchActiveWigAiFilters = async () => {
@@ -1065,18 +1161,20 @@ export const fetchLatestReleaseScheduleByRequestId = async (wigRequestId) => {
   };
 };
 
-export const fetchLatestWigAllocationByPatientDetailsId = async (patientId) => {
+export const fetchLatestWigAllocationByPatientDetailsId = async (patientId, wigRequestId = null) => {
   logWigQuery('fetchLatestWigAllocationByPatientDetailsId', {
     table: wigAllocationsTable,
     phase: 'read',
-    filters: { Patient_ID: patientId },
+    filters: { Patient_ID: patientId, Wig_Request_ID: wigRequestId },
     columns: ['Allocation_ID', 'Wig_ID', 'Patient_ID', 'Wig_Request_ID', 'Allocated_By', 'Allocated_At', 'Release_Status', 'Released_At', 'Notes'],
   });
 
-  const result = await supabase
+  let allocationQuery = supabase
     .from(wigAllocationsTable)
     .select(wigAllocationSelect)
-    .eq('Patient_ID', patientId)
+    .eq('Patient_ID', patientId);
+  if (wigRequestId) allocationQuery = allocationQuery.eq('Wig_Request_ID', wigRequestId);
+  const result = await allocationQuery
     .order('Allocated_At', { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -1172,12 +1270,27 @@ export const fetchLatestWigAllocationByPatientDetailsId = async (patientId) => {
   };
 };
 
+export const fetchWigSummariesByIds = async (wigIds = []) => {
+  const ids = [...new Set(wigIds.filter(Boolean))];
+  if (!ids.length) return { data: [], error: null };
+  const result = await supabase
+    .from(wigsTable)
+    .select(wigSelect)
+    .in('Wig_ID', ids);
+  return {
+    data: (result.data || []).map((wig) => normalizeWigDetails(wig)),
+    error: result.error,
+  };
+};
+
 /** Allocation and wig identity/status only; used by process tracking. */
-export const fetchLatestWigAllocationTrackingByPatientId = async (patientId) => {
-  const allocationResult = await supabase
+export const fetchLatestWigAllocationTrackingByPatientId = async (patientId, wigRequestId = null) => {
+  let allocationQuery = supabase
     .from(wigAllocationsTable)
     .select(wigAllocationSelect)
-    .eq('Patient_ID', patientId)
+    .eq('Patient_ID', patientId);
+  if (wigRequestId) allocationQuery = allocationQuery.eq('Wig_Request_ID', wigRequestId);
+  const allocationResult = await allocationQuery
     .order('Allocated_At', { ascending: false })
     .limit(1)
     .maybeSingle();

@@ -220,6 +220,24 @@ export const useProcessTracking = ({
         }, () => {
           refreshTracking();
         });
+
+        channel = channel.on('postgres_changes', {
+          event: '*',
+          schema: 'public',
+          table: 'wig_release_receipts',
+          filter: `req_id=eq.${watch.reqId}`,
+        }, () => {
+          refreshTracking();
+        });
+
+        channel = channel.on('postgres_changes', {
+          event: '*',
+          schema: 'public',
+          table: 'wig_release_appeals',
+          filter: `req_id=eq.${watch.reqId}`,
+        }, () => {
+          refreshTracking();
+        });
       }
 
       if (watch.wigId) {

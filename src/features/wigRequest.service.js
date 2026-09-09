@@ -1,3 +1,6 @@
+import * as FileSystem from 'expo-file-system/legacy';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
 import * as WigRequestAPI from './wigRequest.api';
 import {
   buildImmediateNotificationEvents,
@@ -70,6 +73,9 @@ const buildPreviewImageUrl = async ({ userId, previewImage }) =>
   });
 
 const COMPLETED_REQUEST_TOKENS = ['completed', 'claimed', 'released', 'cancelled', 'canceled', 'rejected', 'closed'];
+const TERMINAL_WIG_REQUEST_STATUSES = new Set(['released', 'returned - completed', 'rejected', 'cancelled', 'canceled']);
+
+const normalizeWigRequestStatus = (value) => String(value || '').trim().toLowerCase();
 const WIG_REQUEST_CANCELLATION_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const WIG_REQUEST_CANCELLATION_BLOCKERS = [
   'accepted',
@@ -139,6 +145,66 @@ export const getWigRequestCancellationEligibility = (request, now = Date.now()) 
   };
 };
 
+const escapeReceiptHtml = (value = '') => String(value ?? '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#039;');
+
+const formatReceiptDate = (value) => {
+  if (!value) return 'Not available';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return String(value);
+  return parsed.toLocaleString('en-PH', {
+    month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
+  });
+};
+
+const uploadPrivateReleaseFile = async ({ userId, relativePath, asset, contentType }) => {
+  const sessionResult = await ensureActiveSession();
+  const authUserId = sessionResult?.session?.user?.id || '';
+  if (!authUserId || sessionResult?.error || (userId && authUserId !== userId)) {
+    throw new Error('Please sign in again before uploading this file.');
+  }
+  if (!asset?.uri) throw new Error('Choose a valid file first.');
+  const response = await fetch(asset.uri);
+  const fileBody = await response.arrayBuffer();
+  const path = `${authUserId}/${relativePath}`;
+  const result = await WigRequestAPI.uploadWigReleaseDocument({
+    path,
+    fileBody,
+    contentType: contentType || asset.mimeType || 'application/octet-stream',
+  });
+  if (result.error) throw new Error(result.error.message || 'Unable to upload the file.');
+  return path;
+};
+
+const buildReleaseReceiptHtml = ({ request, receipt, wig }) => `
+  <html><head><meta charset="utf-8" /><style>
+    @page { size: A4; margin: 0; }
+    body { margin: 0; padding: 52px; color: #3B171D; font-family: Arial, sans-serif; }
+    .header { padding: 28px; border-radius: 18px; color: white; background: #740D24; }
+    h1 { margin: 8px 0 0; font-size: 30px; } .brand { font-weight: 800; letter-spacing: 3px; }
+    .grid { margin-top: 28px; border: 1px solid #E1CCD1; border-radius: 16px; overflow: hidden; }
+    .row { display: flex; border-bottom: 1px solid #E1CCD1; } .row:last-child { border-bottom: 0; }
+    .label, .value { padding: 14px 16px; } .label { width: 34%; font-weight: 700; background: #FAF3F5; }
+    .value { width: 66%; } .statement { margin-top: 28px; line-height: 1.6; }
+  </style></head><body>
+    <div class="header"><div class="brand">DONIVRA</div><h1>Wig Release Receipt</h1></div>
+    <div class="grid">
+      <div class="row"><div class="label">Receipt ID</div><div class="value">${escapeReceiptHtml(receipt?.receipt_id)}</div></div>
+      <div class="row"><div class="label">Request Code</div><div class="value">${escapeReceiptHtml(request?.request_code)}</div></div>
+      <div class="row"><div class="label">Release Cycle</div><div class="value">${escapeReceiptHtml(receipt?.release_cycle || 1)}</div></div>
+      <div class="row"><div class="label">Wig</div><div class="value">${escapeReceiptHtml(wig?.wig_name || 'Allocated wig')}${wig?.wig_code ? ` (${escapeReceiptHtml(wig.wig_code)})` : ''}</div></div>
+      <div class="row"><div class="label">Cap Size</div><div class="value">${escapeReceiptHtml(request?.requested_cap_size || 'Not specified')}</div></div>
+      <div class="row"><div class="label">Released At</div><div class="value">${escapeReceiptHtml(formatReceiptDate(receipt?.released_at))}</div></div>
+      <div class="row"><div class="label">Received At</div><div class="value">${escapeReceiptHtml(formatReceiptDate(receipt?.received_confirmed_at))}</div></div>
+      <div class="row"><div class="label">Terms Version</div><div class="value">${escapeReceiptHtml(receipt?.terms_version)}</div></div>
+    </div>
+    <p class="statement">The patient confirmed physical receipt of the wig and accepted the release terms for this release cycle.</p>
+  </body></html>`;
+
 const ensurePatientDetails = async (userId) => {
   const { data: existingPatientDetails, error: patientDetailsError } = await fetchPatientDetailsByUserId(userId);
   if (patientDetailsError) {
@@ -196,16 +262,59 @@ export const getPatientWigRequestContext = async (userId) => {
 
     const patientDetails = await ensurePatientDetails(userId);
 
-    const { data: latestWigRequest, error: wigRequestError } =
-      await WigRequestAPI.fetchLatestWigRequestTrackingByPatientId(patientDetails.patient_id);
+    const { data: patientRequests, error: wigRequestError } =
+      await WigRequestAPI.fetchPatientWigRequestsByPatientId(patientDetails.patient_id);
 
     if (wigRequestError) {
-      throw new Error(wigRequestError.message || 'Unable to load the latest wig request.');
+      throw new Error(wigRequestError.message || 'Unable to load wig requests.');
     }
+
+    const { data: requestReceipts, error: requestReceiptsError } =
+      await WigRequestAPI.fetchWigReleaseReceiptsByRequestIds((patientRequests || []).map((request) => request.req_id));
+    if (requestReceiptsError) {
+      throw new Error(requestReceiptsError.message || 'Unable to load wig release receipts.');
+    }
+    const { data: requestWigs, error: requestWigsError } = await WigRequestAPI.fetchWigSummariesByIds(
+      (patientRequests || []).map((request) => request.allocated_wig_id || request.requested_wig_id)
+    );
+    if (requestWigsError) {
+      throw new Error(requestWigsError.message || 'Unable to load wig request summaries.');
+    }
+    const requestWigById = new Map((requestWigs || []).map((wig) => [String(wig.wig_id), wig]));
+    const latestReceiptByRequestId = new Map();
+    (requestReceipts || []).forEach((receipt) => {
+      if (!latestReceiptByRequestId.has(String(receipt.req_id))) {
+        latestReceiptByRequestId.set(String(receipt.req_id), receipt);
+      }
+    });
+    const activeRequest = (patientRequests || []).find((request) => (
+      !TERMINAL_WIG_REQUEST_STATUSES.has(normalizeWigRequestStatus(request.status))
+    )) || null;
+    const confirmationRequest = !activeRequest
+      ? (patientRequests || []).find((request) => {
+          const receipt = latestReceiptByRequestId.get(String(request.req_id));
+          return normalizeWigRequestStatus(request.status) === 'released'
+            && receipt
+            && !receipt.received_confirmed_at;
+        }) || null
+      : null;
+    const latestWigRequest = activeRequest || confirmationRequest;
+    const activeRequestMode = activeRequest
+      ? 'active'
+      : confirmationRequest
+        ? 'receipt_confirmation'
+        : 'none';
+    const previousRequests = (patientRequests || [])
+      .filter((request) => String(request.req_id) !== String(latestWigRequest?.req_id || ''))
+      .map((request) => ({
+        ...request,
+        latest_release_receipt: latestReceiptByRequestId.get(String(request.req_id)) || null,
+        wig: requestWigById.get(String(request.allocated_wig_id || request.requested_wig_id)) || null,
+      }));
 
     const shouldLoadRequestDetails = Boolean(latestWigRequest?.req_id);
     const { data: latestAllocation, error: allocationError } = shouldLoadRequestDetails
-      ? await WigRequestAPI.fetchLatestWigAllocationByPatientDetailsId(patientDetails.patient_id)
+      ? await WigRequestAPI.fetchLatestWigAllocationByPatientDetailsId(patientDetails.patient_id, latestWigRequest.req_id)
       : { data: null, error: null };
 
     if (allocationError) throw new Error(allocationError.message || 'Unable to load the latest wig allocation.');
@@ -266,12 +375,9 @@ export const getPatientWigRequestContext = async (userId) => {
       throw new Error(tryOnSelectionsError.message || 'Unable to load the saved try-on choices.');
     }
 
-    const { data: releaseReceipt, error: releaseReceiptError } = latestWigRequest?.req_id
-      ? await WigRequestAPI.fetchPatientWigReleaseReceipt(latestWigRequest.req_id)
-      : { data: null, error: null };
-    if (releaseReceiptError) {
-      throw new Error(releaseReceiptError.message || 'Unable to load the wig release receipt.');
-    }
+    const releaseReceipt = latestWigRequest?.req_id
+      ? latestReceiptByRequestId.get(String(latestWigRequest.req_id)) || null
+      : null;
     const { data: releaseAppeal, error: releaseAppealError } = releaseReceipt?.receipt_id
       ? await WigRequestAPI.fetchPatientWigReleaseAppeal(releaseReceipt.receipt_id)
       : { data: null, error: null };
@@ -291,6 +397,8 @@ export const getPatientWigRequestContext = async (userId) => {
       tryOnSelections,
       releaseReceipt,
       releaseAppeal,
+      activeRequestMode,
+      previousRequests,
       error: null,
     };
   } catch (error) {
@@ -306,6 +414,8 @@ export const getPatientWigRequestContext = async (userId) => {
       tryOnSelections: [],
       releaseReceipt: null,
       releaseAppeal: null,
+      activeRequestMode: 'none',
+      previousRequests: [],
       error: error.message || 'Unable to load the patient wig request context.',
     };
   }
@@ -413,6 +523,33 @@ export const getWigPreferenceOptions = async () => {
       },
       error: error.message || 'Unable to load wig preference options.',
     };
+  }
+};
+
+export const getPatientWigRequestHistoryDetails = async (request) => {
+  try {
+    if (!request?.req_id) throw new Error('Wig request not found.');
+    const wigId = request.allocated_wig_id || request.requested_wig_id || null;
+    const [specificationResult, wigResult, receiptsResult, appealsResult] = await Promise.all([
+      WigRequestAPI.fetchLatestWigSpecificationByRequestId(request.req_id),
+      wigId ? WigRequestAPI.fetchWigDetailsById(wigId) : Promise.resolve({ data: null, error: null }),
+      WigRequestAPI.fetchPatientWigReleaseReceipts(request.req_id),
+      WigRequestAPI.fetchPatientWigReleaseAppealsByRequestId(request.req_id),
+    ]);
+    const firstError = specificationResult.error || wigResult.error || receiptsResult.error || appealsResult.error;
+    if (firstError) throw new Error(firstError.message || 'Unable to load request history.');
+    return {
+      details: {
+        request,
+        specification: specificationResult.data || null,
+        wig: wigResult.data || null,
+        receipts: receiptsResult.data || [],
+        appeals: appealsResult.data || [],
+      },
+      error: null,
+    };
+  } catch (error) {
+    return { details: null, error: error.message || 'Unable to load request history.' };
   }
 };
 
@@ -560,19 +697,108 @@ export const finalizePatientWigRequestFlow = async ({
   }
 };
 
-export const acceptPatientWigRelease = async ({ receiptId }) => {
-  const { data, error } = await WigRequestAPI.acceptPatientWigReleaseReceipt(receiptId);
-  return { receipt: data, error: error?.message || null };
+export const acceptPatientWigRelease = async ({ userId, request, receipt, wig, confirmationPhoto }) => {
+  let confirmationPhotoPath = '';
+  try {
+    if (!receipt?.receipt_id || !request?.req_id) {
+      throw new Error('A valid wig release receipt is required.');
+    }
+    if (confirmationPhoto?.uri) {
+      const extension = getFileExtension(confirmationPhoto.mimeType || 'image/jpeg');
+      confirmationPhotoPath = await uploadPrivateReleaseFile({
+        userId,
+        relativePath: `receipts/request-${request.req_id}/receipt-${receipt.receipt_id}/cycle-${receipt.release_cycle || 1}/confirmation.${extension}`,
+        asset: confirmationPhoto,
+        contentType: confirmationPhoto.mimeType || 'image/jpeg',
+      });
+    }
+    const { data, error } = await WigRequestAPI.acceptPatientWigReleaseReceipt({
+      receiptId: receipt.receipt_id,
+      confirmationPhotoPath: confirmationPhotoPath || null,
+    });
+    if (error) throw new Error(error.message || 'Unable to confirm receipt.');
+
+    let confirmedReceipt = data;
+    let pdfWarning = null;
+    try {
+      const pdf = await Print.printToFileAsync({
+        html: buildReleaseReceiptHtml({ request, receipt: confirmedReceipt, wig }),
+        base64: false,
+      });
+      const pdfPath = await uploadPrivateReleaseFile({
+        userId,
+        relativePath: `receipts/request-${request.req_id}/receipt-${receipt.receipt_id}/cycle-${receipt.release_cycle || 1}/release-receipt.pdf`,
+        asset: { uri: pdf.uri, mimeType: 'application/pdf' },
+        contentType: 'application/pdf',
+      });
+      const savedPdf = await WigRequestAPI.savePatientWigReleaseReceiptPdfPath({
+        receiptId: receipt.receipt_id,
+        pdfPath,
+      });
+      if (savedPdf.error) throw savedPdf.error;
+      confirmedReceipt = savedPdf.data || { ...confirmedReceipt, pdf_path: pdfPath };
+    } catch (pdfError) {
+      pdfWarning = pdfError?.message || 'The receipt was confirmed, but its PDF is not ready yet.';
+    }
+    return { receipt: confirmedReceipt, error: null, pdfWarning };
+  } catch (error) {
+    if (confirmationPhotoPath) {
+      await WigRequestAPI.removeWigReleaseDocuments([confirmationPhotoPath]).catch(() => {});
+    }
+    return { receipt: null, error: error.message || 'Unable to confirm receipt.' };
+  }
 };
 
-export const submitPatientWigAppeal = async ({ receiptId, reason, description, evidencePaths = [] }) => {
+export const uploadPatientWigAppealPhotos = async ({ userId, request, receipt, photos = [] }) => {
+  const uploadedPaths = [];
+  try {
+    if (photos.length < 1 || photos.length > 4) throw new Error('Attach 1 to 4 wig photos.');
+    for (let index = 0; index < photos.length; index += 1) {
+      const photo = photos[index];
+      const extension = getFileExtension(photo?.mimeType || 'image/jpeg');
+      const path = await uploadPrivateReleaseFile({
+        userId,
+        relativePath: `appeals/request-${request.req_id}/receipt-${receipt.receipt_id}/cycle-${receipt.release_cycle || 1}/photo-${index + 1}-${Date.now()}.${extension}`,
+        asset: photo,
+        contentType: photo?.mimeType || 'image/jpeg',
+      });
+      uploadedPaths.push(path);
+    }
+    return { paths: uploadedPaths, error: null };
+  } catch (error) {
+    if (uploadedPaths.length) await WigRequestAPI.removeWigReleaseDocuments(uploadedPaths).catch(() => {});
+    return { paths: [], error: error.message || 'Unable to upload appeal photos.' };
+  }
+};
+
+export const submitPatientWigAppeal = async ({ receiptId, reason, description, evidencePaths = [], requestedResolution }) => {
   const { data, error } = await WigRequestAPI.submitPatientWigReleaseAppeal({
     receiptId,
     reason,
     description,
     evidencePaths,
+    requestedResolution,
   });
+  if (error && evidencePaths.length) {
+    await WigRequestAPI.removeWigReleaseDocuments(evidencePaths).catch(() => {});
+  }
   return { appeal: data, error: error?.message || null };
+};
+
+export const downloadPatientWigReleaseReceipt = async (receipt) => {
+  try {
+    if (!receipt?.pdf_path) throw new Error('The receipt PDF is not ready yet.');
+    const signed = await WigRequestAPI.createWigReleaseDocumentSignedUrl(receipt.pdf_path, 120);
+    if (signed.error || !signed.data?.signedUrl) throw new Error(signed.error?.message || 'Unable to access the receipt PDF.');
+    if (!FileSystem.cacheDirectory) throw new Error('Downloads are unavailable on this device.');
+    const uri = `${FileSystem.cacheDirectory}wig-release-receipt-${receipt.receipt_id}-cycle-${receipt.release_cycle || 1}.pdf`;
+    await FileSystem.downloadAsync(signed.data.signedUrl, uri);
+    if (!(await Sharing.isAvailableAsync())) throw new Error('File sharing is unavailable on this device.');
+    await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Save Wig Release Receipt' });
+    return { success: true, uri, error: null };
+  } catch (error) {
+    return { success: false, error: error.message || 'Unable to download the receipt PDF.' };
+  }
 };
 
 export const savePatientWigRequestFlow = async ({

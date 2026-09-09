@@ -21,6 +21,8 @@ type StructuredResponseOptions = {
   includeDiagnostics?: boolean;
   providerSort?: 'latency' | 'throughput' | 'price';
   reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
+  requireZeroDataRetention?: boolean;
+  strictSchema?: boolean;
 };
 
 type VisionStructuredResponseOptions = {
@@ -204,6 +206,14 @@ const normalizeChatContent = (item: Record<string, unknown>) => {
       ? { type: 'image_url', image_url: { url: imageUrl } }
       : null;
   }
+  if (type === 'input_file' || type === 'file') {
+    const nestedFile = item?.file as Record<string, unknown> | undefined;
+    const fileData = toText(item?.file_data) || toText(nestedFile?.file_data);
+    const filename = toText(item?.filename) || toText(nestedFile?.filename) || 'document.pdf';
+    return fileData
+      ? { type: 'file', file: { filename, file_data: fileData } }
+      : null;
+  }
   return null;
 };
 
@@ -309,6 +319,8 @@ export const createStructuredResponse = async ({
   includeDiagnostics = false,
   providerSort,
   reasoningEffort,
+  requireZeroDataRetention = false,
+  strictSchema = false,
 }: StructuredResponseOptions) => {
   const diagnostics: OpenRouterDiagnostics = {
     provider: 'openrouter',
@@ -343,12 +355,13 @@ export const createStructuredResponse = async ({
           type: 'json_schema',
           json_schema: {
             name: schemaName,
-            strict: false,
+            strict: strictSchema,
             schema,
           },
         },
         provider: {
           ...getProviderPreferences(),
+          ...(requireZeroDataRetention ? { zdr: true } : {}),
           ...(providerSort ? { sort: providerSort } : {}),
         },
       }),

@@ -7,6 +7,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { DonorTopBar } from "../../src/components/donor/DonorTopBar";
 import { DashboardHeaderSurface } from "../../src/components/layout/DashboardHeaderSurface";
 import { DashboardLayout } from "../../src/components/layout/DashboardLayout";
+import { WigJourneyTimeline } from "../../src/components/layout/PatientWigRequestScreen";
 import { PatientTutorialModal } from "../../src/components/patient/PatientTutorialModal";
 import { StatusBanner } from "../../src/components/ui/StatusBanner";
 import { patientDashboardNavItems } from "../../src/constants/dashboard";
@@ -166,31 +167,7 @@ export default function PatientHomeScreen() {
   });
 
   const roles = resolvePatientThemeRoles(resolvedTheme);
-  const trackingSteps = React.useMemo(() => tracker?.steps || [], [tracker?.steps]);
   const hasActiveRequest = Boolean(tracker?.hasActiveRequest);
-  const currentJourneyStepIndex = React.useMemo(() => {
-    if (!trackingSteps.length) return 0;
-    const highlightedIndex = trackingSteps.findIndex((step) => (
-      step?.state === "current" || step?.state === "attention"
-    ));
-    if (highlightedIndex >= 0) return highlightedIndex;
-    const nextStepIndex = trackingSteps.findIndex((step) => step?.state !== "completed");
-    return nextStepIndex >= 0 ? nextStepIndex : trackingSteps.length - 1;
-  }, [trackingSteps]);
-  const currentJourneyStep = trackingSteps[currentJourneyStepIndex] || null;
-  const requestProgressPercent = trackingSteps.length
-    ? Math.min(100, Math.max(0, ((currentJourneyStepIndex + 1) / trackingSteps.length) * 100))
-    : 0;
-  const requestOverviewGradientColors = React.useMemo(() => [
-    theme.colors.palette.wine900,
-    theme.colors.palette.wine700,
-    theme.colors.palette.wine600,
-  ], []);
-  const patientReferenceValue = String(tracker?.summary?.referenceValue || "").trim();
-  const shouldShowPatientReference = Boolean(
-    patientReferenceValue
-    && !["not assigned", "pending", "not available", "n/a"].includes(patientReferenceValue.toLowerCase())
-  );
   const primaryTextColor = resolvedTheme?.primaryTextColor || roles.headingText;
   const [isTutorialOpen, setIsTutorialOpen] = React.useState(false);
   const [donationEvents, setDonationEvents] = React.useState([]);
@@ -265,54 +242,7 @@ export default function PatientHomeScreen() {
 
   const activeJourneyContent = hasActiveRequest ? (
     <View style={styles.journeyLeadingHost}>
-      <LinearGradient
-        colors={requestOverviewGradientColors}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={styles.timelineSection}
-      >
-        <View pointerEvents="none" style={styles.timelineGradientShade} />
-        <View pointerEvents="none" style={styles.timelineHeaderGlow} />
-
-        <View style={styles.timelineHeadingRow}>
-          <View style={styles.timelineHeadingIdentity}>
-            <View style={styles.timelineHeadingIcon}>
-              <MaterialCommunityIcons name="clipboard-text-clock-outline" size={22} color="#FFFFFF" />
-            </View>
-            <View style={styles.timelineHeadingCopy}>
-              <Text style={styles.timelineEyebrow}>WIG REQUEST</Text>
-              <Text style={styles.timelineHeading}>Request overview</Text>
-            </View>
-          </View>
-        </View>
-
-        <View style={styles.timelineCurrentCopy}>
-          <Text style={styles.timelineCurrentLabel}>CURRENT STAGE</Text>
-          <Text numberOfLines={2} style={styles.timelineCurrentTitle}>
-            {currentJourneyStep?.title || tracker?.summary?.label || "Request in progress"}
-          </Text>
-          {shouldShowPatientReference ? (
-            <View style={styles.timelineReferenceRow}>
-              <MaterialCommunityIcons name="account-card-outline" size={15} color="#FFFFFF" />
-              <Text numberOfLines={1} style={styles.timelineReferenceText}>
-                {tracker?.summary?.referenceLabel || "Patient code"}: {patientReferenceValue}
-              </Text>
-            </View>
-          ) : null}
-        </View>
-
-        <View style={styles.timelineProgressBlock}>
-          <View style={styles.timelineProgressHeader}>
-            <Text style={styles.timelineProgressLabel}>Request progress</Text>
-            <Text style={styles.timelineProgressCount}>
-              Step {Math.min(currentJourneyStepIndex + 1, Math.max(trackingSteps.length, 1))} of {Math.max(trackingSteps.length, 1)}
-            </Text>
-          </View>
-          <View style={styles.timelineProgressTrack}>
-            <View style={[styles.timelineProgressFill, { width: `${requestProgressPercent}%` }]} />
-          </View>
-        </View>
-      </LinearGradient>
+      <WigJourneyTimeline tracker={tracker} roles={roles} />
     </View>
   ) : null;
 

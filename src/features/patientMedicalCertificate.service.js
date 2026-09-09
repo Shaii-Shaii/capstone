@@ -6,7 +6,7 @@ export const medicalCertificateVerificationFunctionName =
   process.env.EXPO_PUBLIC_MEDICAL_CERTIFICATE_VERIFICATION_FUNCTION
   || 'verify-medical-certificate';
 
-const VERIFICATION_REQUEST_TIMEOUT_MS = 18000;
+const VERIFICATION_REQUEST_TIMEOUT_MS = 45000;
 const DATABASE_MEDICAL_VERIFICATION_STATUSES = new Set([
   'not_submitted',
   'ocr_failed',
@@ -29,6 +29,42 @@ const base64ToArrayBuffer = (base64Value = '') => {
 };
 
 const normalizeText = (value = '') => String(value || '').replace(/\s+/g, ' ').trim();
+
+const OCR_FIELD_LABEL_PATTERN = [
+  'patient\\s*(?:full\\s*)?name',
+  'date\\s+of\\s+birth',
+  'birth\\s*date',
+  'dob',
+  'age\\s*(?:\\/\\s*sex)?',
+  'sex',
+  'gender',
+  'date\\s+of\\s+examination',
+  'examination\\s+date',
+  'date\\s+of\\s+diagnosis',
+  'diagnosis\\s+date',
+  'diagnosed\\s+on',
+  'diagnosis\\s*\\/\\s*medical\\s+condition',
+  'medical\\s+condition',
+  'diagnosis',
+  'treatment\\s+status',
+  'treatment',
+  'doctor\\s+name',
+  'physician\\s+name',
+  'speciali[sz]ation',
+  'prc\\s*(?:no\\.?|number|#)?',
+  'medical\\s+license\\s*(?:no\\.?|number|#)?',
+  'license\\s*(?:no\\.?|number|#)?',
+].join('|');
+
+const extractLabeledValue = (text = '', labelPattern = '', maxLength = 180) => {
+  const normalized = normalizeText(text);
+  if (!normalized || !labelPattern) return '';
+  const match = normalized.match(new RegExp(
+    `\\b(?:${labelPattern})\\s*(?:[:#-]|\\.)?\\s*(.{1,${maxLength}}?)(?=\\s+\\b(?:${OCR_FIELD_LABEL_PATTERN})\\b\\s*(?:[:#-]|\\.)?|$)`,
+    'i',
+  ));
+  return match?.[1]?.replace(/^[,:;.-]+|[,:;.-]+$/g, '').trim() || '';
+};
 
 const normalizeComparableText = (value = '') => normalizeText(value)
   .toLowerCase()
@@ -182,6 +218,18 @@ const extractMedicalCondition = (text = '') => {
     /\b(?:acute|chronic)?\s*(?:lymphocytic|lymphoblastic|myeloid|myelogenous)?\s*leukemia\b/i,
     /\b(?:hodgkin'?s?|non-hodgkin'?s?)?\s*lymphoma\b/i,
   ];
+  const labelledCondition = extractLabeledValue(
+    normalized,
+    'diagnosis\\s*\\/\\s*medical\\s+condition|medical\\s+condition|diagnosis',
+  );
+  if (labelledCondition) {
+    for (const conditionPattern of knownConditionPatterns) {
+      const conditionMatch = labelledCondition.match(conditionPattern);
+      if (conditionMatch?.[0]) return conditionMatch[0].trim();
+    }
+    return labelledCondition;
+  }
+
   const patterns = [
     /\b(?:diagnosis\s*\/\s*medical condition|diagnosis|medical condition|condition|assessment)\s*(?:is|:|-)?\s*([a-z][a-z0-9 ,()./'-]{2,160}?)(?=\s+(?:treatment status|treatment|date|diagnosed|doctor|physician|prc|license|recommendation|remarks|certified|$))/i,
     /\bdiagnosed\s+with\s+([a-z][a-z0-9 ,()./'-]{2,100}?)(?=\s+(?:on|date|doctor|physician|prc|license|treatment|recommendation|remarks|$))/i,
@@ -207,6 +255,13 @@ const extractMedicalCondition = (text = '') => {
 const extractDiagnosisDate = (text = '') => {
   const normalized = normalizeText(text);
   const dateValue = '(?:\\d{1,2}[/-]\\d{1,2}[/-]\\d{2,4}|\\d{4}[/-]\\d{1,2}[/-]\\d{1,2}|(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\\s+\\d{1,2},?\\s+\\d{4}|\\d{1,2}\\s+(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?),?\\s+\\d{4})';
+  const labelledDateValue = extractLabeledValue(
+    normalized,
+    'date\\s+of\\s+diagnosis|diagnosis\\s+date|diagnosed\\s+on|date\\s+of\\s+examination|examination\\s+date|certificate\\s+date|date\\s+issued|issued\\s+on',
+    80,
+  );
+  const labelledDateMatch = labelledDateValue.match(new RegExp(`\\b(${dateValue})\\b`, 'i'));
+  if (labelledDateMatch?.[1]) return labelledDateMatch[1].trim();
   const patterns = [
     new RegExp(`\\b(?:date of diagnosis|diagnosis date|diagnosed on)\\s*[:#-]?\\s*(${dateValue})`, 'i'),
     new RegExp(`\\b(?:date of examination|examination date|certificate date|date issued|issued on)\\s*[:#-]?\\s*(${dateValue})`, 'i'),
@@ -216,8 +271,7 @@ const extractDiagnosisDate = (text = '') => {
     const match = normalized.match(pattern);
     if (match?.[1]) return match[1].trim();
   }
-  const genericMatch = normalized.match(new RegExp(`\\b(${dateValue})\\b`, 'i'));
-  return genericMatch?.[1]?.trim() || '';
+  return '';
 };
 
 const extractHospitalName = (text = '') => {
@@ -234,7 +288,7 @@ const extractPatientIdentity = (text = '') => {
   const normalized = normalizeText(text);
   const dateValue = '(?:\\d{1,2}[/-]\\d{1,2}[/-]\\d{2,4}|\\d{4}[/-]\\d{1,2}[/-]\\d{1,2}|(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\\s+\\d{1,2},?\\s+\\d{4}|\\d{1,2}\\s+(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?),?\\s+\\d{4})';
   const reorderedIdentity = normalized.match(/\b(?:diagnosis\s*\/\s*medical condition|medical condition)\s*[:#-]?\s*([a-z][a-z .,'-]{3,80}?)\s+(\d{1,3})\s*(?:years?\s*old|y\/?o)\s*[\/-]\s*(male|female|non-binary|nonbinary|man|woman|m|f)\b/i);
-  const labelledName = normalized.match(/\bpatient\s*(?:full\s*)?name\s*[:#-]\s*([a-z][a-z .,'-]{2,80}?)(?=\s+(?:age|sex|gender|birth(?:date|\s*date)|date of birth|diagnosis|medical condition|$))/i);
+  const labelledName = extractLabeledValue(normalized, 'patient\\s*(?:full\\s*)?name', 100);
   const ageMatch = reorderedIdentity
     || normalized.match(/\bage(?:\s*\/\s*sex)?\s*[:#-]?\s*(\d{1,3})(?:\s*(?:years?\s*old|y\/?o))?/i)
     || normalized.match(/\b(\d{1,3})\s*(?:years?\s*old|y\/?o)\b/i);
@@ -242,8 +296,11 @@ const extractPatientIdentity = (text = '') => {
     || normalized.match(/\b(?:sex|gender)\s*[:#-]?\s*(male|female|non-binary|nonbinary|man|woman|m|f)\b/i)?.[1]
     || normalized.match(/\b(?:years?\s*old|y\/?o)\s*[\/-]\s*(male|female|non-binary|nonbinary|man|woman|m|f)\b/i)?.[1]
     || '';
-  const birthdate = normalized.match(new RegExp(`\\b(?:date of birth|birthdate|birth date|dob)\\s*[:#-]?\\s*(${dateValue})`, 'i'))?.[1] || '';
-  const patientName = (reorderedIdentity?.[1] || labelledName?.[1] || '')
+  const labelledBirthdate = extractLabeledValue(normalized, 'date\\s+of\\s+birth|birth\\s*date|dob', 80);
+  const birthdate = labelledBirthdate.match(new RegExp(`\\b(${dateValue})\\b`, 'i'))?.[1]
+    || normalized.match(new RegExp(`\\b(?:date of birth|birthdate|birth date|dob)\\s*[:#-]?\\s*(${dateValue})`, 'i'))?.[1]
+    || '';
+  const patientName = (reorderedIdentity?.[1] || labelledName || '')
     .replace(/[,:;.-]+$/, '')
     .trim();
   const ageValue = reorderedIdentity?.[2] || ageMatch?.[2] || ageMatch?.[1] || '';
@@ -426,12 +483,30 @@ const normalizeVerifierResponse = (payload = {}, fallbackText = '') => {
     || fallbackText
   );
   const local = validateCertificateText(extractedText);
-  const medicalCondition = payload.medical_condition || payload.medicalCondition || local.medicalCondition;
-  const diagnosisDate = payload.diagnosis_date || payload.diagnosisDate || local.diagnosisDate;
+  const isAiExtraction = payload.provider === 'openrouter'
+    || payload.extraction_method === 'ai_document_vision';
+  const chooseExtractedValue = (localValue, snakeCaseKey, camelCaseKey) => {
+    const remoteValue = payload[snakeCaseKey] || payload[camelCaseKey] || '';
+    // Trust the structured vision response when AI read the original document.
+    // For legacy OCR responses, use the corrected label-aware local parser first.
+    return isAiExtraction ? remoteValue || localValue : localValue || remoteValue;
+  };
+  const medicalCondition = chooseExtractedValue(
+    local.medicalCondition,
+    'medical_condition',
+    'medicalCondition'
+  );
+  const diagnosisDate = chooseExtractedValue(local.diagnosisDate, 'diagnosis_date', 'diagnosisDate');
   const hospitalName = payload.hospital_name || payload.hospitalName || local.hospitalName;
-  const patientName = payload.patient_name || payload.patientName || local.patientName;
+  const doctorName = payload.doctor_name || payload.doctorName || local.doctorName;
+  const licenseNumber = payload.license_number || payload.licenseNumber || local.licenseNumber;
+  const patientName = chooseExtractedValue(local.patientName, 'patient_name', 'patientName');
   const patientGender = payload.patient_gender || payload.patientGender || local.patientGender;
-  const patientBirthdate = payload.patient_birthdate || payload.patientBirthdate || local.patientBirthdate;
+  const patientBirthdate = chooseExtractedValue(
+    local.patientBirthdate,
+    'patient_birthdate',
+    'patientBirthdate'
+  );
   const patientAgeValue = payload.patient_age ?? payload.patientAge ?? local.patientAge;
   const patientAge = patientAgeValue === '' || patientAgeValue === null || patientAgeValue === undefined
     ? null
@@ -440,6 +515,9 @@ const normalizeVerifierResponse = (payload = {}, fallbackText = '') => {
     ...local.missing,
     ...(Array.isArray(payload.missing) ? payload.missing : []),
   ])).filter((item) => {
+    if (item === 'medical certificate label' && isAiExtraction && payload.is_medical_certificate) return false;
+    if (item === 'doctor name' && doctorName) return false;
+    if (item === 'PRC/license number' && licenseNumber) return false;
     if (item === 'medical condition detail' && medicalCondition) return false;
     if (item === 'diagnosis date' && diagnosisDate) return false;
     if (item === 'patient name' && patientName) return false;
@@ -459,8 +537,8 @@ const normalizeVerifierResponse = (payload = {}, fallbackText = '') => {
     missing,
     provider: payload.provider || 'edge_function',
     documentLegitimacy: payload.document_legitimacy || payload.documentLegitimacy || 'requires_prc_staff_review',
-    doctorName: payload.doctor_name || payload.doctorName || local.doctorName,
-    licenseNumber: payload.license_number || payload.licenseNumber || local.licenseNumber,
+    doctorName,
+    licenseNumber,
     medicalCondition,
     diagnosisDate,
     hospitalName,

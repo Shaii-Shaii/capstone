@@ -727,10 +727,15 @@ export default function DonorDriveDetailRoute() {
     setDonationFlowState({
       hasOngoingDonation: Boolean(donationModuleResult.hasOngoingDonation),
       ongoingDonationMessage: donationModuleResult.ongoingDonationMessage || '',
-      hasHairScanLog: Boolean(donationModuleResult.latestScreening && donationModuleResult.latestAnalysisEntry?.submission),
+      // Hair Check screenings are intentionally saved before a donation exists.
+      // Requiring a Hair_Submissions row here incorrectly hides valid standalone
+      // screenings and forces an eligible donor into the guest-only RSVP path.
+      hasHairScanLog: Boolean(donationModuleResult.latestScreening),
       isAiEligible: Boolean(donationModuleResult.isAiEligible),
       requiresPostDonationAnalysis: Boolean(donationModuleResult.requiresPostDonationAnalysis),
-      hairEligibilityMessage: donationModuleResult.requiresPostDonationAnalysis
+      hairEligibilityMessage: donationModuleResult.error
+        ? 'We could not verify your Hair Check right now. Refresh this event and try again.'
+        : donationModuleResult.requiresPostDonationAnalysis
         ? 'Your previous donated hair has already been cut. Run Hair Analysis again so the app can verify if your current hair is long enough for another event donation.'
         : donationModuleResult.latestScreening
           ? donationModuleResult.isAiEligible
@@ -880,7 +885,7 @@ export default function DonorDriveDetailRoute() {
     }
 
     if (canViewDonationProgress) {
-      router.navigate(`/donor/donation-progress?driveId=${drive.donation_drive_id}`);
+      router.navigate(`/donor/donation-progress?driveId=${drive.donation_drive_id}&submissionId=${donationFlowState.matchingSubmissionId}`);
       return;
     }
 
@@ -888,7 +893,7 @@ export default function DonorDriveDetailRoute() {
       const isPresent = isPresentRegistration(drive.registration);
       if (isPresent) {
         if (isDonationParticipantRegistration(drive.registration) && hasSubmittedDonationForDrive) {
-          router.navigate(`/donor/donation-progress?driveId=${drive.donation_drive_id}`);
+          router.navigate(`/donor/donation-progress?driveId=${drive.donation_drive_id}&submissionId=${donationFlowState.matchingSubmissionId}`);
         }
         return;
       }
@@ -938,6 +943,7 @@ export default function DonorDriveDetailRoute() {
     hasHairScanLog,
     requiresPostDonationAnalysis,
     donationFlowState.isAiEligible,
+    donationFlowState.matchingSubmissionId,
     canViewDonationProgress,
     hasSubmittedDonationForDrive,
     isProfileComplete,
@@ -1115,7 +1121,7 @@ export default function DonorDriveDetailRoute() {
             />
             {canViewDonationProgress ? (
               <DonationProgressLinkCard
-                onPress={() => router.navigate(`/donor/donation-progress?driveId=${drive.donation_drive_id}`)}
+                onPress={() => router.navigate(`/donor/donation-progress?driveId=${drive.donation_drive_id}&submissionId=${donationFlowState.matchingSubmissionId}`)}
               />
             ) : null}
         </>

@@ -10,6 +10,7 @@ Run these commands from the project folder and replace the API-key placeholder:
 npx.cmd supabase secrets set OPENROUTER_API_KEY="sk-or-v1-YOUR_KEY_HERE"
 npx.cmd supabase secrets set OPENROUTER_MODEL="openrouter/free"
 npx.cmd supabase secrets set OPENROUTER_VISION_MODEL="google/gemini-3.1-flash-lite"
+npx.cmd supabase secrets set OPENROUTER_MEDICAL_DOCUMENT_MODEL="google/gemini-3.1-flash-lite"
 npx.cmd supabase secrets set OPENROUTER_HAIR_ANALYSIS_MODEL="google/gemini-3.1-flash-lite"
 npx.cmd supabase secrets set OPENROUTER_HAIR_VALIDATION_MODEL="google/gemini-3.1-flash-lite"
 npx.cmd supabase secrets set OPENROUTER_WIG_RECOMMENDATION_MODEL="google/gemini-3.1-flash-lite"
@@ -27,11 +28,13 @@ npx.cmd supabase functions deploy validate-hair-capture-accessories
 npx.cmd supabase functions deploy analyze-hair-submission
 npx.cmd supabase functions deploy detect-wig-head-frame
 npx.cmd supabase functions deploy generate-wig-preview
+npx.cmd supabase functions deploy verify-medical-certificate
 ```
 
 ## Provider behavior
 
 - `google/gemini-3.1-flash-lite` is used for hair-photo validation and analysis because it supports image input and structured JSON output. It is billed through OpenRouter and requires available credits.
+- Medical certificates are read directly from the uploaded image or PDF by `OPENROUTER_MEDICAL_DOCUMENT_MODEL`. The model returns schema-validated fields, while OCR.Space remains the automatic fallback when OpenRouter is unavailable.
 - `OPENROUTER_WIG_RECOMMENDATION_MODEL` uses a vision-capable model to rank the available wigs before FLUX creates the try-on images.
 - `OPENROUTER_WIG_HEAD_DETECTION_MODEL` uses an OpenRouter-qualified vision model for optional head-position metadata. If it is unavailable, the app continues with the original photo instead of blocking FLUX.
 - `openrouter/free` remains available for non-hair workflows configured through `OPENROUTER_MODEL`. Free-model availability and limits can vary.

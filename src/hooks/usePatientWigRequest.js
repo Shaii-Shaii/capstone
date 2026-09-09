@@ -8,17 +8,21 @@ import {
   cancelPatientWigRequest,
   confirmPatientWigTryOnCandidates,
   discardPatientWigRequestDraft,
+  downloadPatientWigReleaseReceipt,
   finalizePatientWigRequestFlow,
   getActiveWigTryOnFilters,
+  getPatientWigRequestHistoryDetails,
   getPatientWigRequestContext,
   getWigPreferenceOptions,
   savePatientWigCapSize,
   savePatientWigTryOnResults,
   submitPatientWigAppeal,
+  uploadPatientWigAppealPhotos,
 } from '../features/wigRequest.service';
 import { detectWigHeadFrame } from '../features/wigHeadDetection.service';
 import { generatePatientWigPreview, rankPatientWigsForPhoto } from '../features/wigGeneration.service';
 import { createAppError, getErrorMessage, logAppError, logAppEvent } from '../utils/appErrors';
+import { supabase } from '../api/supabase/client';
 
 const IMAGE_MEDIA_TYPES = ['images'];
 const PREVIEW_IMAGE_MAX_SIZE = 768;
@@ -386,6 +390,8 @@ export const usePatientWigRequest = ({
     tryOnSelections: [],
     releaseReceipt: null,
     releaseAppeal: null,
+    activeRequestMode: 'none',
+    previousRequests: [],
   });
   const [error, setError] = useState(null);
   const [successMessage, setSuccessMessage] = useState('');
@@ -476,6 +482,8 @@ export const usePatientWigRequest = ({
       tryOnSelections: result.tryOnSelections || [],
       releaseReceipt: result.releaseReceipt || null,
       releaseAppeal: result.releaseAppeal || null,
+      activeRequestMode: result.activeRequestMode || 'none',
+      previousRequests: result.previousRequests || [],
     });
     setHasLoadedContext(true);
 
@@ -518,6 +526,35 @@ export const usePatientWigRequest = ({
     if (!userId) return;
     refreshContext();
   }, [refreshContext, userId]);
+
+  useEffect(() => {
+    const patientId = context.patientDetails?.patient_id;
+    const reqId = context.latestWigRequest?.req_id;
+    if (!userId || !patientId) return undefined;
+
+    const refreshFromReleaseUpdate = () => {
+      void refreshContext({ silent: true, force: true });
+    };
+    let channel = supabase
+      .channel(`patient-wig-request-${userId}-${patientId}-${reqId || 'none'}`)
+      .on('postgres_changes', {
+        event: '*', schema: 'public', table: 'Wig_Requests', filter: `Patient_ID=eq.${patientId}`,
+      }, refreshFromReleaseUpdate);
+
+    if (reqId) {
+      channel = channel
+        .on('postgres_changes', {
+          event: '*', schema: 'public', table: 'wig_release_receipts', filter: `req_id=eq.${reqId}`,
+        }, refreshFromReleaseUpdate)
+        .on('postgres_changes', {
+          event: '*', schema: 'public', table: 'wig_release_appeals', filter: `req_id=eq.${reqId}`,
+        }, refreshFromReleaseUpdate);
+    }
+    channel.subscribe();
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [context.latestWigRequest?.req_id, context.patientDetails?.patient_id, refreshContext, userId]);
 
   const refreshAvailableWigs = useCallback(async () => {
     setIsLoadingAvailableWigs(true);
@@ -921,23 +958,58 @@ export const usePatientWigRequest = ({
     return { success: true, discarded: true };
   };
 
-  const acceptReleaseReceipt = async () => {
-    const receiptId = context.releaseReceipt?.receipt_id;
-    if (!receiptId) return { success: false, error: 'Release receipt not found.' };
-    const result = await acceptPatientWigRelease({ receiptId });
+  const acceptReleaseReceipt = async ({ confirmationPhoto, request = null, receipt = null, wig = null } = {}) => {
+    const targetRequest = request || context.latestWigRequest;
+    const targetReceipt = receipt || context.releaseReceipt;
+    const targetWig = wig || context.requestWig;
+    if (!targetReceipt?.receipt_id) return { success: false, error: 'Release receipt not found.' };
+    const result = await acceptPatientWigRelease({
+      userId,
+      request: targetRequest,
+      receipt: targetReceipt,
+      wig: targetWig,
+      confirmationPhoto,
+    });
     if (result.error) return { success: false, error: result.error };
-    setContext((current) => ({ ...current, releaseReceipt: result.receipt }));
-    return { success: true, receipt: result.receipt };
+    if (String(targetRequest?.req_id) === String(context.latestWigRequest?.req_id)) {
+      setContext((current) => ({ ...current, releaseReceipt: result.receipt }));
+    }
+    return { success: true, receipt: result.receipt, pdfWarning: result.pdfWarning || null };
   };
 
-  const submitReleaseAppeal = async ({ reason, description, evidencePaths = [] }) => {
-    const receiptId = context.releaseReceipt?.receipt_id;
+  const submitReleaseAppeal = async ({ reason, description, requestedResolution, photos = [], request = null, receipt = null }) => {
+    const targetRequest = request || context.latestWigRequest;
+    const targetReceipt = receipt || context.releaseReceipt;
+    const receiptId = targetReceipt?.receipt_id;
     if (!receiptId) return { success: false, error: 'Release receipt not found.' };
-    const result = await submitPatientWigAppeal({ receiptId, reason, description, evidencePaths });
+    const uploadResult = await uploadPatientWigAppealPhotos({
+      userId,
+      request: targetRequest,
+      receipt: targetReceipt,
+      photos,
+    });
+    if (uploadResult.error) return { success: false, error: uploadResult.error };
+    const result = await submitPatientWigAppeal({
+      receiptId,
+      reason,
+      description,
+      evidencePaths: uploadResult.paths,
+      requestedResolution,
+    });
     if (result.error) return { success: false, error: result.error };
-    setContext((current) => ({ ...current, releaseAppeal: result.appeal }));
+    if (String(targetRequest?.req_id) === String(context.latestWigRequest?.req_id)) {
+      setContext((current) => ({ ...current, releaseAppeal: result.appeal }));
+    }
     return { success: true, appeal: result.appeal };
   };
+
+  const downloadReleaseReceipt = async (receipt = null) => (
+    await downloadPatientWigReleaseReceipt(receipt || context.releaseReceipt)
+  );
+
+  const loadPreviousRequestDetails = async (request) => (
+    await getPatientWigRequestHistoryDetails(request)
+  );
 
   return {
     patientDetails: context.patientDetails,
@@ -951,6 +1023,8 @@ export const usePatientWigRequest = ({
     tryOnSelections: context.tryOnSelections,
     releaseReceipt: context.releaseReceipt,
     releaseAppeal: context.releaseAppeal,
+    activeRequestMode: context.activeRequestMode,
+    previousRequests: context.previousRequests,
     hasDraftRequest,
     hasSubmittedRequest,
     referenceImage,
@@ -984,6 +1058,8 @@ export const usePatientWigRequest = ({
     discardDraftRequest,
     cancelRequest,
     acceptReleaseReceipt,
+    downloadReleaseReceipt,
+    loadPreviousRequestDetails,
     submitReleaseAppeal,
     refreshContext,
     refreshAvailableWigs,

@@ -4,6 +4,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Camera, Map as MapLibreMap, Marker } from '@maplibre/maplibre-react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -42,6 +43,8 @@ import {
   submitDonationForStaffWaybill,
   scheduleWalkInDropoff,
   confirmCourierLogisticsDonation,
+  saveCourierShippingDetails,
+  saveIndependentDonationParcelLog,
   getWalkInDropoffAvailability,
   discardUnscheduledWalkInDonationDraft,
   linkDonationRecipient,
@@ -535,6 +538,9 @@ const isSubmissionCutAndShipComplete = (submission = null) => {
 };
 
 const buildEventDonationTimelineStages = ({ item, fallbackStages = [], certificate }) => {
+  if (Array.isArray(item?.donorJourney?.detailStages) && item.donorJourney.detailStages.length) {
+    return item.donorJourney.detailStages;
+  }
   const submission = item?.submission || null;
   const isSubmissionCancelled = isCancelledDonationSubmission(submission);
   const submissionId = Number(submission?.submission_id || submission?.Submission_ID || 0);
@@ -848,82 +854,10 @@ const getDonationCardMeta = ({ submission = null, drive = null, logistics = null
   return { label: 'Active Now', category: 'active', icon: 'calendar-check-outline' };
 };
 
-const getTimelineStageDescription = (stage = {}) => {
-  if (stage?.savedNote) return stage.savedNote;
-
-  switch (stage?.key) {
-    case 'event_rsvp':
-      return 'Your RSVP is approved for this donation drive.';
-    case 'donation_ready_to_send':
-      return 'Your logistic donation is submitted, its waybill QR is ready, and it is recorded as sent by you for drop-off or shipment. Print the waybill and securely attach it to the outside of the donation package.';
-    case 'waybill_ready':
-      return 'The waybill QR is prepared from the saved hair record. Use this paper or printed QR for the next scans.';
-    case 'cut_and_ship':
-    case 'cut_and_shipped':
-      return 'The user has a hair ready to be delivered to the organization.';
-    case 'sent_by_donor':
-      return 'The donor sent the hair parcel with the printed waybill QR.';
-    case 'received_by_company':
-      return 'Hair for Hope received the donated hair and scanned the waybill.';
-    case 'qa_assessment':
-      return 'QA assessment decides whether the donated hair is approved or rejected.';
-    case 'wig_production':
-      return 'Approved hair by the staff is used in the wig production process.';
-    case 'bundling':
-      return 'Approved hair is ready to be grouped with other hair for bundling.';
-    case 'wig_distribution_hospitals':
-      return 'The completed wig is prepared for hospital distribution.';
-    case 'distribution_to_patients':
-      return 'The wig is distributed to patients.';
-    case 'ready_for_shipment':
-      return 'Your hair donation record and QR have been prepared for staff scanning.';
-    case 'in_transit':
-      return 'The donation is moving through the logistics process.';
-    case 'received_by_organization':
-      return 'The organization has received the hair donation.';
-    case 'quality_checking':
-      return 'The organization is reviewing the hair quality and donation details.';
-    case 'ready_for_shipment_to_receiver':
-      return 'The donation is ready for the receiver or wig production process.';
-    case 'received_by_patient':
-      return 'The donation journey has reached the recipient stage.';
-    default:
-      return 'Waiting for the next logistics update.';
-  }
-};
-
-const getCompactTimelineStageDescription = (stage = {}) => {
-  const key = String(stage?.key || '').trim().toLowerCase();
-  const compactCopy = {
-    event_rsvp: 'Your event place is confirmed.',
-    donation_submitted: 'Your donation is confirmed.',
-    donation_ready_to_send: 'Your waybill is ready.',
-    waybill_ready: 'Your waybill is ready.',
-    dropoff_scheduled: 'Your expected arrival is saved.',
-    cut_and_ship: 'Your hair is ready to send.',
-    cut_and_shipped: 'Your hair is ready to send.',
-    sent_by_donor: 'Your donation is on its way.',
-    ready_for_shipment: 'Your parcel is ready.',
-    in_transit: 'Your donation is in transit.',
-    received_by_company: 'The organization received your hair.',
-    received_by_organization: 'The organization received your hair.',
-    qa_assessment: 'Staff will check the donated hair.',
-    quality_checking: 'Staff is checking the hair.',
-    bundling: 'Approved hair is being bundled.',
-    wig_production: 'Approved hair is in production.',
-    wig_distribution_hospitals: 'The wig is ready for distribution.',
-    distribution_to_patients: 'The wig is being delivered.',
-    assigned_to_patient: 'The wig has a recipient.',
-    received_by_patient: 'The recipient received the wig.',
-  };
-  if (compactCopy[key]) return compactCopy[key];
-
-  const source = String(stage?.savedNote || getTimelineStageDescription(stage) || '').trim();
-  const firstSentence = source.split(/(?<=[.!?])\s+/)[0] || source;
-  return firstSentence.length > 82 ? `${firstSentence.slice(0, 79).trim()}...` : firstSentence;
-};
-
 const getCompactTimelineStageLabel = (stage = {}) => {
+  if (Array.isArray(stage?.stageKeys) && stage.stageKeys.length) {
+    return stage?.label || stage?.title || 'Donation update';
+  }
   const key = String(stage?.key || '').trim().toLowerCase();
   const labels = {
     donation_submitted: 'Donation confirmed',
@@ -2886,31 +2820,62 @@ function ActiveDonationProgressCard({
   onViewTimeline,
 }) {
   const stages = Array.isArray(timelineStages) ? timelineStages : [];
-  const currentStageIndex = stages.findIndex((stage) => (
+  const canonicalCurrentStageKey = String(donation?.donorJourney?.currentStageKey || '');
+  const canonicalCurrentStageIndex = canonicalCurrentStageKey
+    ? stages.findIndex((stage) => (stage?.stageKeys || []).includes(canonicalCurrentStageKey))
+    : -1;
+  const stateCurrentStageIndex = stages.findIndex((stage) => (
     ['current', 'attention', 'inprogress', 'ongoing'].includes(normalizeTimelineKey(stage?.state))
   ));
+  const currentStageIndex = canonicalCurrentStageIndex >= 0 ? canonicalCurrentStageIndex : stateCurrentStageIndex;
   const firstIncompleteIndex = stages.findIndex((stage) => normalizeTimelineKey(stage?.state) !== 'completed');
   const resolvedStageIndex = currentStageIndex >= 0
     ? currentStageIndex
     : firstIncompleteIndex >= 0
       ? firstIncompleteIndex
       : Math.max(stages.length - 1, 0);
-  const progressPercent = stages.length > 1
-    ? Math.min(100, Math.round((resolvedStageIndex / (stages.length - 1)) * 100))
-    : stages.length ? 100 : 0;
   const currentStage = stages[resolvedStageIndex] || null;
   const eventTitle = donation?.drive?.event_title || donation?.title || 'Independent logistics donation';
-  const isEventDonation = Number(donation?.submission?.donation_drive_id || donation?.drive?.donation_drive_id) > 0;
   const currentStageLabel = currentStage
     ? getCompactTimelineStageLabel(currentStage)
     : donation?.statusLabel || 'Donation received';
-  const currentStageStateKey = normalizeTimelineKey(currentStage?.state);
-  const currentStageStatusLabel = currentStage?.progressLabel
-    || (currentStageStateKey === 'completed'
-      ? 'Complete'
-      : currentStageStateKey === 'upcoming'
-        ? 'Waiting'
-        : 'Ongoing');
+  const donationReference = String(
+    donation?.submission?.waybill_code
+    || donation?.waybillCode
+    || donation?.identifier
+    || '',
+  ).trim();
+  const timelineIcons = {
+    event_rsvp: 'calendar-check-outline',
+    donation_submitted: 'check',
+    donation_confirmed: 'check-decagram-outline',
+    package_preparation: 'package-variant-closed',
+    package_proof_uploaded: 'camera-check-outline',
+    courier_details_added: 'truck-check-outline',
+    waiting_for_package_arrival: 'truck-delivery-outline',
+    package_received: 'package-variant-closed-check',
+    hair_under_verification: 'shield-search-outline',
+    hair_accepted: 'check-decagram-outline',
+    hair_not_accepted: 'close-circle-outline',
+    donation_ready_to_send: 'qrcode',
+    waybill_ready: 'qrcode',
+    dropoff_scheduled: 'calendar-clock-outline',
+    cut_and_ship: 'content-cut',
+    cut_and_shipped: 'content-cut',
+    sent_by_donor: 'truck-fast-outline',
+    ready_for_shipment: 'package-variant-closed',
+    in_transit: 'truck-delivery-outline',
+    received_by_company: 'inbox-arrow-down-outline',
+    received_by_organization: 'inbox-arrow-down-outline',
+    qa_assessment: 'shield-search-outline',
+    quality_checking: 'shield-search-outline',
+    bundling: 'package-variant-closed',
+    wig_production: 'cog-outline',
+    wig_distribution_hospitals: 'hospital-building',
+    assigned_to_patient: 'account-heart-outline',
+    distribution_to_patients: 'gift-outline',
+    received_by_patient: 'hand-heart-outline',
+  };
 
   return (
     <LinearGradient
@@ -2923,75 +2888,76 @@ function ActiveDonationProgressCard({
       <View pointerEvents="none" style={styles.activeProgressGlowSmall} />
 
       <View style={styles.activeProgressTopRow}>
-        <View style={styles.activeProgressIcon}>
-          <MaterialCommunityIcons name="timeline-check-outline" size={24} color={roles.primaryActionText} />
-        </View>
-        <View style={styles.activeProgressLivePill}>
-          <View style={styles.activeProgressLiveDot} />
-          <Text style={[styles.activeProgressLiveText, { color: roles.primaryActionText }]}>ACTIVE DONATION</Text>
-        </View>
-      </View>
-
-      <Text style={[styles.activeProgressEyebrow, { color: roles.primaryActionText }]}>DONATION PROGRESS</Text>
-
-      <View style={styles.activeProgressEventRow}>
-        <MaterialCommunityIcons
-          name={isEventDonation ? 'calendar-heart' : 'truck-delivery-outline'}
-          size={17}
-          color={roles.primaryActionText}
-        />
-        <View style={styles.activeProgressEventCopy}>
-          <Text style={[styles.activeProgressEventLabel, { color: roles.primaryActionText }]}>
-            {isEventDonation ? 'EVENT DONATION' : 'LOGISTICS DONATION'}
-          </Text>
-          <Text numberOfLines={2} style={[styles.activeProgressEventName, { color: roles.primaryActionText }]}>
-            {eventTitle}
-          </Text>
-        </View>
-      </View>
-
-      <View style={styles.activeProgressSummaryRow}>
-        <View style={styles.activeProgressSummaryCopy}>
-          <Text style={[styles.activeProgressStageLabel, { color: roles.primaryActionText }]}>CURRENT MILESTONE</Text>
-          <Text numberOfLines={1} style={[styles.activeProgressStage, { color: roles.primaryActionText }]}>{currentStageLabel}</Text>
-          <View style={styles.activeProgressStageStatus}>
-            <View style={styles.activeProgressStageStatusDot} />
-            <Text style={[styles.activeProgressStageStatusText, { color: roles.primaryActionText }]}>
-              {currentStageStatusLabel}
-            </Text>
+        <View style={styles.activeProgressHeaderIdentity}>
+          <View style={styles.activeProgressIcon}>
+            <MaterialCommunityIcons name="creation-outline" size={20} color={roles.primaryActionText} />
+          </View>
+          <View style={styles.activeProgressHeaderCopy}>
+            <Text style={[styles.activeProgressHeaderEyebrow, { color: roles.primaryActionText }]}>DONATION</Text>
+            <Text style={[styles.activeProgressHeaderTitle, { color: roles.primaryActionText }]}>Journey progress</Text>
           </View>
         </View>
-        <Text style={[styles.activeProgressPercent, { color: roles.primaryActionText }]}>{progressPercent}%</Text>
-      </View>
-      <View style={styles.activeProgressTrack}>
-        <View style={[styles.activeProgressFill, { width: `${Math.max(progressPercent, 4)}%` }]} />
       </View>
 
       <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`View donation details for ${eventTitle}`}
+        accessibilityRole={onViewTimeline ? 'button' : undefined}
+        accessibilityLabel={onViewTimeline ? `View donation details for ${eventTitle}` : undefined}
         onPress={onViewTimeline}
-        style={({ pressed }) => [
-          styles.activeProgressAction,
-          pressed ? styles.eventFeedPressed : null,
-        ]}
+        disabled={!onViewTimeline}
+        style={({ pressed }) => [styles.activeProgressHeadingCopy, pressed ? styles.eventFeedPressed : null]}
       >
-        <LinearGradient
-          pointerEvents="none"
-          colors={['#FFFDFD', '#F8E9ED', '#EFCBD4']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.activeProgressActionSurface}
-        >
-          <View style={styles.activeProgressActionIcon}>
-            <MaterialCommunityIcons name="timeline-text-outline" size={19} color={theme.colors.palette.wine900} />
-          </View>
-          <Text style={styles.activeProgressActionText}>View donation details</Text>
-          <View style={styles.activeProgressActionArrow}>
-            <MaterialCommunityIcons name="arrow-right" size={18} color="#FFFFFF" />
-          </View>
-        </LinearGradient>
+        <Text style={[styles.activeProgressStageLabel, { color: roles.primaryActionText }]}>CURRENT STAGE</Text>
+        <Text numberOfLines={2} style={[styles.activeProgressStage, { color: roles.primaryActionText }]}>
+          {currentStageLabel}
+        </Text>
+        {donationReference ? (
+          <Text numberOfLines={1} style={[styles.activeProgressReference, { color: roles.primaryActionText }]}>
+            Donation code: {donationReference}
+          </Text>
+        ) : null}
       </Pressable>
+
+      <ScrollView
+        horizontal
+        nestedScrollEnabled
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.activeProgressTimelineContent}
+      >
+        {stages.map((stage, index) => {
+          const stateKey = normalizeTimelineKey(stage?.state);
+          const isCompleted = stateKey === 'completed';
+          const isCurrent = index === resolvedStageIndex;
+          const isReached = isCompleted || isCurrent;
+          const stageKey = String(stage?.key || '').trim().toLowerCase();
+          return (
+            <View key={stage.key || `${stage.label}-${index}`} style={styles.activeProgressTimelineStage}>
+              {index > 0 ? (
+                <View style={[
+                  styles.activeProgressTimelineConnector,
+                  { backgroundColor: index <= resolvedStageIndex ? '#FFFFFF' : 'rgba(255,255,255,0.26)' },
+                ]} />
+              ) : null}
+              <View style={[
+                styles.activeProgressTimelineMarker,
+                {
+                  backgroundColor: isReached ? '#FFFFFF' : 'rgba(255,255,255,0.12)',
+                  borderColor: isReached ? '#FFFFFF' : 'rgba(255,255,255,0.42)',
+                },
+              ]}>
+                <MaterialCommunityIcons
+                  name={isCompleted ? 'check' : (timelineIcons[stageKey] || 'circle-small')}
+                  size={16}
+                  color={isReached ? roles.primaryActionBackground : roles.primaryActionText}
+                />
+              </View>
+              <Text numberOfLines={2} style={[styles.activeProgressTimelineLabel, { color: roles.primaryActionText }]}>
+                {getCompactTimelineStageLabel(stage)}
+              </Text>
+            </View>
+          );
+        })}
+      </ScrollView>
+
     </LinearGradient>
   );
 }
@@ -4602,7 +4568,7 @@ function LogisticsDonationConfirmationScreen({
           {isRescheduled
             ? 'Your donation keeps the same tracking reference.'
             : isCourier
-              ? 'Your courier donation is saved and ready for shipping.'
+              ? 'Your courier donation is saved and ready for package preparation.'
               : 'Your walk-in drop-off is saved and ready for staff tracking.'}
         </Text>
       </LinearGradient>
@@ -4639,7 +4605,7 @@ function LogisticsDonationConfirmationScreen({
               <Text style={[styles.logisticsConfirmationLabel, { color: roles.metaText }]}>{isCourier ? 'DELIVERY METHOD' : 'EXPECTED ARRIVAL'}</Text>
               <Text style={[styles.logisticsConfirmationValue, { color: roles.headingText }]}>{isCourier ? 'Ship by Courier' : scheduleDate}</Text>
               <Text style={[styles.logisticsConfirmationMeta, { color: roles.bodyText }]}>
-                {isCourier ? 'Add the courier tracking number after you ship the parcel.' : expectedArrivalTime}
+                {isCourier ? 'Attach the waybill, upload package proof, then add courier details after shipping.' : expectedArrivalTime}
               </Text>
             </View>
           </View>
@@ -4655,9 +4621,9 @@ function LogisticsDonationConfirmationScreen({
         </View>
 
         <AppButton
-          title="View donation details"
+          title={isCourier ? 'Prepare package' : 'View donation details'}
           onPress={onViewDonation}
-          leading={<MaterialCommunityIcons name="timeline-text-outline" size={19} color={roles.primaryActionText} />}
+          leading={<MaterialCommunityIcons name={isCourier ? 'package-variant-closed' : 'timeline-text-outline'} size={19} color={roles.primaryActionText} />}
         />
         <AppButton
           title="Back to donations"
@@ -5161,6 +5127,9 @@ const isSubmissionCutAndShipComplete = (submission = null) => {
 };
 
 const buildEventDonationTimelineStages = ({ item, fallbackStages = [], certificate }) => {
+  if (Array.isArray(item?.donorJourney?.detailStages) && item.donorJourney.detailStages.length) {
+    return item.donorJourney.detailStages;
+  }
   const submission = item?.submission || null;
   const isSubmissionCancelled = isCancelledDonationSubmission(submission);
   const submissionId = Number(submission?.submission_id || submission?.Submission_ID || 0);
@@ -5265,6 +5234,40 @@ const buildEventDonationTimelineStages = ({ item, fallbackStages = [], certifica
  */
 
 }
+function DonationProgressFloatingHeader({ roles, onBack }) {
+  return (
+    <LinearGradient
+      colors={[roles.defaultCardBackground, roles.iconPrimarySurface]}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 1 }}
+      style={[
+        styles.timelineFloatingHeader,
+        { borderColor: withOpacity(roles.primaryActionBackground, 0.16) },
+      ]}
+    >
+      {onBack ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Back to donations"
+          onPress={onBack}
+          hitSlop={10}
+          style={({ pressed }) => [
+            styles.timelineFloatingBackButton,
+            { backgroundColor: roles.iconPrimarySurface },
+            pressed ? styles.timelineBackButtonPressed : null,
+          ]}
+        >
+          <MaterialCommunityIcons name="arrow-left" size={20} color={roles.iconPrimaryColor} />
+        </Pressable>
+      ) : null}
+      <View style={styles.timelineHeroHeading}>
+        <Text style={[styles.timelineHeroTitle, { color: roles.headingText }]}>Donation progress</Text>
+        <Text style={[styles.timelineHeroSubtitle, { color: roles.metaText }]}>Track your latest updates.</Text>
+      </View>
+    </LinearGradient>
+  );
+}
+
 function DonationTimelineStatusScreen({
   roles,
   item,
@@ -5272,11 +5275,20 @@ function DonationTimelineStatusScreen({
   timelineEvents = [],
   parcelImages = [],
   certificate,
-  onBack,
+  isUploadingCourierProof = false,
+  isSavingCourierDetails = false,
   onViewAppointment,
   onViewCertificate,
+  onUploadCourierProof,
+  onSaveCourierDetails,
 }) {
   const [isWaybillQrOpen, setIsWaybillQrOpen] = React.useState(false);
+  const [courierPhoto, setCourierPhoto] = React.useState(null);
+  const [courierName, setCourierName] = React.useState('');
+  const [trackingNumber, setTrackingNumber] = React.useState('');
+  const [isEditingCourierDetails, setIsEditingCourierDetails] = React.useState(false);
+  const [isSavedProofVisible, setIsSavedProofVisible] = React.useState(false);
+  const [courierFeedback, setCourierFeedback] = React.useState({ message: '', variant: 'info' });
   const registration = item?.drive?.registration || item?.registration || null;
   const submittedAt = item?.submission?.created_at
     || item?.submission?.updated_at
@@ -5293,6 +5305,99 @@ function DonationTimelineStatusScreen({
       String(item?.logistics?.logistics_type || item?.methodLabel || '').trim().toLowerCase()
     )
   );
+  const logistics = item?.logistics || null;
+  const logisticsTypeKey = String(logistics?.logistics_type || item?.methodLabel || '').trim().toLowerCase();
+  const isCourierDonation = !isEventDonation && ['ship by courier', 'courier'].includes(logisticsTypeKey);
+  const savedPackageProof = (parcelImages || []).find(
+    (image) => image?.image_type === 'independent_parcel_photo'
+  ) || null;
+  const savedPackageProofUrl = savedPackageProof?.signed_url || savedPackageProof?.image_url || '';
+  const hasCourierDetails = Boolean(
+    String(logistics?.courier_name || '').trim()
+    && String(logistics?.tracking_number || '').trim()
+  );
+  const packageReceivedAt = logistics?.received_at || null;
+  const courierState = packageReceivedAt
+    ? 'Package Received'
+    : hasCourierDetails
+      ? 'Waiting for Package Arrival'
+      : savedPackageProof
+        ? 'Add Courier Details'
+        : 'Complete Package Preparation';
+  const latestDetail = getLatestPreviewDetail(item?.submission);
+
+  React.useEffect(() => {
+    setCourierName(String(logistics?.courier_name || ''));
+    setTrackingNumber(String(logistics?.tracking_number || ''));
+    setIsEditingCourierDetails(!hasCourierDetails);
+  }, [hasCourierDetails, logistics?.courier_name, logistics?.tracking_number]);
+
+  const pickCourierPhoto = React.useCallback(async (mode) => {
+    try {
+      const picker = mode === 'camera' ? ImagePicker.launchCameraAsync : ImagePicker.launchImageLibraryAsync;
+      const result = await picker({ mediaTypes: ['images'], allowsEditing: true, quality: 0.78, base64: true });
+      if (result.canceled || !result.assets?.length) return;
+      const asset = result.assets[0];
+      setCourierPhoto({
+        uri: asset.uri,
+        base64: asset.base64 || '',
+        mimeType: asset.mimeType || 'image/jpeg',
+        fileName: asset.fileName || 'package-proof.jpg',
+      });
+      setCourierFeedback({ message: '', variant: 'info' });
+    } catch (error) {
+      setCourierFeedback({
+        message: error?.message || 'The package photo could not be opened.',
+        variant: 'error',
+      });
+    }
+  }, []);
+
+  const useCourierPhoto = React.useCallback(async () => {
+    if (!courierPhoto || !onUploadCourierProof) return;
+    const result = await onUploadCourierProof({
+      submission: item?.submission || null,
+      detail: latestDetail,
+      photo: courierPhoto,
+    });
+    if (result?.success) {
+      setCourierPhoto(null);
+      setCourierFeedback({ message: 'Package proof uploaded successfully.', variant: 'success' });
+      return;
+    }
+    setCourierFeedback({
+      message: result?.error
+        ? `Package photo could not be uploaded. ${result.error}`
+        : 'Package photo could not be uploaded.',
+      variant: 'error',
+    });
+  }, [courierPhoto, item?.submission, latestDetail, onUploadCourierProof]);
+
+  const saveCourierDetails = React.useCallback(async () => {
+    const cleanCourierName = String(courierName || '').trim();
+    const cleanTrackingNumber = String(trackingNumber || '').trim();
+    if (!cleanCourierName || !cleanTrackingNumber || !onSaveCourierDetails) {
+      setCourierFeedback({
+        message: !cleanCourierName ? 'Enter the courier name.' : 'Enter the tracking number provided by the courier.',
+        variant: 'error',
+      });
+      return;
+    }
+    const result = await onSaveCourierDetails({
+      submissionId: item?.submission?.submission_id || null,
+      courierName: cleanCourierName,
+      trackingNumber: cleanTrackingNumber,
+    });
+    if (result?.success) {
+      setIsEditingCourierDetails(false);
+      setCourierFeedback({ message: 'Shipping details saved. Waiting for package arrival.', variant: 'success' });
+      return;
+    }
+    setCourierFeedback({
+      message: result?.error || 'Courier details could not be saved.',
+      variant: 'error',
+    });
+  }, [courierName, item?.submission?.submission_id, onSaveCourierDetails, trackingNumber]);
   const walkInStatusKey = String(walkInAppointment?.status || '').trim().toLowerCase();
   const isClosedWalkIn = ['no show', 'cancelled', 'canceled'].includes(walkInStatusKey)
     || ['cancelled', 'canceled'].includes(String(item?.submission?.status || '').trim().toLowerCase());
@@ -5307,34 +5412,20 @@ function DonationTimelineStatusScreen({
 
   return (
     <View style={[styles.flowScreen, styles.timelineStatusScreen]}>
-      <LinearGradient
-        colors={[roles.defaultCardBackground, roles.iconPrimarySurface]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={[styles.timelineHero, { borderColor: withOpacity(roles.primaryActionBackground, 0.16) }]}
-      >
-        {onBack ? (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Back to donations"
-            onPress={onBack}
-            style={({ pressed }) => [
-              styles.timelineBackButton,
-              { backgroundColor: roles.iconPrimarySurface },
-              pressed ? styles.timelineBackButtonPressed : null,
-            ]}
-          >
-            <MaterialCommunityIcons name="arrow-left" size={20} color={roles.iconPrimaryColor} />
-          </Pressable>
-        ) : null}
-
-        <View style={styles.timelineHeroMetrics}>
-          <View style={styles.timelineHeroHeading}>
-            <Text style={[styles.timelineHeroTitle, { color: roles.headingText }]}>Donation progress</Text>
-            <Text style={[styles.timelineHeroSubtitle, { color: roles.metaText }]}>Track your latest updates.</Text>
-          </View>
+      {stages.length ? (
+        <ActiveDonationProgressCard
+          roles={roles}
+          donation={item}
+          timelineStages={stages}
+        />
+      ) : (
+        <View style={[styles.emptyDonationState, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
+          <AppIcon name="info" size="lg" color={roles.metaText} />
+          <Text style={[styles.emptyDonationText, { color: roles.bodyText }]}>
+            No timeline updates are available from the database yet.
+          </Text>
         </View>
-      </LinearGradient>
+      )}
 
       {latestTimelineEvent ? (
         <LinearGradient
@@ -5417,6 +5508,198 @@ function DonationTimelineStatusScreen({
         </Pressable>
       ) : null}
 
+      {isCourierDonation ? (
+        <View style={styles.courierContinuationSection}>
+          <LinearGradient
+            colors={[roles.defaultCardBackground, roles.iconPrimarySurface]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={[styles.courierStateCard, { borderColor: withOpacity(roles.primaryActionBackground, 0.18) }]}
+          >
+            <View style={[styles.courierStateIcon, { backgroundColor: roles.primaryActionBackground }] }>
+              <MaterialCommunityIcons
+                name={packageReceivedAt ? 'package-variant-closed-check' : 'package-variant-closed'}
+                size={22}
+                color={roles.primaryActionText}
+              />
+            </View>
+            <View style={styles.courierStateCopy}>
+              <Text style={[styles.timelineWaybillLabel, { color: roles.metaText }]}>CURRENT COURIER STEP</Text>
+              <Text style={[styles.courierStateTitle, { color: roles.headingText }]}>{courierState}</Text>
+              <Text style={[styles.flowMetaText, { color: roles.bodyText }]}>
+                {packageReceivedAt
+                  ? `Received ${formatDateTimeLabel(packageReceivedAt)}. Your hair is awaiting or undergoing physical verification.`
+                  : hasCourierDetails
+                    ? 'Your shipping details are saved. Staff will confirm receipt after the parcel physically arrives.'
+                    : savedPackageProof
+                      ? 'Your package proof is saved. Add the courier information provided after shipping.'
+                      : 'Attach the Donivra waybill and upload a clear photo before shipping.'}
+              </Text>
+            </View>
+          </LinearGradient>
+
+          {courierFeedback.message ? (
+            <StatusBanner message={courierFeedback.message} variant={courierFeedback.variant} />
+          ) : null}
+
+          <View style={[styles.courierActionCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }] }>
+            <View style={styles.courierActionHeading}>
+              <View style={[styles.courierActionIcon, { backgroundColor: roles.iconPrimarySurface }] }>
+                <MaterialCommunityIcons name="package-variant" size={20} color={roles.iconPrimaryColor} />
+              </View>
+              <View style={styles.courierActionHeadingCopy}>
+                <Text style={[styles.summarySectionTitle, { color: roles.headingText }]}>Prepare Your Package</Text>
+                <Text style={[styles.flowMetaText, { color: roles.bodyText }]}>Use the existing Donivra waybill shown above.</Text>
+              </View>
+            </View>
+            {[
+              'Securely pack your hair donation.',
+              'Print or save your Donivra Waybill label.',
+              'Attach the label where it is clearly visible.',
+              'Take a clear photo of the prepared package.',
+              'Upload the photo before shipping.',
+            ].map((instruction, index) => (
+              <View key={instruction} style={styles.courierInstructionRow}>
+                <View style={[styles.courierInstructionIndex, { backgroundColor: roles.iconPrimarySurface }] }>
+                  <Text style={[styles.courierInstructionIndexText, { color: roles.iconPrimaryColor }]}>{index + 1}</Text>
+                </View>
+                <Text style={[styles.courierInstructionText, { color: roles.bodyText }]}>{instruction}</Text>
+              </View>
+            ))}
+          </View>
+
+          <View style={[styles.courierActionCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }] }>
+            <View style={styles.courierActionHeading}>
+              <View style={[styles.courierActionIcon, { backgroundColor: roles.iconPrimarySurface }] }>
+                <MaterialCommunityIcons name="camera-outline" size={20} color={roles.iconPrimaryColor} />
+              </View>
+              <View style={styles.courierActionHeadingCopy}>
+                <Text style={[styles.timelineWaybillLabel, { color: roles.metaText }]}>PACKAGE PROOF</Text>
+                <Text style={[styles.flowMetaText, { color: roles.bodyText }]}>Take a clear photo of your prepared package with the Donivra Waybill label attached.</Text>
+              </View>
+            </View>
+
+            {savedPackageProof ? (
+              <>
+                <View style={styles.courierUploadedRow}>
+                  <MaterialCommunityIcons name="check-circle" size={21} color={theme.colors.success || roles.iconPrimaryColor} />
+                  <Text style={[styles.courierUploadedText, { color: roles.headingText }]}>Uploaded</Text>
+                </View>
+                {isSavedProofVisible && savedPackageProofUrl ? (
+                  <Image source={{ uri: savedPackageProofUrl }} style={styles.courierPhotoPreview} resizeMode="cover" />
+                ) : null}
+                <AppButton
+                  title={isSavedProofVisible ? 'Hide Photo' : 'View Photo'}
+                  variant="outline"
+                  onPress={() => setIsSavedProofVisible((current) => !current)}
+                  disabled={!savedPackageProofUrl}
+                  textColorOverride={roles.primaryActionBackground}
+                />
+              </>
+            ) : courierPhoto ? (
+              <>
+                <Image source={{ uri: courierPhoto.uri }} style={styles.courierPhotoPreview} resizeMode="cover" />
+                <View style={styles.courierButtonRow}>
+                  <AppButton
+                    title="Retake"
+                    variant="outline"
+                    onPress={() => pickCourierPhoto('camera')}
+                    disabled={isUploadingCourierProof}
+                    textColorOverride={roles.primaryActionBackground}
+                    style={styles.courierButtonFlex}
+                  />
+                  <AppButton
+                    title={isUploadingCourierProof ? 'Uploading...' : courierFeedback.variant === 'error' ? 'Retry Upload' : 'Use This Photo'}
+                    onPress={useCourierPhoto}
+                    loading={isUploadingCourierProof}
+                    disabled={isUploadingCourierProof}
+                    style={styles.courierButtonFlex}
+                  />
+                </View>
+              </>
+            ) : (
+              <View style={styles.courierButtonRow}>
+                <AppButton
+                  title="Take Photo"
+                  onPress={() => pickCourierPhoto('camera')}
+                  leading={<MaterialCommunityIcons name="camera" size={18} color={roles.primaryActionText} />}
+                  style={styles.courierButtonFlex}
+                />
+                <AppButton
+                  title="Choose from Gallery"
+                  variant="outline"
+                  onPress={() => pickCourierPhoto('library')}
+                  textColorOverride={roles.primaryActionBackground}
+                  style={styles.courierButtonFlex}
+                />
+              </View>
+            )}
+          </View>
+
+          {savedPackageProof ? (
+            <View style={[styles.courierActionCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }] }>
+              <View style={styles.courierActionHeading}>
+                <View style={[styles.courierActionIcon, { backgroundColor: roles.iconPrimarySurface }] }>
+                  <MaterialCommunityIcons name="truck-delivery-outline" size={20} color={roles.iconPrimaryColor} />
+                </View>
+                <View style={styles.courierActionHeadingCopy}>
+                  <Text style={[styles.summarySectionTitle, { color: roles.headingText }]}>Courier Details</Text>
+                  <Text style={[styles.flowMetaText, { color: roles.bodyText }]}>Enter the courier and tracking number provided after you ship your package.</Text>
+                </View>
+              </View>
+
+              {isEditingCourierDetails && !packageReceivedAt ? (
+                <>
+                  <AppInput
+                    label="Courier Name"
+                    required
+                    value={courierName}
+                    onChangeText={setCourierName}
+                    placeholder="Example: LBC, J&T, Flash"
+                  />
+                  <AppInput
+                    label="Tracking Number"
+                    required
+                    value={trackingNumber}
+                    onChangeText={setTrackingNumber}
+                    placeholder="Enter the courier tracking number"
+                    helperText="This is separate from your Donivra Waybill."
+                    autoCapitalize="characters"
+                  />
+                  <AppButton
+                    title={isSavingCourierDetails ? 'Saving...' : 'Save Shipping Details'}
+                    onPress={saveCourierDetails}
+                    loading={isSavingCourierDetails}
+                    disabled={isSavingCourierDetails}
+                  />
+                </>
+              ) : (
+                <>
+                  <View style={styles.courierDetailDisplayRow}>
+                    <Text style={[styles.timelineWaybillLabel, { color: roles.metaText }]}>COURIER</Text>
+                    <Text style={[styles.courierDetailDisplayValue, { color: roles.headingText }]}>{logistics?.courier_name || 'Not provided'}</Text>
+                  </View>
+                  <View style={styles.courierDetailDisplayRow}>
+                    <Text style={[styles.timelineWaybillLabel, { color: roles.metaText }]}>TRACKING NUMBER</Text>
+                    <Text selectable style={[styles.courierDetailDisplayValue, { color: roles.headingText }]}>{logistics?.tracking_number || 'Not provided'}</Text>
+                  </View>
+                  {!packageReceivedAt ? (
+                    <AppButton
+                      title="Edit Courier Details"
+                      variant="outline"
+                      onPress={() => setIsEditingCourierDetails(true)}
+                      textColorOverride={roles.primaryActionBackground}
+                    />
+                  ) : (
+                    <Text style={[styles.flowMetaText, { color: roles.metaText }]}>Shipping details are locked after staff confirms receipt.</Text>
+                  )}
+                </>
+              )}
+            </View>
+          ) : null}
+        </View>
+      ) : null}
+
       {isWalkInDonation && walkInAppointment?.appointment_start_at ? (
         <LinearGradient
           colors={[roles.defaultCardBackground, roles.iconPrimarySurface]}
@@ -5473,119 +5756,6 @@ function DonationTimelineStatusScreen({
           </View>
         </View>
       ) : null}
-
-      <View style={styles.timelineSection}>
-        <View style={styles.timelineSectionHeading}>
-          <Text style={[styles.summarySectionTitle, { color: roles.headingText }]}>Donation journey</Text>
-          <Text style={[styles.timelineSectionHint, { color: roles.metaText }]}>Track each step</Text>
-        </View>
-        <View style={styles.timelineStageList}>
-          {stages.length ? stages.map((stage, index) => {
-            const isCompleted = stage.state === 'completed';
-            const isCurrent = stage.state === 'current';
-            const isCancelled = stage.state === 'cancelled';
-            const stageDisplayDate = stage.displayEvidenceAt || stage.completedAt || stage.evidenceAt || '';
-            const markerColor = isCancelled ? roles.errorText : roles.primaryActionBackground;
-            const stageImages = index === 0
-              ? (stage.parcelImages || parcelImages || []).filter((image) => image?.signed_url || image?.image_url)
-              : [];
-            return (
-              <View key={stage.key || `${stage.label}-${index}`} style={styles.timelineStageRow}>
-                <View style={styles.timelineMarkerColumn}>
-                  <View style={[
-                    styles.timelineMarker,
-                    {
-                      backgroundColor: isCompleted ? roles.primaryActionBackground : roles.defaultCardBackground,
-                      borderColor: isCompleted || isCurrent || isCancelled ? markerColor : roles.defaultCardBorder,
-                    },
-                  ]}>
-                    {isCompleted ? (
-                      <MaterialCommunityIcons name="check" size={14} color={roles.primaryActionText} />
-                    ) : isCancelled ? (
-                      <MaterialCommunityIcons name="close" size={14} color={roles.errorText} />
-                    ) : isCurrent ? (
-                      <View style={[styles.timelineCurrentDot, { backgroundColor: roles.primaryActionBackground }]} />
-                    ) : (
-                      <MaterialCommunityIcons name="clock-outline" size={13} color={roles.metaText} />
-                    )}
-                  </View>
-                  {index < stages.length - 1 ? (
-                    <View style={[styles.timelineStageConnector, { backgroundColor: isCompleted ? roles.primaryActionBackground : roles.defaultCardBorder }]} />
-                  ) : null}
-                </View>
-                <View
-                  style={[
-                    styles.timelineStageCard,
-                    {
-                      backgroundColor: isCurrent ? roles.heroBackground : roles.defaultCardBackground,
-                      borderColor: isCancelled ? roles.errorText : (isCurrent ? roles.heroBorder : roles.defaultCardBorder),
-                    },
-                  ]}
-                >
-                  <View style={styles.timelineStageHeader}>
-                    <Text style={[styles.timelineStageTitle, { color: isCancelled ? roles.errorText : (isCurrent ? roles.heroHeadingText : roles.headingText) }]}>
-                      {getCompactTimelineStageLabel(stage)}
-                    </Text>
-                    <Text style={[styles.timelineStageDate, { color: isCurrent ? roles.heroMetaText : roles.metaText }]}>
-                      {stageDisplayDate ? formatDateTimeLabel(stageDisplayDate) : (stage.progressLabel || 'Waiting')}
-                    </Text>
-                  </View>
-                  <Text
-                    numberOfLines={2}
-                    style={[styles.flowMetaText, { color: isCurrent ? roles.heroBodyText : roles.bodyText }]}
-                  >
-                    {getCompactTimelineStageDescription(stage)}
-                  </Text>
-                  {stageImages.length ? (
-                    <ScrollView
-                      horizontal
-                      showsHorizontalScrollIndicator={false}
-                      contentContainerStyle={styles.timelinePhotoStrip}
-                    >
-                      {stageImages.map((image, imageIndex) => (
-                        <View
-                          key={`timeline-photo-${image?.image_id || imageIndex}`}
-                          style={[styles.timelinePhotoFrame, { backgroundColor: roles.supportCardBackground }]}
-                        >
-                          <Image
-                            source={{ uri: image.signed_url || image.image_url }}
-                            style={styles.timelinePhoto}
-                            resizeMode="cover"
-                          />
-                          <Text style={[styles.timelinePhotoLabel, { color: roles.metaText }]} numberOfLines={1}>
-                            {image.uploaded_at ? formatDateTimeLabel(image.uploaded_at) : 'Uploaded photo'}
-                          </Text>
-                        </View>
-                      ))}
-                    </ScrollView>
-                  ) : null}
-                  {stage.statusLabel ? (
-                    <View style={[
-                      styles.timelineStageBadge,
-                      {
-                        backgroundColor: isCancelled
-                          ? withOpacity(roles.errorText, 0.1)
-                          : withOpacity(roles.primaryActionBackground, isCurrent ? 0.14 : 0.08),
-                      },
-                    ]}>
-                      <Text style={[styles.timelineStageBadgeText, { color: isCancelled ? roles.errorText : roles.iconPrimaryColor }]}>
-                        {stage.statusLabel}
-                      </Text>
-                    </View>
-                  ) : null}
-                </View>
-              </View>
-            );
-          }) : (
-            <View style={[styles.emptyDonationState, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
-              <AppIcon name="info" size="lg" color={roles.metaText} />
-              <Text style={[styles.emptyDonationText, { color: roles.bodyText }]}>
-                No timeline updates are available from the database yet.
-              </Text>
-            </View>
-          )}
-        </View>
-      </View>
 
       <WaybillQrModal
         visible={isWaybillQrOpen}
@@ -5919,12 +6089,16 @@ export function DonorDonationStatusScreen() {
   const [savingQrKey, setSavingQrKey] = React.useState('');
   const [isSchedulingDropoff, setIsSchedulingDropoff] = React.useState(false);
   const [isConfirmingCourier, setIsConfirmingCourier] = React.useState(false);
+  const [isUploadingCourierProof, setIsUploadingCourierProof] = React.useState(false);
+  const [isSavingCourierDetails, setIsSavingCourierDetails] = React.useState(false);
   const [walkInAvailability, setWalkInAvailability] = React.useState([]);
   const [walkInAvailabilityError, setWalkInAvailabilityError] = React.useState('');
   const [isLoadingWalkInAvailability, setIsLoadingWalkInAvailability] = React.useState(false);
   const [walkInAvailabilityRefreshKey, setWalkInAvailabilityRefreshKey] = React.useState(0);
   const [confirmedLogisticsDonation, setConfirmedLogisticsDonation] = React.useState(null);
   const logisticsEligibilityRequestRef = React.useRef(0);
+  const courierProofUploadInFlightRef = React.useRef(false);
+  const courierDetailsSaveInFlightRef = React.useRef(false);
   // When the user picks a view manually, stop auto-routing away from it.
   const hasManualDonationViewSelectionRef = React.useRef(false);
 
@@ -5999,6 +6173,10 @@ export function DonorDonationStatusScreen() {
   }, [loadModuleData]);
 
   React.useEffect(() => { loadModuleData(); }, [loadModuleData]);
+
+  useFocusEffect(React.useCallback(() => {
+    void loadModuleData({ silent: true });
+  }, [loadModuleData]));
 
   React.useEffect(() => {
     let isMounted = true;
@@ -6519,7 +6697,13 @@ export function DonorDonationStatusScreen() {
           ? moduleData?.appointment
           : null
       );
-      const itemTimelineStages = flowRecord?.timelineStages || moduleData?.timelineStages || [];
+      const itemDonorJourney = Number(moduleData?.donorJourney?.submissionId) === Number(primarySubmission?.submission_id)
+        ? moduleData.donorJourney
+        : null;
+      const itemTimelineStages = itemDonorJourney?.compactStages
+        || flowRecord?.timelineStages
+        || moduleData?.timelineStages
+        || [];
       const itemTimelineEvents = flowRecord?.timelineEvents || moduleData?.timelineEvents || [];
       const itemTrackingEntries = flowRecord?.trackingEntries || moduleData?.trackingEntries || [];
       const statusMeta = getDonationCardMeta({
@@ -6565,6 +6749,7 @@ export function DonorDonationStatusScreen() {
         logistics: itemLogistics,
         appointment: itemAppointment,
         timelineStages: itemTimelineStages,
+        donorJourney: itemDonorJourney,
         timelineEvents: itemTimelineEvents,
         trackingEntries: itemTrackingEntries,
         canCancel,
@@ -6619,6 +6804,7 @@ export function DonorDonationStatusScreen() {
     moduleData?.activeSubmissions,
     moduleData?.logistics,
     moduleData?.appointment,
+    moduleData?.donorJourney,
     moduleData?.submissionFlowRecords,
     moduleData?.timelineEvents,
     moduleData?.timelineStages,
@@ -6800,7 +6986,7 @@ export function DonorDonationStatusScreen() {
       || activeDonationOverviewItem?.drive?.donation_drive_id
     );
     if (Number.isFinite(driveId) && driveId > 0) {
-      router.navigate(`/donor/donation-progress?driveId=${driveId}`);
+      router.navigate(`/donor/donation-progress?driveId=${driveId}&submissionId=${activeDonationOverviewItem.submission.submission_id}`);
       return;
     }
 
@@ -7264,6 +7450,60 @@ export function DonorDonationStatusScreen() {
     setConfirmedLogisticsDonation(result);
     setDonationModuleScreen(DONATION_MODULE_SCREEN.LOGISTICS_CONFIRMATION);
   }, [isConfirmingCourier, loadModuleData, user?.id]);
+
+  const handleUploadCourierPackageProof = React.useCallback(async ({
+    submission = null,
+    detail = null,
+    photo = null,
+  } = {}) => {
+    if (courierProofUploadInFlightRef.current) {
+      return { success: false, error: 'A package photo upload is already in progress.' };
+    }
+    courierProofUploadInFlightRef.current = true;
+    setIsUploadingCourierProof(true);
+    try {
+      const result = await saveIndependentDonationParcelLog({
+        userId: user?.id || null,
+        databaseUserId: profile?.user_id || null,
+        submission,
+        detail,
+        photo,
+      });
+      if (result.success) await loadModuleData({ silent: true });
+      return result;
+    } catch (error) {
+      return { success: false, error: error?.message || 'Package photo could not be uploaded.' };
+    } finally {
+      courierProofUploadInFlightRef.current = false;
+      setIsUploadingCourierProof(false);
+    }
+  }, [loadModuleData, profile?.user_id, user?.id]);
+
+  const handleSaveCourierShippingDetails = React.useCallback(async ({
+    submissionId = null,
+    courierName = '',
+    trackingNumber = '',
+  } = {}) => {
+    if (courierDetailsSaveInFlightRef.current) {
+      return { success: false, error: 'Courier details are already being saved.' };
+    }
+    courierDetailsSaveInFlightRef.current = true;
+    setIsSavingCourierDetails(true);
+    try {
+      const result = await saveCourierShippingDetails({
+        submissionId,
+        courierName,
+        trackingNumber,
+      });
+      if (result.success) await loadModuleData({ silent: true });
+      return result;
+    } catch (error) {
+      return { success: false, error: error?.message || 'Courier details could not be saved.' };
+    } finally {
+      courierDetailsSaveInFlightRef.current = false;
+      setIsSavingCourierDetails(false);
+    }
+  }, [loadModuleData]);
 
   const handleScheduleWalkInDropoff = React.useCallback(async ({
     submission = null,
@@ -8750,7 +8990,8 @@ export function DonorDonationStatusScreen() {
           parcelImages={selectedSubmissionFlowRecord?.parcelImages || moduleData?.parcelImages || []}
           certificate={certificate}
           accountDonorName={accountDonorName}
-          onBack={handleShowHairEventTab}
+          isUploadingCourierProof={isUploadingCourierProof}
+          isSavingCourierDetails={isSavingCourierDetails}
           onViewAppointment={() => {
             setPendingWalkInSubmission(selectedDonationTimelineItem?.submission || null);
             setWalkInScheduleReturnScreen(DONATION_MODULE_SCREEN.DONATION_STATUS);
@@ -8763,6 +9004,8 @@ export function DonorDonationStatusScreen() {
               params: { certificateId: String(certificate.certificate_id) },
             });
           }}
+          onUploadCourierProof={handleUploadCourierPackageProof}
+          onSaveCourierDetails={handleSaveCourierShippingDetails}
         />
       );
     }
@@ -8808,7 +9051,9 @@ export function DonorDonationStatusScreen() {
     handleBackFromWalkInSchedule,
     handleChooseLogisticMethod,
     handleConfirmCourierDonation,
+    handleSaveCourierShippingDetails,
     handleScheduleWalkInDropoff,
+    handleUploadCourierPackageProof,
     handleSubmitDonationAndShowQr,
     handleSubmitSelectedEventDonation,
     hairEligibilityMessage,
@@ -8822,6 +9067,8 @@ export function DonorDonationStatusScreen() {
     isLoadingWalkInAvailability,
     isSchedulingDropoff,
     isConfirmingCourier,
+    isSavingCourierDetails,
+    isUploadingCourierProof,
     isProfileComplete,
     latestScreening,
     moduleData?.activeFlowType,
@@ -8948,6 +9195,11 @@ export function DonorDonationStatusScreen() {
             onOpenFilters={() => setIsEventFilterSheetOpen(true)}
           />
         </View>
+      ) : effectiveDonationModuleScreen === DONATION_MODULE_SCREEN.DONATION_STATUS ? (
+        <DonationProgressFloatingHeader
+          roles={roles}
+          onBack={handleShowHairEventTab}
+        />
       ) : null}
       loadingOverlay={isLoading ? (
         <DonivraLoadingOverlay visible label="Loading donation details..." />
@@ -9726,12 +9978,12 @@ const styles = StyleSheet.create({
   },
   activeProgressCard: {
     position: 'relative',
-    minHeight: 292,
+    minHeight: 236,
     borderRadius: 24,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.2)',
-    padding: theme.spacing.lg,
-    gap: theme.spacing.sm,
+    padding: theme.spacing.md,
+    gap: theme.spacing.md,
     overflow: 'hidden',
     ...theme.shadows.card,
   },
@@ -9758,17 +10010,44 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: theme.spacing.sm,
-    marginBottom: 2,
+  },
+  activeProgressHeaderIdentity: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  activeProgressHeaderCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  activeProgressHeaderEyebrow: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 9,
+    fontWeight: theme.typography.weights.bold,
+    letterSpacing: 1,
+    opacity: 0.76,
+  },
+  activeProgressHeaderTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.body,
+    lineHeight: 21,
+    fontWeight: theme.typography.weights.bold,
   },
   activeProgressIcon: {
-    width: 46,
-    height: 46,
-    borderRadius: 16,
+    width: 38,
+    height: 38,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(255,255,255,0.13)',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.18)',
+  },
+  activeProgressHeadingCopy: {
+    gap: 3,
   },
   activeProgressLivePill: {
     minHeight: 28,
@@ -9838,15 +10117,60 @@ const styles = StyleSheet.create({
   },
   activeProgressStageLabel: {
     fontFamily: theme.typography.fontFamily,
-    fontSize: 8,
+    fontSize: 9,
     fontWeight: theme.typography.weights.bold,
-    letterSpacing: 0.7,
-    opacity: 0.66,
+    letterSpacing: 1,
+    opacity: 0.74,
   },
   activeProgressStage: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.titleSm,
+    lineHeight: 27,
+    fontWeight: theme.typography.weights.bold,
+  },
+  activeProgressReference: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.caption,
+    lineHeight: 15,
+    opacity: 0.76,
+  },
+  activeProgressTimelineContent: {
+    minWidth: '100%',
+    paddingTop: theme.spacing.xs,
+    paddingBottom: 2,
+    paddingHorizontal: 2,
+  },
+  activeProgressTimelineStage: {
+    position: 'relative',
+    width: 84,
+    alignItems: 'center',
+    gap: 7,
+  },
+  activeProgressTimelineMarker: {
+    zIndex: 2,
+    width: 34,
+    height: 34,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderRadius: 17,
+  },
+  activeProgressTimelineConnector: {
+    position: 'absolute',
+    zIndex: 1,
+    top: 16,
+    left: -25,
+    width: 50,
+    height: 3,
+    borderRadius: theme.radius.full,
+  },
+  activeProgressTimelineLabel: {
+    width: 78,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 10,
+    lineHeight: 13,
     fontWeight: theme.typography.weights.semibold,
+    textAlign: 'center',
   },
   activeProgressStageStatus: {
     alignSelf: 'flex-start',
@@ -11136,6 +11460,25 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     gap: theme.spacing.sm,
     ...theme.shadows.soft,
+  },
+  timelineFloatingHeader: {
+    width: '100%',
+    minHeight: 68,
+    borderWidth: 1,
+    borderRadius: 18,
+    padding: theme.spacing.md,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.spacing.sm,
+    zIndex: 30,
+    ...theme.shadows.soft,
+  },
+  timelineFloatingBackButton: {
+    width: 40,
+    height: 40,
+    borderRadius: theme.radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   timelineHeroMetrics: {
     flex: 1,
@@ -12593,6 +12936,116 @@ const styles = StyleSheet.create({
   timelineWaybillHelp: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.caption,
+  },
+  courierContinuationSection: {
+    width: '100%',
+    gap: theme.spacing.md,
+  },
+  courierStateCard: {
+    width: '100%',
+    borderWidth: 1,
+    borderRadius: theme.radius.lg,
+    padding: theme.spacing.md,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.spacing.md,
+    ...theme.shadows.soft,
+  },
+  courierStateIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: theme.radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  courierStateCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 3,
+  },
+  courierStateTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    fontWeight: theme.typography.weights.bold,
+  },
+  courierActionCard: {
+    width: '100%',
+    borderWidth: 1,
+    borderRadius: theme.radius.lg,
+    padding: theme.spacing.md,
+    gap: theme.spacing.md,
+    ...theme.shadows.soft,
+  },
+  courierActionHeading: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.spacing.sm,
+  },
+  courierActionIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: theme.radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  courierActionHeadingCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  courierInstructionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  courierInstructionIndex: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  courierInstructionIndexText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.bold,
+  },
+  courierInstructionText: {
+    flex: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    lineHeight: 20,
+  },
+  courierButtonRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: theme.spacing.sm,
+  },
+  courierButtonFlex: {
+    flex: 1,
+  },
+  courierPhotoPreview: {
+    width: '100%',
+    height: 210,
+    borderRadius: theme.radius.md,
+  },
+  courierUploadedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.xs,
+  },
+  courierUploadedText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.bold,
+  },
+  courierDetailDisplayRow: {
+    gap: 3,
+  },
+  courierDetailDisplayValue: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.semibold,
   },
   waybillModalActions: {
     flexDirection: 'row',

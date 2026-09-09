@@ -2,6 +2,8 @@ import { Asset } from 'expo-asset';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import { PermissionsAndroid, Platform } from 'react-native';
+import ReactNativeBlobUtil from 'react-native-blob-util';
 import { theme } from '../design-system/theme';
 import { fetchHairSubmissionsByUserId, fetchLatestDonationCertificateByUserId } from './hairSubmission.api';
 
@@ -57,34 +59,26 @@ export const getCertificateMetaValueFontSize = (value = '', { max = 18, min = 11
   return clampNumber(Math.round(max - ((normalizedLength - 18) * 0.35)), min, max);
 };
 
-const templateAsset = Asset.fromModule(require('../assets/images/donivra_certificate_template.png'));
-let templateDataUriPromise = null;
-
 const getCertificateTemplateDataUri = async () => {
-  if (!templateDataUriPromise) {
-    templateDataUriPromise = (async () => {
-      if (!templateAsset.localUri) {
-        await templateAsset.downloadAsync();
-      }
-
-      const resolvedUri = templateAsset.localUri || templateAsset.uri || '';
-      if (!resolvedUri) {
-        throw new Error('The donor certificate template image could not be resolved.');
-      }
-
-      const base64 = await FileSystem.readAsStringAsync(resolvedUri, {
-        encoding: 'base64',
-      });
-
-      if (!base64) {
-        throw new Error('The donor certificate template image could not be loaded.');
-      }
-
-      return `data:image/png;base64,${base64}`;
-    })();
+  const templateAsset = Asset.fromModule(require('../assets/images/donivra_certificate_template.png'));
+  if (!templateAsset.localUri) {
+    await templateAsset.downloadAsync();
   }
 
-  return templateDataUriPromise;
+  const resolvedUri = templateAsset.localUri || templateAsset.uri || '';
+  if (!resolvedUri) {
+    throw new Error('The donor certificate template image could not be resolved.');
+  }
+
+  const base64 = await FileSystem.readAsStringAsync(resolvedUri, {
+    encoding: 'base64',
+  });
+
+  if (!base64) {
+    throw new Error('The donor certificate template image could not be loaded.');
+  }
+
+  return `data:image/png;base64,${base64}`;
 };
 
 export const buildDonorFullName = (profile = null, fallback = '') => (
@@ -197,11 +191,11 @@ export const buildDonorCertificateHtml = async (certificate, options = {}) => {
   const templateDataUri = await getCertificateTemplateDataUri();
   const colors = buildCertificateHtmlColors(options.colors);
   const certificateNumber = certificate?.certificateNumber || 'Pending certificate number';
-  const issuedDate = certificate?.issuedAtLabel || formatCertificateDate(certificate?.issuedAt || '');
+  const issuedDate = formatCertificateDate(certificate?.issuedAt || '') || certificate?.issuedAtLabel;
   const donorName = String(certificate?.donorName || '').trim();
-  const recipientFontSize = getCertificateRecipientFontSize(donorName);
-  const certificateValueFontSize = getCertificateMetaValueFontSize(certificateNumber, { max: 16, min: 10 });
-  const issuedValueFontSize = getCertificateMetaValueFontSize(issuedDate, { max: 17, min: 11 });
+  const recipientFontSize = getCertificateRecipientFontSize(donorName, { max: 44, min: 26 });
+  const certificateValueFontSize = getCertificateMetaValueFontSize(certificateNumber, { max: 16, min: 13 });
+  const issuedValueFontSize = getCertificateMetaValueFontSize(issuedDate, { max: 16, min: 13 });
 
   if (!donorName) {
     throw new Error('Your donor name is missing from the account profile. Please update your profile before generating a certificate.');
@@ -233,10 +227,10 @@ export const buildDonorCertificateHtml = async (certificate, options = {}) => {
           }
           .recipient-block {
             position: absolute;
-            top: 286px;
-            left: 92px;
-            width: 632px;
-            min-height: 94px;
+            top: 380px;
+            left: 76px;
+            width: 470px;
+            min-height: 58px;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -246,36 +240,30 @@ export const buildDonorCertificateHtml = async (certificate, options = {}) => {
           .name {
             text-align: center;
             font-size: ${recipientFontSize}px;
-            font-weight: 700;
+            font-weight: 600;
             color: ${colors.nameText};
             line-height: 1.04;
             letter-spacing: 0.2px;
             word-break: break-word;
           }
-          .meta-block {
+          .certificate-value,
+          .issued-value {
             position: absolute;
-            top: 150px;
-            right: 262px;
-            width: 208px;
-            padding: 14px 16px 12px;
-            border-radius: 18px;
-            background: ${colors.cardBackground};
-            box-sizing: border-box;
-          }
-          .meta-label {
-            font-size: 11px;
-            color: ${colors.metaLabel};
-            text-transform: uppercase;
-            letter-spacing: 0.8px;
-            margin-bottom: 2px;
-          }
-          .meta-value {
-            font-size: 16px;
             color: ${colors.metaText};
-            margin-bottom: 10px;
-            line-height: 1.2;
+            font-weight: 600;
+            line-height: 1.25;
             word-break: break-word;
             overflow-wrap: anywhere;
+          }
+          .certificate-value {
+            top: 659px;
+            left: 300px;
+            width: 398px;
+          }
+          .issued-value {
+            top: 716px;
+            left: 218px;
+            width: 300px;
           }
         </style>
       </head>
@@ -285,13 +273,8 @@ export const buildDonorCertificateHtml = async (certificate, options = {}) => {
             <div class="name">${escapeHtml(donorName)}</div>
           </div>
 
-          <div class="meta-block">
-            <div class="meta-label">Certificate No.</div>
-            <div class="meta-value" style="font-size:${certificateValueFontSize}px;">${escapeHtml(certificateNumber)}</div>
-
-            <div class="meta-label">Issued</div>
-            <div class="meta-value" style="font-size:${issuedValueFontSize}px; margin-bottom:0;">${escapeHtml(issuedDate)}</div>
-          </div>
+          <div class="certificate-value" style="font-size:${certificateValueFontSize}px;">${escapeHtml(certificateNumber)}</div>
+          <div class="issued-value" style="font-size:${issuedValueFontSize}px;">${escapeHtml(issuedDate)}</div>
         </div>
       </body>
     </html>
@@ -316,4 +299,76 @@ export const shareDonorCertificatePdf = async (uri) => {
     dialogTitle: 'Share donor certificate',
     UTI: '.pdf',
   });
+};
+
+const sanitizeCertificateFilePart = (value = '') => String(value || '')
+  .trim()
+  .replace(/[^a-z0-9_-]+/gi, '-')
+  .replace(/^-+|-+$/g, '')
+  .slice(0, 72);
+
+const toNativeFilePath = (uri = '') => {
+  const path = String(uri || '').replace(/^file:\/\//i, '');
+  try {
+    return decodeURIComponent(path);
+  } catch {
+    return path;
+  }
+};
+
+export const saveDonorCertificatePdfToDownloads = async (uri, certificate = null) => {
+  if (!uri) {
+    throw new Error('The certificate PDF has not been prepared yet.');
+  }
+
+  const certificateReference = sanitizeCertificateFilePart(
+    certificate?.certificateNumber || certificate?.certificateId || Date.now()
+  );
+  const fileName = `Donivra-Certificate-${certificateReference || Date.now()}.pdf`;
+
+  if (Platform.OS !== 'android') {
+    await shareDonorCertificatePdf(uri);
+    return { fileName, location: 'file-picker', uri };
+  }
+
+  const sourcePath = toNativeFilePath(uri);
+  const androidVersion = Number(Platform.Version) || 0;
+
+  if (androidVersion >= 29) {
+    const savedUri = await ReactNativeBlobUtil.MediaCollection.copyToMediaStore(
+      {
+        name: fileName,
+        parentFolder: '',
+        mimeType: 'application/pdf',
+      },
+      'Download',
+      sourcePath
+    );
+
+    if (!savedUri) {
+      throw new Error('Android could not save the certificate to Downloads.');
+    }
+
+    return { fileName, location: 'Downloads', uri: savedUri };
+  }
+
+  const permission = await PermissionsAndroid.request(
+    PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE,
+    {
+      title: 'Save certificate',
+      message: 'Allow Donivra to save your certificate in the Downloads folder.',
+      buttonPositive: 'Allow',
+      buttonNegative: 'Cancel',
+    }
+  );
+
+  if (permission !== PermissionsAndroid.RESULTS.GRANTED) {
+    throw new Error('Storage permission is needed to save the certificate to Downloads.');
+  }
+
+  const destinationPath = `${ReactNativeBlobUtil.fs.dirs.DownloadDir}/${fileName}`;
+  await ReactNativeBlobUtil.fs.cp(sourcePath, destinationPath);
+  await ReactNativeBlobUtil.fs.scanFile([{ path: destinationPath, mime: 'application/pdf' }]);
+
+  return { fileName, location: 'Downloads', uri: `file://${destinationPath}` };
 };

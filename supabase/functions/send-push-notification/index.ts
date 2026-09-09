@@ -1,5 +1,8 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { createJsonResponse, handleCorsPreflight } from '../_shared/cors.ts';
+import { isEmailAddress } from '../_shared/email/html.ts';
+import { sendTransactionalEmail } from '../_shared/email/smtp-client.ts';
+import { renderNotificationUpdateEmail } from '../_shared/email/templates/notification-update.ts';
 
 type NotificationRow = {
   notification_id: number;
@@ -30,12 +33,25 @@ type UserRow = {
   email: string | null;
 };
 
+type UserDetailRow = {
+  user_id: number;
+  first_name: string | null;
+};
+
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
-const RESEND_EMAIL_URL = 'https://api.resend.com/emails';
 const MAX_EXPO_BATCH_SIZE = 100;
 const MAX_EXPO_ATTEMPTS = 3;
 const VIEW_DETAILS_CATEGORY_ID = 'donivra_view_details';
 const MAX_PUSH_BODY_LENGTH = 110;
+const CENTRALIZED_TRANSACTIONAL_EMAIL_NOTIFICATION_TYPES = new Set([
+  'certificate_available',
+  'submission_received',
+  'logistics_update',
+  'donation_tracking_updated',
+  'donation_drive_update',
+  'donation_drive_rsvp_confirmed',
+  'donation_drive_rsvp_reminder',
+]);
 
 const getBearerToken = (request: Request) => {
   const authorization = request.headers.get('Authorization') || '';
@@ -179,43 +195,23 @@ const sendExpoBatch = async (
   };
 };
 
-const escapeHtml = (value = '') => String(value)
-  .replace(/&/g, '&amp;')
-  .replace(/</g, '&lt;')
-  .replace(/>/g, '&gt;')
-  .replace(/"/g, '&quot;')
-  .replace(/'/g, '&#39;');
-
-const isEmailAddress = (value = '') => (
-  /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '').trim())
-);
-
-const buildEmailHtml = (notification: NotificationRow) => {
-  const title = escapeHtml(notification.title || 'Donivra update');
-  const message = escapeHtml(notification.message || 'You have a new Donivra notification.');
-  const route = getRouteForNotification(notification);
-
-  return `
-    <div style="font-family: Arial, sans-serif; color: #1f2937; line-height: 1.6;">
-      <h2 style="margin: 0 0 12px;">${title}</h2>
-      <p style="margin: 0 0 16px;">${message}</p>
-      <p style="margin: 0 0 8px;">Open Donivra to view the full update${route ? ` in ${escapeHtml(route)}` : ''}.</p>
-      <p style="margin: 18px 0 0; color: #6b7280; font-size: 12px;">This message was sent to the email address registered on your Donivra account.</p>
-    </div>
-  `;
+const getEmailCategory = (notification: NotificationRow) => {
+  const context = `${notification.type || ''} ${notification.reference_type || ''} ${notification.title || ''}`.toLowerCase();
+  if (/wig|appeal|receipt|release/.test(context)) return 'WIG REQUEST UPDATE';
+  if (/event|drive|rsvp/.test(context)) return 'DONATION EVENT';
+  if (/hair|donation|submission|certificate/.test(context)) return 'HAIR DONATION UPDATE';
+  return 'DONIVRA UPDATE';
 };
 
-const buildEmailText = (notification: NotificationRow) => {
-  const route = getRouteForNotification(notification);
-  return [
-    notification.title || 'Donivra update',
-    '',
-    notification.message || 'You have a new Donivra notification.',
-    '',
-    `Open Donivra to view the full update${route ? ` in ${route}` : ''}.`,
-    '',
-    'This message was sent to the email address registered on your Donivra account.',
-  ].join('\n');
+const getEmailActionLabel = (notification: NotificationRow) => {
+  const context = `${notification.type || ''} ${notification.title || ''}`.toLowerCase();
+  if (context.includes('appeal')) return 'View Appeal Details';
+  if (context.includes('receipt')) return context.includes('confirmed') ? 'View Receipt' : 'Confirm Wig Receipt';
+  if (context.includes('certificate')) return 'View Certificate';
+  if (/event|drive|rsvp/.test(context)) return 'View Event Details';
+  if (context.includes('wig')) return 'View Wig Request';
+  if (/hair|donation|submission/.test(context)) return 'View Donation Journey';
+  return 'View Update';
 };
 
 Deno.serve(async (request) => {
@@ -231,8 +227,6 @@ Deno.serve(async (request) => {
   const supabaseUrl = Deno.env.get('SUPABASE_URL') || '';
   const supabaseServiceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
   const expoAccessToken = Deno.env.get('EXPO_ACCESS_TOKEN') || '';
-  const resendApiKey = Deno.env.get('RESEND_API_KEY') || '';
-  const resendFromEmail = Deno.env.get('RESEND_FROM_EMAIL') || '';
 
   if (!supabaseUrl || !supabaseServiceRoleKey) {
     return createJsonResponse({ message: 'Supabase server configuration is missing.' }, 500);
@@ -305,7 +299,7 @@ Deno.serve(async (request) => {
     return createJsonResponse({ sent: 0, skipped: true, reason: 'no_authorized_notifications' });
   }
 
-  const [tokenResult, userResult] = await Promise.all([
+  const [tokenResult, userResult, userDetailResult] = await Promise.all([
     supabase
       .from('Push_Notification_Tokens')
       .select('push_token_id:Push_Token_ID, user_id:User_ID, expo_push_token:Expo_Push_Token')
@@ -314,6 +308,10 @@ Deno.serve(async (request) => {
     supabase
       .from('users')
       .select('user_id, email')
+      .in('user_id', userIds),
+    supabase
+      .from('user_details')
+      .select('user_id, first_name')
       .in('user_id', userIds),
   ]);
 
@@ -329,9 +327,25 @@ Deno.serve(async (request) => {
   ((userResult.data || []) as UserRow[]).forEach((row) => {
     usersById.set(Number(row.user_id), row);
   });
+  const userNamesById = new Map<number, string>();
+  ((userDetailResult.error ? [] : userDetailResult.data || []) as UserDetailRow[]).forEach((row) => {
+    const userId = Number(row.user_id);
+    if (!userNamesById.has(userId) && String(row.first_name || '').trim()) {
+      userNamesById.set(userId, String(row.first_name).trim());
+    }
+  });
 
   const emailResults = [];
   for (const notification of notifications) {
+    if (CENTRALIZED_TRANSACTIONAL_EMAIL_NOTIFICATION_TYPES.has(notification.type || '')) {
+      emailResults.push({
+        notificationId: notification.notification_id,
+        skipped: true,
+        reason: 'handled_by_transactional_email_outbox',
+      });
+      continue;
+    }
+
     if (String(notification.email_status || '').toLowerCase() === 'sent') {
       emailResults.push({
         notificationId: notification.notification_id,
@@ -359,60 +373,58 @@ Deno.serve(async (request) => {
       continue;
     }
 
-    if (!resendApiKey || !resendFromEmail) {
+    try {
+      const route = getRouteForNotification(notification);
+      const appUrl = String(Deno.env.get('DONIVRA_APP_URL') || '').replace(/\/$/, '');
+      const delivery = await sendTransactionalEmail({
+        recipient: recipientEmail,
+        email: renderNotificationUpdateEmail({
+          recipientName: userNamesById.get(notification.user_id) || 'Donivra member',
+          title: notification.title || 'Account update',
+          message: notification.message || 'There is a new update in your Donivra account.',
+          category: getEmailCategory(notification),
+          actionLabel: getEmailActionLabel(notification),
+          actionUrl: appUrl && route ? `${appUrl}${route}` : '',
+          logoUrl: String(Deno.env.get('DONIVRA_LOGO_URL') || ''),
+        }),
+      });
       await supabase
         .from('Notification')
         .update({
-          Email_Status: 'Not configured',
-          Email_Response: { reason: 'resend_not_configured' },
+          Email_Status: 'Sent',
+          Email_Sent_At: new Date().toISOString(),
+          Email_Response: {
+            provider_message_id: delivery.messageId,
+            dry_run: delivery.dryRun,
+            accepted_count: delivery.accepted.length,
+            rejected_count: delivery.rejected.length,
+          },
         })
         .eq('Notification_ID', notification.notification_id);
-
       emailResults.push({
         notificationId: notification.notification_id,
-        skipped: true,
-        reason: 'resend_not_configured',
+        sent: true,
+        dryRun: delivery.dryRun,
       });
-      continue;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Email delivery failed.';
+      await supabase
+        .from('Notification')
+        .update({
+          Email_Status: 'Failed',
+          Email_Sent_At: null,
+          Email_Response: { error: message },
+        })
+        .eq('Notification_ID', notification.notification_id);
+      emailResults.push({
+        notificationId: notification.notification_id,
+        sent: false,
+        error: message,
+      });
     }
-
-    const resendResponse = await fetch(RESEND_EMAIL_URL, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${resendApiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        from: resendFromEmail,
-        to: [recipientEmail],
-        subject: notification.title || 'Donivra update',
-        html: buildEmailHtml(notification),
-        text: buildEmailText(notification),
-      }),
-    });
-
-    const resendBody = await resendResponse.clone().json().catch(async () => ({
-      message: await resendResponse.text().catch(() => 'Email request failed.'),
-    }));
-
-    await supabase
-      .from('Notification')
-      .update({
-        Email_Status: resendResponse.ok ? 'Sent' : 'Failed',
-        Email_Sent_At: resendResponse.ok ? new Date().toISOString() : null,
-        Email_Response: resendBody,
-      })
-      .eq('Notification_ID', notification.notification_id);
-
-    emailResults.push({
-      notificationId: notification.notification_id,
-      sent: resendResponse.ok,
-      status: resendResponse.status,
-      response: resendBody,
-    });
   }
 
-  const tokensByUserId = new Map<number, Array<{ pushTokenId: number; token: string }>>();
+  const tokensByUserId = new Map<number, { pushTokenId: number; token: string }[]>();
   ((tokenResult.data || []) as PushTokenRow[]).forEach((row) => {
     const token = String(row.expo_push_token || '').trim();
     if (!isExpoPushToken(token)) return;
@@ -473,7 +485,7 @@ Deno.serve(async (request) => {
   }
 
   const expoResponses = [];
-  const pushTickets: Array<Record<string, unknown>> = [];
+  const pushTickets: Record<string, unknown>[] = [];
   const invalidTokens = new Set<string>();
 
   for (const batch of chunk(deliveries, MAX_EXPO_BATCH_SIZE)) {

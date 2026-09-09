@@ -34,6 +34,7 @@ export function LegalDocumentPreview({
   viewportHeight = null,
   actionLabel = '',
   actionPlacement = 'topRight',
+  showContentPreview = false,
 }) {
   const [isViewerOpen, setIsViewerOpen] = useState(false);
   const [previewState, setPreviewState] = useState('loading');
@@ -95,6 +96,15 @@ export function LegalDocumentPreview({
                 onLoadComplete={() => setPreviewState('ready')}
                 onError={() => setPreviewState('error')}
               />
+            </View>
+          ) : showContentPreview && hasDocumentContent ? (
+            <View pointerEvents="none" style={styles.previewTextWrap}>
+              <Text
+                numberOfLines={7}
+                style={[styles.previewDocumentText, { color: roles.bodyText }]}
+              >
+                {documentContent}
+              </Text>
             </View>
           ) : (
             <View style={styles.previewFallback}>
@@ -246,6 +256,17 @@ const styles = StyleSheet.create({
   previewPdf: {
     width: '100%',
     height: '100%',
+  },
+  previewTextWrap: {
+    flex: 1,
+    paddingHorizontal: theme.spacing.md,
+    paddingTop: theme.spacing.md,
+    paddingBottom: 42,
+  },
+  previewDocumentText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
   },
   previewFallback: {
     flex: 1,
