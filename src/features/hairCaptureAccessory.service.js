@@ -8,7 +8,7 @@ const normalizeDetectedAccessories = (value = []) => (
 
 const buildDetectedMessage = (items = []) => {
   const label = items.length ? items.join(' and ').toLowerCase() : 'an accessory';
-  return `We found ${label}. Remove it, then take this photo again.`;
+  return `We found ${label} covering the hair needed for this view. Move or remove it, then take this photo again.`;
 };
 
 const buildPresentationMessage = (issues = []) => {
@@ -64,13 +64,17 @@ export const checkHairCaptureAccessories = async ({ photo, view } = {}) => {
   const presentationBlocked = check.hair_fully_visible !== true
     || check.hair_loose_and_down !== true
     || presentationIssues.length > 0;
+  const usabilityBlocked = check.view_correct !== true
+    || check.image_clear !== true
+    || check.lighting_acceptable !== true;
+  const photoVerificationToken = String(result.data?.photo_verification_token || '').trim();
 
   if (blocked) {
     return {
       ok: false,
       blocked: true,
       retryable: false,
-      title: 'Remove All Accessories',
+      title: 'Show the Required Hair Area',
       message: `${buildDetectedMessage(detectedAccessories)} Wear your hair loose and fully visible.`,
       detectedAccessories,
       presentationIssues,
@@ -89,16 +93,29 @@ export const checkHairCaptureAccessories = async ({ photo, view } = {}) => {
     };
   }
 
-  if (presentationBlocked || check.can_capture !== true) {
+  if (presentationBlocked || usabilityBlocked || check.can_capture !== true) {
     return {
       ok: false,
       blocked: true,
       retryable: false,
-      title: 'Show Your Hair Properly',
-      message: buildPresentationMessage(presentationIssues),
+      title: usabilityBlocked ? 'Retake This Hair View' : 'Show Your Hair Properly',
+      message: usabilityBlocked
+        ? String(check.reason || 'Use the requested angle with clear, even lighting and keep the required hair area in frame.')
+        : buildPresentationMessage(presentationIssues),
       detectedAccessories: [],
       presentationIssues,
       confidence: Number(check.confidence || 0),
+    };
+  }
+
+  if (!photoVerificationToken) {
+    return {
+      ok: false,
+      blocked: false,
+      retryable: true,
+      title: 'Photo Check Unavailable',
+      message: 'The photo passed visually, but its secure verification could not be completed. Please try again.',
+      detectedAccessories: [],
     };
   }
 
@@ -110,5 +127,6 @@ export const checkHairCaptureAccessories = async ({ photo, view } = {}) => {
     message: '',
     detectedAccessories: [],
     confidence: Number(check.confidence || 0),
+    photoVerificationToken,
   };
 };

@@ -48,6 +48,7 @@ import {
     fetchLatestDonationRequirement,
     fetchLatestHairSubmissionDetailBySubmissionId,
     fetchSalonDonationAppointmentBySubmissionId,
+    fetchSalonDonationAppointmentsByUserId,
     fetchSalonAppointmentStatusHistoryByAppointmentIds,
     getHairSubmissionImageSignedUrl,
     isHairCheckOnlySubmission,
@@ -1302,12 +1303,122 @@ const buildDonationHistory = ({ submissions = [], activeSubmission = null }) => 
 const DONOR_HISTORY_STATUS_LABELS = {
   pending: 'Submitted',
   cut: 'Hair received',
+  received: 'Hair received',
   accepted: 'Hair accepted',
+  bundled: 'Hair bundled',
   wiginproduction: 'Wig in production',
   wigcreated: 'Wig created',
+  completed: 'Completed',
   cancelled: 'Cancelled',
   canceled: 'Cancelled',
   rejected: 'Not accepted',
+};
+
+const formatActivityStatus = (value = '', fallback = 'Recorded') => {
+  const normalized = String(value || '').trim();
+  if (!normalized) return fallback;
+  return normalized
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(' ');
+};
+
+const sortActivityTimeline = (items = []) => {
+  const seen = new Set();
+  return items
+    .filter((item) => item?.timestamp)
+    .sort((left, right) => new Date(left.timestamp).getTime() - new Date(right.timestamp).getTime())
+    .filter((item) => {
+      const key = `${normalizeTimelineStatusKey(item?.title)}|${item?.timestamp}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+};
+
+const getLatestActivityTimestamp = (timeline = [], fallback = null) => (
+  [...timeline]
+    .map((item) => item?.timestamp)
+    .filter(Boolean)
+    .sort((left, right) => new Date(right).getTime() - new Date(left).getTime())[0]
+  || fallback
+);
+
+const isCancelledActivityStatus = (value = '') => (
+  ['cancelled', 'canceled', 'rejected'].includes(normalizeTimelineStatusKey(value))
+);
+
+const buildDonationActivityTimeline = ({ submission, trackingEntries = [], certificate = null }) => {
+  const submittedAt = submission?.created_at || submission?.submitted_at || null;
+  const timeline = submittedAt ? [{
+    key: `donation-${submission.submission_id}-submitted`,
+    title: 'Donation Submitted',
+    description: 'The hair donation was recorded in Donivra.',
+    timestamp: submittedAt,
+    status: 'Completed',
+  }] : [];
+
+  (trackingEntries || [])
+    .filter((entry) => {
+      const text = `${entry?.title || ''} ${entry?.description || ''}`.toLowerCase();
+      return entry?.updated_at && !text.includes('manual donor details saved');
+    })
+    .forEach((entry) => {
+      timeline.push({
+        key: `tracking-${entry?.tracking_id || entry?.id || `${submission.submission_id}-${entry.updated_at}`}`,
+        title: String(entry?.title || formatActivityStatus(entry?.status, 'Donation Updated')).trim(),
+        description: String(entry?.description || '').trim(),
+        timestamp: entry.updated_at,
+        status: formatActivityStatus(entry?.status, 'Completed'),
+      });
+    });
+
+  const statusKey = normalizeTimelineStatusKey(submission?.status);
+  const statusLabel = DONOR_HISTORY_STATUS_LABELS[statusKey]
+    || formatActivityStatus(submission?.status, 'Submitted');
+  const hasCurrentStatusEvent = timeline.some((item) => (
+    normalizeTimelineStatusKey(`${item?.title || ''} ${item?.status || ''}`).includes(statusKey)
+  ));
+  if (statusKey && statusKey !== 'pending' && submission?.updated_at && !hasCurrentStatusEvent) {
+    timeline.push({
+      key: `donation-${submission.submission_id}-${statusKey}`,
+      title: statusLabel,
+      description: isCancelledActivityStatus(submission.status)
+        ? 'This donation activity was closed.'
+        : 'This is the latest recorded stage of the donation.',
+      timestamp: submission.updated_at,
+      status: isCancelledActivityStatus(submission.status) ? statusLabel : 'Current stage',
+      isCurrent: !isCancelledActivityStatus(submission.status)
+        && !['completed', 'wigcreated', 'wigcompleted'].includes(statusKey),
+    });
+  }
+
+  if (certificate?.issued_at) {
+    timeline.push({
+      key: `certificate-${certificate.certificate_id || certificate.id}`,
+      title: 'Certificate Issued',
+      description: certificate.certificate_number
+        ? `Certificate ${certificate.certificate_number} is available in Achievements.`
+        : 'The donation certificate is available in Achievements.',
+      timestamp: certificate.issued_at,
+      status: 'Completed',
+    });
+  }
+
+  const sorted = sortActivityTimeline(timeline);
+  const donationIsClosed = isCancelledActivityStatus(submission?.status)
+    || ['completed', 'wigcreated', 'wigcompleted'].includes(statusKey);
+  if (donationIsClosed) {
+    sorted.forEach((item) => {
+      item.isCurrent = false;
+    });
+  } else if (sorted.length > 1) {
+    sorted.forEach((item, index) => {
+      item.isCurrent = index === sorted.length - 1 && !certificate?.issued_at;
+    });
+  }
+  return sorted;
 };
 
 const buildDonorActivityHistory = ({
@@ -1316,6 +1427,8 @@ const buildDonorActivityHistory = ({
   screenings = [],
   registeredDrives = [],
   certificates = [],
+  appointments = [],
+  appointmentHistory = [],
 } = {}) => {
   const activities = [];
   const realDonations = submissions.filter((submission) => (
@@ -1325,138 +1438,252 @@ const buildDonorActivityHistory = ({
     realDonations.map((submission) => [Number(submission.submission_id), submission])
   );
 
+  const workflowBySubmissionId = new Map(
+    workflowEvidence.map((record) => [Number(record?.submission?.submission_id), record])
+  );
+  const certificateBySubmissionId = new Map(
+    certificates
+      .filter((certificate) => certificate?.submission_id)
+      .map((certificate) => [Number(certificate.submission_id), certificate])
+  );
+  const driveById = new Map(
+    registeredDrives
+      .filter((drive) => drive?.donation_drive_id)
+      .map((drive) => [Number(drive.donation_drive_id), drive])
+  );
+  const donationActivityBySubmissionId = new Map();
+
+  realDonations.forEach((submission) => {
+    const workflow = workflowBySubmissionId.get(Number(submission.submission_id)) || null;
+    const certificate = certificateBySubmissionId.get(Number(submission.submission_id)) || null;
+    const drive = driveById.get(Number(submission.donation_drive_id)) || null;
+    const timeline = buildDonationActivityTimeline({
+      submission,
+      trackingEntries: workflow?.trackingEntries || [],
+      certificate,
+    });
+    const statusKey = normalizeTimelineStatusKey(submission.status);
+    const status = DONOR_HISTORY_STATUS_LABELS[statusKey]
+      || formatActivityStatus(submission.status, 'Submitted');
+    const timestamp = getLatestActivityTimestamp(
+      timeline,
+      submission.updated_at || submission.created_at || null
+    );
+    const activity = {
+      id: `donation-${submission.submission_id}`,
+      type: 'donation',
+      title: `Hair Donation ${submission.donation_reference || `DON-${submission.submission_id}`}`,
+      related_title: drive?.event_title
+        || (workflow?.logistics?.logistics_type ? `${formatActivityStatus(workflow.logistics.logistics_type)} donation` : 'Independent donation'),
+      status,
+      timestamp,
+      activity_date: submission.created_at || timestamp,
+      date_label: formatHistoryDateLabel(submission.created_at || timestamp),
+      reference: submission.donation_reference || `DON-${submission.submission_id}`,
+      icon: 'hand-heart-outline',
+      timeline,
+      submission_id: submission.submission_id,
+      drive_id: submission.donation_drive_id || null,
+      certificate_id: certificate?.certificate_id || certificate?.id || null,
+      certificate_number: certificate?.certificate_number || '',
+      isOngoing: !isCancelledActivityStatus(submission.status)
+        && !['completed', 'wigcreated', 'wigcompleted'].includes(statusKey),
+    };
+    donationActivityBySubmissionId.set(Number(submission.submission_id), activity);
+    activities.push(activity);
+  });
+
   registeredDrives.forEach((drive) => {
     const registration = drive?.registration;
     if (!registration?.registration_id) return;
     const attended = isMarkedPresentRegistration(registration);
-    const registeredAt = registration.registered_at || registration.updated_at || null;
+    const registrationStatusKey = normalizeTimelineStatusKey(registration.registration_status);
+    const cancelled = ['cancelled', 'canceled'].includes(registrationStatusKey);
+    const registeredAt = registration.registered_at || null;
     const attendedAt = registration.rsvp_scanned_at || registration.attendance_marked_at || null;
-    const eventName = String(drive?.event_title || 'donation event').trim();
+    const relatedDonation = realDonations.find((submission) => (
+      Number(submission?.event_attendee_id) === Number(registration.registration_id)
+      || Number(submission?.donation_drive_id) === Number(drive.donation_drive_id)
+    )) || null;
+    const donationActivity = relatedDonation
+      ? donationActivityBySubmissionId.get(Number(relatedDonation.submission_id))
+      : null;
+    const timeline = sortActivityTimeline([
+      registeredAt ? {
+        key: `event-${registration.registration_id}-rsvp`,
+        title: 'RSVP Submitted',
+        description: 'Participation in the event was recorded.',
+        timestamp: registeredAt,
+        status: 'Completed',
+      } : null,
+      cancelled && registration.updated_at ? {
+        key: `event-${registration.registration_id}-cancelled`,
+        title: 'RSVP Cancelled',
+        description: 'The event registration was cancelled.',
+        timestamp: registration.updated_at,
+        status: 'Cancelled',
+      } : null,
+      attendedAt ? {
+        key: `event-${registration.registration_id}-attended`,
+        title: 'Checked In',
+        description: 'Attendance at the event was confirmed.',
+        timestamp: attendedAt,
+        status: 'Completed',
+      } : null,
+      ...(donationActivity?.timeline || []),
+    ]);
+    const timestamp = attendedAt || registration.updated_at || registeredAt || drive.start_date || null;
 
     activities.push({
-      id: `event-rsvp-${registration.registration_id}`,
+      id: `event-${registration.registration_id}`,
       type: 'event',
-      title: 'Event RSVP confirmed',
-      description: `You registered to attend ${eventName}.`,
-      status: 'Registered',
-      timestamp: registeredAt,
-      date_label: formatHistoryDateLabel(registeredAt),
-      icon: 'calendar-check-outline',
-    });
-    if (attended) {
-      activities.push({
-        id: `event-attended-${registration.registration_id}`,
-        type: 'event',
-        title: 'Event attended',
-        description: `Your attendance at ${eventName} was confirmed.`,
-        status: 'Attended',
-        timestamp: attendedAt || registration.updated_at || null,
-        date_label: formatHistoryDateLabel(attendedAt || registration.updated_at || null),
-        icon: 'account-check-outline',
-      });
-    }
-  });
-
-  realDonations.forEach((submission) => {
-    const submittedAt = submission.created_at || submission.submitted_at || null;
-    const statusKey = normalizeTimelineStatusKey(submission.status);
-    const statusLabel = DONOR_HISTORY_STATUS_LABELS[statusKey] || 'Updated';
-    activities.push({
-      id: `donation-submitted-${submission.submission_id}`,
-      type: 'donation',
-      title: 'Donation submitted',
-      description: 'Your hair donation journey was started.',
-      status: 'Submitted',
-      timestamp: submittedAt,
-      date_label: formatHistoryDateLabel(submittedAt),
-      reference: submission.donation_reference || '',
-      icon: 'hand-heart-outline',
-    });
-
-    const statusAt = submission.updated_at || submission.cut_at || null;
-    if (statusKey && statusKey !== 'pending' && statusAt) {
-      activities.push({
-        id: `donation-status-${submission.submission_id}-${statusKey}`,
-        type: 'timeline',
-        title: 'Donation timeline updated',
-        description: `Your donation reached: ${statusLabel}.`,
-        status: statusLabel,
-        timestamp: statusAt,
-        date_label: formatHistoryDateLabel(statusAt),
-        reference: submission.donation_reference || '',
-        icon: 'timeline-check-outline',
-      });
-    }
-  });
-
-  workflowEvidence.forEach((record) => {
-    const submission = submissionById.get(Number(record?.submission?.submission_id));
-    if (!submission) return;
-    (record?.trackingEntries || []).forEach((entry) => {
-      const timestamp = entry?.updated_at || null;
-      activities.push({
-        id: `timeline-${entry?.tracking_id || entry?.id || `${submission.submission_id}-${timestamp || 'update'}`}`,
-        type: 'timeline',
-        title: String(entry?.title || 'Donation timeline updated').trim(),
-        description: String(entry?.description || 'A new donation milestone was recorded.').trim(),
-        status: String(entry?.status || 'Updated').trim(),
-        timestamp,
-        date_label: formatHistoryDateLabel(timestamp),
-        reference: submission.donation_reference || '',
-        icon: 'timeline-check-outline',
-      });
-    });
-  });
-
-  certificates.forEach((certificate) => {
-    if (!submissionById.has(Number(certificate?.submission_id))) return;
-    const timestamp = certificate?.issued_at || null;
-    activities.push({
-      id: `certificate-${certificate?.certificate_id || certificate?.id}`,
-      type: 'certificate',
-      title: 'Donation certificate issued',
-      description: 'Your donation certificate is ready to view in Achievements.',
-      status: 'Certificate ready',
+      title: String(drive?.event_title || 'Donation Event').trim(),
+      related_title: relatedDonation
+        ? `Related donation: ${relatedDonation.donation_reference || `DON-${relatedDonation.submission_id}`}`
+        : drive?.venue_name || drive?.location_label || '',
+      status: cancelled ? 'Cancelled' : attended ? 'Completed' : 'Joined',
       timestamp,
-      date_label: formatHistoryDateLabel(timestamp),
-      reference: certificate?.certificate_number || '',
-      icon: 'certificate-outline',
+      activity_date: drive.start_date || timestamp,
+      date_label: formatHistoryDateLabel(drive.start_date || timestamp),
+      reference: relatedDonation?.donation_reference || '',
+      icon: cancelled ? 'calendar-remove-outline' : 'calendar-check-outline',
+      timeline,
+      drive_id: drive.donation_drive_id,
+      submission_id: relatedDonation?.submission_id || null,
+      certificate_id: donationActivity?.certificate_id || null,
+      certificate_number: donationActivity?.certificate_number || '',
+      isOngoing: !cancelled && !attended,
     });
   });
 
   screenings.forEach((screening) => {
     const timestamp = screening?.created_at || null;
-    const linkedSubmission = submissionById.get(Number(screening?.submission_id));
+    const linkedSubmission = realDonations.find((submission) => (
+      Number(submission?.ai_screening_id) === Number(screening?.ai_screening_id || screening?.id)
+      || (screening?.submission_id && Number(submission?.submission_id) === Number(screening.submission_id))
+    )) || null;
+    const usedAt = linkedSubmission?.created_at || linkedSubmission?.submitted_at || null;
+    const timeline = sortActivityTimeline([
+      timestamp ? {
+        key: `analysis-${screening?.ai_screening_id || screening?.id}-completed`,
+        title: 'Hair Analysis Completed',
+        description: screening?.summary || 'The Hair Analysis result was saved.',
+        timestamp,
+        status: formatActivityStatus(screening?.decision, 'Completed'),
+      } : null,
+      linkedSubmission && usedAt ? {
+        key: `analysis-${screening?.ai_screening_id || screening?.id}-used`,
+        title: 'Used for Donation',
+        description: `Used for ${linkedSubmission.donation_reference || `DON-${linkedSubmission.submission_id}`}.`,
+        timestamp: usedAt,
+        status: 'Completed',
+      } : null,
+    ]);
     activities.push({
       id: `analysis-${screening?.ai_screening_id || screening?.id}`,
       type: 'analysis',
-      title: 'Hair Analysis completed',
-      description: 'Your Hair Analysis result and recommendations were saved.',
-      status: String(screening?.decision || 'Analysis saved').trim(),
+      title: 'Hair Analysis Completed',
+      related_title: linkedSubmission
+        ? `Used for ${linkedSubmission.donation_reference || `DON-${linkedSubmission.submission_id}`}`
+        : screening?.detected_condition || '',
+      status: formatActivityStatus(screening?.decision, 'Analysis saved'),
       timestamp,
+      activity_date: timestamp,
       date_label: formatHistoryDateLabel(timestamp),
       icon: 'creation-outline',
+      timeline,
+      screening_id: screening?.ai_screening_id || screening?.id || null,
+      submission_id: linkedSubmission?.submission_id || null,
+      reference: linkedSubmission?.donation_reference || '',
+      isOngoing: false,
     });
-    if (linkedSubmission) {
-      const usedAt = linkedSubmission.created_at || linkedSubmission.submitted_at || null;
-      activities.push({
-        id: `analysis-used-${screening?.ai_screening_id || screening?.id}-${linkedSubmission.submission_id}`,
-        type: 'analysis',
-        title: 'Hair Analysis used for donation',
-        description: 'A saved Hair Analysis was used to verify your donation journey.',
-        status: 'Used for donation',
-        timestamp: usedAt,
-        date_label: formatHistoryDateLabel(usedAt),
-        reference: linkedSubmission.donation_reference || '',
-        icon: 'check-decagram-outline',
-      });
-    }
+  });
+
+  const appointmentHistoryById = new Map();
+  (appointmentHistory || []).forEach((entry) => {
+    const appointmentId = Number(entry?.Appointment_ID || entry?.appointment_id);
+    if (!appointmentId) return;
+    const entries = appointmentHistoryById.get(appointmentId) || [];
+    entries.push(entry);
+    appointmentHistoryById.set(appointmentId, entries);
+  });
+
+  appointments.forEach((appointment) => {
+    const statusKey = normalizeTimelineStatusKey(appointment?.status);
+    if (!['completed', 'cancelled', 'canceled', 'noshow'].includes(statusKey)) return;
+    const linkedSubmission = submissionById.get(Number(appointment.submission_id)) || null;
+    const rawHistory = appointmentHistoryById.get(Number(appointment.appointment_id)) || [];
+    const timeline = sortActivityTimeline([
+      appointment.created_at ? {
+        key: `appointment-${appointment.appointment_id}-created`,
+        title: 'Expected Arrival Scheduled',
+        description: 'The Walk-in expected arrival was recorded.',
+        timestamp: appointment.created_at,
+        status: 'Completed',
+      } : null,
+      ...rawHistory.map((entry) => ({
+        key: `appointment-history-${entry?.Status_History_ID || entry?.status_history_id}`,
+        title: formatActivityStatus(entry?.To_Status || entry?.to_status || entry?.Change_Type || entry?.change_type, 'Appointment Updated'),
+        description: String(entry?.Notes || entry?.notes || '').trim(),
+        timestamp: entry?.Changed_At || entry?.changed_at || null,
+        status: 'Completed',
+      })),
+      appointment.checked_in_at ? {
+        key: `appointment-${appointment.appointment_id}-checked-in`,
+        title: 'Checked In',
+        description: 'Arrival at the receiving location was confirmed.',
+        timestamp: appointment.checked_in_at,
+        status: 'Completed',
+      } : null,
+      appointment.completed_at ? {
+        key: `appointment-${appointment.appointment_id}-completed`,
+        title: 'Appointment Completed',
+        description: 'The Walk-in receiving activity was completed.',
+        timestamp: appointment.completed_at,
+        status: 'Completed',
+      } : null,
+      appointment.cancelled_at ? {
+        key: `appointment-${appointment.appointment_id}-cancelled`,
+        title: statusKey === 'noshow' ? 'Marked as No Show' : 'Appointment Cancelled',
+        description: appointment.cancellation_reason || 'The Walk-in activity was closed.',
+        timestamp: appointment.cancelled_at,
+        status: statusKey === 'noshow' ? 'No Show' : 'Cancelled',
+      } : null,
+    ]);
+    const timestamp = appointment.completed_at
+      || appointment.cancelled_at
+      || appointment.updated_at
+      || appointment.appointment_start_at
+      || appointment.created_at;
+    activities.push({
+      id: `appointment-${appointment.appointment_id}`,
+      type: 'appointment',
+      title: 'Walk-in Donation Appointment',
+      related_title: linkedSubmission
+        ? `Related donation: ${linkedSubmission.donation_reference || `DON-${linkedSubmission.submission_id}`}`
+        : '',
+      status: statusKey === 'noshow' ? 'No Show' : formatActivityStatus(appointment.status),
+      timestamp,
+      activity_date: appointment.appointment_start_at || timestamp,
+      date_label: formatHistoryDateLabel(appointment.appointment_start_at || timestamp),
+      reference: linkedSubmission?.donation_reference || '',
+      icon: statusKey === 'completed' ? 'store-check-outline' : 'calendar-remove-outline',
+      timeline,
+      appointment_id: appointment.appointment_id,
+      submission_id: appointment.submission_id || null,
+      appointment_start_at: appointment.appointment_start_at || null,
+      isOngoing: false,
+    });
   });
 
   return activities
     .sort((left, right) => {
-      const leftTime = left?.timestamp ? new Date(left.timestamp).getTime() : 0;
-      const rightTime = right?.timestamp ? new Date(right.timestamp).getTime() : 0;
+      const leftTime = left?.activity_date || left?.timestamp
+        ? new Date(left.activity_date || left.timestamp).getTime()
+        : 0;
+      const rightTime = right?.activity_date || right?.timestamp
+        ? new Date(right.activity_date || right.timestamp).getTime()
+        : 0;
       return rightTime - leftTime;
     });
 };
@@ -1468,11 +1695,12 @@ const buildDonorActivityHistory = ({
 export const getDonorDonationHistory = async ({ userId, databaseUserId, limit = 100 } = {}) => {
   if (!userId || !databaseUserId) return { historyItems: [], donationHistory: [], error: 'Your session is not ready.' };
 
-  const [submissionsResult, screeningsResult, drivesResult, certificatesResult] = await Promise.all([
+  const [submissionsResult, screeningsResult, drivesResult, certificatesResult, appointmentsResult] = await Promise.all([
     fetchHairSubmissionProgressSummariesByUserId(userId, limit),
     fetchAiScreeningsByUserId(databaseUserId, limit),
     fetchRegisteredDonationDrivesByUserId({ databaseUserId, limit }),
     fetchDonationCertificatesByUserId(userId, limit),
+    fetchSalonDonationAppointmentsByUserId(databaseUserId, limit),
   ]);
   const submissions = submissionsResult.data || [];
   const realSubmissionIds = submissions
@@ -1486,17 +1714,27 @@ export const getDonorDonationHistory = async ({ userId, databaseUserId, limit = 
         trackingLimitPerSubmission: 24,
       })
     : { data: [], error: null };
+  const appointmentIds = (appointmentsResult.data || [])
+    .map((appointment) => appointment?.appointment_id)
+    .filter(Boolean);
+  const appointmentHistoryResult = appointmentIds.length
+    ? await fetchSalonAppointmentStatusHistoryByAppointmentIds(appointmentIds)
+    : { data: [], error: null };
   const historyItems = buildDonorActivityHistory({
     submissions,
     workflowEvidence: workflowResult.data || [],
     screenings: screeningsResult.data || [],
     registeredDrives: drivesResult.data || [],
     certificates: certificatesResult.data || [],
+    appointments: appointmentsResult.data || [],
+    appointmentHistory: appointmentHistoryResult.data || [],
   });
   const error = submissionsResult.error
     || screeningsResult.error
     || drivesResult.error
     || certificatesResult.error
+    || appointmentsResult.error
+    || appointmentHistoryResult.error
     || workflowResult.error
     || null;
 
@@ -1504,6 +1742,18 @@ export const getDonorDonationHistory = async ({ userId, databaseUserId, limit = 
     historyItems,
     donationHistory: historyItems,
     error: error?.message || error || null,
+  };
+};
+
+export const getDonorActivityHistoryItem = async ({
+  userId,
+  databaseUserId,
+  activityId,
+} = {}) => {
+  const result = await getDonorDonationHistory({ userId, databaseUserId, limit: 100 });
+  return {
+    activity: (result.historyItems || []).find((item) => String(item?.id) === String(activityId)) || null,
+    error: result.error,
   };
 };
 

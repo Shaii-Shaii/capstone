@@ -1,5 +1,5 @@
 import { invokeEdgeFunction } from '../api/supabase/client';
-import { hairAnalysisFunctionName, hairSubmissionImageTypes } from './hairSubmission.constants';
+import { hairAnalysisFunctionName } from './hairSubmission.constants';
 import { normalizeHairAnalyzerAnswers } from './hairSubmission.schema';
 import { getErrorMessage, logAppError, logAppEvent } from '../utils/appErrors';
 import { resolveEstimatedLengthCm } from '../utils/hairLength';
@@ -145,6 +145,16 @@ const normalizeAnalysis = (data, donationRequirementContext = null) => {
       .map((item) => item.notes),
   ].filter(Boolean).join(' ');
   const dandruffDetected = data?.dandruff_detected === true || hasVisibleDandruffEvidence(scalpFindingEvidenceText);
+  const visibleConcerns = Array.isArray(data?.visible_concerns)
+    ? data.visible_concerns.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+  const visibleConditionStatus = data?.visible_condition_status === 'Visible Concerns Detected'
+    || visibleConcerns.length
+    || dandruffDetected
+    || toNumberOrDefault(data?.dryness_level, 0) >= 7
+    || toNumberOrDefault(data?.damage_level, 0) >= 7
+    ? 'Visible Concerns Detected'
+    : 'No Visible Concerns Detected';
 
   return {
     is_hair_detected: data?.is_hair_detected !== false,
@@ -154,10 +164,21 @@ const normalizeAnalysis = (data, donationRequirementContext = null) => {
     estimated_length: resolveEstimatedLengthCm(data),
     length_measurable: data?.length_measurable !== false && resolveEstimatedLengthCm(data) != null,
     length_limit_reason: data?.length_limit_reason || '',
-    detected_color: data?.detected_color || 'Black',
-    detected_texture: data?.detected_texture || 'Straight',
-    detected_density: data?.detected_density || 'Medium',
+    detected_color: data?.detected_color || 'Unable to determine',
+    detected_texture: data?.detected_texture || 'Unable to determine',
+    detected_density: data?.detected_density || 'Unable to determine',
     detected_condition: data?.detected_condition || 'Needs manual hair review',
+    visible_condition_status: visibleConditionStatus,
+    visible_concerns: visibleConcerns,
+    assessment_consistency: Array.isArray(data?.assessment_consistency)
+      ? data.assessment_consistency
+      : [],
+    self_assessment_conflicts: Array.isArray(data?.self_assessment_conflicts)
+      ? data.self_assessment_conflicts
+      : [],
+    reference_image_context: data?.reference_image_context && typeof data.reference_image_context === 'object'
+      ? data.reference_image_context
+      : { status: 'not_configured', active_reference_count: 0 },
     chemical_treatment_detected: data?.chemical_treatment_detected === true,
     colored_hair_detected: data?.colored_hair_detected === true,
     bleached_hair_detected: data?.bleached_hair_detected === true,
@@ -179,15 +200,15 @@ const normalizeAnalysis = (data, donationRequirementContext = null) => {
     dandruff_severity: data?.dandruff_severity || (dandruffDetected ? 'mild' : 'none'),
     dandruff_notes: data?.dandruff_notes || (
       dandruffDetected
-        ? 'Dandruff-like flakes were observed in the uploaded scalp or root views.'
-        : 'No visible dandruff-like flakes were observed in the uploaded views.'
+        ? 'Visible flake-like particles were observed in the uploaded scalp or root views.'
+        : 'No visible flake-like particles were observed in the uploaded views.'
     ),
     lice_detected: data?.lice_detected === true,
     lice_confidence: data?.lice_confidence || (data?.lice_detected === true ? 'medium' : 'none'),
     lice_notes: data?.lice_notes || (
       data?.lice_detected === true
-        ? 'Visible lice or nit-like signs were observed; this screening is not a medical diagnosis.'
-        : 'No visible lice or nit-like signs were observed in the uploaded views.'
+        ? 'Possible nit-like signs were observed; this visible screening is not a diagnosis.'
+        : 'No possible nit-like signs were observed in the uploaded views.'
     ),
     improvement_tracking_status: data?.improvement_tracking_status || 'Needs improvement tracking',
     improvement_recommendation: data?.improvement_recommendation || 'Keep tracking hair length and condition with future CheckHair scans before donating.',
@@ -312,27 +333,6 @@ const selectVerifiedImagePayloads = (images = []) => images.map((image) => {
   };
 });
 
-const isStaleHairEndsRequirementError = (message = '') => {
-  const normalized = String(message || '').toLowerCase();
-  return normalized.includes('required hair views') && normalized.includes('hair ends close-up');
-};
-
-const buildHairEndsCompatibilityImage = (images = []) => {
-  const sourceImage = images.find((image) => String(image?.viewKey || '').toLowerCase() === hairSubmissionImageTypes.sideProfile)
-    || images.find((image) => String(image?.viewKey || '').toLowerCase() === hairSubmissionImageTypes.frontView)
-    || images.find((image) => image?.dataUrl)
-    || null;
-
-  if (!sourceImage) return null;
-
-  return {
-    ...sourceImage,
-    viewKey: hairSubmissionImageTypes.hairEndsCloseUp,
-    viewLabel: 'Hair Ends Close-Up',
-    compatibilityDuplicate: true,
-  };
-};
-
 const estimateImagePayloadBytes = (images = []) => (
   (images || []).reduce((total, image) => total + (image?.base64 ? image.base64.length : 0), 0)
 );
@@ -411,9 +411,9 @@ const buildLowConfidenceFallbackAnalysis = ({ images = [], message = '' } = {}) 
       notes: 'The AI provider received this view but returned limited structured detail, so the hair wellness result is low confidence.',
     })),
     estimated_length: 0,
-    detected_color: 'Black',
-    detected_texture: 'Straight',
-    detected_density: 'Medium',
+    detected_color: 'Unable to determine',
+    detected_texture: 'Unable to determine',
+    detected_density: 'Unable to determine',
     detected_condition: 'Needs manual hair review',
     visible_damage_notes: 'Hair is visible, but the AI provider did not return enough detail for a strong condition reading.',
     confidence_score: 0.35,
@@ -430,10 +430,10 @@ const buildLowConfidenceFallbackAnalysis = ({ images = [], message = '' } = {}) 
     scalp_coverage_notes: 'Hair and scalp view were submitted; coverage should be tracked again in the next scan for a stronger comparison.',
     dandruff_detected: false,
     dandruff_severity: 'none',
-    dandruff_notes: 'No visible dandruff-like flakes were confirmed in this low-confidence fallback.',
+    dandruff_notes: 'No visible scalp flaking was confirmed in this low-confidence fallback.',
     lice_detected: false,
     lice_confidence: 'none',
-    lice_notes: 'No visible lice or nit-like signs were confirmed in this low-confidence fallback.',
+    lice_notes: 'No visible nit-like signs were confirmed in this low-confidence fallback.',
     improvement_tracking_status: 'Needs improvement tracking',
     improvement_recommendation: 'Focus on gentle hair care, scalp comfort, and length retention. Keep tracking changes over time before deciding on donation readiness.',
     decision: 'Not eligible for donation yet',
@@ -718,7 +718,6 @@ export const analyzeHairPhotos = async ({
     });
 
     let functionResult = null;
-    let addedStaleHairEndsCompatibilityView = false;
     for (let attempt = 1; attempt <= HAIR_ANALYSIS_MAX_INVOKE_ATTEMPTS; attempt += 1) {
       functionResult = await invokeEdgeFunction(hairAnalysisFunctionName, {
         body: payload,
@@ -734,11 +733,6 @@ export const analyzeHairPhotos = async ({
       const resolvedErrorMessage = errorPayload?.error || await resolveFunctionErrorMessage(functionResult.error);
       const normalizedErrorType = String(errorPayload?.error_type || '').trim().toLowerCase();
       const retryAfterSeconds = providerRequestAttempted ? errorPayload?.retry_after_seconds ?? null : null;
-      const canRetryWithStaleHairEndsCompatibility = (
-        !addedStaleHairEndsCompatibilityView
-        && payload.images.length === 3
-        && isStaleHairEndsRequirementError(resolvedErrorMessage)
-      );
       const isRetryableProviderBusyError = (
         edgeFunctionInvoked
         && providerRequestAttempted
@@ -753,7 +747,6 @@ export const analyzeHairPhotos = async ({
       const canRetry = (
         isRetryableProviderBusyError
         || isRetryableProviderOutputFailure
-        || canRetryWithStaleHairEndsCompatibility
       )
         && attempt < HAIR_ANALYSIS_MAX_INVOKE_ATTEMPTS;
 
@@ -799,24 +792,6 @@ export const analyzeHairPhotos = async ({
           providerRequestAttempted,
           providerResponseStatus,
         };
-      }
-
-      if (canRetryWithStaleHairEndsCompatibility) {
-        const compatibilityImage = buildHairEndsCompatibilityImage(payload.images);
-        if (compatibilityImage) {
-          payload.images = [...payload.images, compatibilityImage];
-          addedStaleHairEndsCompatibilityView = true;
-
-          logAppEvent('hairAnalysis.invoke', 'Retrying hair analysis with compatibility view for stale Hair Ends server requirement.', {
-            functionName: hairAnalysisFunctionName,
-            attempt,
-            imageCount: payload.images.length,
-            originalRequiredPhotoCount: 3,
-            staleRequirement: 'Hair Ends Close-Up',
-          }, 'warn');
-
-          continue;
-        }
       }
 
       if (canRetry) {

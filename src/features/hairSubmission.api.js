@@ -10,6 +10,7 @@ const hairSubmissionImagesTable = 'Hair_Submission_Images';
 const hairSubmissionLogisticsTable = 'Hair_Submission_Logistics';
 const hairBundleTrackingHistoryTable = 'Hair_Bundle_Tracking_History';
 const aiScreeningsTable = 'AI_Screenings';
+const hairAnalysisReferenceImagesTable = 'hair_analysis_reference_images';
 const donationRequirementsTable = 'wig_requirements';
 const logisticsSettingsTable = 'Logistics_Settings';
 const donationCertificatesTable = 'Donation_Certificates';
@@ -21,6 +22,30 @@ const salonOperatingHoursTable = 'Salon_Operating_Hours';
 const salonScheduleOverridesTable = 'Salon_Schedule_Overrides';
 const salonAppointmentStatusHistoryTable = 'Salon_Appointment_Status_History';
 const CM_PER_INCH = 2.54;
+
+export const fetchActiveHairAnalysisReferenceImages = async ({ usage = 'ui', expiresIn = 600 } = {}) => {
+  let query = supabase
+    .from(hairAnalysisReferenceImagesTable)
+    .select('reference_image_id, reference_category, reference_value, title, description, storage_bucket, storage_path, use_for_ai, use_for_donor_ui, sort_order')
+    .eq('is_active', true)
+    .order('sort_order', { ascending: true });
+
+  query = usage === 'ai' ? query.eq('use_for_ai', true) : query.eq('use_for_donor_ui', true);
+  const { data, error } = await query;
+  if (error) return { data: [], error };
+
+  const rows = await Promise.all((data || []).map(async (row) => {
+    const { data: signedData, error: signedError } = await supabase.storage
+      .from(row.storage_bucket)
+      .createSignedUrl(row.storage_path, expiresIn);
+    return {
+      ...row,
+      signed_url: signedError ? '' : signedData?.signedUrl || '',
+    };
+  }));
+
+  return { data: rows.filter((row) => row.signed_url), error: null };
+};
 
 const hairSubmissionSelect = `
   submission_id:Submission_ID,
@@ -440,6 +465,8 @@ const isUnclearScreeningValue = (value = '') => {
     !key
     || key === 'unclear'
     || key === 'unknown'
+    || key === 'unabletodetermine'
+    || key === 'undetermined'
     || key === 'notsure'
     || key === 'notdetected'
     || key === 'notapplicable'
@@ -477,9 +504,9 @@ const normalizeAiScreeningInsertPayload = (payload = {}) => {
   const normalizedPayload = {
     ...payload,
     estimated_length: estimatedLength,
-    detected_color: screeningStringOrDefault(payload?.detected_color, 'Black'),
-    detected_texture: screeningStringOrDefault(payload?.detected_texture, 'Straight'),
-    detected_density: screeningStringOrDefault(payload?.detected_density, 'Medium'),
+    detected_color: screeningStringOrDefault(payload?.detected_color, 'Unable to determine'),
+    detected_texture: screeningStringOrDefault(payload?.detected_texture, 'Unable to determine'),
+    detected_density: screeningStringOrDefault(payload?.detected_density, 'Unable to determine'),
     detected_condition: screeningStringOrDefault(payload?.detected_condition, 'Needs manual hair review'),
     shedding_level: normalizeSheddingLevelForDb(payload?.shedding_level),
     visible_scalp_area: screeningStringOrDefault(payload?.visible_scalp_area, 'low'),
@@ -1158,13 +1185,13 @@ export const createAiScreening = async (payload) => {
       Dandruff_Detected: payload?.dandruff_detected === true,
       Dandruff_Severity: screeningStringOrDefault(payload?.dandruff_severity, payload?.dandruff_detected === true ? 'mild' : 'none'),
       Dandruff_Notes: nonEmptyString(payload?.dandruff_notes, payload?.dandruff_detected === true
-        ? 'Dandruff-like flakes were observed in the uploaded scalp or root views.'
-        : 'No visible dandruff-like flakes were observed in the uploaded views.'),
+        ? 'Visible flake-like particles were observed in the uploaded scalp or root views.'
+        : 'No visible scalp flaking was observed in the uploaded views.'),
       Lice_Detected: payload?.lice_detected === true,
       Lice_Confidence: screeningStringOrDefault(payload?.lice_confidence, payload?.lice_detected === true ? 'medium' : 'none'),
       Lice_Notes: nonEmptyString(payload?.lice_notes, payload?.lice_detected === true
-        ? 'Visible lice or nit-like signs were observed; this screening is not a medical diagnosis.'
-        : 'No visible lice or nit-like signs were observed in the uploaded views.'),
+        ? 'Possible nit-like signs were observed; this visible screening is not a diagnosis.'
+        : 'No visible nit-like signs were observed in the uploaded views.'),
       Improvement_Tracking_Status: nonEmptyString(payload?.improvement_tracking_status, 'Needs improvement tracking'),
       Improvement_Recommendation: nonEmptyString(payload?.improvement_recommendation, 'Keep tracking hair length and condition with future CheckHair scans before donating.'),
       // PostgreSQL replaces this placeholder with its current derived display
@@ -2579,6 +2606,39 @@ export const fetchSalonDonationAppointmentBySubmissionId = async (submissionId) 
     .maybeSingle();
 
   return { data: result.data || null, error: result.error };
+};
+
+export const fetchSalonDonationAppointmentsByUserId = async (userId, limit = 100) => {
+  const resolvedUserId = await resolveSubmissionUserId(userId);
+  if (resolvedUserId.error) {
+    return { data: [], error: resolvedUserId.error };
+  }
+
+  const result = await supabase
+    .from(salonDonationAppointmentsTable)
+    .select(`
+      appointment_id:Appointment_ID,
+      user_id:User_ID,
+      submission_id:Hair_Submission_ID,
+      appointment_start_at:Appointment_Start_At,
+      appointment_end_at:Appointment_End_At,
+      status:Status,
+      contact_name:Contact_Name,
+      contact_email:Contact_Email,
+      contact_number:Contact_Number,
+      booking_source:Booking_Source,
+      checked_in_at:Checked_In_At,
+      completed_at:Completed_At,
+      cancelled_at:Cancelled_At,
+      cancellation_reason:Cancellation_Reason,
+      created_at:Created_At,
+      updated_at:Updated_At
+    `)
+    .eq('User_ID', resolvedUserId.userId)
+    .order('Appointment_Start_At', { ascending: false })
+    .limit(Math.max(1, Number(limit) || 100));
+
+  return { data: result.data || [], error: result.error };
 };
 
 export const fetchLogisticsDonationByWaybill = async (waybillCode = '') => {

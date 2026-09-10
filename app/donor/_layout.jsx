@@ -9,6 +9,7 @@ const DONOR_NAV_HIDDEN_PATHS = new Set([
   '/donor/signup',
   '/donor/notifications',
   '/donor/donation-history',
+  '/donor/activity-history-details',
   '/donor/achievements',
   '/donor/hair-check-details',
 ]);

@@ -27,6 +27,7 @@ import {
   getHairScreeningMood,
 } from '../../features/hairScreeningPresentation';
 import hairAnalysisAiIcon from '../../assets/images/hair-analysis-ai-icon.png';
+import { formatHairAnalysisDateTime, getHairAnalysisAvailability } from '../../features/hairAnalysisAvailability';
 
 const CAPTURE_NOISE_PATTERNS = [
   'retake', 'lighting', 'image quality', 'photo quality', 'clearer photo',
@@ -36,7 +37,6 @@ const CAPTURE_NOISE_PATTERNS = [
   'reupload', 'all views are', 'photo is clear', 'visible in the',
 ];
 const CARE_SAFETY_NOTE = 'If you have allergies, scalp irritation, or sensitivity, consult a qualified hair or scalp care professional before trying new ingredients.';
-const HAIR_ANALYSIS_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000;
 
 const ADVERTISED_RECOMMENDATION_PATTERNS = [
   /\bDove\b/gi,
@@ -103,17 +103,6 @@ const formatSavedDateTime = (value) => (
 const formatTimeLabel = (value) => (
   new Intl.DateTimeFormat('en-US', {
     timeZone: 'Asia/Manila',
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(new Date(value))
-);
-
-const formatNextAnalysisDateTime = (value) => (
-  new Intl.DateTimeFormat('en-US', {
-    timeZone: 'Asia/Manila',
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
     hour: 'numeric',
     minute: '2-digit',
   }).format(new Date(value))
@@ -477,7 +466,7 @@ export function HairLogDetailModal({
       ? 'Analysis continued with user-approved photos after validation warning. The result is low-confidence and should not be used for donation approval.'
       : 'Use this scan as a baseline and compare the next check for changes.');
   const assessmentMetrics = [
-    { label: 'Condition', value: screening?.detected_condition || 'Not detected', icon: 'head-heart-outline', wide: true },
+    { label: 'Visible condition', value: assessment.label || 'Not detected', icon: 'head-heart-outline', wide: true },
     { label: 'Current eligibility', value: currentEligibilityLabel, icon: 'content-cut', wide: true },
     currentEligibility?.reason
       ? { label: 'Current requirement result', value: currentEligibility.reason, icon: 'information-outline', wide: true }
@@ -496,21 +485,19 @@ export function HairLogDetailModal({
       icon: 'head-alert-outline',
     },
     { label: 'Shedding', value: screening?.shedding_level || 'Not detected', icon: 'head-minus-outline' },
-    { label: 'Dandruff', value: formatDetectedLabel(screening?.dandruff_detected), icon: 'head-snowflake-outline' },
-    { label: 'Dandruff severity', value: screening?.dandruff_severity || 'None', icon: 'snowflake-alert' },
-    { label: 'Lice / nits', value: formatDetectedLabel(screening?.lice_detected), icon: 'shield-bug-outline' },
-    { label: 'Lice confidence', value: screening?.lice_confidence || 'None', icon: 'shield-check-outline' },
+    { label: 'Visible scalp flaking', value: formatDetectedLabel(screening?.dandruff_detected), icon: 'head-snowflake-outline' },
+    { label: 'Flaking visibility', value: screening?.dandruff_severity || 'None', icon: 'snowflake-alert' },
+    { label: 'Possible nit-like signs', value: formatDetectedLabel(screening?.lice_detected), icon: 'shield-bug-outline' },
+    { label: 'Visual confidence', value: screening?.lice_confidence || 'None', icon: 'shield-check-outline' },
     { label: 'Tracking status', value: screening?.improvement_tracking_status || 'Not detected', icon: 'head-sync-outline', wide: true },
   ].filter(Boolean);
-  const nextAnalysisAtMs = screening?.created_at
-    ? new Date(screening.created_at).getTime() + HAIR_ANALYSIS_COOLDOWN_MS
-    : NaN;
-  const nextAnalysisRemainingMs = Number.isFinite(nextAnalysisAtMs)
-    ? nextAnalysisAtMs - nowMs
+  const analysisAvailability = getHairAnalysisAvailability(screening?.created_at, nowMs);
+  const canAnalyzeAgain = !analysisAvailability.isLocked;
+  const nextAnalysisRemainingMs = analysisAvailability.nextCheckAt
+    ? Math.max(0, analysisAvailability.nextCheckAt.getTime() - nowMs)
     : 0;
-  const canAnalyzeAgain = !Number.isFinite(nextAnalysisAtMs) || nextAnalysisRemainingMs <= 0;
-  const nextAnalysisLabel = Number.isFinite(nextAnalysisAtMs)
-    ? formatNextAnalysisDateTime(nextAnalysisAtMs)
+  const nextAnalysisLabel = analysisAvailability.nextCheckAt
+    ? formatHairAnalysisDateTime(analysisAvailability.nextCheckAt)
     : '';
   const insightBullets = Array.from(new Set([
     screening?.donation_readiness_note,

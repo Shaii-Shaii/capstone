@@ -21,10 +21,12 @@ import {
   resolveDatabaseUserId,
 } from './profile/api/profile.api';
 import { writeAuditLog } from '../utils/appErrors';
+import { getHairAnalysisAvailability } from './hairAnalysisAvailability';
 
 const buildStorageKey = ({ userId, role }) => `${notificationStoragePrefix}.${role}.${userId}`;
 const DONOR_REMINDER_EMAIL_FUNCTION = 'send-donor-hair-analysis-reminder';
 const DRIVE_REMINDER_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
+const HAIR_CHECK_EVENT_REMINDER_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const PUSH_RECEIPT_CHECK_INTERVAL_MS = 15 * 60 * 1000;
 const reminderEmailAttemptCache = new Map();
 const pushReceiptAttemptCache = new Map();
@@ -177,8 +179,11 @@ const triggerHairAnalysisReminderEmail = async ({
   databaseUserId,
   userEmail,
   localDateKey,
+  eventId,
+  eventTitle,
+  eventStartAt,
 }) => {
-  const cacheKey = `${databaseUserId || authUserId || 'anonymous'}:${localDateKey}`;
+  const cacheKey = `${databaseUserId || authUserId || 'anonymous'}:event:${eventId}`;
   if (reminderEmailAttemptCache.has(cacheKey)) {
     return reminderEmailAttemptCache.get(cacheKey);
   }
@@ -189,6 +194,9 @@ const triggerHairAnalysisReminderEmail = async ({
       databaseUserId,
       userEmail,
       localDate: localDateKey,
+      eventId,
+      eventTitle,
+      eventStartAt,
     },
   }).catch((error) => ({ data: null, error }));
 
@@ -587,33 +595,15 @@ const buildDonorDerivedNotifications = async ({
   userEmail = '',
 }) => {
   const notifications = [];
-  const { data: submissions, error } = await fetchHairSubmissionsByUserId(userId, 6);
+  const [{ data: submissions, error }, latestAnalysisResult] = await Promise.all([
+    fetchHairSubmissionsByUserId(userId, 6),
+    fetchLatestHairAnalysisSummaryByUserId(userId, 60).catch(() => ({ data: null, error: null })),
+  ]);
 
   if (error) {
     throw new Error(error.message || 'Unable to load donor notifications.');
   }
   const todayLocalDateKey = toLocalDateKey(new Date());
-
-  if (!hasScreeningForLocalDay(submissions || [], todayLocalDateKey)) {
-    notifications.push(buildNotification({
-      dedupeKey: `${notificationTypes.hairAnalysisReminder}:${todayLocalDateKey}`,
-      type: notificationTypes.hairAnalysisReminder,
-      title: 'Hair analysis reminder',
-      message: 'You have not checked your hair today.',
-      createdAt: new Date().toISOString(),
-      referenceType: 'route',
-      referenceId: '/donor/donations',
-    }));
-
-    if (databaseUserId || userId) {
-      await triggerHairAnalysisReminderEmail({
-        authUserId: userId,
-        databaseUserId,
-        userEmail,
-        localDateKey: todayLocalDateKey,
-      });
-    }
-  }
 
   const submissionIds = (submissions || [])
     .map((submission) => submission?.submission_id)
@@ -734,6 +724,8 @@ const buildDonorDerivedNotifications = async ({
 
   if (databaseUserId) {
     const registeredDrivesResult = await fetchRegisteredDonationDrivesByUserId({ databaseUserId, limit: 24 });
+    const latestScreening = latestAnalysisResult?.data?.latestAnalysisEntry?.screening || null;
+    const availability = getHairAnalysisAvailability(latestScreening?.created_at);
     (registeredDrivesResult.data || []).forEach((drive) => {
       const rsvpNotification = buildDriveRsvpNotification(drive);
       if (rsvpNotification) notifications.push(rsvpNotification);
@@ -741,6 +733,35 @@ const buildDonorDerivedNotifications = async ({
       if (shouldIncludeDriveUpdate(drive)) {
         const reminderNotification = buildDriveNotification(drive);
         if (reminderNotification) notifications.push(reminderNotification);
+      }
+
+      const eventStartsAt = drive?.start_date ? new Date(drive.start_date).getTime() : NaN;
+      const untilEvent = eventStartsAt - Date.now();
+      const shouldRemindForHairCheck = Number.isFinite(eventStartsAt)
+        && untilEvent >= 0
+        && untilEvent <= HAIR_CHECK_EVENT_REMINDER_WINDOW_MS
+        && !availability.isLocked;
+      if (shouldRemindForHairCheck) {
+        notifications.push(buildNotification({
+          dedupeKey: `${notificationTypes.hairAnalysisReminder}:event:${drive.donation_drive_id}`,
+          type: notificationTypes.hairAnalysisReminder,
+          title: 'Hair Check before your event',
+          message: `${drive.event_title || 'Your registered donation event'} is coming up. Complete one current Hair Check before attending.`,
+          createdAt: drive.updated_at || new Date().toISOString(),
+          referenceType: 'route',
+          referenceId: '/donor/donations',
+        }));
+        if (databaseUserId || userId) {
+          void triggerHairAnalysisReminderEmail({
+            authUserId: userId,
+            databaseUserId,
+            userEmail,
+            localDateKey: todayLocalDateKey,
+            eventId: drive.donation_drive_id,
+            eventTitle: drive.event_title || 'your registered donation event',
+            eventStartAt: drive.start_date,
+          });
+        }
       }
     });
   }

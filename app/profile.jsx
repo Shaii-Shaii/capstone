@@ -889,76 +889,6 @@ export default function ProfileScreen() {
           </View>
         </View>
 
-        <View style={styles.profileHeroMetricsRow}>
-          {[
-            {
-              key: 'donations',
-              label: t('profile.donations'),
-              value: null,
-              icon: 'donations',
-              route: '/donor/donation-history',
-              emphasized: false,
-            },
-            {
-              key: 'achievements',
-              label: t('profile.achievements'),
-              value: null,
-              icon: 'sparkle',
-              route: '/donor/achievements',
-              emphasized: true,
-            },
-          ].map((item) => (
-            <Pressable
-              key={item.key}
-              accessibilityRole="button"
-              accessibilityLabel={item.label}
-              onPress={() => router.navigate(item.route)}
-              style={({ pressed }) => [styles.profileHeroMetricPressable, pressed ? styles.profileHeroMetricCardPressed : null]}
-            >
-              <LinearGradient
-                colors={item.emphasized
-                  ? [theme.colors.palette.wine600, theme.colors.palette.wine700, theme.colors.palette.wine900]
-                  : ['#FFF9FA', '#F6E6EA', '#F1D8DF']}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={styles.profileHeroMetricCard}
-              >
-                <View style={[
-                  styles.profileHeroMetricIcon,
-                  item.emphasized ? styles.profileHeroMetricIconEmphasized : null,
-                ]}>
-                  <AppIcon
-                    name={item.icon}
-                    size="sm"
-                    color={item.emphasized ? '#FFFFFF' : theme.colors.palette.wine700}
-                  />
-                </View>
-                <Text
-                  numberOfLines={1}
-                  adjustsFontSizeToFit
-                  minimumFontScale={0.82}
-                  style={[
-                    styles.profileHeroMetricTitle,
-                    item.emphasized ? styles.profileHeroMetricTitleEmphasized : null,
-                  ]}
-                >
-                  {item.label}
-                </Text>
-                {item.value != null ? (
-                  <View style={[
-                    styles.profileHeroMetricCount,
-                    item.emphasized ? styles.profileHeroMetricCountEmphasized : null,
-                  ]}>
-                    <Text style={[
-                      styles.profileHeroMetricCountText,
-                      item.emphasized ? styles.profileHeroMetricCountTextEmphasized : null,
-                    ]}>{item.value}</Text>
-                  </View>
-                ) : null}
-              </LinearGradient>
-            </Pressable>
-          ))}
-        </View>
     </LinearGradient>
   );
 
@@ -1183,6 +1113,14 @@ export default function ProfileScreen() {
               title={t('profile.personalInformation')}
               subtitle="Update your name, contact details, and address."
               onPress={() => setMode('edit')}
+              roles={roles}
+              textColor={primaryTextColor}
+            />
+            <ProfileMenuRow
+              icon="changePassword"
+              title={t('profile.changePassword')}
+              subtitle={t('profile.changePasswordSubtitle')}
+              onPress={() => setMode('password')}
               roles={roles}
               textColor={primaryTextColor}
             />
@@ -2339,90 +2277,6 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.caption,
     color: '#F9EDEF',
-  },
-  profileHeroMetricsRow: {
-    width: '100%',
-    alignSelf: 'stretch',
-    flexDirection: 'row',
-    alignItems: 'stretch',
-    justifyContent: 'flex-start',
-    gap: theme.spacing.sm,
-  },
-  profileHeroMetricPressable: {
-    flexGrow: 1,
-    flexShrink: 1,
-    flexBasis: 0,
-    minWidth: 0,
-    maxWidth: '50%',
-    alignSelf: 'stretch',
-    borderRadius: 16,
-    overflow: 'hidden',
-    ...theme.shadows.soft,
-  },
-  profileHeroMetricCard: {
-    flex: 1,
-    alignSelf: 'stretch',
-    minHeight: 52,
-    borderWidth: 1,
-    borderColor: 'rgba(116,20,43,0.08)',
-    borderRadius: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    gap: 6,
-  },
-  profileHeroMetricCardPressed: {
-    opacity: 0.82,
-    transform: [{ scale: 0.98 }],
-  },
-  profileHeroMetricIcon: {
-    width: 28,
-    height: 28,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-    borderWidth: 1,
-    borderColor: 'rgba(116,20,43,0.10)',
-    backgroundColor: 'rgba(116,20,43,0.08)',
-  },
-  profileHeroMetricIconEmphasized: {
-    borderColor: 'rgba(255,255,255,0.18)',
-    backgroundColor: 'rgba(255,255,255,0.16)',
-  },
-  profileHeroMetricTitle: {
-    flex: 1,
-    minWidth: 0,
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.compact.bodySm,
-    fontWeight: theme.typography.weights.bold,
-    color: theme.colors.palette.wine900,
-  },
-  profileHeroMetricTitleEmphasized: {
-    color: '#FFFFFF',
-  },
-  profileHeroMetricCount: {
-    minWidth: 24,
-    height: 24,
-    borderRadius: 12,
-    paddingHorizontal: 6,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-    backgroundColor: 'rgba(114,20,43,0.10)',
-  },
-  profileHeroMetricCountEmphasized: {
-    backgroundColor: 'rgba(255,255,255,0.18)',
-  },
-  profileHeroMetricCountText: {
-    fontFamily: theme.typography.fontFamilyDisplay,
-    fontSize: theme.typography.compact.bodySm,
-    fontWeight: theme.typography.weights.bold,
-    color: theme.colors.palette.wine900,
-  },
-  profileHeroMetricCountTextEmphasized: {
-    color: '#FFFFFF',
   },
   profileActionGradientBorder: {
     flex: 1,

@@ -21,6 +21,10 @@ import {
   getCachedHairAnalysisHomeData,
   setCachedHairAnalysisHomeData,
 } from '../../src/features/hairAnalysisHomeCache';
+import {
+  formatHairAnalysisDateTime,
+  getHairAnalysisAvailability,
+} from '../../src/features/hairAnalysisAvailability';
 import { buildProfileCompletionMeta } from '../../src/features/profile/services/profile.service';
 import {
   getCanonicalHairAssessment,
@@ -100,8 +104,8 @@ const getMoistureLabel = (screening = null) => {
 const localizeAnalysisValue = (value, t) => {
   const normalized = String(value || '').trim().toLowerCase();
   if (!normalized || normalized === 'n/a') return value || 'N/A';
-  if (normalized.includes('needs care')) return t('analysis.needsCare');
-  if (normalized.includes('healthy')) return t('analysis.healthy');
+  if (normalized.includes('needs care')) return 'Visible Concerns Detected';
+  if (normalized.includes('healthy')) return 'No Visible Concerns Detected';
   if (normalized.includes('damage')) return t('analysis.damage');
   if (normalized.includes('wavy')) return t('analysis.wavy');
   if (normalized.includes('straight')) return t('analysis.straight');
@@ -122,8 +126,6 @@ const formatRecentLogDate = (value, locale = 'en-US') => {
     minute: '2-digit',
   }).format(new Date(value));
 };
-
-const WEEKLY_SCAN_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
 
 function HairConditionSummaryCard({ entry, eligibility = null, onPress }) {
   const { resolvedTheme } = useAuth();
@@ -493,17 +495,14 @@ function HairAnalysisHomeModule() {
     : getMonthLabel(calendarCursor, locale);
   const isProfileComplete = profileCompletionMeta.isComplete;
   const isFirstHairCheck = screenings.length === 0;
-  const latestScreeningAtMs = latestScreening?.created_at ? new Date(latestScreening.created_at).getTime() : NaN;
-  const isWeeklyScanLocked = Number.isFinite(latestScreeningAtMs)
-    ? Date.now() < (latestScreeningAtMs + WEEKLY_SCAN_INTERVAL_MS)
-    : false;
+  const hairAnalysisAvailability = React.useMemo(
+    () => getHairAnalysisAvailability(latestScreening?.created_at),
+    [latestScreening?.created_at]
+  );
+  const isWeeklyScanLocked = hairAnalysisAvailability.isLocked;
 
   const latestAssessment = React.useMemo(
     () => getCanonicalHairAssessment(latestScreening),
-    [latestScreening]
-  );
-  const latestMood = React.useMemo(
-    () => getHairScreeningMood(latestScreening),
     [latestScreening]
   );
   const todayCondition = localizeAnalysisValue(latestAssessment.label, t);
@@ -686,10 +685,13 @@ function HairAnalysisHomeModule() {
                 <Text style={styles.healthOverviewEyebrow}>{t('analysis.latestResult')}</Text>
                 <Text numberOfLines={2} style={styles.healthOverviewTitle}>{todayCondition}</Text>
                 {healthRangeLabel ? <Text style={styles.healthOverviewRange}>{healthRangeLabel}</Text> : <Text style={styles.healthOverviewRange}>{t('analysis.completeFirst')}</Text>}
-              </View>
-              <View style={styles.healthMoodRing}>
-                <MaterialCommunityIcons name={latestMood.icon} size={31} color="#FFFFFF" />
-                <Text numberOfLines={1} style={styles.healthMoodLabel}>{localizeAnalysisValue(latestMood.label, t)}</Text>
+                {hairAnalysisAvailability.hasPreviousCheck ? (
+                  <Text style={styles.healthOverviewRange}>
+                    Last check: {formatHairAnalysisDateTime(hairAnalysisAvailability.lastCheckAt)}{hairAnalysisAvailability.isLocked
+                      ? ` • Next available: ${formatHairAnalysisDateTime(hairAnalysisAvailability.nextCheckAt)}`
+                      : ' • New check available now'}
+                  </Text>
+                ) : null}
               </View>
             </View>
 
@@ -1197,25 +1199,6 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.compact.caption,
     color: 'rgba(255, 255, 255, 0.78)',
-  },
-  healthMoodRing: {
-    width: 78,
-    height: 78,
-    borderRadius: 39,
-    borderWidth: 3,
-    borderColor: 'rgba(255, 255, 255, 0.82)',
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 1,
-  },
-  healthMoodLabel: {
-    maxWidth: 66,
-    fontFamily: theme.typography.fontFamily,
-    fontSize: 8.5,
-    fontWeight: theme.typography.weights.bold,
-    color: '#FFFFFF',
-    textAlign: 'center',
   },
   healthMetricsRow: {
     minHeight: 54,

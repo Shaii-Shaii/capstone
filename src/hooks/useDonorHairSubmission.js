@@ -272,7 +272,7 @@ const mapAnalysisError = (message = '', extras = {}) => {
   }
 
   if (normalized.includes('not clear') || normalized.includes('unclear') || normalized.includes('blur')) {
-    return createErrorState('Photos not clear, please re-capture', 'Photos not clear, please re-capture. Hold the camera steady, use bright light, and keep the front, left side, right side, scalp, hair ends, and back hair photos clear.');
+    return createErrorState('Photos not clear, please re-capture', 'Hold the camera steady, use bright light, and keep the back hair, both back/side views, and scalp/root area clear.');
   }
 
   if (
@@ -393,7 +393,7 @@ const mapAnalysisError = (message = '', extras = {}) => {
   if (String(extras?.errorType || '').trim().toLowerCase() === 'photo_quality') {
     return createErrorState(
       'Retake Photos',
-      message || 'Please retake the front, left side, right side, scalp, hair ends, and back hair photos in bright light with one person visible and the scalp/crown area clear.',
+      message || 'Please retake only the affected hair photo in bright, even light with the requested hair area clear.',
       { errorType: 'photo_quality', photoRetakeRequired: true }
     );
   }
@@ -415,21 +415,16 @@ const mapAnalysisError = (message = '', extras = {}) => {
   }
 
   if (
-    normalized.includes('front view photo')
-    || normalized.includes('left side photo')
-    || normalized.includes('side profile photo')
-    || normalized.includes('right side photo')
-    || normalized.includes('side view photo')
-    || normalized.includes('back view photo')
-    || normalized.includes('back hair photo')
-    || normalized.includes('hair ends close-up')
-    || normalized.includes('hair scalp')
+    normalized.includes('back hair')
+    || normalized.includes('left back/side hair')
+    || normalized.includes('right back/side hair')
+    || normalized.includes('scalp / root area')
   ) {
     return createErrorState('More Hair Views Needed', message);
   }
 
   if (normalized.includes('not clear enough for a reliable hair analysis')) {
-    return createErrorState('Photos Need Better Clarity', 'The uploaded hair photos were too unclear for a reliable result. Retake the front, left side, right side, scalp, hair ends, and back hair photos in brighter light with the hair and scalp/crown area clear.');
+    return createErrorState('Photos Need Better Clarity', 'One or more required hair areas were too unclear for a reliable result. Retake only the highlighted photo in brighter, even light.');
   }
 
   if (normalized.includes('invalid json') || normalized.includes('could not be parsed')) {
@@ -546,6 +541,7 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
     latestCertificate: null,
     latestSubmission: null,
     latestSubmissionDetail: null,
+    referenceImages: [],
   });
   const [isPickingImages, setIsPickingImages] = useState(false);
   const [isCapturingImages, setIsCapturingImages] = useState(false);
@@ -604,6 +600,7 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
         latestCertificate: result.latestCertificate,
         latestSubmission: result.latestSubmission,
         latestSubmissionDetail: result.latestSubmissionDetail,
+        referenceImages: result.referenceImages || [],
       });
 
       logAppEvent('donor_hair_submission.context', 'Hair analyzer context loaded.', {
@@ -1104,6 +1101,7 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
     latestCertificate: analyzerContext.latestCertificate,
     latestSubmission: analyzerContext.latestSubmission,
     latestSubmissionDetail: analyzerContext.latestSubmissionDetail,
+    referenceImages: analyzerContext.referenceImages,
     error,
     successMessage,
     isLoadingContext,

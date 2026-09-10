@@ -1,6 +1,8 @@
 import React from 'react';
 import {
   ActivityIndicator,
+  Animated,
+  Easing,
   Pressable,
   StyleSheet,
   Text,
@@ -9,6 +11,7 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { DashboardLayout } from './DashboardLayout';
 import { DashboardHeaderSurface } from './DashboardHeaderSurface';
 import { DonorTopBar } from '../donor/DonorTopBar';
@@ -18,47 +21,23 @@ import { useAuth } from '../../providers/AuthProvider';
 import { getDonorDonationHistory } from '../../features/donorDonations.service';
 import { resolveThemeRoles, theme } from '../../design-system/theme';
 
-const formatStatusLabel = (value = '') => {
-  const normalized = String(value || '').trim();
-  if (!normalized) return 'Completed';
+const HISTORY_FILTERS = [
+  { key: 'all', label: 'All' },
+  { key: 'event', label: 'Events' },
+  { key: 'donation', label: 'Donations' },
+  { key: 'appointment', label: 'Appointments' },
+  { key: 'analysis', label: 'Hair Analysis' },
+];
 
-  return normalized
-    .split(/[_\s-]+/)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
-    .join(' ');
-};
-
-const getDonationStatusTone = (status = '') => {
-  const normalized = String(status || '').toLowerCase();
-  return {
-    isCancelled: /cancel|reject|deny|fail|void|expire/.test(normalized),
-    isCompleted: /complete|completed|success|approved|received|done|closed/.test(normalized),
-  };
-};
-
-const toHistoryDate = (value) => {
+const toDate = (value) => {
   if (!value) return null;
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 };
 
-const getHistoryDateKey = (value) => {
-  const parsed = toHistoryDate(value);
-  if (!parsed) return 'date-unavailable';
-  return `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, '0')}-${String(parsed.getDate()).padStart(2, '0')}`;
-};
-
-const getHistorySectionLabel = (value) => {
-  const parsed = toHistoryDate(value);
-  if (!parsed) return 'Earlier activity';
-
-  const today = new Date();
-  const yesterday = new Date(today);
-  yesterday.setDate(today.getDate() - 1);
-
-  if (parsed.toDateString() === today.toDateString()) return 'Today';
-  if (parsed.toDateString() === yesterday.toDateString()) return 'Yesterday';
+const formatActivityDate = (value) => {
+  const parsed = toDate(value);
+  if (!parsed) return 'Date unavailable';
   return parsed.toLocaleDateString('en-PH', {
     month: 'long',
     day: 'numeric',
@@ -66,141 +45,99 @@ const getHistorySectionLabel = (value) => {
   });
 };
 
-const groupHistoryByDate = (items = []) => {
-  const groups = [];
-  const groupByKey = new Map();
+const getMonthKey = (value) => {
+  const parsed = toDate(value);
+  if (!parsed) return 'earlier';
+  return `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, '0')}`;
+};
 
+const getMonthLabel = (value) => {
+  const parsed = toDate(value);
+  if (!parsed) return 'Earlier activity';
+  return parsed.toLocaleDateString('en-PH', { month: 'long', year: 'numeric' });
+};
+
+const groupHistoryByMonth = (items = []) => {
+  const groups = [];
+  const byKey = new Map();
   items.forEach((item) => {
-    const key = getHistoryDateKey(item?.timestamp);
-    let group = groupByKey.get(key);
-    if (!group) {
-      group = {
-        key,
-        label: getHistorySectionLabel(item?.timestamp),
-        date: key === 'date-unavailable' ? '' : key,
-        items: [],
-      };
-      groupByKey.set(key, group);
+    const value = item?.activity_date || item?.timestamp;
+    const key = getMonthKey(value);
+    if (!byKey.has(key)) {
+      const group = { key, label: getMonthLabel(value), items: [] };
+      byKey.set(key, group);
       groups.push(group);
     }
-    group.items.push(item);
+    byKey.get(key).items.push(item);
   });
-
   return groups;
 };
 
-const HISTORY_FILTERS = [
-  { key: 'all', label: 'All' },
-  { key: 'event', label: 'Events' },
-  { key: 'donation', label: 'Donations' },
-  { key: 'analysis', label: 'Hair Analysis' },
-  { key: 'certificate', label: 'Certificates' },
-];
-
-const matchesHistoryFilter = (item, filter) => {
-  if (filter === 'all') return true;
-  if (filter === 'donation') return item?.type === 'donation' || item?.type === 'timeline';
-  return item?.type === filter;
-};
-
-const matchesHistorySearch = (item, query) => {
-  const normalizedQuery = String(query || '').trim().toLowerCase();
-  if (!normalizedQuery) return true;
-
-  return [item?.title, item?.description, item?.reference, item?.status, item?.date_label]
+const matchesSearch = (item, query) => {
+  const normalized = String(query || '').trim().toLowerCase();
+  if (!normalized) return true;
+  return [item?.title, item?.related_title, item?.status, item?.reference, item?.date_label]
     .filter(Boolean)
-    .some((value) => String(value).toLowerCase().includes(normalizedQuery));
+    .some((value) => String(value).toLowerCase().includes(normalized));
 };
 
-function DonationHistoryRow({ item, roles, showDivider = true }) {
-  const { isCancelled, isCompleted } = getDonationStatusTone(item?.status);
-  const statusLabel = isCancelled
-    ? 'Cancelled'
-    : isCompleted
-      ? 'Completed'
-      : formatStatusLabel(item?.status);
-  const statusColor = isCancelled
-    ? '#A32121'
-    : roles.iconPrimaryColor;
+const getStatusColors = (status, roles) => {
+  const normalized = String(status || '').toLowerCase();
+  if (/cancel|reject|no show|not accepted/.test(normalized)) {
+    return { text: '#A32121', background: '#FCE8E8' };
+  }
+  if (/complete|accepted|created|received/.test(normalized)) {
+    return { text: '#177245', background: '#E4F5EB' };
+  }
+  return { text: roles.iconPrimaryColor, background: roles.iconPrimarySurface };
+};
 
-  return (
-    <View
-      style={[
-        styles.row,
-        {
-          borderBottomColor: roles.defaultCardBorder,
-          borderBottomWidth: showDivider ? StyleSheet.hairlineWidth : 0,
-        },
-      ]}
-    >
-      <View style={[styles.rowIconWrap, { backgroundColor: roles.iconPrimarySurface }]}>
-        <MaterialCommunityIcons
-          name={item?.icon || 'history'}
-          size={24}
-          color={roles.iconPrimaryColor}
-        />
-      </View>
-
-      <View style={styles.rowCopy}>
-        <View style={styles.rowTop}>
-          <Text numberOfLines={1} style={[styles.rowTitle, { color: roles.headingText }]}>
-            {item?.title || 'Activity update'}
-          </Text>
-          <Text numberOfLines={1} style={[styles.rowStatus, { color: statusColor }]}>
-            {statusLabel}
-          </Text>
-        </View>
-
-        {item?.description ? (
-          <Text numberOfLines={1} style={[styles.rowDescription, { color: roles.bodyText }]}>
-            {item.description}
-          </Text>
-        ) : null}
-
-        {item?.reference ? (
-          <Text numberOfLines={1} style={[styles.referenceText, { color: roles.metaText }]}>
-            {item.reference}
-          </Text>
-        ) : null}
-      </View>
-    </View>
-  );
-}
-
-function HistorySearchControls({
+function HistoryTools({
   roles,
-  searchQuery,
-  onSearchChange,
+  query,
+  onQueryChange,
   activeFilter,
   onFilterChange,
-  showFilters,
+  filtersVisible,
   onToggleFilters,
 }) {
-  const filterIsActive = showFilters || activeFilter !== 'all';
+  const filterReveal = React.useRef(new Animated.Value(filtersVisible ? 1 : 0)).current;
+
+  React.useEffect(() => {
+    const animation = Animated.timing(filterReveal, {
+      toValue: filtersVisible ? 1 : 0,
+      duration: filtersVisible ? 300 : 230,
+      easing: filtersVisible
+        ? Easing.out(Easing.cubic)
+        : Easing.inOut(Easing.quad),
+      useNativeDriver: false,
+    });
+    animation.start();
+    return () => animation.stop();
+  }, [filterReveal, filtersVisible]);
+
+  const hasActiveFilter = activeFilter !== 'all';
 
   return (
-    <View style={styles.stickyTools}>
-      <View style={styles.searchTools}>
+    <View style={styles.tools}>
+      <View style={styles.searchToolsRow}>
         <View style={[
           styles.searchBar,
-          {
-            backgroundColor: roles.defaultCardBackground,
-            borderColor: roles.defaultCardBorder,
-          },
+          { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder },
         ]}>
           <MaterialCommunityIcons name="magnify" size={21} color={roles.metaText} />
           <TextInput
-            value={searchQuery}
-            onChangeText={onSearchChange}
-            placeholder="Search activity"
+            value={query}
+            onChangeText={onQueryChange}
+            placeholder="Search activities"
             placeholderTextColor={roles.metaText}
             returnKeyType="search"
-            style={[styles.searchInput, { color: roles.headingText }]}
             accessibilityLabel="Search activity history"
+            style={[styles.searchInput, { color: roles.headingText }]}
           />
-          {searchQuery ? (
+          {query ? (
             <Pressable
-              onPress={() => onSearchChange('')}
+              onPress={() => onQueryChange('')}
               hitSlop={8}
               accessibilityRole="button"
               accessibilityLabel="Clear search"
@@ -213,25 +150,79 @@ function HistorySearchControls({
         <Pressable
           onPress={onToggleFilters}
           accessibilityRole="button"
-          accessibilityLabel="Filter activity history"
-          accessibilityState={{ expanded: showFilters }}
-          style={[
+          accessibilityLabel={filtersVisible ? 'Hide activity filters' : 'Show activity filters'}
+          accessibilityState={{ expanded: filtersVisible }}
+          style={({ pressed }) => [
             styles.filterButton,
             {
-              backgroundColor: roles.defaultCardBackground,
-              borderColor: filterIsActive ? roles.iconPrimaryColor : roles.defaultCardBorder,
+              backgroundColor: filtersVisible
+                ? theme.colors.palette.wine700
+                : '#FFF4F7',
+              borderColor: theme.colors.palette.wine700,
+              opacity: pressed ? 0.82 : 1,
+              transform: [{ scale: pressed ? 0.96 : 1 }],
             },
           ]}
         >
-          <MaterialCommunityIcons name="filter-variant" size={21} color={roles.iconPrimaryColor} />
-          <Text style={[styles.filterButtonText, { color: roles.headingText }]}>Filter</Text>
+          <View style={styles.filterButtonIcons}>
+            <MaterialCommunityIcons
+              name="filter-variant"
+              size={21}
+              color={filtersVisible ? '#FFE2A8' : theme.colors.palette.wine900}
+            />
+            <Animated.View
+              style={{
+                transform: [{
+                  rotate: filterReveal.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: ['0deg', '180deg'],
+                  }),
+                }],
+              }}
+            >
+              <MaterialCommunityIcons
+                name="chevron-down"
+                size={14}
+                color={filtersVisible ? '#FFE2A8' : theme.colors.palette.wine900}
+              />
+            </Animated.View>
+          </View>
+          {hasActiveFilter ? (
+            <View
+              style={[
+                styles.filterActiveDot,
+                {
+                  backgroundColor: filtersVisible
+                    ? '#FFE2A8'
+                    : theme.colors.palette.wine700,
+                  borderColor: filtersVisible
+                    ? theme.colors.palette.wine700
+                    : '#FFF4F7',
+                },
+              ]}
+            />
+          ) : null}
         </Pressable>
       </View>
 
-      {showFilters ? (
-        <View style={styles.filterOptions}>
+      <Animated.View
+        pointerEvents={filtersVisible ? 'auto' : 'none'}
+        accessibilityElementsHidden={!filtersVisible}
+        importantForAccessibility={filtersVisible ? 'auto' : 'no-hide-descendants'}
+        style={[
+          styles.filterReveal,
+          {
+            height: filterReveal.interpolate({ inputRange: [0, 1], outputRange: [0, 94] }),
+            opacity: filterReveal,
+            transform: [{
+              translateY: filterReveal.interpolate({ inputRange: [0, 1], outputRange: [-8, 0] }),
+            }],
+          },
+        ]}
+      >
+        <View style={styles.filterRow}>
           {HISTORY_FILTERS.map((filter) => {
-            const selected = activeFilter === filter.key;
+            const selected = filter.key === activeFilter;
             return (
               <Pressable
                 key={filter.key}
@@ -241,14 +232,23 @@ function HistorySearchControls({
                 style={[
                   styles.filterChip,
                   {
-                    backgroundColor: selected ? roles.iconPrimarySurface : roles.defaultCardBackground,
-                    borderColor: selected ? roles.iconPrimaryColor : roles.defaultCardBorder,
+                    backgroundColor: selected ? roles.primaryActionBackground : roles.defaultCardBackground,
+                    borderColor: selected ? roles.primaryActionBackground : roles.defaultCardBorder,
                   },
                 ]}
               >
+                {selected ? (
+                  <LinearGradient
+                    pointerEvents="none"
+                    colors={[theme.colors.palette.wine900, theme.colors.palette.wine600]}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                    style={StyleSheet.absoluteFillObject}
+                  />
+                ) : null}
                 <Text style={[
                   styles.filterChipText,
-                  { color: selected ? roles.iconPrimaryColor : roles.bodyText },
+                  { color: selected ? theme.colors.textOnBrand : roles.bodyText },
                 ]}>
                   {filter.label}
                 </Text>
@@ -256,8 +256,125 @@ function HistorySearchControls({
             );
           })}
         </View>
-      ) : null}
+      </Animated.View>
     </View>
+  );
+}
+
+function ActivityCard({ item, roles, onPress, index = 0 }) {
+  const statusColors = getStatusColors(item?.status, roles);
+  const entrance = React.useRef(new Animated.Value(0)).current;
+  const actionLabel = item?.type === 'donation'
+    ? 'View donation timeline'
+    : item?.type === 'analysis'
+      ? 'View analysis activity'
+      : 'View activity timeline';
+
+  React.useEffect(() => {
+    entrance.setValue(0);
+    Animated.timing(entrance, {
+      toValue: 1,
+      duration: 360,
+      delay: Math.min(index * 70, 280),
+      useNativeDriver: true,
+    }).start();
+  }, [entrance, index, item?.id]);
+
+  return (
+    <Animated.View
+      style={[
+        styles.activityCardMotion,
+        {
+          opacity: entrance,
+          transform: [{
+            translateY: entrance.interpolate({
+              inputRange: [0, 1],
+              outputRange: [12, 0],
+            }),
+          }],
+        },
+      ]}
+    >
+      <Pressable
+        onPress={onPress}
+        accessibilityRole="button"
+        accessibilityLabel={`${item?.title || 'Activity'}. ${actionLabel}`}
+        style={({ pressed }) => [
+          styles.activityCard,
+          {
+            borderColor: roles.defaultCardBorder,
+            opacity: pressed ? 0.9 : 1,
+            transform: [{ scale: pressed ? 0.985 : 1 }],
+          },
+        ]}
+      >
+        <LinearGradient
+          colors={[roles.defaultCardBackground, roles.iconPrimarySurface]}
+          locations={[0.18, 1]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.activityCardGradient}
+        >
+          <LinearGradient
+            pointerEvents="none"
+            colors={[theme.colors.palette.wine700, theme.colors.palette.wine600]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 0, y: 1 }}
+            style={styles.cardAccent}
+          />
+          <View pointerEvents="none" style={styles.cardGlow} />
+
+          <View style={styles.cardTopRow}>
+            <View style={[styles.activityIcon, { backgroundColor: roles.defaultCardBackground }]}>
+              <MaterialCommunityIcons
+                name={item?.icon || 'history'}
+                size={23}
+                color={roles.iconPrimaryColor}
+              />
+            </View>
+            <View style={styles.cardHeading}>
+              <Text numberOfLines={2} style={[styles.cardTitle, { color: roles.headingText }]}>
+                {item?.title || 'Donor activity'}
+              </Text>
+              {item?.related_title ? (
+                <Text numberOfLines={1} style={[styles.cardRelated, { color: roles.bodyText }]}>
+                  {item.related_title}
+                </Text>
+              ) : null}
+            </View>
+            <View style={[styles.cardChevron, { backgroundColor: roles.defaultCardBackground }]}>
+              <MaterialCommunityIcons name="chevron-right" size={21} color={roles.iconPrimaryColor} />
+            </View>
+          </View>
+
+          <View style={styles.cardMetaRow}>
+            <View style={styles.cardDateRow}>
+              <MaterialCommunityIcons name="calendar-blank-outline" size={16} color={roles.metaText} />
+              <Text style={[styles.cardDate, { color: roles.metaText }]}>
+                {formatActivityDate(item?.activity_date || item?.timestamp)}
+              </Text>
+            </View>
+            <View style={[styles.statusPill, { backgroundColor: statusColors.background }]}>
+              <Text numberOfLines={1} style={[styles.statusText, { color: statusColors.text }]}>
+                {item?.status || 'Recorded'}
+              </Text>
+            </View>
+          </View>
+
+          <View style={[styles.cardFooter, { borderTopColor: roles.defaultCardBorder }]}>
+            <View style={styles.cardActionRow}>
+              <Text style={[styles.cardAction, { color: roles.iconPrimaryColor }]}>{actionLabel}</Text>
+              <MaterialCommunityIcons name="arrow-right" size={15} color={roles.iconPrimaryColor} />
+            </View>
+            {item?.reference ? (
+              <Text numberOfLines={1} style={[styles.reference, { color: roles.metaText }]}>
+                {item.reference}
+              </Text>
+            ) : null}
+          </View>
+        </LinearGradient>
+      </Pressable>
+    </Animated.View>
   );
 }
 
@@ -265,23 +382,19 @@ export function DonorDonationHistoryScreen() {
   const router = useRouter();
   const { user, profile, resolvedTheme, isLoading: isAuthLoading } = useAuth();
   const roles = resolveThemeRoles(resolvedTheme);
-
   const [isLoading, setIsLoading] = React.useState(true);
   const [isRefreshing, setIsRefreshing] = React.useState(false);
   const [historyItems, setHistoryItems] = React.useState([]);
   const [errorMessage, setErrorMessage] = React.useState('');
   const [searchQuery, setSearchQuery] = React.useState('');
   const [activeFilter, setActiveFilter] = React.useState('all');
-  const [showFilters, setShowFilters] = React.useState(false);
-  const filteredHistoryItems = React.useMemo(() => (
-    historyItems.filter((item) => (
-      matchesHistoryFilter(item, activeFilter) && matchesHistorySearch(item, searchQuery)
-    ))
-  ), [activeFilter, historyItems, searchQuery]);
-  const historyGroups = React.useMemo(
-    () => groupHistoryByDate(filteredHistoryItems),
-    [filteredHistoryItems]
-  );
+  const [filtersVisible, setFiltersVisible] = React.useState(false);
+
+  const filteredItems = React.useMemo(() => historyItems.filter((item) => (
+    (activeFilter === 'all' || item?.type === activeFilter)
+    && matchesSearch(item, searchQuery)
+  )), [activeFilter, historyItems, searchQuery]);
+  const historyGroups = React.useMemo(() => groupHistoryByMonth(filteredItems), [filteredItems]);
 
   const loadHistory = React.useCallback(async ({ silent = false } = {}) => {
     if (!user?.id || !profile?.user_id) {
@@ -290,44 +403,40 @@ export function DonorDonationHistoryScreen() {
       setIsRefreshing(false);
       return;
     }
-
-    if (silent) {
-      setIsRefreshing(true);
-    } else {
-      setIsLoading(true);
-    }
+    if (silent) setIsRefreshing(true);
+    else setIsLoading(true);
     setErrorMessage('');
-
     try {
       const result = await getDonorDonationHistory({
         userId: user.id,
         databaseUserId: profile.user_id,
       });
-
-      setHistoryItems(result?.historyItems || result?.donationHistory || []);
-
+      setHistoryItems(result?.historyItems || []);
       if (result?.error) {
-        // Keep the technical detail out of the UI, but preserve it for debugging.
         console.warn('[DonorDonationHistoryScreen] loadHistory error:', result.error);
-        setErrorMessage('Some activity updates could not be loaded. Pull down to try again.');
+        setErrorMessage('Some activities could not be loaded. Pull down to try again.');
       }
-    } catch (err) {
+    } catch (error) {
+      console.warn('[DonorDonationHistoryScreen] loadHistory exception:', error);
       setHistoryItems([]);
       setErrorMessage('Your activity history could not be loaded. Pull down to try again.');
-      console.warn('[DonorDonationHistoryScreen] loadHistory exception:', err);
     } finally {
-      if (silent) {
-        setIsRefreshing(false);
-      } else {
-        setIsLoading(false);
-      }
+      if (silent) setIsRefreshing(false);
+      else setIsLoading(false);
     }
   }, [profile?.user_id, user?.id]);
 
   React.useEffect(() => {
-    if (isAuthLoading) return;
-    loadHistory();
+    if (!isAuthLoading) loadHistory();
   }, [isAuthLoading, loadHistory]);
+
+  const openActivity = React.useCallback((item) => {
+    if (!item?.id) return;
+    router.push({
+      pathname: '/donor/activity-history-details',
+      params: { activityId: String(item.id) },
+    });
+  }, [router]);
 
   return (
     <DashboardLayout
@@ -338,21 +447,21 @@ export function DonorDonationHistoryScreen() {
       onRefresh={() => loadHistory({ silent: true })}
       refreshing={isRefreshing}
       stickyContent={historyItems.length ? (
-        <HistorySearchControls
+        <HistoryTools
           roles={roles}
-          searchQuery={searchQuery}
-          onSearchChange={setSearchQuery}
+          query={searchQuery}
+          onQueryChange={setSearchQuery}
           activeFilter={activeFilter}
           onFilterChange={setActiveFilter}
-          showFilters={showFilters}
-          onToggleFilters={() => setShowFilters((current) => !current)}
+          filtersVisible={filtersVisible}
+          onToggleFilters={() => setFiltersVisible((current) => !current)}
         />
       ) : null}
       header={(
         <DashboardHeaderSurface>
           <DonorTopBar
-            title="History"
-            subtitle="Your donor activity"
+            title="Activity History"
+            subtitle="Activities you joined or completed"
             showBack
             showNotificationsAction={false}
             showLogoutAction={false}
@@ -371,51 +480,49 @@ export function DonorDonationHistoryScreen() {
             onDismiss={() => setErrorMessage('')}
           />
         ) : null}
+
         {isLoading ? (
           <View style={styles.loadingState}>
-            <ActivityIndicator color={resolvedTheme?.primaryColor || theme.colors.brandPrimary} />
-            <Text style={[styles.loadingText, { color: roles.metaText }]}>
-              Loading your activity history...
-            </Text>
+            <ActivityIndicator color={roles.primaryActionBackground} />
+            <Text style={[styles.loadingText, { color: roles.metaText }]}>Loading your activities...</Text>
           </View>
         ) : historyItems.length ? (
-          <View style={styles.list}>
-            {historyGroups.length ? (
-              historyGroups.map((group) => (
+          historyGroups.length ? (
+            <View style={styles.list}>
+              {historyGroups.map((group) => (
                 <View key={group.key} style={styles.section}>
-                  <View style={styles.sectionHeading}>
+                  <View style={styles.sectionHeadingRow}>
                     <Text style={[styles.sectionTitle, { color: roles.headingText }]}>{group.label}</Text>
-                    {group.date ? (
-                      <Text style={[styles.sectionDate, { color: roles.metaText }]}>{group.date}</Text>
-                    ) : null}
+                    <View style={[styles.sectionRule, { backgroundColor: roles.defaultCardBorder }]} />
                   </View>
-                  <View style={styles.sectionRows}>
+                  <View style={styles.cardList}>
                     {group.items.map((item, index) => (
-                      <DonationHistoryRow
-                        key={item.id || `${group.key}-${index}`}
+                      <ActivityCard
+                        key={item.id}
                         item={item}
                         roles={roles}
-                        showDivider={index < group.items.length - 1}
+                        index={index}
+                        onPress={() => openActivity(item)}
                       />
                     ))}
                   </View>
                 </View>
-              ))
-            ) : (
-              <View style={styles.noResults}>
-                <MaterialCommunityIcons name="magnify-close" size={34} color={roles.metaText} />
-                <Text style={[styles.noResultsTitle, { color: roles.headingText }]}>No matching activity</Text>
-                <Text style={[styles.noResultsText, { color: roles.metaText }]}>Try another search or filter.</Text>
-              </View>
-            )}
-          </View>
+              ))}
+            </View>
+          ) : (
+            <View style={styles.noResults}>
+              <MaterialCommunityIcons name="magnify-close" size={36} color={roles.metaText} />
+              <Text style={[styles.noResultsTitle, { color: roles.headingText }]}>No matching activities</Text>
+              <Text style={[styles.noResultsText, { color: roles.metaText }]}>Try another search or category.</Text>
+            </View>
+          )
         ) : (
           <View style={[styles.emptyCard, { backgroundColor: roles.defaultCardBackground, borderColor: roles.defaultCardBorder }]}>
             <EmptyDataState
               variant="default"
               showCountBadge={false}
               title="No activity history yet"
-              message="Event attendance, Hair Analysis, donation updates, and certificates will appear here."
+              message="Events you join, completed Hair Analyses, donations, and finished appointments will appear here."
               style={styles.emptyState}
               illustrationStyle={styles.emptyIllustration}
               titleStyle={[styles.emptyTitle, { color: roles.headingText }]}
@@ -433,30 +540,14 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: theme.layout.contentMaxWidth,
     alignSelf: 'center',
-    gap: theme.spacing.sm,
   },
-  loadingState: {
-    minHeight: 180,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: theme.spacing.xs,
-  },
-  loadingText: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-  },
-  list: {
-    gap: theme.spacing.lg,
-  },
-  stickyTools: {
+  tools: {
     width: '100%',
     maxWidth: theme.layout.contentMaxWidth,
     alignSelf: 'center',
-    gap: theme.spacing.sm,
-    paddingHorizontal: theme.spacing.sm,
-    backgroundColor: 'transparent',
   },
-  searchTools: {
+  searchToolsRow: {
+    width: '100%',
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.spacing.sm,
@@ -464,63 +555,246 @@ const styles = StyleSheet.create({
   searchBar: {
     flex: 1,
     minWidth: 0,
-    height: 48,
-    paddingHorizontal: theme.spacing.md,
+    height: 50,
     borderWidth: 1,
-    borderRadius: 16,
+    borderRadius: 22,
+    paddingHorizontal: theme.spacing.md,
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.spacing.sm,
-    backgroundColor: 'transparent',
+    ...theme.shadows.soft,
   },
   searchInput: {
     flex: 1,
-    minWidth: 0,
     paddingVertical: 0,
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.body,
   },
   filterButton: {
-    height: 48,
-    paddingHorizontal: theme.spacing.md,
-    borderWidth: 1,
-    borderRadius: 16,
+    position: 'relative',
+    width: 50,
+    height: 50,
+    flexShrink: 0,
+    borderWidth: 1.5,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+    ...theme.shadows.soft,
+  },
+  filterButtonIcons: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
-    backgroundColor: 'transparent',
+    gap: 1,
   },
-  filterButtonText: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    fontWeight: theme.typography.weights.semibold,
+  filterActiveDot: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    borderWidth: 1.5,
   },
-  filterOptions: {
+  filterReveal: {
+    width: '100%',
+    overflow: 'hidden',
+  },
+  filterRow: {
+    width: '100%',
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: theme.spacing.xs,
-    marginTop: theme.spacing.xs,
-    backgroundColor: 'transparent',
+    paddingTop: 10,
   },
   filterChip: {
-    minHeight: 36,
-    paddingHorizontal: theme.spacing.md,
+    flexGrow: 1,
+    flexBasis: '29%',
+    minHeight: 38,
+    paddingHorizontal: theme.spacing.sm,
     borderWidth: 1,
     borderRadius: theme.radius.pill,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
   },
   filterChipText: {
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.caption,
     fontWeight: theme.typography.weights.semibold,
   },
-  noResults: {
-    minHeight: 190,
+  loadingState: {
+    minHeight: 220,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 4,
+    gap: theme.spacing.sm,
+  },
+  loadingText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+  },
+  list: {
+    gap: theme.spacing.xl,
+    paddingBottom: theme.spacing.lg,
+  },
+  section: {
+    gap: 10,
+  },
+  sectionHeadingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  sectionTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    fontWeight: theme.typography.weights.bold,
+  },
+  sectionRule: {
+    flex: 1,
+    height: StyleSheet.hairlineWidth,
+  },
+  cardList: {
+    gap: theme.spacing.md,
+  },
+  activityCardMotion: {
+    width: '100%',
+    borderRadius: 24,
+    ...theme.shadows.soft,
+  },
+  activityCard: {
+    width: '100%',
+    borderWidth: 1,
+    borderRadius: 24,
+    overflow: 'hidden',
+  },
+  activityCardGradient: {
+    position: 'relative',
+    borderRadius: 23,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.md,
+    paddingLeft: theme.spacing.lg,
+    gap: theme.spacing.md,
+    overflow: 'hidden',
+  },
+  cardAccent: {
+    position: 'absolute',
+    top: 12,
+    bottom: 12,
+    left: 0,
+    width: 4,
+    borderTopRightRadius: theme.radius.pill,
+    borderBottomRightRadius: theme.radius.pill,
+  },
+  cardGlow: {
+    position: 'absolute',
+    width: 108,
+    height: 108,
+    borderRadius: 54,
+    top: -62,
+    right: -38,
+    backgroundColor: 'rgba(255, 255, 255, 0.34)',
+  },
+  cardTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  activityIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(110, 13, 34, 0.08)',
+    ...theme.shadows.soft,
+  },
+  cardHeading: {
+    flex: 1,
+    minWidth: 0,
+    gap: 3,
+  },
+  cardTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
+    fontWeight: theme.typography.weights.bold,
+    lineHeight: theme.typography.semantic.bodyLg * theme.typography.lineHeights.snug,
+  },
+  cardRelated: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+  },
+  cardChevron: {
+    width: 34,
+    height: 34,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  cardMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+  },
+  cardDateRow: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  cardDate: {
+    flexShrink: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+  },
+  statusPill: {
+    maxWidth: 150,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: theme.radius.pill,
+  },
+  statusText: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    fontWeight: theme.typography.weights.bold,
+  },
+  cardFooter: {
+    paddingTop: theme.spacing.sm,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+  },
+  cardActionRow: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  cardAction: {
+    flexShrink: 1,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  reference: {
+    flexShrink: 0,
+    maxWidth: 120,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+  },
+  noResults: {
+    minHeight: 240,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
   },
   noResultsTitle: {
     marginTop: theme.spacing.xs,
@@ -532,89 +806,17 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamily,
     fontSize: theme.typography.semantic.bodySm,
   },
-  section: {
-    gap: theme.spacing.xs,
-  },
-  sectionHeading: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 2,
-  },
-  sectionTitle: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    fontWeight: theme.typography.weights.bold,
-  },
-  sectionDate: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.caption,
-  },
-  sectionRows: {
-    overflow: 'hidden',
-  },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.spacing.sm,
-    minHeight: 68,
-    paddingVertical: theme.spacing.sm,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-  },
-  rowIconWrap: {
-    width: 42,
-    height: 42,
-    borderRadius: 13,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  rowCopy: {
-    flex: 1,
-    minWidth: 0,
-    gap: 3,
-  },
-  rowTop: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    gap: theme.spacing.sm,
-  },
-  rowTitle: {
-    flex: 1,
-    minWidth: 0,
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.body,
-    fontWeight: theme.typography.weights.semibold,
-    lineHeight: theme.typography.semantic.body * theme.typography.lineHeights.snug,
-  },
-  rowStatus: {
-    flexShrink: 0,
-    maxWidth: 94,
-    textAlign: 'right',
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.caption,
-    fontWeight: theme.typography.weights.semibold,
-  },
-  referenceText: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.caption,
-  },
-  emptyState: {
-    width: '100%',
-    minHeight: 300,
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.lg,
-  },
-  rowDescription: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.bodySm,
-    lineHeight: theme.typography.semantic.bodySm * theme.typography.lineHeights.relaxed,
-  },
   emptyCard: {
     overflow: 'hidden',
     borderWidth: 1,
     borderRadius: 24,
     ...theme.shadows.soft,
+  },
+  emptyState: {
+    width: '100%',
+    minHeight: 320,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.lg,
   },
   emptyIllustration: {
     marginBottom: theme.spacing.xs,

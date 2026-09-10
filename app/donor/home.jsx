@@ -271,27 +271,27 @@ const normalizeConditionTone = (condition = '') => {
   if (normalized.includes('healthy') || normalized.includes('good')) {
     return {
       dotColor: '',
-      label: 'Healthy',
+      label: 'No Visible Concerns Detected',
     };
   }
 
   if (normalized.includes('dry') || normalized.includes('damaged')) {
     return {
       dotColor: '',
-      label: 'Needs care',
+      label: 'Visible Concerns Detected',
     };
   }
 
   if (normalized.includes('treated') || normalized.includes('rebonded') || normalized.includes('colored')) {
     return {
       dotColor: '',
-      label: 'Treated',
+      label: 'Visible Concerns Detected',
     };
   }
 
   return {
     dotColor: '',
-    label: condition || 'Checked',
+    label: condition ? 'Visible Concerns Detected' : 'Visible check completed',
   };
 };
 
@@ -2164,18 +2164,18 @@ const buildContextualGreeting = ({ hasHistory, latestCondition, checkedToday, da
   if (!hasHistory) return 'Start your first hair check to get personalized insights.';
   const tone = normalizeConditionTone(latestCondition || '');
   if (checkedToday) {
-    return tone.label === 'Healthy'
-      ? 'Your hair is healthy today. Keep it up!'
+    return tone.label === 'No Visible Concerns Detected'
+      ? 'No visible concerns were detected today. Keep following your routine.'
       : `Today's check shows ${tone.label.toLowerCase()}. See your care tips below.`;
   }
   const days = Number(daysSinceLastLog) || 0;
   const daysText = days === 1 ? '1 day' : `${days} days`;
   if (days > 1) {
-    return tone.label !== 'Healthy'
+    return tone.label !== 'No Visible Concerns Detected'
       ? `You haven't logged for ${daysText}. Based on your previous log, you had ${tone.label.toLowerCase()} hair. Have you tried the recommendations?`
-      : `It's been ${daysText} since your last check. Your hair was healthy last time, so check in again.`;
+      : `It's been ${daysText} since your last check. No visible concerns were detected last time, so check in again when available.`;
   }
-  return tone.label !== 'Healthy'
+  return tone.label !== 'No Visible Concerns Detected'
     ? `Your last check showed ${tone.label.toLowerCase()} hair. Have you tried the care tips we shared?`
     : `Last check: ${tone.label.toLowerCase()}. Ready for today's check?`;
 };

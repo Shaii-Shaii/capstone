@@ -31,6 +31,14 @@ import {
 } from '../../features/hairSubmission.api';
 import { invalidateHairAnalysisHomeCache } from '../../features/hairAnalysisHomeCache';
 import {
+  buildConsistencyRecord,
+  buildHairAnalysisConsistencyIssues,
+} from '../../features/hairAnalysisConsistency';
+import {
+  formatHairAnalysisDateTime,
+  getHairAnalysisAvailability,
+} from '../../features/hairAnalysisAvailability';
+import {
   hairAnalyzerComplianceDefaultValues,
   hairAnalyzerComplianceSchema,
   hairAnalyzerQuestionDefaultValues,
@@ -232,9 +240,13 @@ void formatScheduleDateLabel;
 
 const isSideProfileView = (view = {}) => String(view?.key || view?.label || '').toLowerCase().includes('side');
 const getRequiredSideDirection = (view = {}) => {
-  const value = String(view?.key || view?.label || '').toLowerCase();
-  if (value.includes('right')) return 'right';
-  if (value.includes('left') || value.includes('side_profile')) return 'left';
+  const key = String(view?.key || '').trim().toLowerCase();
+  const label = String(view?.label || '').trim().toLowerCase();
+
+  // The direction is the way the donor must turn, not the side of hair being
+  // photographed. Turning right exposes the left back/side, and vice versa.
+  if (key === 'side_profile' || label.includes('left')) return 'right';
+  if (key === 'right_side_profile' || label.includes('right')) return 'left';
   return '';
 };
 const isHairScalpView = (view = {}) => {
@@ -252,8 +264,9 @@ const isBackHairView = (view = {}) => {
   return value.includes('back');
 };
 
-const requiresFaceVerification = (view = {}) => String(view?.key || view?.label || '').toLowerCase().includes('front')
-  || isSideProfileView(view);
+// Only the two guided side views require enough of the face/profile to verify
+// that the donor turned in the requested direction.
+const requiresFaceVerification = (view = {}) => isSideProfileView(view);
 
 const getViewCaptureLabel = (view = {}) => {
   const value = String(view?.key || view?.label || '').toLowerCase();
@@ -273,7 +286,7 @@ const getInitialLiveFaceStatus = (view = null) => ({
   faceCount: 0,
   message: requiresFaceVerification(view)
     ? isSideProfileView(view)
-      ? `Turn to the ${getViewCaptureLabel(view).toLowerCase()} so your hair length is visible.`
+      ? `Turn your head slightly ${getRequiredSideDirection(view)} and keep your profile and hair visible.`
       : 'Face the camera directly and keep your hair fully visible.'
     : isHairScalpView(view)
       ? 'Frame the scalp/crown area clearly with bright, even light.'
@@ -289,6 +302,7 @@ const resolveLiveFaceStatus = (faces = [], view = null) => {
   const faceList = Array.isArray(faces) ? faces : [];
   const expectsFace = requiresFaceVerification(view);
   const expectsSideProfile = isSideProfileView(view);
+  const requiredSideDirection = expectsSideProfile ? getRequiredSideDirection(view) : '';
   const viewLabel = getViewCaptureLabel(view);
 
   if (!faceList.length) {
@@ -305,7 +319,7 @@ const resolveLiveFaceStatus = (faces = [], view = null) => {
       valid: false,
       faceCount: 0,
       message: expectsSideProfile
-        ? `No ${viewLabel.toLowerCase()} detected. Turn to the ${viewLabel.toLowerCase()} and keep your hair visible.`
+        ? `No side profile detected. Turn your head slightly ${requiredSideDirection} and keep your profile and hair visible.`
         : 'No person detected. Center your face and hair.',
       tone: 'error',
     };
@@ -317,6 +331,15 @@ const resolveLiveFaceStatus = (faces = [], view = null) => {
       faceCount: faceList.length,
       message: 'Multiple subjects detected. Only one person is allowed.',
       tone: 'error',
+    };
+  }
+
+  if (!expectsFace && isBackHairView(view)) {
+    return {
+      valid: false,
+      faceCount: 1,
+      message: 'Face away from the camera and keep all of your loose hair centered in the frame.',
+      tone: 'warning',
     };
   }
 
@@ -358,13 +381,14 @@ const resolveLiveFaceStatus = (faces = [], view = null) => {
   }
 
   if (expectsSideProfile) {
-    const requiredDirection = getRequiredSideDirection(view);
-
-    if (yawAngle < 18) {
+    if (yawAngle < 22) {
       return {
         valid: false,
         faceCount: 1,
-        message: `Turn your head to the ${viewLabel.toLowerCase()}. This required view should show your hair length.`,
+        yawAngle: signedYawAngle,
+        expectedDirection: requiredSideDirection,
+        directionCorrect: false,
+        message: `Turn your head farther ${requiredSideDirection} so the requested side of your hair is clearly visible.`,
         tone: 'warning',
       };
     }
@@ -373,10 +397,10 @@ const resolveLiveFaceStatus = (faces = [], view = null) => {
     // points toward the image's right. For a person facing the camera that is
     // their left turn; the front-camera preview may display it mirrored.
     // Do not use abs(yaw) alone or both guided slots accept either pose.
-    const isFacingRequiredDirection = requiredDirection === 'left'
-      ? signedYawAngle >= 18
-      : requiredDirection === 'right'
-        ? signedYawAngle <= -18
+    const isFacingRequiredDirection = requiredSideDirection === 'left'
+      ? signedYawAngle >= 22
+      : requiredSideDirection === 'right'
+        ? signedYawAngle <= -22
         : true;
 
     if (!isFacingRequiredDirection) {
@@ -384,9 +408,9 @@ const resolveLiveFaceStatus = (faces = [], view = null) => {
         valid: false,
         faceCount: 1,
         yawAngle: signedYawAngle,
-        expectedDirection: requiredDirection,
+        expectedDirection: requiredSideDirection,
         directionCorrect: false,
-        message: `You are facing the wrong side. Turn your head to the ${requiredDirection} before capture.`,
+        message: `You are facing the wrong side. Turn your head ${requiredSideDirection} before capture.`,
         tone: 'warning',
       };
     }
@@ -395,7 +419,7 @@ const resolveLiveFaceStatus = (faces = [], view = null) => {
       valid: true,
       faceCount: 1,
       yawAngle: signedYawAngle,
-      expectedDirection: requiredDirection,
+      expectedDirection: requiredSideDirection,
       directionCorrect: true,
       message: `${viewLabel} detected. Keep hair length and ends visible.`,
       tone: 'success',
@@ -679,8 +703,8 @@ const buildHairRecommendationFallbacks = ({ analysis = {}, donationAssessment = 
 
   if (analysis?.lice_detected === true) {
     rows.push({
-      title: 'Pause donation and confirm scalp health',
-      recommendation_text: 'The scan marked visible lice or nit-like signs. Pause donation preparation and ask a qualified health or scalp-care professional to confirm the finding before using a treatment or joining an event.',
+      title: 'Pause donation and confirm the visible finding',
+      recommendation_text: 'The scan marked possible nit-like signs. Pause donation preparation and ask a qualified hair or scalp-care professional to confirm what is visible before using a treatment or joining an event.',
       priority_order: rows.length + 1,
     });
   }
@@ -801,7 +825,7 @@ const buildHumanReviewValuesForSave = (values = {}, analysis = {}) => {
     declaredColor: String(values.declaredColor ?? fallback.declaredColor ?? '').trim(),
     declaredTexture: String(values.declaredTexture ?? fallback.declaredTexture ?? '').trim(),
     declaredDensity: String(values.declaredDensity ?? fallback.declaredDensity ?? '').trim(),
-    declaredCondition: String(fallback.declaredCondition ?? '').trim(),
+    declaredCondition: String(values.declaredCondition ?? fallback.declaredCondition ?? '').trim(),
     detailNotes: String(fallback.detailNotes ?? '').trim(),
   };
 };
@@ -811,13 +835,45 @@ const getReviewDisplayValue = (value, fallback = 'For review') => {
   return normalized || fallback;
 };
 
-const buildReviewSummaryRows = (values = {}) => ([
-  ['Hair length', String(values.declaredLength ?? '').trim() && Number(values.declaredLength) > 0 ? `${values.declaredLength} inches` : 'For review'],
-  ['Color', getReviewDisplayValue(values.declaredColor)],
-  ['Texture', getReviewDisplayValue(values.declaredTexture)],
-  ['Density', getReviewDisplayValue(values.declaredDensity)],
-  ['AI condition', getReviewDisplayValue(values.declaredCondition)],
+const buildReviewSummaryRows = (analysis = {}) => ([
+  ['Hair length', formatLengthLabel(analysis?.estimated_length)],
+  ['Color', getReviewDisplayValue(analysis?.detected_color)],
+  ['Texture', getReviewDisplayValue(analysis?.detected_texture)],
+  ['Apparent density', getReviewDisplayValue(analysis?.detected_density)],
+  ['AI visible observation', getReviewDisplayValue(analysis?.detected_condition)],
 ]);
+
+const buildReviewCorrectionRows = (values = {}, analysis = {}) => {
+  const aiValues = buildHairReviewDefaultValues(analysis);
+  const fields = [
+    ['Hair length', values.declaredLength, aiValues.declaredLength, ' inches'],
+    ['Color', values.declaredColor, aiValues.declaredColor, ''],
+    ['Texture', values.declaredTexture, aiValues.declaredTexture, ''],
+    ['Apparent density', values.declaredDensity, aiValues.declaredDensity, ''],
+    ['Visible condition', values.declaredCondition, aiValues.declaredCondition, ''],
+  ];
+
+  return fields
+    .filter(([, value, aiValue]) => (
+      String(value ?? '').trim().toLowerCase() !== String(aiValue ?? '').trim().toLowerCase()
+    ))
+    .map(([label, value, , suffix]) => [label, `${getReviewDisplayValue(value)}${value ? suffix : ''}`]);
+};
+
+const applyConsistencyResolutionToReviewValues = (values = {}, issue = null, resolution = '') => {
+  if (!issue || resolution !== 'keep_original_answer') return values;
+  const originalValue = issue.donorAnswer || issue.originalAnswer || '';
+
+  if (issue.category === 'texture') return { ...values, declaredTexture: originalValue };
+  if (issue.category === 'apparent_density') return { ...values, declaredDensity: originalValue };
+  if (issue.category === 'color') return { ...values, declaredColor: originalValue };
+  if (issue.category === 'visible_condition') return { ...values, declaredCondition: originalValue };
+  if (issue.category === 'length') {
+    const numericLength = String(issue.originalAnswer ?? '').match(/\d+(?:\.\d+)?/)?.[0] || '';
+    return numericLength ? { ...values, declaredLength: numericLength } : values;
+  }
+  return values;
+};
 
 const getQuestionChoiceIcon = (questionKey = '', optionValue = '', optionIndex = 0) => {
   const normalized = String(optionValue || '').trim().toLowerCase();
@@ -832,15 +888,54 @@ const getQuestionChoiceIcon = (questionKey = '', optionValue = '', optionIndex =
   return ['leaf', 'water-outline', 'weather-sunny', 'hair-dryer-outline', 'heart-pulse'][optionIndex % 5];
 };
 
-function ChoiceList({ value, options, onChange, multi = false, questionKey = '', language = 'en' }) {
-  const values = Array.isArray(value) ? value : [];
+const referenceCategoryForQuestion = (questionKey = '') => ({
+  hairTexture: 'texture',
+  oilyAfterWash: 'visible_oiliness',
+  dandruffOrFlakes: 'visible_flaking',
+  dryOrRough: 'visible_condition',
+  healthierNow: 'visible_condition',
+}[questionKey] || '');
 
-  return (
-    <View style={styles.choiceList}>
-      {options.map((option) => {
+const LOCAL_CHOICE_REFERENCE_IMAGES = {
+  hairTexture: {
+    straight: require('../../assets/images/hair-patterns/straight.png'),
+    wavy: require('../../assets/images/hair-patterns/wavy.png'),
+    curly: require('../../assets/images/hair-patterns/curly.png'),
+    coily: require('../../assets/images/hair-patterns/coily.png'),
+  },
+  dandruffOrFlakes: {
+    no: require('../../assets/images/scalp-condition/no_flakes.png'),
+    a_little: require('../../assets/images/scalp-condition/little_flakes.png'),
+    a_lot: require('../../assets/images/scalp-condition/many_flakes.png'),
+  },
+  dryOrRough: {
+    normal_balanced: require('../../assets/images/hair-condition/balance.png'),
+    dry: require('../../assets/images/hair-condition/dry.png'),
+    rough: require('../../assets/images/hair-condition/rough.png'),
+    oily: require('../../assets/images/hair-condition/oily.png'),
+  },
+};
+
+function ChoiceList({ value, options, onChange, multi = false, questionKey = '', language = 'en', referenceImages = [] }) {
+  const values = Array.isArray(value) ? value : [];
+  const localChoiceImages = LOCAL_CHOICE_REFERENCE_IMAGES[questionKey] || null;
+  const isVisualGallery = Boolean(localChoiceImages);
+
+  const choices = options.map((option) => {
         const isActive = multi ? values.includes(option.value) : value === option.value;
         const detailText = getChoiceDetailText(questionKey, option.value, language);
         const optionIcon = getQuestionChoiceIcon(questionKey, option.value, options.indexOf(option));
+        const referenceCategory = referenceCategoryForQuestion(questionKey);
+        const referenceImage = referenceImages.find((item) => (
+          item?.reference_category === referenceCategory
+          && String(item?.reference_value || '').toLowerCase() === String(option.value || '').toLowerCase()
+          && item?.signed_url
+        ));
+        const localChoiceImage = isVisualGallery
+          ? localChoiceImages[String(option.value || '').trim().toLowerCase()]
+          : null;
+        const choiceImageSource = localChoiceImage
+          || (referenceImage?.signed_url ? { uri: referenceImage.signed_url } : null);
 
         return (
           <Pressable
@@ -860,31 +955,61 @@ function ChoiceList({ value, options, onChange, multi = false, questionKey = '',
             }}
             style={({ pressed }) => [
               styles.choiceCard,
+              isVisualGallery ? styles.choiceGalleryCard : null,
               isActive ? styles.choiceCardActive : null,
               pressed ? styles.choiceCardPressed : null,
             ]}
           >
-            <LinearGradient
-              pointerEvents="none"
-              colors={isActive ? ['#FFF5F8', '#F1D7DF'] : ['#FFFFFF', '#FFF9FA']}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={styles.choiceCardGradient}
-            />
-            {isActive ? <View pointerEvents="none" style={styles.choiceCardActiveAccent} /> : null}
-            <View style={styles.choiceCardContent}>
-              <View style={[styles.choiceIconWrap, isActive ? styles.choiceIconWrapActive : null]}>
-                <MaterialCommunityIcons
-                  name={optionIcon}
-                  size={20}
-                  color={isActive ? theme.colors.textOnBrand : theme.colors.brandPrimary}
+            {choiceImageSource && isVisualGallery ? (
+              <Image
+                pointerEvents="none"
+                source={choiceImageSource}
+                resizeMode="cover"
+                style={styles.choiceGalleryBackground}
+                accessibilityLabel={`${option.label} approved visual example`}
+              />
+            ) : null}
+            {isVisualGallery ? <View pointerEvents="none" style={styles.choiceGalleryImageShade} /> : null}
+            {!isVisualGallery ? (
+              <LinearGradient
+                pointerEvents="none"
+                colors={isActive ? ['#FFF5F8', '#F1D7DF'] : ['#FFFFFF', '#FFF9FA']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.choiceCardGradient}
+              />
+            ) : null}
+            {isActive && !isVisualGallery ? <View pointerEvents="none" style={styles.choiceCardActiveAccent} /> : null}
+            <View style={[styles.choiceCardContent, isVisualGallery ? styles.choiceGalleryContent : null]}>
+              {referenceImage && !isVisualGallery ? (
+                <Image
+                  source={{ uri: referenceImage.signed_url }}
+                  style={styles.choiceReferenceImage}
+                  accessibilityLabel={`${option.label} approved visual example`}
                 />
-              </View>
-              <View style={styles.choiceCardCopy}>
-                <Text style={[styles.choiceLabel, isActive ? styles.choiceLabelActive : null]}>{option.label}</Text>
+              ) : null}
+              {!isVisualGallery ? (
+                <View style={[styles.choiceIconWrap, isActive ? styles.choiceIconWrapActive : null]}>
+                  <MaterialCommunityIcons
+                    name={optionIcon}
+                    size={20}
+                    color={isActive ? theme.colors.textOnBrand : theme.colors.brandPrimary}
+                  />
+                </View>
+              ) : null}
+              <View style={[styles.choiceCardCopy, isVisualGallery ? styles.choiceGalleryCopy : null]}>
+                <Text style={[
+                  styles.choiceLabel,
+                  isActive ? styles.choiceLabelActive : null,
+                  isVisualGallery && choiceImageSource ? styles.choiceGalleryLabel : null,
+                ]}>{option.label}</Text>
                 {detailText ? <Text style={styles.choiceDescription}>{detailText}</Text> : null}
               </View>
-              <View style={[styles.choiceRadio, isActive ? styles.choiceRadioActive : null]}>
+              <View style={[
+                styles.choiceRadio,
+                isVisualGallery ? styles.choiceGalleryRadio : null,
+                isActive ? styles.choiceRadioActive : null,
+              ]}>
                 {isActive ? (
                   <MaterialCommunityIcons name="check" size={16} color={theme.colors.textOnBrand} />
                 ) : null}
@@ -892,9 +1017,34 @@ function ChoiceList({ value, options, onChange, multi = false, questionKey = '',
             </View>
           </Pressable>
         );
-      })}
-    </View>
-  );
+      });
+
+  if (isVisualGallery) {
+    const galleryRows = [];
+    for (let index = 0; index < choices.length; index += 2) {
+      galleryRows.push(choices.slice(index, index + 2));
+    }
+
+    return (
+      <View style={[styles.choiceList, styles.choiceGallery]}>
+        {galleryRows.map((rowChoices, rowIndex) => (
+          <View key={`${questionKey}-gallery-row-${rowIndex}`} style={styles.choiceGalleryRow}>
+            {rowChoices.map((choice, columnIndex) => (
+              <View
+                key={`${questionKey}-gallery-cell-${rowIndex}-${columnIndex}`}
+                style={styles.choiceGalleryCell}
+              >
+                {choice}
+              </View>
+            ))}
+            {rowChoices.length === 1 ? <View pointerEvents="none" style={styles.choiceGalleryCellSpacer} /> : null}
+          </View>
+        ))}
+      </View>
+    );
+  }
+
+  return <View style={styles.choiceList}>{choices}</View>;
 }
 
 function HairAnalysisTopBar({
@@ -1233,7 +1383,6 @@ function HairCaptureTutorialModal({
         <View style={styles.captureTutorialSheet}>
           <View style={styles.captureTutorialHeader}>
             <View style={styles.captureTutorialHeaderCopy}>
-              <Text style={styles.captureTutorialEyebrow}>{isFilipino ? '6 NA LARAWAN PARA SA SCAN' : '6 scan photos'}</Text>
               <Text style={styles.captureTutorialTitle}>{isFilipino ? 'Paano ipakita ang iyong buhok' : 'How to show your hair'}</Text>
             </View>
             <Pressable
@@ -1766,7 +1915,6 @@ function LiveHairCameraPanel({
       : styles.liveStatusDotActive;
   const localizedCurrentView = getLocalizedCaptureView(currentView, language);
   const shortViewHint = getViewCaptureLabel(localizedCurrentView);
-  const hairDisplayTip = localizedCurrentView?.displayTip || (isFilipino ? 'Ilugay, ipagitna, at tiyaking maliwanag ang buhok.' : 'Keep hair loose, centered, and well lit.');
   const currentTutorialTips = Array.isArray(localizedCurrentView?.tutorialTips) ? localizedCurrentView.tutorialTips.slice(0, 2) : [];
   const currentViewKey = currentView?.key || currentView?.label || '';
   const previewPhotoUri = currentPhoto?.uri || pendingCapturePreviewUri || '';
@@ -1798,6 +1946,8 @@ function LiveHairCameraPanel({
   const currentPhotoUriRef = useRef(currentPhoto?.uri || '');
   const voiceCaptureBlockedRef = useRef(false);
   const capturePoseReadyRef = useRef(isCapturePoseReady);
+  const readyAnnouncementViewRef = useRef('');
+  const readyAnnouncementSpeakingRef = useRef(false);
 
   currentPhotoUriRef.current = currentPhoto?.uri || '';
   capturePoseReadyRef.current = isCapturePoseReady;
@@ -1812,6 +1962,7 @@ function LiveHairCameraPanel({
   const startVoiceListening = React.useCallback(async () => {
     clearVoiceRestartTimer();
     if (!NativeSpeechRecognition || !voiceCaptureEnabledRef.current) return;
+    if (readyAnnouncementSpeakingRef.current) return;
     if (voiceCountdownActiveRef.current || currentPhotoUriRef.current || voiceCaptureBlockedRef.current) return;
     if (voiceRecognitionActiveRef.current || voiceRecognitionStartingRef.current) return;
 
@@ -2043,6 +2194,7 @@ function LiveHairCameraPanel({
       voiceRecognitionActiveRef.current = false;
       voiceRecognitionStartingRef.current = false;
       setIsVoiceListening(false);
+      if (readyAnnouncementSpeakingRef.current) return;
       if (!voiceCaptureEnabledRef.current || voiceCountdownActiveRef.current || currentPhotoUriRef.current) return;
       clearVoiceRestartTimer();
       voiceRestartTimeoutRef.current = setTimeout(() => {
@@ -2058,6 +2210,96 @@ function LiveHairCameraPanel({
       endSubscription.remove();
     };
   }, [clearVoiceRestartTimer, runCaptureCountdown, startVoiceListening]);
+
+  useEffect(() => {
+    if (currentPhoto?.uri) {
+      readyAnnouncementViewRef.current = '';
+      if (readyAnnouncementSpeakingRef.current) {
+        readyAnnouncementSpeakingRef.current = false;
+        Speech.stop();
+      }
+      return undefined;
+    }
+
+    const canAnnounceReady = Boolean(
+      currentViewKey
+      && isCapturePoseReady
+      && !isCapturing
+      && !isUploading
+      && !isAnalyzing
+      && activeCaptureCountdown === 0
+      && readyAnnouncementViewRef.current !== currentViewKey
+    );
+    if (!canAnnounceReady) {
+      if (
+        readyAnnouncementSpeakingRef.current
+        && (!isCapturePoseReady || isCapturing || isUploading || isAnalyzing || activeCaptureCountdown > 0)
+      ) {
+        readyAnnouncementSpeakingRef.current = false;
+        Speech.stop();
+      }
+      return undefined;
+    }
+
+    const announceTimer = setTimeout(() => {
+      if (
+        !capturePoseReadyRef.current
+        || currentPhotoUriRef.current
+        || voiceCaptureBlockedRef.current
+        || voiceCountdownActiveRef.current
+        || readyAnnouncementViewRef.current === currentViewKey
+      ) return;
+
+      readyAnnouncementViewRef.current = currentViewKey;
+      readyAnnouncementSpeakingRef.current = true;
+      clearVoiceRestartTimer();
+      try {
+        NativeSpeechRecognition?.abort();
+      } catch (_voiceAbortError) {
+        // Recognition may already be idle.
+      }
+      voiceRecognitionActiveRef.current = false;
+      voiceRecognitionStartingRef.current = false;
+      setIsVoiceListening(false);
+
+      const finishAnnouncement = () => {
+        if (!readyAnnouncementSpeakingRef.current) return;
+        readyAnnouncementSpeakingRef.current = false;
+        if (voiceCaptureEnabledRef.current && !currentPhotoUriRef.current) {
+          voiceRestartTimeoutRef.current = setTimeout(() => {
+            voiceRestartTimeoutRef.current = null;
+            startVoiceListening();
+          }, 350);
+        }
+      };
+
+      Speech.speak(
+        isFilipino ? 'Handa nang kunan ang larawan.' : 'Photo is ready for capture.',
+        {
+          language: speechLanguage,
+          pitch: 1,
+          rate: 0.9,
+          onDone: finishAnnouncement,
+          onStopped: finishAnnouncement,
+          onError: finishAnnouncement,
+        }
+      );
+    }, 700);
+
+    return () => clearTimeout(announceTimer);
+  }, [
+    activeCaptureCountdown,
+    clearVoiceRestartTimer,
+    currentPhoto?.uri,
+    currentViewKey,
+    isAnalyzing,
+    isCapturePoseReady,
+    isCapturing,
+    isFilipino,
+    isUploading,
+    speechLanguage,
+    startVoiceListening,
+  ]);
 
   useEffect(() => {
     if (currentPhoto?.uri) {
@@ -2355,21 +2597,6 @@ function LiveHairCameraPanel({
               <Text style={[styles.liveCaptureGuideText, { color: roles.primaryActionBackground }]}>{isFilipino ? 'Gabay' : 'Guide'}</Text>
             </Pressable>
           </View>
-          <Text style={[styles.liveCaptureInstructionTip, { color: roles.bodyText }]} numberOfLines={2}>
-            {hairDisplayTip}
-          </Text>
-          {!currentPhoto?.uri && currentTutorialTips.length ? (
-            <View style={styles.liveCaptureInstructionBullets}>
-              {currentTutorialTips.map((tip) => (
-                <View key={tip} style={styles.liveCaptureInstructionBullet}>
-                  <View style={[styles.liveCaptureInstructionDot, { backgroundColor: roles.primaryActionBackground }]} />
-                  <Text style={[styles.liveCaptureInstructionBulletText, { color: roles.bodyText }]} numberOfLines={2}>
-                    {tip}
-                  </Text>
-                </View>
-              ))}
-            </View>
-          ) : null}
         </View>
         {!currentPhoto?.uri && effectiveCameraError ? (
           <View style={styles.liveCameraErrorNotice}>
@@ -2673,7 +2900,6 @@ function PreAnalysisPhotoReview({
   onPreview,
   onRetake,
   onRetryValidation,
-  onRunAnalysis,
 }) {
   const { width: viewportWidth } = useWindowDimensions();
   const [isValidationModalVisible, setIsValidationModalVisible] = useState(false);
@@ -2684,7 +2910,6 @@ function PreAnalysisPhotoReview({
     Math.min(96, Math.floor((Math.min(viewportWidth, theme.layout.contentMaxWidth) - 80) / 3))
   );
   const readyCount = photos.filter(Boolean).length;
-  const allReady = readyCount === requiredViews.length && requiredViews.length > 0;
   const validationMessage = typeof validation?.message === 'string'
     ? validation.message
     : validation?.message?.message || '';
@@ -2700,7 +2925,6 @@ function PreAnalysisPhotoReview({
     validation?.ok === true
     && validation?.visualScreeningCompleted === true
     && validation?.accessoriesDetected === false
-    && String(validation?.hairAuthenticityStatus || '').trim().toLowerCase() === 'likely_natural'
     && validation?.sameSubjectVerified === true
     && validation?.verificationToken
   );
@@ -2885,37 +3109,6 @@ function PreAnalysisPhotoReview({
               </Text>
             </View>
           ))}
-        </View>
-
-        <View style={styles.preAnalysisActions}>
-          <AppButton
-            title={isValidating
-              ? 'Checking photos...'
-              : isAnalyzing
-                ? 'Analyzing...'
-                : validationRetryable
-                  ? 'Try photo check again'
-                  : validationFailed
-                    ? 'Retake required'
-                    : 'Continue to analysis'}
-            onPress={validationRetryable ? onRetryValidation : onRunAnalysis}
-            loading={isValidating || isAnalyzing}
-            disabled={
-              !allReady
-              || (!validationRetryable && !visualVerificationComplete)
-              || isValidating
-              || isAnalyzing
-              || isSaving
-            }
-            trailing={(
-              <MaterialCommunityIcons
-                name={validationRetryable ? 'refresh' : 'arrow-right'}
-                size={19}
-                color="#FFFFFF"
-              />
-            )}
-            fullWidth
-          />
         </View>
 
         <View style={styles.preAnalysisList}>
@@ -3180,7 +3373,7 @@ function AnalysisLoadingSplash({ resolvedTheme, photos = [] }) {
           </Animated.View>
           <View style={styles.analysisScanHeaderText}>
           <Text style={styles.analysisSplashTitle}>Analyzing hair</Text>
-            <Text style={styles.analysisSplashText}>Reviewing your six photos to prepare a clear result.</Text>
+            <Text style={styles.analysisSplashText}>Reviewing your four hair-focused photos to prepare a clear result.</Text>
           </View>
         </View>
       </View>
@@ -3282,7 +3475,7 @@ const FIRST_TIME_QUESTION_STEPS = [
   },
   {
     key: 'dandruffOrFlakes',
-    title: 'Do you notice dandruff or flakes?',
+    title: 'Do you notice visible flaking near your scalp or roots?',
     type: 'choice',
     optionsKey: 'dandruffLevel',
   },
@@ -3382,7 +3575,7 @@ const FILIPINO_QUESTION_TITLES = {
   hairTexture: 'Ano ang natural na pattern ng iyong buhok?',
   washFrequency: 'Gaano kadalas mong hinuhugasan ang iyong buhok?',
   scalpItch: 'Makati ba ang iyong anit?',
-  dandruffOrFlakes: 'Napapansin mo ba ang balakubak o mga flakes?',
+  dandruffOrFlakes: 'Napapansin mo ba ang nakikitang flakes malapit sa anit o ugat?',
   oilyAfterWash: 'Mabilis bang maging mamantika ang iyong anit pagkatapos maghugas?',
   dryOrRough: 'Alin ang pinakamahusay na naglalarawan sa kondisyon ng iyong buhok?',
   hairFall: 'Napansin mo ba kamakailan ang pagdami ng pagkaputol o paglagas ng buhok?',
@@ -3409,7 +3602,7 @@ const FILIPINO_OPTION_LABELS = {
   dandruffLevel: { no: 'Wala', a_little: 'Kaunti', a_lot: 'Marami' },
   quickOiliness: { no: 'Hindi', sometimes: 'Paminsan-minsan', yes: 'Oo' },
   drynessLevel: {
-    normal_balanced: 'Normal/Balansyado', dry: 'Tuyo', rough: 'Magaspang', oily: 'Mamantika', damaged: 'May pinsala', brittle: 'Marupok', frizzy: 'Buhaghag',
+    normal_balanced: 'Normal/Balansyado', dry: 'Tuyo', rough: 'Magaspang', oily: 'Mamantika',
   },
   hairFallLevel: { no: 'Hindi', not_sure: 'Hindi sigurado', yes: 'Oo' },
   chemicalProcessHistory: { no: 'Hindi', yes: 'Oo' },
@@ -3417,7 +3610,7 @@ const FILIPINO_OPTION_LABELS = {
   recommendationFollowThrough: { yes_consistently: 'Oo, palagi', sometimes: 'Paminsan-minsan', not_yet: 'Hindi pa' },
   hairProgress: { better: 'Mas mabuti', same: 'Halos pareho', worse: 'Mas malala', not_sure: 'Hindi sigurado' },
   followUpChanges: {
-    less_dryness: 'Mas hindi na tuyo', less_oiliness: 'Mas hindi na mamantika', less_hair_fall: 'Mas kaunti ang paglagas', less_dandruff: 'Mas kaunti ang balakubak', softer_hair: 'Mas malambot ang buhok', no_major_change: 'Walang malaking pagbabago', got_worse: 'Mas lumala',
+    less_dryness: 'Mas hindi na tuyo', less_oiliness: 'Mas hindi na mamantika', less_hair_fall: 'Mas kaunti ang paglagas', less_dandruff: 'Mas kaunti ang nakikitang flakes', softer_hair: 'Mas malambot ang buhok', no_major_change: 'Walang malaking pagbabago', got_worse: 'Mas lumala',
   },
   yesNo: { yes: 'Oo', no: 'Hindi' },
   routineChangeFocus: {
@@ -3436,7 +3629,7 @@ const FILIPINO_QUESTION_MATTER_COPY = {
   hairTexture: 'Tinutulungan ng pattern ng buhok ang AI na maunawaan ang hugis, pag-urong, at nakikitang haba nito sa mga larawan.',
   washFrequency: 'Nakaaapekto ang dalas ng paghuhugas sa langis, pagkatuyo, buildup, at kinang na nakikita sa iyong buhok.',
   scalpItch: 'Nakakatulong ang pangangati upang matukoy kung may pagkatuyo, pamumula, flakes, o iritasyon sa anit.',
-  dandruffOrFlakes: 'Tinutulungan ng impormasyong ito ang AI na ihiwalay ang balakubak at buildup mula sa natural na texture ng buhok.',
+  dandruffOrFlakes: 'Tinutulungan nito ang AI na ihambing ang nakikitang flakes o buildup sa larawan. Hindi ito diagnosis.',
   oilyAfterWash: 'Nakakatulong ito upang malaman kung normal na kinang o sobrang langis sa anit ang nakikita sa larawan.',
   dryOrRough: 'Ang kondisyon ng buhok ay nagbibigay ng konteksto sa pagkatuyo, gaspang, langis, pinsala, at pagkabuhaghag.',
   hairFall: 'Nakakatulong ang impormasyon tungkol sa paglagas o pagkaputol sa pagsusuri ng density at nakikitang pagnipis.',
@@ -3488,7 +3681,7 @@ const QUESTION_MATTER_COPY = {
     daily: 'Daily washing can make some hair look cleaner but may also dry out the ends, so the AI checks if dryness or frizz is routine-related.',
     every_2_3_days: 'Washing every 2-3 days is a common routine. It helps the AI compare visible oil, shine, and scalp condition against a balanced wash pattern.',
     '1_2_times_weekly': 'Washing 1-2 times a week may allow more oil or buildup to appear, so the AI weighs scalp shine and flakes more carefully.',
-    less_often: 'Washing less often matters because oil, buildup, dandruff, or dullness can affect how healthy the hair appears during the scan.',
+    less_often: 'Washing less often matters because oil, buildup, visible flaking, or dullness can affect how the hair appears during the scan.',
   },
   scalpItch: {
     default: 'Scalp itch helps the AI understand whether visible redness, flakes, or scalp irritation may be affecting hair condition.',
@@ -3498,14 +3691,14 @@ const QUESTION_MATTER_COPY = {
   },
   dandruffOrFlakes: {
     default: 'Dandruff or flakes help the AI separate scalp buildup from hair texture, shine, and dryness in the photos.',
-    no: 'No flakes means the AI can treat visible white marks or dullness as less likely to be dandruff-related.',
-    a_little: 'A little dandruff may affect scalp appearance, so the AI checks whether flakes are minor or visually affecting the scan.',
+    no: 'This helps the AI compare your answer with any visible flake-like particles without making a diagnosis.',
+    a_little: 'A little visible flaking helps the AI interpret the scalp/root photo more carefully.',
     a_lot: 'A lot of flakes can signal scalp buildup or irritation, which may require care before donation review.',
   },
   oilyAfterWash: {
-    default: 'Oiliness after washing helps the AI judge whether shine in the photo is healthy shine or excess scalp oil.',
+    default: 'Oiliness after washing helps the AI separate ordinary visible shine from oily-looking roots.',
     no: 'If your scalp does not get oily quickly, visible shine is more likely to be normal hair shine than excess oil.',
-    sometimes: 'Sometimes getting oily helps the AI treat shine and scalp appearance as variable instead of automatically unhealthy.',
+    sometimes: 'Sometimes getting oily helps the AI treat shine and root appearance as variable.',
     yes: 'Quick oiliness can make hair look heavy or greasy, so the AI checks whether oil is affecting visible condition.',
   },
   hairFall: {
@@ -3546,21 +3739,18 @@ const QUESTION_MATTER_COPY = {
     Coily: 'Coily hair pattern can shrink more in photos, so the AI weighs visible length and shape together.',
   },
   dryOrRough: {
-    default: 'Hair condition helps the AI interpret whether today\'s look reflects balance, dryness, roughness, oiliness, damage, brittleness, or frizz.',
+    default: 'Hair condition helps the AI interpret whether today\'s look reflects a balanced, dry, rough, or oily appearance.',
     normal_balanced: 'Normal or balanced hair gives the AI a cleaner baseline for checking shine, softness, and visible strand health.',
     dry: 'Dry hair can make ends look dull or frizzy, so the AI checks whether moisture loss is affecting the scan.',
     rough: 'Rough hair can point to friction, dryness, or surface damage, which affects how the AI reads texture and ends.',
     oily: 'Oily hair can make strands look heavier or shinier, so the AI checks whether scalp oil is affecting the scan.',
-    damaged: 'Damaged hair matters because split ends, breakage, or weakness can change how donation readiness is assessed.',
-    brittle: 'Brittle hair can break more easily, so the AI looks more closely at strand strength and visible damage.',
-    frizzy: 'Frizzy hair can make the surface look uneven, so the AI weighs frizz alongside true dryness or damage.',
   },
   noticedChanges: {
     default: 'Noticed changes help the AI focus its comparison between your previous scan and today\'s photos.',
     less_dryness: 'Less dryness helps the AI check if the ends now look smoother, less dull, and more donation-ready.',
     less_oiliness: 'Less oiliness helps the AI judge whether scalp shine and heaviness improved since the last scan.',
     less_hair_fall: 'Less hair fall helps the AI compare density and scalp visibility with your previous result.',
-    less_dandruff: 'Less dandruff helps the AI review whether flakes or scalp buildup are less visible now.',
+    less_dandruff: 'Less visible flaking helps the AI compare whether flake-like particles or buildup are less visible now.',
     softer_hair: 'Softer hair helps the AI look for smoother texture, better shine, and fewer rough-looking areas.',
     no_major_change: 'No major change tells the AI to expect a similar result and focus on small differences in length or ends.',
     got_worse: 'Worse condition tells the AI to look for new dryness, flakes, frizz, breakage, or scalp concerns.',
@@ -3591,22 +3781,22 @@ const QUESTION_MATTER_COPY = {
     other: 'Other changes give the AI general context that your current scan may not match your previous routine.',
   },
   healthierNow: {
-    default: 'This helps the AI compare your own condition impression with visible changes in the photos.',
-    yes: 'If you feel it is healthier, the AI checks for supporting signs like better shine, smoother texture, and healthier ends.',
-    no: 'If it does not feel healthier, the AI looks for remaining dryness, frizz, flakes, or damage that may need care.',
+    default: 'This helps the AI compare your own impression with visible changes in the photos.',
+    yes: 'If you notice fewer concerns, the AI checks for visible changes such as shine, smoother texture, and less fraying.',
+    no: 'If you still notice concerns, the AI compares them with visible dryness, frizz, flakes, or damage.',
     not_sure: 'Not sure tells the AI to rely more on the photo evidence and saved history before judging progress.',
   },
 };
 
 const QUESTION_HELPER_COPY = {
-  scalpItch: 'Understanding your scalp health helps us ensure the highest quality for hair recipients.',
+  scalpItch: 'This answer gives context for visible scalp and root-area observations in the photos.',
 };
 
 const QUESTION_CHOICE_COPY = {
   scalpItch: {
-    never: 'My scalp feels healthy and calm daily.',
-    sometimes: 'Occasional dryness or mild irritation.',
-    often: 'Frequent itching or visible redness.',
+    never: 'I do not usually notice scalp discomfort.',
+    sometimes: 'I sometimes notice dryness or discomfort.',
+    often: 'I often notice itching or visible discomfort.',
   },
 };
 
@@ -3697,7 +3887,7 @@ const normalizeConditionTone = (condition = '') => {
   if (normalized.includes('healthy') || normalized.includes('good')) {
     return {
       dotColor: '#4FAE71',
-      label: 'Healthy',
+      label: 'No Visible Concerns Detected',
       icon: 'check-decagram-outline',
       iconColor: '#2B7A4B',
       toneSurface: '#E9F8EE',
@@ -3707,7 +3897,7 @@ const normalizeConditionTone = (condition = '') => {
   if (normalized.includes('dry') || normalized.includes('damaged')) {
     return {
       dotColor: '#E49C49',
-      label: 'Needs care',
+      label: 'Visible Concerns Detected',
       icon: 'alert-circle-outline',
       iconColor: '#9B5F1B',
       toneSurface: '#FFF4E8',
@@ -3717,7 +3907,7 @@ const normalizeConditionTone = (condition = '') => {
   if (normalized.includes('treated') || normalized.includes('rebonded') || normalized.includes('colored')) {
     return {
       dotColor: '#7A8AE6',
-      label: 'Treated',
+      label: 'Visible Concerns Detected',
       icon: 'palette-outline',
       iconColor: '#485CC5',
       toneSurface: '#EEF1FF',
@@ -3726,7 +3916,7 @@ const normalizeConditionTone = (condition = '') => {
 
   return {
     dotColor: theme.colors.brandPrimary,
-    label: condition || 'Checked',
+    label: condition ? 'Visible Concerns Detected' : 'Visible check completed',
     icon: 'line-scan',
     iconColor: theme.colors.brandPrimary,
     toneSurface: theme.colors.brandPrimaryMuted,
@@ -3936,21 +4126,8 @@ const buildRetryCountdownMessage = (errorState, secondsRemaining) => {
   return `Hair analysis is busy right now. Please wait ${secondsRemaining} seconds, then try again.`;
 };
 
-const WEEKLY_SCAN_INTERVAL_DAYS = 7;
-const WEEKLY_SCAN_INTERVAL_MS = WEEKLY_SCAN_INTERVAL_DAYS * 24 * 60 * 60 * 1000;
-
 const formatWeeklyScanDateTime = (value) => {
-  if (!value) return 'next week';
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return 'next week';
-
-  return new Intl.DateTimeFormat('en-PH', {
-    month: 'long',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(date);
+  return formatHairAnalysisDateTime(value) || 'next week';
 };
 
 const getLatestAiRecommendation = (entry = null) => {
@@ -3973,24 +4150,30 @@ const buildWeeklyScanTip = (latestEntry = null) => {
   const recommendationTitle = String(recommendation?.title || '').trim();
   const recommendationText = String(recommendation?.recommendation_text || '').trim();
   const normalizedCondition = condition.toLowerCase();
-  const isHealthy = normalizedCondition.includes('healthy')
+  const isLegacyNoConcern = normalizedCondition.includes('healthy')
+    && !normalizedCondition.includes('unhealthy')
     && !normalizedCondition.includes('dry')
     && !normalizedCondition.includes('damage')
     && !normalizedCondition.includes('frizz')
     && !normalizedCondition.includes('oily');
+  const displayCondition = normalizedCondition.includes('unhealthy')
+    ? 'Visible Concerns Detected'
+    : isLegacyNoConcern
+      ? 'No Visible Concerns Detected'
+      : condition;
 
-  if (isHealthy) {
+  if (isLegacyNoConcern) {
     if (recommendationText) {
-      return `Your last AI scan marked your hair as ${condition}. To maintain it this week: ${recommendationText}`;
+      return `Your last AI scan found ${displayCondition}. To maintain it this week: ${recommendationText}`;
     }
     if (summary) {
-      return `Your last AI scan marked your hair as ${condition}. Keep the same routine this week and avoid extra heat or chemical treatment so the next scan can compare your progress clearly.`;
+      return `Your last AI scan found ${displayCondition}. Keep the same routine this week and avoid extra heat or chemical treatment so the next scan can compare your progress clearly.`;
     }
-    return 'Your last AI scan looked healthy. Maintain your current routine this week, protect the ends, and avoid extra heat styling before your next scan.';
+    return 'Your last AI scan found no visible concerns. Maintain your current routine this week, protect the ends, and avoid extra heat styling before your next scan.';
   }
 
   if (recommendationText) {
-    return `Based on your last AI result${condition ? ` showing ${condition}` : ''}, focus on this before the next scan: ${recommendationTitle ? `${recommendationTitle} - ` : ''}${recommendationText}`;
+    return `Based on your last AI result${displayCondition ? ` showing ${displayCondition}` : ''}, focus on this before the next scan: ${recommendationTitle ? `${recommendationTitle} - ` : ''}${recommendationText}`;
   }
 
   if (summary) {
@@ -4001,8 +4184,8 @@ const buildWeeklyScanTip = (latestEntry = null) => {
 };
 
 const buildWeeklyScanLimitState = (latestEntry = null, now = Date.now()) => {
-  const latestScanTime = new Date(latestEntry?.screening?.created_at || 0).getTime();
-  if (!Number.isFinite(latestScanTime) || latestScanTime <= 0) {
+  const availability = getHairAnalysisAvailability(latestEntry?.screening?.created_at, now);
+  if (!availability.hasPreviousCheck) {
     return {
       isLocked: false,
       nextScanDate: null,
@@ -4013,10 +4196,10 @@ const buildWeeklyScanLimitState = (latestEntry = null, now = Date.now()) => {
     };
   }
 
-  const nextScanDate = new Date(latestScanTime + WEEKLY_SCAN_INTERVAL_MS);
-  const isLocked = now < nextScanDate.getTime();
+  const nextScanDate = availability.nextCheckAt;
+  const isLocked = availability.isLocked;
   const nextScanLabel = formatWeeklyScanDateTime(nextScanDate);
-  const lastScanLabel = formatWeeklyScanDateTime(new Date(latestScanTime));
+  const lastScanLabel = formatWeeklyScanDateTime(availability.lastCheckAt);
   const tip = buildWeeklyScanTip(latestEntry);
 
   return {
@@ -4314,6 +4497,9 @@ export function DonorHairSubmissionScreen() {
   const [analysisReviewValues, setAnalysisReviewValues] = useState(() => buildHairReviewDefaultValues(null));
   const [isEditingAnalysisReview, setIsEditingAnalysisReview] = useState(false);
   const [resultDetailIndex, setResultDetailIndex] = useState(0);
+  const [consistencyIssues, setConsistencyIssues] = useState([]);
+  const [consistencyIssueIndex, setConsistencyIssueIndex] = useState(0);
+  const [consistencyResolutions, setConsistencyResolutions] = useState({});
   const { user, profile, resolvedTheme } = useAuth();
   const { width: viewportWidth } = useWindowDimensions();
   const roles = resolveThemeRoles(resolvedTheme);
@@ -4332,6 +4518,7 @@ export function DonorHairSubmissionScreen() {
     requiredViews,
     analysis,
     donationRequirement,
+    referenceImages,
     error,
     successMessage,
     isLoadingContext,
@@ -4654,7 +4841,7 @@ export function DonorHairSubmissionScreen() {
 
     const currentAnswers = getCurrentQuestionnaireAnswers();
     try {
-      return await analyzePhotos({
+      const result = await analyzePhotos({
         questionnaireAnswers: {
           ...currentAnswers,
         },
@@ -4666,6 +4853,16 @@ export function DonorHairSubmissionScreen() {
         correctedDetails: options.correctedDetails || null,
         allowPhotoQualityFallback: Boolean(options.allowPhotoQualityFallback),
       });
+      if (result?.success && result.analysis) {
+        const issues = buildHairAnalysisConsistencyIssues({
+          answers: currentAnswers,
+          analysis: result.analysis,
+        });
+        setConsistencyIssues(issues);
+        setConsistencyIssueIndex(0);
+        setConsistencyResolutions({});
+      }
+      return result;
     } finally {
       analysisAttemptInFlightRef.current = false;
     }
@@ -5004,6 +5201,14 @@ export function DonorHairSubmissionScreen() {
     if (!analysis) return;
     const donationAssessment = buildDonationAssessment({ analysis, donationRequirement });
     const donationAlignedAnalysis = buildDonationAlignedAnalysis(analysis, donationAssessment);
+    const currentAnswers = getCurrentQuestionnaireAnswers();
+    const confirmedReviewValues = buildHumanReviewValuesForSave(analysisReviewValues, donationAlignedAnalysis);
+    const consistencyRecord = buildConsistencyRecord({
+      answers: currentAnswers,
+      analysis: donationAlignedAnalysis,
+      issues: consistencyIssues,
+      resolutions: consistencyResolutions,
+    });
     const personalizedRecommendations = buildVisibleHairRecommendations({
       analysis,
       donationAssessment,
@@ -5011,6 +5216,14 @@ export function DonorHairSubmissionScreen() {
     const analysisForSave = {
       ...donationAlignedAnalysis,
       recommendations: personalizedRecommendations,
+      questionnaire_answers: { ...currentAnswers },
+      self_assessment_consistency: consistencyRecord,
+      ai_visual_findings: consistencyRecord.ai_visible_findings,
+      user_reviewed_details: {
+        reviewed_at: new Date().toISOString(),
+        values: confirmedReviewValues,
+        source: 'donor_final_review',
+      },
     };
 
     logAppEvent('donor_hair_submission.confirmation', 'User confirmed AI result for saving.', {
@@ -5021,8 +5234,6 @@ export function DonorHairSubmissionScreen() {
       humanReviewedSpecs: true,
     });
 
-    const currentAnswers = getCurrentQuestionnaireAnswers();
-    const confirmedReviewValues = buildHumanReviewValuesForSave(analysisReviewValues, analysisForSave);
     const result = await submitSubmission(confirmedReviewValues, {
       questionnaireAnswers: {
         ...currentAnswers,
@@ -5049,6 +5260,9 @@ export function DonorHairSubmissionScreen() {
       setPhotoIndex(0);
       setStepIndex(0);
       setResultConfirmationMode('pending');
+      setConsistencyIssues([]);
+      setConsistencyIssueIndex(0);
+      setConsistencyResolutions({});
       allowAnalyzerExitRef.current = true;
       setIsAnalyzerActive(false);
       router.replace('/donor/donations');
@@ -5304,6 +5518,7 @@ export function DonorHairSubmissionScreen() {
               language={language}
               value={effectiveQuestionnaireValues?.[fieldName] ?? field.value}
               options={getLocalizedQuestionOptions(currentQuestion.optionsKey, language)}
+              referenceImages={referenceImages}
               onChange={(nextValue) => {
                 if (currentQuestion.type === 'choice') {
                   handleQuestionChoiceChange({
@@ -5438,6 +5653,7 @@ export function DonorHairSubmissionScreen() {
             validationMode: 'live_face_and_accessory',
             accessoryCheckPassed: true,
             accessoryCheckConfidence: Number(accessoryCheck.confidence || 0),
+            photoVerificationToken: accessoryCheck.photoVerificationToken,
             capturedAt,
           },
           validationDataUrl: validationPhoto?.dataUrl || null,
@@ -5750,7 +5966,6 @@ export function DonorHairSubmissionScreen() {
       photoPreflightState?.ok === true
       && photoPreflightState?.visualScreeningCompleted === true
       && photoPreflightState?.accessoriesDetected === false
-      && String(photoPreflightState?.hairAuthenticityStatus || '').trim().toLowerCase() === 'likely_natural'
       && photoPreflightState?.verificationToken
     );
     if (!hasVerifiedPhotos) return;
@@ -5978,7 +6193,7 @@ export function DonorHairSubmissionScreen() {
             </View>
             <View style={styles.readinessFloatingPrimaryCopy}>
               <Text style={styles.readinessFloatingPrimaryTitle}>Open camera</Text>
-              <Text style={styles.readinessFloatingPrimarySubtitle}>6 guided hair views</Text>
+              <Text style={styles.readinessFloatingPrimarySubtitle}>4 guided hair views</Text>
             </View>
             <MaterialCommunityIcons name="arrow-right" size={19} color={theme.colors.textOnBrand} />
           </LinearGradient>
@@ -5994,6 +6209,9 @@ export function DonorHairSubmissionScreen() {
     setIsEditingAnalysisReview(false);
     setResultDetailIndex(0);
     setResultConfirmationMode('pending');
+    setConsistencyIssues([]);
+    setConsistencyIssueIndex(0);
+    setConsistencyResolutions({});
     setPhotoIndex(0);
     setQuestionIndex(0);
     setStepIndex(0);
@@ -6001,7 +6219,7 @@ export function DonorHairSubmissionScreen() {
   };
 
   const renderResultActionDock = () => {
-    if (stepIndex !== 3 || !analysis) return null;
+    if (stepIndex !== 3 || !analysis || consistencyIssueIndex < consistencyIssues.length) return null;
     const donationAssessment = buildDonationAssessment({ analysis, donationRequirement });
 
     return (
@@ -6068,6 +6286,85 @@ export function DonorHairSubmissionScreen() {
             </LinearGradient>
           </Pressable>
         </View>
+      </LinearGradient>
+    );
+  };
+
+  const renderPhotoReviewActionDock = () => {
+    if (
+      stepIndex !== 3
+      || analysis
+      || weeklyScanLimit.isLocked
+      || isAnalysisLaunching
+      || (pageErrorState && !isPhotoRetakeErrorState(pageErrorState))
+    ) return null;
+
+    const activeValidation = pageErrorState
+      ? {
+          ok: false,
+          retryable: pageErrorState?.photoVerificationRequired === true,
+        }
+      : photoPreflightState;
+    const readyCount = photos.filter(Boolean).length;
+    const allReady = readyCount === requiredViews.length && requiredViews.length > 0;
+    const validationFailed = Boolean(activeValidation && activeValidation.ok === false);
+    const validationRetryable = validationFailed && activeValidation?.retryable === true;
+    const visualVerificationComplete = Boolean(
+      activeValidation?.ok === true
+      && activeValidation?.visualScreeningCompleted === true
+      && activeValidation?.accessoriesDetected === false
+      && activeValidation?.sameSubjectVerified === true
+      && activeValidation?.verificationToken
+    );
+    const reviewIsValidating = isPhotoPreflightRunning || pendingCaptureValidationCount > 0;
+    const reviewIsAnalyzing = isAnalyzing || isAnalysisLaunching;
+    const actionDisabled = Boolean(
+      !allReady
+      || (!validationRetryable && !visualVerificationComplete)
+      || reviewIsValidating
+      || reviewIsAnalyzing
+      || isSaving
+    );
+    const actionTitle = reviewIsValidating
+      ? 'Checking photos...'
+      : reviewIsAnalyzing
+        ? 'Analyzing...'
+        : validationRetryable
+          ? 'Try photo check again'
+          : validationFailed
+            ? 'Retake required'
+            : 'Continue to analysis';
+
+    const handleReviewAction = async () => {
+      if (validationRetryable) {
+        if (pageErrorState) clearAnalysisError();
+        await validatePhotoReview('review_manual_retry');
+        return;
+      }
+      await runReviewedAnalysis();
+    };
+
+    return (
+      <LinearGradient
+        colors={[theme.colors.backgroundPrimary, theme.colors.palette.blush100]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.photoReviewFloatingDock}
+      >
+        <AppButton
+          title={actionTitle}
+          onPress={handleReviewAction}
+          loading={reviewIsValidating || reviewIsAnalyzing}
+          disabled={actionDisabled}
+          trailing={(
+            <MaterialCommunityIcons
+              name={validationRetryable ? 'refresh' : 'arrow-right'}
+              size={19}
+              color="#FFFFFF"
+            />
+          )}
+          fullWidth
+        />
       </LinearGradient>
     );
   };
@@ -6210,14 +6507,14 @@ export function DonorHairSubmissionScreen() {
                   <Text style={styles.readinessEyebrow}>PHOTO CHECK</Text>
                   <Text style={styles.readinessTitle}>Your guided scan is ready</Text>
                   <Text style={styles.readinessBody}>
-                    Check your answers, then capture six clear views of your hair.
+                    Check your answers, then capture four clear, hair-focused views.
                   </Text>
                 </View>
               </View>
               <View style={styles.readinessStatusRow}>
                 <View style={styles.readinessStatusChip}>
                   <MaterialCommunityIcons name="camera-outline" size={15} color="#FFFFFF" />
-                  <Text style={styles.readinessStatusText}>6 guided photos</Text>
+                  <Text style={styles.readinessStatusText}>4 guided photos</Text>
                 </View>
                 <View style={styles.readinessStatusChip}>
                   <MaterialCommunityIcons name="shield-check-outline" size={15} color="#FFFFFF" />
@@ -6334,6 +6631,110 @@ export function DonorHairSubmissionScreen() {
         );
       case 3:
         if (analysis) {
+          const consistencyIssue = consistencyIssues[consistencyIssueIndex] || null;
+          if (consistencyIssue) {
+            const resolveConsistencyIssue = (resolution) => {
+              setConsistencyResolutions((current) => ({ ...current, [consistencyIssue.id]: resolution }));
+              setAnalysisReviewValues((current) => (
+                applyConsistencyResolutionToReviewValues(current, consistencyIssue, resolution)
+              ));
+              setConsistencyIssueIndex((current) => current + 1);
+            };
+            const issueNumber = consistencyIssueIndex + 1;
+            const issueCount = consistencyIssues.length;
+
+            return (
+              <View style={styles.consistencyReviewPanel}>
+                <LinearGradient
+                  colors={[theme.colors.palette.wine900, theme.colors.palette.wine700]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.consistencyReviewHeader}
+                >
+                  <View style={styles.consistencyReviewHeaderCopy}>
+                    <View style={styles.consistencyReviewMetaRow}>
+                      <View style={styles.consistencyReviewKicker}>
+                        <MaterialCommunityIcons name="compare" size={16} color={theme.colors.textHeroSoft} />
+                        <Text style={styles.consistencyReviewEyebrow}>ASSESSMENT REVIEW</Text>
+                      </View>
+                      <View style={styles.consistencyProgressBadge}>
+                        <Text style={styles.consistencyProgressText}>{issueNumber} of {issueCount}</Text>
+                      </View>
+                    </View>
+                    <Text style={styles.consistencyReviewTitle}>Review Your Assessment</Text>
+                  </View>
+                </LinearGradient>
+                <View style={styles.consistencyReviewIntro}>
+                  <Text style={styles.consistencyReviewBody}>
+                    Our photo analysis found {issueCount} {issueCount === 1 ? 'detail' : 'details'} that {issueCount === 1 ? 'looks' : 'look'} different from your answers. Please review {issueCount === 1 ? 'it' : 'each one'} before continuing.
+                  </Text>
+                </View>
+                <LinearGradient
+                  colors={[theme.colors.backgroundPrimary, theme.colors.brandPrimaryMuted]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.consistencyIssueCard}
+                >
+                  <Text style={styles.consistencyCategoryLabel}>{consistencyIssue.categoryLabel}</Text>
+                  <View style={styles.consistencyComparisonRow}>
+                    <View style={styles.consistencyComparisonCard}>
+                      <Text style={styles.consistencyComparisonLabel}>YOU SELECTED</Text>
+                      <Text style={styles.consistencyComparisonValue}>{consistencyIssue.donorAnswer}</Text>
+                    </View>
+                    <MaterialCommunityIcons
+                      name="arrow-right"
+                      size={20}
+                      color={theme.colors.brandPrimarySoft}
+                      style={styles.consistencyComparisonArrow}
+                    />
+                    <View style={[styles.consistencyComparisonCard, styles.consistencyComparisonCardVisual]}>
+                      <Text style={styles.consistencyComparisonLabel}>PHOTO ANALYSIS</Text>
+                      <Text style={styles.consistencyComparisonValue}>{consistencyIssue.visualFinding}</Text>
+                    </View>
+                  </View>
+                  <View style={styles.consistencyExplanationRow}>
+                    <MaterialCommunityIcons name="information-outline" size={19} color={theme.colors.brandPrimary} />
+                    <Text style={styles.consistencyExplanationText}>{consistencyIssue.explanation}</Text>
+                  </View>
+                </LinearGradient>
+                <Text style={styles.consistencyReviewNote}>Which best describes your hair right now?</Text>
+                <View style={styles.consistencyActions}>
+                  <AppButton
+                    title={`Use ${consistencyIssue.visualFinding}`}
+                    leading={<MaterialCommunityIcons name="image-check-outline" size={18} color={theme.colors.textOnBrand} />}
+                    onPress={() => resolveConsistencyIssue('accept_visual_finding')}
+                    fullWidth
+                  />
+                  <AppButton
+                    title={`Keep ${consistencyIssue.donorAnswer}`}
+                    variant="secondary"
+                    leading={<MaterialCommunityIcons name="account-check-outline" size={18} color={theme.colors.brandPrimary} />}
+                    onPress={() => resolveConsistencyIssue('keep_original_answer')}
+                    fullWidth
+                  />
+                  <AppButton
+                    title={`Retake ${consistencyIssue.relevantView}`}
+                    variant="outline"
+                    leading={<MaterialCommunityIcons name="camera-retake-outline" size={18} color={theme.colors.brandPrimary} />}
+                    onPress={() => {
+                      const slotIndex = consistencyIssue.relevantPhotoIndex;
+                      setConsistencyIssues([]);
+                      setConsistencyIssueIndex(0);
+                      setConsistencyResolutions({});
+                      setPhotoPreflightState(null);
+                      photoPreflightKeyRef.current = '';
+                      invalidateCaptureValidation(slotIndex);
+                      removePhoto(slotIndex);
+                      setPhotoIndex(slotIndex);
+                      setStepIndex(2);
+                    }}
+                    fullWidth
+                  />
+                </View>
+              </View>
+            );
+          }
+
           const donationAssessment = buildDonationAssessment({ analysis, donationRequirement });
           const displayAnalysis = buildDonationAlignedAnalysis(analysis, donationAssessment);
           const sideProfileIndex = requiredViews.findIndex((view) => view?.key === 'side_profile');
@@ -6354,10 +6755,24 @@ export function DonorHairSubmissionScreen() {
             donationAssessment,
           });
           const questionnaireGuidanceNote = String(displayAnalysis?.history_assessment || '').trim();
-          const reviewSummaryRows = buildReviewSummaryRows(analysisReviewValues);
+          const reviewSummaryRows = buildReviewSummaryRows(displayAnalysis);
+          const reviewCorrectionRows = buildReviewCorrectionRows(analysisReviewValues, displayAnalysis);
+          const reviewedConsistencyItems = consistencyIssues
+            .filter((issue) => Boolean(consistencyResolutions[issue.id]));
           const resultConditionLabel = getReviewDisplayValue(
             displayAnalysis?.detected_condition || analysisReviewValues.declaredCondition
           );
+          const visibleConcerns = Array.isArray(displayAnalysis?.visible_concerns)
+            ? displayAnalysis.visible_concerns.filter(Boolean)
+            : [];
+          const hasVisibleConcerns = displayAnalysis?.visible_condition_status === 'Visible Concerns Detected'
+            || visibleConcerns.length > 0
+            || displayAnalysis?.dandruff_detected === true
+            || Number(displayAnalysis?.dryness_level) >= 7
+            || Number(displayAnalysis?.damage_level) >= 7;
+          const visibleConditionLabel = hasVisibleConcerns
+            ? 'Visible Concerns Detected'
+            : 'No Visible Concerns Detected';
           const resultDetailPageWidth = Math.max(
             280,
             Math.min(theme.layout.contentMaxWidth, viewportWidth) - theme.spacing.md * 2
@@ -6422,7 +6837,9 @@ export function DonorHairSubmissionScreen() {
                   </Pressable>
 
                   <View style={styles.resultOverviewCopy}>
-                    <Text style={styles.resultOverviewCondition}>{resultConditionLabel}</Text>
+                    <Text style={styles.resultOverviewMetricLabel}>VISIBLE CONDITION</Text>
+                    <Text style={styles.resultOverviewCondition}>{visibleConditionLabel}</Text>
+                    <Text style={styles.resultOverviewSummary}>{resultConditionLabel}</Text>
                     <View style={styles.resultOverviewMetricRow}>
                       <View style={styles.resultOverviewMetric}>
                         <Text style={styles.resultOverviewMetricLabel}>Hair length</Text>
@@ -6529,8 +6946,8 @@ export function DonorHairSubmissionScreen() {
                     <View style={styles.resultDetailAccent} />
                     <View style={styles.resultSectionHeader}>
                       <View style={styles.resultDetailHeaderCopy}>
-                        <Text style={styles.resultSectionTitle}>Review detected details</Text>
-                        <Text style={styles.resultSectionHint}>Edit only obvious measurement or classification mistakes.</Text>
+                        <Text style={styles.resultSectionTitle}>Review analysis details</Text>
+                        <Text style={styles.resultSectionHint}>AI visual findings. Any edit is saved separately as your correction.</Text>
                       </View>
                       <Pressable
                         onPress={() => setIsEditingAnalysisReview((current) => !current)}
@@ -6558,6 +6975,39 @@ export function DonorHairSubmissionScreen() {
                             <Text style={styles.reviewSummaryValue}>{value}</Text>
                           </View>
                         ))}
+                        {reviewCorrectionRows.length ? (
+                          <View style={styles.consistencyResultSummary}>
+                            <Text style={styles.consistencyResultSummaryTitle}>Your corrections</Text>
+                            {reviewCorrectionRows.map(([label, value]) => (
+                              <View key={label} style={styles.consistencyResultSummaryRow}>
+                                <MaterialCommunityIcons name="account-edit-outline" size={17} color={theme.colors.brandPrimary} />
+                                <Text style={styles.consistencyResultSummaryText}>{label}: {value}</Text>
+                              </View>
+                            ))}
+                          </View>
+                        ) : null}
+                        {reviewedConsistencyItems.length ? (
+                          <View style={styles.consistencyResultSummary}>
+                            <Text style={styles.consistencyResultSummaryTitle}>Assessment reviewed</Text>
+                            {reviewedConsistencyItems.map((issue) => {
+                              const keptOriginal = consistencyResolutions[issue.id] === 'keep_original_answer';
+                              return (
+                                <View key={issue.id} style={styles.consistencyResultSummaryRow}>
+                                  <MaterialCommunityIcons
+                                    name="check-circle-outline"
+                                    size={17}
+                                    color={theme.colors.brandPrimary}
+                                  />
+                                  <Text style={styles.consistencyResultSummaryText}>
+                                    {keptOriginal
+                                      ? `${issue.categoryLabel}: you kept ${issue.donorAnswer}; the photo finding remains ${issue.visualFinding}.`
+                                      : `${issue.categoryLabel}: you selected the photo finding, ${issue.visualFinding}.`}
+                                  </Text>
+                                </View>
+                              );
+                            })}
+                          </View>
+                        ) : null}
                       </View>
                     ) : (
                       <View style={styles.reviewEditPanel}>
@@ -6596,7 +7046,7 @@ export function DonorHairSubmissionScreen() {
                           />
                         </View>
                         <View style={styles.correctionFieldGroup}>
-                          <Text style={styles.correctionFieldLabel}>Density</Text>
+                          <Text style={styles.correctionFieldLabel}>Apparent density</Text>
                           <ReviewOptionChips
                             value={analysisReviewValues.declaredDensity}
                             options={HAIR_DENSITY_REVIEW_OPTIONS}
@@ -6607,7 +7057,7 @@ export function DonorHairSubmissionScreen() {
                           />
                         </View>
                         <View style={styles.aiReadOnlyBlock}>
-                          <Text style={styles.aiReadOnlyLabel}>AI condition assessment</Text>
+                          <Text style={styles.aiReadOnlyLabel}>AI visible observation</Text>
                           <Text style={styles.aiReadOnlyValue}>{getReviewDisplayValue(analysisReviewValues.declaredCondition)}</Text>
                         </View>
                         <AppButton
@@ -6691,19 +7141,19 @@ export function DonorHairSubmissionScreen() {
                     </View>
                     <View style={styles.assessmentRows}>
                       <View style={styles.assessmentRow}>
-                        <Text style={styles.assessmentLabel}>Dandruff / flakes</Text>
+                        <Text style={styles.assessmentLabel}>Visible scalp flaking</Text>
                         <Text style={styles.assessmentValue}>{formatDetectedLabel(displayAnalysis.dandruff_detected)}</Text>
                       </View>
                       <View style={styles.assessmentRow}>
-                        <Text style={styles.assessmentLabel}>Dandruff severity</Text>
+                        <Text style={styles.assessmentLabel}>Flaking visibility</Text>
                         <Text style={styles.assessmentValue}>{displayAnalysis.dandruff_severity || 'none'}</Text>
                       </View>
                       <View style={styles.assessmentRow}>
-                        <Text style={styles.assessmentLabel}>Lice / nits</Text>
+                        <Text style={styles.assessmentLabel}>Possible nit-like signs</Text>
                         <Text style={styles.assessmentValue}>{formatDetectedLabel(displayAnalysis.lice_detected)}</Text>
                       </View>
                       <View style={styles.assessmentRow}>
-                        <Text style={styles.assessmentLabel}>Lice confidence</Text>
+                        <Text style={styles.assessmentLabel}>Visual confidence</Text>
                         <Text style={styles.assessmentValue}>{displayAnalysis.lice_confidence || 'none'}</Text>
                       </View>
                     </View>
@@ -6783,7 +7233,6 @@ export function DonorHairSubmissionScreen() {
                 clearAnalysisError();
                 await validatePhotoReview('review_manual_retry');
               }}
-              onRunAnalysis={runReviewedAnalysis}
             />
           );
         }
@@ -6857,7 +7306,6 @@ export function DonorHairSubmissionScreen() {
               setStepIndex(2);
             }}
             onRetryValidation={() => validatePhotoReview('review_manual_retry')}
-            onRunAnalysis={runReviewedAnalysis}
           />
         );
       default:
@@ -7007,6 +7455,7 @@ export function DonorHairSubmissionScreen() {
           )}
           {renderQuestionNavigationDock()}
           {renderReadinessActionDock()}
+          {renderPhotoReviewActionDock()}
           {renderResultActionDock()}
         </View>
         {donationRequirementsIntroModal}
@@ -8019,6 +8468,33 @@ const styles = StyleSheet.create({
   choiceList: {
     gap: theme.spacing.md,
   },
+  choiceGallery: {
+    width: '100%',
+    alignSelf: 'stretch',
+    justifyContent: 'center',
+    gap: 10,
+  },
+  choiceGalleryRow: {
+    width: '100%',
+    alignSelf: 'stretch',
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 10,
+  },
+  choiceGalleryCell: {
+    flex: 1,
+    flexBasis: 0,
+    minWidth: 0,
+    aspectRatio: 1,
+    overflow: 'hidden',
+    borderRadius: 16,
+  },
+  choiceGalleryCellSpacer: {
+    flex: 1,
+    flexBasis: 0,
+    minWidth: 0,
+    aspectRatio: 1,
+  },
   choiceCard: {
     position: 'relative',
     overflow: 'hidden',
@@ -8030,6 +8506,17 @@ const styles = StyleSheet.create({
     borderColor: theme.colors.borderSubtle,
     backgroundColor: theme.colors.backgroundPrimary,
     ...theme.shadows.soft,
+  },
+  choiceGalleryCard: {
+    width: '100%',
+    height: '100%',
+    minHeight: 0,
+    flex: 1,
+    paddingHorizontal: 0,
+    paddingVertical: 0,
+    borderRadius: 16,
+    borderWidth: 1,
+    backgroundColor: theme.colors.surfaceSoft,
   },
   choiceCardActive: {
     borderColor: theme.colors.brandPrimary,
@@ -8059,6 +8546,81 @@ const styles = StyleSheet.create({
     position: 'relative',
     justifyContent: 'center',
   },
+  choiceGalleryContent: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'flex-end',
+    zIndex: 2,
+  },
+  choiceGalleryBackground: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 15,
+  },
+  choiceGalleryImageShade: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 1,
+    borderRadius: 15,
+    backgroundColor: 'rgba(20, 6, 11, 0.16)',
+  },
+  choiceReferenceImage: {
+    width: '100%',
+    height: 112,
+    borderRadius: 12,
+    marginBottom: theme.spacing.sm,
+    backgroundColor: theme.colors.surfaceSoft,
+  },
+  consistencyReviewPanel: {
+    marginHorizontal: theme.spacing.md,
+    marginTop: theme.spacing.md,
+    paddingBottom: theme.spacing.xl,
+  },
+  consistencyReviewHeader: {
+    minHeight: 112,
+    padding: theme.spacing.lg,
+    justifyContent: 'center',
+    borderRadius: 22,
+    overflow: 'hidden',
+    ...theme.shadows.card,
+  },
+  consistencyReviewHeaderCopy: { gap: theme.spacing.sm },
+  consistencyReviewMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.md,
+  },
+  consistencyReviewKicker: { flexDirection: 'row', alignItems: 'center', gap: theme.spacing.xs },
+  consistencyReviewEyebrow: { fontSize: 10, fontWeight: '800', color: theme.colors.textHeroSoft, letterSpacing: 1 },
+  consistencyReviewTitle: { fontSize: 23, lineHeight: 29, fontWeight: '800', color: theme.colors.textOnBrand },
+  consistencyProgressBadge: { paddingHorizontal: 11, paddingVertical: 6, borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.18)' },
+  consistencyProgressText: { fontSize: 11, fontWeight: '800', color: theme.colors.textOnBrand },
+  consistencyReviewIntro: { paddingHorizontal: theme.spacing.xs, paddingTop: theme.spacing.lg },
+  consistencyReviewBody: { fontSize: 15, lineHeight: 23, color: theme.colors.textSecondary },
+  consistencyIssueCard: {
+    marginTop: theme.spacing.lg,
+    marginBottom: theme.spacing.lg,
+    padding: theme.spacing.lg,
+    borderRadius: 22,
+    gap: theme.spacing.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.borderSubtle,
+    ...theme.shadows.card,
+  },
+  consistencyCategoryLabel: { fontSize: 13, fontWeight: '800', color: theme.colors.brandPrimary, textTransform: 'uppercase', letterSpacing: 0.8 },
+  consistencyComparisonRow: { flexDirection: 'row', alignItems: 'center', gap: theme.spacing.sm },
+  consistencyComparisonCard: { flex: 1, minWidth: 0, paddingVertical: theme.spacing.xs },
+  consistencyComparisonCardVisual: { alignItems: 'flex-start' },
+  consistencyComparisonArrow: { flexShrink: 0 },
+  consistencyComparisonLabel: { fontSize: 10, fontWeight: '800', color: theme.colors.brandPrimary, letterSpacing: 0.8 },
+  consistencyComparisonValue: { marginTop: theme.spacing.xs, fontSize: 15, lineHeight: 21, fontWeight: '800', color: theme.colors.textPrimary },
+  consistencyExplanationRow: { flexDirection: 'row', alignItems: 'flex-start', gap: theme.spacing.sm, paddingTop: theme.spacing.md, borderTopWidth: 1, borderTopColor: theme.colors.borderSubtle },
+  consistencyExplanationText: { flex: 1, fontSize: 13, lineHeight: 19, color: theme.colors.textSecondary },
+  consistencyReviewNote: { marginBottom: theme.spacing.md, fontSize: 14, lineHeight: 20, fontWeight: '800', color: theme.colors.textPrimary },
+  consistencyActions: { gap: theme.spacing.sm },
+  consistencyResultSummary: { marginTop: theme.spacing.md, padding: theme.spacing.md, borderRadius: 16, gap: theme.spacing.sm, backgroundColor: theme.colors.brandPrimaryMuted },
+  consistencyResultSummaryTitle: { fontSize: 13, fontWeight: '800', color: theme.colors.brandPrimary },
+  consistencyResultSummaryRow: { flexDirection: 'row', alignItems: 'flex-start', gap: theme.spacing.sm },
+  consistencyResultSummaryText: { flex: 1, fontSize: 12, lineHeight: 18, color: theme.colors.textSecondary },
   choiceIconWrap: {
     position: 'absolute',
     left: 0,
@@ -8084,6 +8646,13 @@ const styles = StyleSheet.create({
     paddingRight: 44,
     gap: 2,
   },
+  choiceGalleryCopy: {
+    width: '100%',
+    paddingLeft: 12,
+    paddingRight: 44,
+    paddingBottom: 12,
+    gap: 0,
+  },
   choiceLabel: {
     fontFamily: theme.typography.fontFamilyDisplay,
     fontSize: theme.typography.semantic.body,
@@ -8094,6 +8663,13 @@ const styles = StyleSheet.create({
   choiceLabelActive: {
     fontWeight: theme.typography.weights.semibold,
     color: theme.colors.brandPrimary,
+  },
+  choiceGalleryLabel: {
+    color: theme.colors.textOnBrand,
+    fontSize: theme.typography.semantic.bodyLg,
+    textShadowColor: 'rgba(0,0,0,0.45)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
   },
   choiceDescription: {
     fontFamily: theme.typography.fontFamily,
@@ -8119,18 +8695,32 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.brandPrimary,
     borderColor: theme.colors.brandPrimary,
   },
+  choiceGalleryRadio: {
+    right: 10,
+    top: 10,
+    marginTop: 0,
+    width: 28,
+    height: 28,
+    backgroundColor: 'rgba(255,255,255,0.92)',
+  },
   questionnaireStage: {
     flex: 1,
     gap: theme.spacing.md,
   },
   questionTransitionWrap: {
+    width: '100%',
+    alignSelf: 'stretch',
     gap: theme.spacing.lg,
   },
   questionPanel: {
+    width: '100%',
+    alignSelf: 'stretch',
     gap: theme.spacing.md,
     paddingVertical: 0,
   },
   questionContentCard: {
+    width: '100%',
+    alignSelf: 'stretch',
     gap: theme.spacing.lg,
   },
   questionHeroCard: {
@@ -11871,6 +12461,22 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'stretch',
     gap: 8,
+    padding: 8,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: theme.colors.borderStrong,
+    overflow: 'hidden',
+    ...theme.shadows.card,
+  },
+  photoReviewFloatingDock: {
+    position: 'absolute',
+    left: theme.spacing.md,
+    right: theme.spacing.md,
+    bottom: theme.spacing.sm,
+    zIndex: 31,
+    elevation: 20,
+    minHeight: 72,
+    justifyContent: 'center',
     padding: 8,
     borderRadius: 22,
     borderWidth: 1,

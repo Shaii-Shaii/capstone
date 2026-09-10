@@ -70,12 +70,12 @@ export const getCanonicalHairAssessment = (screening = null) => {
   // Detected_Condition is the AI's canonical, most-prominent condition. Keep
   // the summary card consistent with the condition shown in the detail list.
   if (/^(healthy|good(?: condition)?)$/i.test(condition)) {
-    return { label: condition, needsCare: false, issueLabel: 'Good result' };
+    return { label: 'No Visible Concerns Detected', needsCare: false, issueLabel: 'No visible concerns' };
   }
 
   const conditionIssue = getConditionIssueLabel(condition);
   if (conditionIssue) {
-    return { label: condition, needsCare: true, issueLabel: conditionIssue };
+    return { label: 'Visible Concerns Detected', needsCare: true, issueLabel: conditionIssue };
   }
 
   const combined = [
@@ -89,7 +89,7 @@ export const getCanonicalHairAssessment = (screening = null) => {
   const needsCare = hasExplicitCareConcern(combined) || Boolean(metricIssue);
 
   if (!needsCare && (/healthy|good|eligible/i.test(combined) || condition)) {
-    return { label: condition || 'Healthy', needsCare: false, issueLabel: 'Good result' };
+    return { label: 'No Visible Concerns Detected', needsCare: false, issueLabel: 'No visible concerns' };
   }
 
   // A metric concern names its own issue. In particular, a high dryness or
@@ -97,7 +97,7 @@ export const getCanonicalHairAssessment = (screening = null) => {
   const issueLabel = metricIssue || textIssue || 'Needs care';
 
   return {
-    label: condition && !/healthy/i.test(condition) ? condition : issueLabel,
+    label: 'Visible Concerns Detected',
     needsCare: true,
     issueLabel,
   };
@@ -138,7 +138,7 @@ export const getHairScreeningMood = (screening = null) => {
       icon: 'emoticon-sad-outline',
       color: '#B84D58',
       surface: '#F8E4E7',
-      label: 'Needs care',
+      label: 'Visible Concerns Detected',
     };
   }
 
@@ -148,7 +148,7 @@ export const getHairScreeningMood = (screening = null) => {
       icon: 'emoticon-neutral-outline',
       color: '#B9772B',
       surface: '#F8EAD8',
-      label: 'Keep caring',
+      label: 'Visible Concerns Detected',
     };
   }
 
@@ -157,7 +157,7 @@ export const getHairScreeningMood = (screening = null) => {
     icon: 'emoticon-happy-outline',
     color: '#3F8A57',
     surface: '#E3F3E5',
-    label: 'Looking good',
+    label: 'No Visible Concerns Detected',
   };
 };
 

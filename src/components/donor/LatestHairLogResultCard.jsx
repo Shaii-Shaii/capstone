@@ -42,15 +42,15 @@ export const LatestHairLogResultCard = ({
   }
 
   const recommendationLabel = conditionLower.includes('healthy') || conditionLower.includes('good')
-    ? 'Maintain routine'
+    ? 'No Visible Concerns Detected'
     : conditionLower.includes('fair') || conditionLower.includes('okay')
       ? 'Stay consistent'
-      : 'Needs care';
+      : 'Visible Concerns Detected';
   const statusLabel = conditionLower.includes('healthy') || conditionLower.includes('good')
-    ? 'Good'
+    ? 'No Visible Concerns Detected'
     : conditionLower.includes('fair') || conditionLower.includes('okay')
-      ? 'Watch'
-      : 'Needs care';
+      ? 'Visible Concerns Detected'
+      : 'Visible Concerns Detected';
 
   return (
     <AppCard variant="default" radius="xl" padding="md" style={styles.card}>

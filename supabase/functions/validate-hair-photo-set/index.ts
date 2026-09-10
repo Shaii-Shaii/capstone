@@ -1,6 +1,9 @@
 import { createJsonResponse, handleCorsPreflight } from '../_shared/cors.ts';
 import { createStructuredResponse, resolveOpenRouterHairVisionModel } from '../_shared/ai-vision.ts';
-import { createHairPhotoVerificationToken } from '../_shared/hair-photo-verification.ts';
+import {
+  createHairPhotoVerificationToken,
+  verifyHairPhotoVerificationToken,
+} from '../_shared/hair-photo-verification.ts';
 import { compareFacesWithCompreFace, isCompreFaceConfigured } from '../_shared/compreface-comparison.ts';
 
 const validationSchema = {
@@ -48,7 +51,7 @@ const validationSchema = {
               view_correct: { type: 'boolean' },
               observed_pose: {
                 type: 'string',
-                enum: ['front', 'left_profile', 'right_profile', 'scalp', 'hair_ends', 'back_hair', 'unclear'],
+                enum: ['back_hair', 'left_back_side', 'right_back_side', 'scalp_root', 'unclear'],
               },
               pose_correct: { type: 'boolean' },
               same_subject_status: {
@@ -88,6 +91,14 @@ type HairValidationImage = {
 };
 
 const canonicalViewAliases: Record<string, string> = {
+  'back hair': 'Back Hair',
+  back_hair: 'Back Hair',
+  'left back/side hair': 'Left Back/Side Hair',
+  side_profile: 'Left Back/Side Hair',
+  'right back/side hair': 'Right Back/Side Hair',
+  right_side_profile: 'Right Back/Side Hair',
+  'scalp / root area': 'Scalp / Root Area',
+  hair_scalp: 'Scalp / Root Area',
   'front view photo': 'Front View Photo',
   front_view: 'Front View Photo',
   'full hair length photo': 'Front View Photo',
@@ -95,22 +106,17 @@ const canonicalViewAliases: Record<string, string> = {
   'side view photo': 'Side Profile Photo',
   'left side photo': 'Side Profile Photo',
   'right side photo': 'Side Profile Photo',
-  right_side_profile: 'Right Side Photo',
   'hair ends close-up': 'Hair Ends Close-Up',
   'hair ends close up': 'Hair Ends Close-Up',
   'hair ends': 'Hair Ends Close-Up',
   hair_ends_close_up: 'Hair Ends Close-Up',
   'back hair photo': 'Back Hair Photo',
   'back view photo': 'Back Hair Photo',
-  'back hair': 'Back Hair Photo',
-  back_hair: 'Back Hair Photo',
-  side_profile: 'Side Profile Photo',
   side_view: 'Side Profile Photo',
   'hair scalp': 'Hair Scalp',
   'photo of the scalp': 'Hair Scalp',
   'scalp photo': 'Hair Scalp',
   'scalp view': 'Hair Scalp',
-  hair_scalp: 'Hair Scalp',
 };
 
 const normalizeString = (value: unknown) => (
@@ -120,6 +126,10 @@ const normalizeString = (value: unknown) => (
 const normalizeViewLabel = (value: unknown) => {
   const normalized = normalizeString(value).toLowerCase();
   if (!normalized) return '';
+  if (normalized.includes('left back') || normalized === 'side_profile') return 'Left Back/Side Hair';
+  if (normalized.includes('right back') || normalized === 'right_side_profile') return 'Right Back/Side Hair';
+  if (normalized.includes('scalp') || normalized.includes('root area') || normalized.includes('crown')) return 'Scalp / Root Area';
+  if (normalized === 'back hair' || normalized === 'back_hair' || normalized.includes('back hair photo')) return 'Back Hair';
   if (normalized.includes('back hair') || normalized.includes('back view') || normalized === 'back' || normalized.includes('back')) {
     return 'Back Hair Photo';
   }
@@ -192,8 +202,8 @@ const selectCanonicalValidationImage = (
   canonicalLabel = '',
 ) => images.find((image) => normalizeViewLabel(image?.viewLabel || image?.viewKey) === canonicalLabel);
 
-const requiredValidationViewLabels = ['Front View Photo', 'Side Profile Photo', 'Hair Scalp'];
-const optionalValidationViewLabels = ['Right Side Photo', 'Hair Ends Close-Up', 'Back Hair Photo'];
+const requiredValidationViewLabels = ['Back Hair', 'Left Back/Side Hair', 'Right Back/Side Hair', 'Scalp / Root Area'];
+const optionalValidationViewLabels: string[] = [];
 
 const buildCanonicalValidationImages = (images: HairValidationImage[] = []) => ([
   ...requiredValidationViewLabels.map((label) => ({
@@ -210,9 +220,13 @@ const buildCanonicalValidationImages = (images: HairValidationImage[] = []) => (
     .filter(({ image }) => Boolean(image?.dataUrl)),
 ]);
 
-const faceVisibleViewLabels = ['Front View Photo', 'Side Profile Photo', 'Right Side Photo'];
-const hairOnlyViewLabels = ['Hair Scalp', 'Hair Ends Close-Up', 'Back Hair Photo'];
+const faceVisibleViewLabels: string[] = [];
+const hairOnlyViewLabels = [...requiredValidationViewLabels];
 const expectedPoseByViewLabel: Record<string, string> = {
+  'Back Hair': 'back_hair',
+  'Left Back/Side Hair': 'left_back_side',
+  'Right Back/Side Hair': 'right_back_side',
+  'Scalp / Root Area': 'scalp_root',
   'Front View Photo': 'front',
   'Side Profile Photo': 'left_profile',
   'Right Side Photo': 'right_profile',
@@ -222,6 +236,10 @@ const expectedPoseByViewLabel: Record<string, string> = {
 };
 
 const friendlyPoseByViewLabel: Record<string, string> = {
+  'Back Hair': 'full back-hair view',
+  'Left Back/Side Hair': 'left back/side hair view',
+  'Right Back/Side Hair': 'right back/side hair view',
+  'Scalp / Root Area': 'scalp and root view',
   'Front View Photo': 'front-facing view',
   'Side Profile Photo': 'left-side profile',
   'Right Side Photo': 'right-side profile',
@@ -246,9 +264,7 @@ const normalizeAccessoryFindings = (value: unknown) => {
     const viewLabel = normalizeViewLabel(source.view_label);
     const accessory = normalizeString(source.accessory);
     if (!viewLabel || !accessory) return [];
-    // Guided captures require a completely accessory-free face, head, and
-    // hair, even when an item would not cover the measured hair length.
-    const blocksRequiredHair = true;
+    const blocksRequiredHair = source.blocks_required_hair === true;
     const key = `${viewLabel.toLowerCase()}|${accessory.toLowerCase()}`;
     if (seen.has(key)) return [];
     seen.add(key);
@@ -446,6 +462,25 @@ const instructions = [
   'If any rule fails, set is_acceptable=false, give one concise user-facing reason, and list failed view labels.',
 ].join('\n');
 
+const hairFocusedValidationInstructions = [
+  'You validate four donor Hair Check photos before a separate visible hair analysis.',
+  'Return JSON only and never identify the person or infer sensitive traits.',
+  'The required views are Back Hair, Left Back/Side Hair, Right Back/Side Hair, and Scalp / Root Area.',
+  'A face is optional in every view. Do not require, compare, recognize, or match faces.',
+  'Check usability only: the requested hair area must be present, sharp enough, bright enough, not overexposed, and not replaced by an unrelated or stock image.',
+  'Back Hair must show loose hair from roots through the lowest visible ends.',
+  'Left Back/Side Hair and Right Back/Side Hair must show the corresponding opposite back/side angles with roots, length, and ends visible.',
+  'Scalp / Root Area must show a clear crown, part line, or root area. The face may be fully cropped.',
+  'Compare only non-identifying current-hair cues across views: color, texture, length, density, parting, and length. Different rooms or lighting alone are not a mismatch.',
+  'Do not reject a natural hair type, color, texture, density, visible concern, or possible donation ineligibility. Those belong to the later analysis.',
+  'Accessories only block a view when they cover the required roots, shaft, length, ends, or scalp area. Eyeglasses and ordinary clothing are not blockers.',
+  'Hair may be moved gently for the scalp view. For length views, reject a bun, ponytail, clip, covering, or pose that hides the natural hanging length or ends.',
+  'Use observed_pose exactly as follows: Back Hair=back_hair, Left Back/Side Hair=left_back_side, Right Back/Side Hair=right_back_side, Scalp / Root Area=scalp_root.',
+  'Return one per_view_checks item for every supplied image. Mark only the affected view failed so the donor retakes only that photo.',
+  'Use same_subject_status=match when current-hair cues are compatible, mismatch only for clear conflicts/unrelated images, and unclear when the photo is unusable.',
+  'Set visual_screening_completed=true only after all four views were inspected. Keep all notes concise and actionable.',
+].join('\n');
+
 Deno.serve(async (request) => {
   const preflight = handleCorsPreflight(request);
   if (preflight) return preflight;
@@ -454,20 +489,12 @@ Deno.serve(async (request) => {
     const body = await request.json();
     const images = Array.isArray(body?.images) ? body.images.filter(Boolean) : [];
     const validationImages = buildCanonicalValidationImages(images);
+    const individualVerificationTokens = Array.isArray(body?.photo_verification_tokens)
+      ? body.photo_verification_tokens.map(normalizeString)
+      : [];
     const missingValidationViews = validationImages
       .filter(({ image, required }) => required && !image?.dataUrl)
       .map(({ label }) => label);
-    const hasOpenRouterKey = Boolean(Deno.env.get('OPENROUTER_API_KEY'));
-    const model = resolveOpenRouterHairVisionModel(
-      Deno.env.get('OPENROUTER_HAIR_VALIDATION_MODEL'),
-    );
-
-    if (!hasOpenRouterKey) {
-      return createJsonResponse({
-        error: 'OpenRouter photo validation is not configured on the server.',
-        errorType: 'configuration_error',
-      }, 500);
-    }
 
     if (missingValidationViews.length) {
       return createJsonResponse({
@@ -483,6 +510,107 @@ Deno.serve(async (request) => {
           visual_screening_completed: false,
         },
       }, 200);
+    }
+
+    const hasCompleteIndividualVerification = individualVerificationTokens.length === validationImages.length
+      && individualVerificationTokens.every(Boolean);
+    if (hasCompleteIndividualVerification) {
+      const individualChecks = await Promise.all(validationImages.map(({ image }, index) => (
+        verifyHairPhotoVerificationToken({
+          token: individualVerificationTokens[index],
+          images: image ? [image] : [],
+        })
+      )));
+      const failedReceiptIndexes = individualChecks
+        .map((valid, index) => (valid ? -1 : index))
+        .filter((index) => index >= 0);
+
+      if (failedReceiptIndexes.length) {
+        return createJsonResponse({
+          validation: {
+            is_acceptable: false,
+            reason: 'One or more photos changed after validation. Please retake the highlighted view.',
+            failed_views: failedReceiptIndexes.map((index) => validationImages[index]?.label || `Photo ${index + 1}`),
+            accessories_detected: false,
+            accessory_notes: '',
+            accessory_findings: [],
+            allowed_accessories: [],
+            hair_authenticity_status: 'unclear',
+            hair_authenticity_notes: 'Individual photo verification no longer matches the supplied image.',
+            appearance_flags: [],
+            per_view_checks: [],
+            same_subject_verified: false,
+            visual_screening_completed: false,
+            retryable: false,
+          },
+          verification_token: null,
+          diagnostics: { provider_request_attempted: false, validation_mode: 'signed_individual_receipts' },
+        });
+      }
+
+      const perViewChecks = validationImages.map(({ label }) => ({
+        view_label: label,
+        view_correct: true,
+        observed_pose: label === 'Back Hair'
+          ? 'back_hair'
+          : label === 'Left Back/Side Hair'
+            ? 'left_back_side'
+            : label === 'Right Back/Side Hair'
+              ? 'right_back_side'
+              : 'scalp_root',
+        pose_correct: true,
+        same_subject_status: 'match',
+        confidence: 1,
+        note: 'This image matches its signed individual photo-validation result.',
+      }));
+      const verificationToken = await createHairPhotoVerificationToken(images);
+
+      console.info('[validate-hair-photo-set] signed individual validations accepted without another AI request', {
+        imageCount: validationImages.length,
+        providerRequestAttempted: false,
+      });
+
+      return createJsonResponse({
+        validation: {
+          is_acceptable: true,
+          reason: 'All four individually validated photos are ready for combined hair analysis.',
+          failed_views: [],
+          accessories_detected: false,
+          accessory_notes: '',
+          accessory_findings: [],
+          allowed_accessories: [],
+          hair_authenticity_status: 'unclear',
+          hair_authenticity_notes: 'Hair authenticity is evaluated conservatively during the combined visual analysis.',
+          appearance_flags: [],
+          per_view_checks: perViewChecks,
+          same_subject_verified: true,
+          different_faces_detected: false,
+          face_mismatch_views: [],
+          visual_screening_completed: true,
+          retryable: false,
+        },
+        verification_token: verificationToken,
+        face_comparison: {
+          status: 'not_required',
+          required: false,
+          failed_views: [],
+          comparisons: [],
+          message: 'Face matching is not used for hair-focused captures.',
+        },
+        diagnostics: { provider_request_attempted: false, validation_mode: 'signed_individual_receipts' },
+      });
+    }
+
+    const hasOpenRouterKey = Boolean(Deno.env.get('OPENROUTER_API_KEY'));
+    const model = resolveOpenRouterHairVisionModel(
+      Deno.env.get('OPENROUTER_HAIR_VALIDATION_MODEL'),
+    );
+
+    if (!hasOpenRouterKey) {
+      return createJsonResponse({
+        error: 'OpenRouter photo validation is not configured on the server.',
+        errorType: 'configuration_error',
+      }, 500);
     }
 
     const parts: Record<string, unknown>[] = [
@@ -507,10 +635,9 @@ Deno.serve(async (request) => {
       });
     });
 
-    const [result, faceComparison] = await Promise.all([
-      createStructuredResponse({
+    const result = await createStructuredResponse({
         providerMode: 'openrouter-only',
-        systemInstruction: instructions,
+        systemInstruction: hairFocusedValidationInstructions,
         responseJsonSchema: validationSchema,
         maxOutputTokens: 1800,
         model,
@@ -518,9 +645,11 @@ Deno.serve(async (request) => {
         reasoningEffort: 'minimal',
         includeDiagnostics: true,
         contents: [{ role: 'user', parts }],
-      }),
-      runCompreFaceComparison(validationImages),
-    ]);
+      });
+    const faceComparison = {
+      status: 'not_required', required: false, failed_views: [] as string[], comparisons: [],
+      message: 'Face matching is not used for hair-focused captures.',
+    };
 
     const parsed = result?.parsed && typeof result.parsed === 'object'
       ? result.parsed as Record<string, unknown>
@@ -566,7 +695,7 @@ Deno.serve(async (request) => {
     const accessoryFindings = normalizeAccessoryFindings(validationSource.accessory_findings);
     const blockingAccessories = accessoryFindings.filter((finding) => finding.blocks_required_hair);
     const allowedAccessories = accessoryFindings.filter((finding) => finding.accepted);
-    const accessoriesDetected = validationSource.accessories_detected === true || blockingAccessories.length > 0;
+    const accessoriesDetected = blockingAccessories.length > 0;
     const hasExplicitAccessoryDecision = typeof validationSource.accessories_detected === 'boolean';
     const hairAuthenticityStatus = [
       'likely_natural',
@@ -591,19 +720,11 @@ Deno.serve(async (request) => {
       }
       return check;
     });
-    const suppliedFaceViewLabels = faceVisibleViewLabels.filter((viewLabel) => suppliedLabels.includes(viewLabel));
     const suppliedHairOnlyViewLabels = hairOnlyViewLabels.filter((viewLabel) => suppliedLabels.includes(viewLabel));
-    const aiFaceComparisonPassed = suppliedFaceViewLabels.length >= 2
-      && suppliedFaceViewLabels.every((viewLabel) => (
-      normalizedPerViewChecks.find((check) => check.view_label === viewLabel)?.same_subject_status === 'match'
-      ));
     const supportingHairViewsPassed = suppliedHairOnlyViewLabels.every((viewLabel) => (
       normalizedPerViewChecks.find((check) => check.view_label === viewLabel)?.same_subject_status === 'match'
     ));
-    const canUseAiFaceComparison = ['not_configured', 'unavailable'].includes(faceComparison.status);
-    const faceViewsVerified = faceComparison.status === 'verified'
-      || (canUseAiFaceComparison && aiFaceComparisonPassed);
-    const sameSubjectVerified = faceViewsVerified && supportingHairViewsPassed;
+    const sameSubjectVerified = supportingHairViewsPassed;
     const reportedFailedViews = Array.isArray(validationSource.failed_views)
       ? validationSource.failed_views.map(normalizeViewLabel).filter(Boolean)
       : [];
@@ -630,12 +751,11 @@ Deno.serve(async (request) => {
       && normalizedPerViewChecks.every((check) => check.view_correct);
     const visualScreeningCompleted = validationSource.visual_screening_completed === true
       && normalizedPerViewChecks.length === suppliedLabels.length;
-    const faceComparisonRetryable = faceComparison.status === 'unavailable' && !aiFaceComparisonPassed;
+    const faceComparisonRetryable = false;
     const strictlyVerified = (
       visualScreeningCompleted
       && hasExplicitAccessoryDecision
       && !accessoriesDetected
-      && hairAuthenticityStatus === 'likely_natural'
       && allViewsCorrect
       && sameSubjectVerified
       && failedViewSet.size === 0
@@ -656,9 +776,7 @@ Deno.serve(async (request) => {
               ? 'One or more captured photos do not match the same current hair set. Please retake the highlighted views.'
               : unclearConsistencyViews.length
                 ? 'We could not confirm that every captured photo belongs to the same current hair set. Please retake the highlighted views clearly.'
-            : hairAuthenticityStatus === 'unclear'
-              ? 'The natural hairline and roots are not clear enough to verify. Remove any head covering or obstruction, then retake the affected views.'
-              : reason || 'The photos do not look ready for analysis. Please retake the affected views.';
+            : reason || 'The photos do not look ready for analysis. Please retake the affected views.';
     const normalizedValidation = {
       is_acceptable: strictlyVerified,
       reason: normalizedReason,

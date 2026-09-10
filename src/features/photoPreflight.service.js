@@ -30,9 +30,11 @@ const buildMissingPhotoDetails = ({ photos = [], requiredViews = [] } = {}) => (
 const hasRequiredViewSet = (requiredViews = []) => {
   const keys = requiredViews.map(normalizeViewKey);
   return (
-    keys.some((key) => key.includes('front'))
-    && keys.some((key) => key.includes('side'))
-    && keys.some((key) => key.includes('scalp') || key.includes('crown'))
+    keys.length === 4
+    && keys.some((key) => key.includes('back'))
+    && keys.some((key) => key.includes('side_profile') || key.includes('left back'))
+    && keys.some((key) => key.includes('right_side_profile') || key.includes('right back'))
+    && keys.some((key) => key.includes('scalp') || key.includes('root'))
   );
 };
 
@@ -56,7 +58,7 @@ const buildRemoteValidationDetails = (failedViews = [], reason = '') => {
   const views = Array.isArray(failedViews) && failedViews.length ? failedViews : ['Photo set'];
   return views.map((viewLabel) => ({
     viewLabel,
-    error: reason || 'Photos must show the same person and same current hair.',
+    error: reason || 'This hair view is not clear or consistent enough to use.',
   }));
 };
 
@@ -219,6 +221,9 @@ const evaluateFraudRiskSignals = ({ photos = [], requiredViews = [] } = {}) => {
 
 const runCrossViewPhotoValidation = async ({ photos = [], requiredViews = [] } = {}) => {
   const images = buildValidationPayloadImages({ photos, requiredViews });
+  const photoVerificationTokens = photos.map((photo) => (
+    String(photo?.photoValidation?.photoVerificationToken || '').trim()
+  ));
   if (images.length !== requiredViews.length) {
     return {
       ok: false,
@@ -232,7 +237,10 @@ const runCrossViewPhotoValidation = async ({ photos = [], requiredViews = [] } =
   }
 
   const result = await invokeEdgeFunction('validate-hair-photo-set', {
-    body: { images },
+    body: {
+      images,
+      photo_verification_tokens: photoVerificationTokens,
+    },
   });
 
   if (result.error) {
@@ -284,30 +292,25 @@ const runCrossViewPhotoValidation = async ({ photos = [], requiredViews = [] } =
   const faceMismatchViews = Array.isArray(validation.face_mismatch_views)
     ? validation.face_mismatch_views.map((view) => String(view || '').trim()).filter(Boolean)
     : [];
-  const hasArtificialHairConcern = hairAuthenticityStatus === 'possible_wig_or_extensions';
   const verificationToken = typeof result.data?.verification_token === 'string'
     ? result.data.verification_token.trim()
     : '';
+  const remoteValidationMode = String(result.data?.diagnostics?.validation_mode || '').trim();
   const isAcceptable = validation.is_acceptable === true
     && visualScreeningCompleted
     && accessoriesDetected === false
-    && hairAuthenticityStatus === 'likely_natural'
     && sameSubjectVerified
     && Boolean(verificationToken);
   const visualConcernReason = accessoriesDetected === true
     ? toSafeMessage(validation.accessory_notes, 'Remove accessories or objects blocking the hair, then retake the affected views.')
-    : hasArtificialHairConcern
-      ? toSafeMessage(validation.hair_authenticity_notes, 'Possible wig, hairpiece, or extensions detected. Retake with the natural hairline and roots clearly visible.')
-      : '';
+    : '';
   const reason = visualConcernReason || (!visualScreeningCompleted
     ? 'We could not finish checking these photos. Please try the photo check again before analysis.'
-    : hairAuthenticityStatus === 'unclear'
-      ? 'The natural hairline and roots are not clear enough to verify. Remove any head covering or obstruction, then retake the affected views.'
-      : !verificationToken && validation.is_acceptable === true
+    : !verificationToken && validation.is_acceptable === true
         ? 'Photo verification could not be secured. Please run the photo check again.'
         : toSafeMessage(validation.reason, isAcceptable
           ? 'Ready for analysis.'
-          : 'Photos must show the same person and same current hair.'));
+          : 'The required hair area must be clear, correctly angled, and consistent across this photo set.'));
   const failedViews = Array.isArray(validation.failed_views)
     ? validation.failed_views
     : [];
@@ -328,16 +331,16 @@ const runCrossViewPhotoValidation = async ({ photos = [], requiredViews = [] } =
         ? 'Photo Check Needs Retry'
         : accessoriesDetected === true
           ? 'Remove Hair Accessories'
-          : hasArtificialHairConcern || hairAuthenticityStatus === 'unclear'
-            ? 'Hair Verification Needed'
-            : 'Photos Do Not Match',
+          : 'Photos Need Attention',
     message: isAcceptable ? 'Ready for analysis.' : reason,
     details: isAcceptable ? [] : buildPerViewValidationDetails({
       failedViews: resolvedFailedViews,
       perViewChecks,
       reason,
     }),
-    validationMode: 'remote_cross_view',
+    validationMode: remoteValidationMode === 'signed_individual_receipts'
+      ? 'remote_signed_individual_receipts'
+      : 'remote_cross_view',
     accessoriesDetected,
     accessoryNotes: toSafeMessage(validation.accessory_notes),
     accessoryFindings,
@@ -378,15 +381,10 @@ export const validateHairPhotosBeforeAnalysis = async ({ photos = [], requiredVi
       skipped: false,
       hardBlock: true,
       title: 'Photo Setup Needed',
-      message: 'Use the required front, left side, right side, scalp, back, and hair-ends views.',
+      message: 'Use the four required views: Back Hair, Left Back/Side Hair, Right Back/Side Hair, and Scalp / Root Area.',
       details: [],
       validationMode: 'local',
     };
-  }
-
-  const crossViewResult = await runCrossViewPhotoValidation({ photos, requiredViews });
-  if (!crossViewResult?.ok) {
-    return crossViewResult;
   }
 
   const fraudRisk = evaluateFraudRiskSignals({ photos, requiredViews });
@@ -395,27 +393,18 @@ export const validateHairPhotosBeforeAnalysis = async ({ photos = [], requiredVi
       ok: false,
       skipped: false,
       hardBlock: true,
-      title: 'Retake required',
-      message: 'Photo risk is high. Retake all required views using live camera.',
-      details: fraudRisk.details.slice(0, 2),
-      validationMode: 'fraud_risk',
+      title: 'Photos Need Attention',
+      message: fraudRisk.details[0]?.error || 'Retake the highlighted photo before analysis.',
+      details: fraudRisk.details,
+      validationMode: 'local_capture_integrity',
       riskLevel: fraudRisk.riskLevel,
       riskScore: fraudRisk.riskScore,
     };
   }
 
-  if (fraudRisk.riskLevel === 'medium') {
-    return {
-      ok: false,
-      skipped: false,
-      hardBlock: false,
-      title: 'Retake required',
-      message: 'Photo check flagged a risk. Please retake for a cleaner scan.',
-      details: fraudRisk.details.slice(0, 2),
-      validationMode: 'fraud_risk',
-      riskLevel: fraudRisk.riskLevel,
-      riskScore: fraudRisk.riskScore,
-    };
+  const crossViewResult = await runCrossViewPhotoValidation({ photos, requiredViews });
+  if (!crossViewResult?.ok) {
+    return crossViewResult;
   }
 
   return {

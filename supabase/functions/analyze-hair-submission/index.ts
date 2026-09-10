@@ -1,6 +1,7 @@
 import { createJsonResponse, handleCorsPreflight } from '../_shared/cors.ts';
 import { createStructuredResponse, resolveOpenRouterHairVisionModel } from '../_shared/ai-vision.ts';
 import { verifyHairPhotoVerificationToken } from '../_shared/hair-photo-verification.ts';
+import { createClient } from 'npm:@supabase/supabase-js@2';
 
 const analysisSchema = {
   type: 'object',
@@ -59,6 +60,71 @@ const analysisSchema = {
         },
         detected_condition: {
           type: 'string',
+        },
+        visible_condition_status: {
+          type: 'string',
+          enum: ['No Visible Concerns Detected', 'Visible Concerns Detected'],
+        },
+        visible_concerns: {
+          type: 'array',
+          items: { type: 'string' },
+        },
+        assessment_consistency: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              category: {
+                type: 'string',
+                enum: [
+                  'texture',
+                  'visible_oiliness',
+                  'visible_flaking',
+                  'visible_condition',
+                  'apparent_density',
+                  'color',
+                  'length',
+                ],
+              },
+              answer_key: { type: 'string' },
+              self_assessment: { type: 'string' },
+              visual_finding: { type: 'string' },
+              consistent: { type: 'boolean' },
+              requires_confirmation: { type: 'boolean' },
+              unable_to_determine: { type: 'boolean' },
+              confidence: { type: 'number' },
+              explanation: { type: 'string' },
+              relevant_view: { type: 'string' },
+            },
+            required: [
+              'category',
+              'answer_key',
+              'self_assessment',
+              'visual_finding',
+              'consistent',
+              'requires_confirmation',
+              'unable_to_determine',
+              'confidence',
+              'explanation',
+              'relevant_view',
+            ],
+          },
+        },
+        self_assessment_conflicts: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              answer_key: { type: 'string' },
+              donor_answer: { type: 'string' },
+              visual_finding: { type: 'string' },
+              explanation: { type: 'string' },
+              relevant_view: { type: 'string' },
+              confidence: { type: 'number' },
+            },
+            required: ['id', 'answer_key', 'donor_answer', 'visual_finding', 'explanation', 'relevant_view', 'confidence'],
+          },
         },
         chemical_treatment_detected: {
           type: 'boolean',
@@ -182,6 +248,10 @@ const analysisSchema = {
         'detected_texture',
         'detected_density',
         'detected_condition',
+        'visible_condition_status',
+        'visible_concerns',
+        'assessment_consistency',
+        'self_assessment_conflicts',
         'chemical_treatment_detected',
         'colored_hair_detected',
         'bleached_hair_detected',
@@ -401,43 +471,31 @@ type HistoryContext = {
 
 const requiredViewDefinitions = [
   {
-    key: 'front_view',
-    label: 'Front View Photo',
-    role: 'main root or hairline and overall fall view',
-    analysisFocus: 'Use this view to inspect the hairline or root area, face-forward framing, overall visible color, scalp visibility, density, and whether the full hair fall is visible from top to bottom. Reject this view if the donor is turned sideways instead of facing forward.',
+    key: 'back_hair',
+    label: 'Back Hair',
+    role: 'main overall length, color, texture, density, and condition view',
+    analysisFocus: 'Use loose back hair from roots through the lowest visible ends. A face is not required.',
   },
   {
     key: 'side_profile',
-    label: 'Side Profile Photo',
-    role: 'left side length and shaft structure view',
-    analysisFocus: 'Use this view to inspect one clear side profile, visible donation length from the lower cheek/neck cut-start area to the ends, fullness through the shaft, texture consistency, and whether the lowest visible ends can be seen. Reject this view if it is another front-facing image.',
+    label: 'Left Back/Side Hair',
+    role: 'left back/side length and shaft view',
+    analysisFocus: 'Use this angle to inspect visible length, shaft, texture, and ends. Do not require a face.',
   },
   {
     key: 'right_side_profile',
-    label: 'Right Side Photo',
-    role: 'right side length and shaft structure view',
-    analysisFocus: 'Use this view with the side profile view to cross-check visible donation length, shaft fullness, texture consistency, and condition from the opposite side. Do not require this view for older submissions if it is absent.',
+    label: 'Right Back/Side Hair',
+    role: 'right back/side length and shaft view',
+    analysisFocus: 'Use this opposite angle to cross-check visible length, shaft, texture, and ends. Do not require a face.',
   },
   {
     key: 'hair_scalp',
-    label: 'Hair Scalp',
-    role: 'scalp and crown coverage view',
-    analysisFocus: 'Use this view to inspect visible scalp coverage, part line width, crown density, flakes, oiliness, buildup, redness-looking irritation, and overall root/scalp condition. Do not use this view as the primary basis for donation length.',
-  },
-  {
-    key: 'hair_ends_close_up',
-    label: 'Hair Ends Close-Up',
-    role: 'close-up ends condition view',
-    analysisFocus: 'Use this view to inspect split ends, frayed tips, dryness, frizz, breakage, and visible damage at the lowest ends. Do not use this view alone for total donation length.',
-  },
-  {
-    key: 'back_hair',
-    label: 'Back Hair Photo',
-    role: 'back-side hair length and density view',
-    analysisFocus: 'Use this view when available to cross-check back-side hair length, lowest visible ends, density, fullness, texture pattern, frizz, and damage. This view can improve donation length confidence, especially when front or side views do not show the lowest ends clearly.',
+    label: 'Scalp / Root Area',
+    role: 'visible scalp, crown, and root view',
+    analysisFocus: 'Use this view for visible coverage, root appearance, oiliness, buildup, and flake-like particles. This is nonmedical and not a diagnosis.',
   },
 ] as const;
-const minimumExpectedViews = ['Front View Photo', 'Side Profile Photo', 'Hair Scalp'];
+const minimumExpectedViews = requiredViewDefinitions.map((view) => view.label);
 const expectedViews = minimumExpectedViews;
 const CM_PER_INCH = 2.54;
 const ELIGIBLE_STATUS = 'Eligible for hair donation';
@@ -498,6 +556,14 @@ const recommendationOriginPatterns = [
   /\b[A-Z][a-z]+(?:n|ian|ese|ish|i)\s+(?:product|brand|care)\s+options?\b/g,
 ];
 const canonicalViewAliases: Record<string, string> = {
+  'back hair': 'Back Hair',
+  back_hair: 'Back Hair',
+  'left back/side hair': 'Left Back/Side Hair',
+  side_profile: 'Left Back/Side Hair',
+  'right back/side hair': 'Right Back/Side Hair',
+  right_side_profile: 'Right Back/Side Hair',
+  'scalp / root area': 'Scalp / Root Area',
+  hair_scalp: 'Scalp / Root Area',
   'front view photo': 'Front View Photo',
   front_view: 'Front View Photo',
   'full hair length photo': 'Front View Photo',
@@ -505,8 +571,6 @@ const canonicalViewAliases: Record<string, string> = {
   'side view photo': 'Side Profile Photo',
   'left side photo': 'Side Profile Photo',
   'right side photo': 'Right Side Photo',
-  right_side_profile: 'Right Side Photo',
-  side_profile: 'Side Profile Photo',
   side_view: 'Side Profile Photo',
   'hair ends close-up': 'Hair Ends Close-Up',
   'hair ends close up': 'Hair Ends Close-Up',
@@ -514,11 +578,8 @@ const canonicalViewAliases: Record<string, string> = {
   hair_ends_close_up: 'Hair Ends Close-Up',
   'back hair photo': 'Back Hair Photo',
   'back view photo': 'Back Hair Photo',
-  'back hair': 'Back Hair Photo',
-  back_hair: 'Back Hair Photo',
   'hair scalp': 'Hair Scalp',
   'photo of the scalp': 'Hair Scalp',
-  hair_scalp: 'Hair Scalp',
 };
 
 const formatLengthInches = (lengthCm: number) => `${(lengthCm / CM_PER_INCH).toFixed(1)} inches`;
@@ -534,16 +595,16 @@ const instructions = [
   'CRITICAL RULE 2: You MUST describe what you ACTUALLY SEE in the photos. Do not rely on questionnaire answers alone.',
   'CRITICAL RULE 3: Every recommendation MUST be based on VISIBLE observations from the photos, not generic hair care advice.',
   'CRITICAL RULE 4: Complete a two-pass review. First record evidence from every required view, then cross-check those observations before selecting the condition, numeric levels, summary, and recommendations.',
-  'CRITICAL RULE 5: Do not invent a concern to fill a recommendation slot. When evidence is uncertain or the hair appears healthy, give conservative maintenance guidance and state the visibility limit through confidence_score or the summary.',
+  'CRITICAL RULE 5: Do not invent a concern to fill a recommendation slot. When evidence is uncertain or no visible concern is detected, give conservative maintenance guidance and state the visibility limit through confidence_score or the summary.',
   '',
   'OBSERVATION CHECKLIST — examine each photo for:',
-  '1. SCALP: Is the scalp visible? Is it oily (shiny, greasy appearance)? Dry (flaky, tight)? Clean? Any visible flaking, dandruff-like flakes, buildup, or visible lice/nits attached to hair shafts near the scalp?',
+  '1. SCALP/ROOT AREA: Is the requested area visible? Record only visible oiliness, dryness, flaking, buildup, or possible attached nit-like particles. Do not diagnose a condition.',
   '2. ROOTS: Are the roots oily or dry? Any product buildup visible?',
   '3. HAIR SHAFT: Does the hair look shiny and lustrous, or dull and matte? Any visible frizz along the shaft? Signs of chemical processing (uneven color, texture changes)?',
   '4. TEXTURE: Straight, wavy, curly, coily, or mixed? Is the texture consistent or uneven?',
   '5. DENSITY: How thick does the hair appear? Light, medium, thick, or dense coverage?',
-  '6. ENDS: Are the ends split, frayed, or damaged? Do they look dry and rough, or healthy and sealed?',
-  '7. OVERALL HEALTH: Does the hair look healthy and well-maintained, or does it show signs of damage, dryness, or neglect?',
+  '6. ENDS: Are the ends visibly split, frayed, dry, rough, or sealed?',
+  '7. OVERALL VISIBLE CONDITION: Return exactly No Visible Concerns Detected or Visible Concerns Detected separately from donation eligibility.',
   '8. SPECIFIC DAMAGE SIGNS: Breakage, thinning, brittleness, excessive frizz, uneven texture, color damage?',
   '9. SCALP COVERAGE: Note visible bald spots, patchy areas, thinning-looking regions, widened part line, or areas with more visible scalp. Treat this as wellness/progress tracking only, not a medical diagnosis.',
   '10. SCALP FINDINGS: Check the scalp/crown and root views for dandruff-like flakes and visible lice or nits. This is a visible screening only, not a diagnosis.',
@@ -563,25 +624,23 @@ const instructions = [
   '- BLURRY OR MOTION-BLURRED: If detail is limited, keep is_hair_detected=true and return a conservative hair-focused assessment.',
   '',
   'Your detected_condition, visible_damage_notes, summary, and recommendations MUST directly reflect these observations.',
-  'If the questionnaire says "dry hair" but the photos show shiny, healthy hair, trust the photos and note the discrepancy.',
+  'If the questionnaire says "dry hair" but the photos show visible shine without clear dryness, create a high-confidence consistency conflict when warranted.',
   'If the photos show visible split ends and dryness but the questionnaire says "no problems", trust the photos.',
 
   // Hair detection and validity
   'First confirm whether the images clearly show human hair intended for screening.',
   'The photo set already passed pre-validation, so keep is_hair_detected=true unless the image payload is completely unrelated to hair.',
-  'Validate photo rules before analysis: one human subject only, front view is face-forward, side profile is actually turned to the side, Hair Scalp clearly shows the scalp/crown or part line area, face and hair clearly visible where required, no masks or face coverings, no obstructing hair accessories, no caps, no clips covering the hair, no heavy blur, and no distracting objects blocking the hair. Ordinary eyeglasses are acceptable if they do not hide the hairline or hair.',
-  'Validate cross-view consistency before hair analysis. The front and side views should appear to show the same current hair from the same person. The Hair Scalp view may crop the face or show a top-down head angle; compare it by hair/scalp cues only. Use only visible consistency cues; do not identify the person. Reject only if photos clearly appear to be from different people or clearly different current hair that cannot be explained by camera angle or lighting.',
+  'The four required photos are Back Hair, Left Back/Side Hair, Right Back/Side Hair, and Scalp / Root Area. A face is optional and must never be required or compared.',
+  'Cross-check the four views only through non-identifying hair cues such as color, texture, length, density, and parting. Photo usability has already been validated, so do not turn analysis output into a retake decision.',
   'Do not return not-detected, retake-required, or photo-validation style results. The output must be about visible hair analysis.',
   'If visibility is limited, keep is_hair_detected=true and lower confidence_score instead of rejecting the photo set.',
   'When image quality or visibility is weak, lower confidence and describe the observation limit. Do not make an eligibility-policy decision.',
 
   // Per-view notes
   'For each provided photo view, write a detailed per_view_notes entry describing WHAT YOU SEE:',
-  '- Front View: scalp condition, root oiliness/dryness, overall hair appearance, texture, density',
-  '- Side Profile and Right Side Photo: confirm each side angle, then describe hair length visibility, shaft condition, shine or dullness, texture consistency',
-  '- Hair Scalp: visible scalp coverage, part line/crown density, flakes or dandruff-like particles, oiliness, buildup, visible lice/nits if clearly seen, and root/scalp condition. This note must explicitly state whether dandruff/flakes, lice, and nits are visible or not visible.',
-  '- Hair Ends Close-Up: visible split ends, fraying, dryness, roughness, frizz, or sealed healthy ends',
-  '- Back Hair Photo: back-side length, lowest visible ends, fullness, texture pattern, and any visible dryness, frizz, or damage',
+  '- Back Hair: visible roots-to-ends length, fullness, texture pattern, shine/dullness, fraying, and other visible concerns',
+  '- Left Back/Side Hair and Right Back/Side Hair: visible length and ends, shaft appearance, texture, and density from both angles',
+  '- Scalp / Root Area: visible coverage, part line/crown density, flake-like particles, oiliness, buildup, and possible attached nit-like signs. Use observational, non-diagnostic language.',
   'Use missing_views only when a required view is genuinely absent or completely unusable.',
 
   // Length estimation
@@ -589,15 +648,15 @@ const instructions = [
   'Set length_measurable=true only when a usable length view clearly shows the lower cheek/neck or nape cut-start area and the naturally hanging lowest ends.',
   'Set length_measurable=false, estimated_length=null, and explain length_limit_reason when hair is tied back, in a bun or ponytail, folded upward, held by a claw clip/hair clip/tie/scrunchie, or when the natural lowest ends are hidden, cropped, blocked, or covered. Never measure to the clip, bun, or tied section.',
   'Donation length starts at the likely cut-start area around the lower cheek, jawline, or neck ("bandang leeg"), not from the scalp, hairline, or root. Measure the visible hanging length from that cheek/neck start point down to the lowest clearly visible hair ends.',
-  'Use the Front View Photo, Side Profile Photo, Right Side Photo, and Back Hair Photo together when available. The back-side photo is important for confirming the lowest visible ends and true hanging length. The hairline/root does not need to be visible for donation length if the cheek/neck or nape start area and lowest ends are visible.',
+  'Use Back Hair plus both Back/Side Hair views together to confirm the lowest visible ends and hanging length. Use Scalp / Root Area only for root and visible scalp observations.',
   'IMPORTANT LENGTH RULE: Do not return null just because there is no ruler. Make a conservative practical visual estimate using face/head scale and body landmarks. Approximate donation length from lower cheek/neck to ends: shoulder-length is usually about 4-8 inches, collarbone is usually about 6-10 inches, upper chest is usually about 8-12 inches, armpit is usually about 10-14 inches, mid-back is usually about 15-24 inches, waist is usually about 24-32 inches. Store the rounded numeric estimate in centimeters.',
   'Body landmarks are estimation aids only. Do not turn shoulder, collarbone, armpit, or another landmark into an eligibility rule; compare the numeric estimate only with the current database requirement.',
   'Return null for estimated_length whenever length_measurable=false. If loose, naturally hanging hair is clearly visible but simply too short for donation, still return the best conservative numeric estimate instead of null.',
   'In length_assessment, explicitly mention that the estimate starts around the lower cheek/neck/cut-start area and name the visible endpoint landmark, such as shoulder, collarbone, armpit, mid-back, waist, or "lowest visible ends". Use inches only in this text.',
 
   // Detected fields
-  'detected_texture: use exactly one of Straight, Wavy, Curly, Coily, or Mixed based on visible hair pattern across all provided views. Consider shrinkage for curly and coily hair and do not penalize textured hair because visible stretched length may differ from hanging shape.',
-  'detected_density: use Light, Medium, Thick, or Dense — based ONLY on what you see in the photos.',
+  'detected_texture: use exactly one of Straight, Wavy, Curly, Coily, Mixed, or Unable to determine based only on visible hair pattern across all provided views. Consider shrinkage for curly and coily hair and do not penalize textured hair because visible stretched length may differ from hanging shape.',
+  'detected_density: use Light, Medium, Thick, Dense, or Unable to determine — based ONLY on what you see in the photos.',
   'bald_spots_present: true only when a clear no-hair or patchy low-coverage area is visible; false when not visible or uncertain.',
   'affected_regions: list visible coverage areas using only these simple labels when supported by the photos: front, crown, sides, back, hairline, part line, patches. Return [] if none are visible.',
   'hair_density_score: number from 0-100 estimating visible coverage fullness, where 0=no visible hair coverage in the checked area and 100=very full coverage. Use 50 when coverage cannot be assessed.',
@@ -608,19 +667,19 @@ const instructions = [
   'If the Hair Scalp view shows scattered white flake-like particles along the part line/crown/root area, set dandruff_detected=true even when the finding is mild. If unsure whether it is dandruff or product buildup, still mark dandruff_detected=true and explain "flake/buildup-like particles" in dandruff_notes.',
   'Dandruff-like particles are usually loose, scattered, irregularly shaped, and visible on the scalp surface or part line. They are not the same as lice or nits.',
   'dandruff_severity: use none, mild, moderate, or heavy based only on visible flakes plus questionnaire support. Use none when dandruff_detected is false.',
-  'dandruff_notes: one concise observation about visible flakes/buildup, or "No visible dandruff-like flakes were observed."',
+  'dandruff_notes: one concise visual observation about flakes/buildup, or "No visible scalp flaking was observed." Do not diagnose dandruff.',
   'lice_detected: true only when lice or nits are clearly visible as small insects or attached oval particles on hair shafts near the scalp; false when absent or uncertain.',
   'Do not confuse loose white flakes, dandruff, or scalp/product buildup with lice/nits. Lice/nits require clear attached oval particles on individual shafts or visible insects.',
   'If the visible particles sit on the scalp/part line rather than being attached to hair shafts, classify them as dandruff/flakes or buildup, not lice/nits.',
   'Only set lice_detected=true when the evidence is stronger than dandruff evidence: attached oval nit-like particles on multiple hair shafts, or visible insect-like bodies. Otherwise keep lice_detected=false.',
   'If possible lice/nit-like particles are visible but not clear enough to confirm, keep lice_detected=false, set lice_confidence=low, and explain the uncertainty in lice_notes.',
   'lice_confidence: use none, low, medium, or high. Use high only when visible evidence is clear; use low when the image is unclear or only questionnaire context suggests concern.',
-  'lice_notes: one concise visible-screening note. Do not diagnose infestation; say whether visible lice/nit-like signs were or were not observed.',
+  'lice_notes: one concise visible-screening note. Do not diagnose infestation; say whether possible nit-like signs were or were not observed.',
   'improvement_tracking_status: use one of: Ready for donation, Not eligible for donation yet, Needs improvement tracking.',
   'improvement_recommendation: one practical, non-medical wellness/progress tracking recommendation. If coverage concerns are visible, suggest tracking the same views over time and gentle scalp/hair care; do not name diseases or diagnoses.',
   'detected_condition: use one precise label based on the MOST PROMINENT VISIBLE condition you observe:',
   'chemical_treatment_detected, colored_hair_detected, bleached_hair_detected, and rebonded_hair_detected: return explicit booleans from visible evidence plus the questionnaire. Do not infer a specific treatment without evidence.',
-  '  - Healthy: shiny, lustrous, no visible damage, sealed ends, good scalp condition',
+  '  - No visible concern: visible shine, no clear damage, and sealed-looking ends',
   '  - Dry: dull appearance, rough texture, lack of shine, dry-looking ends',
   '  - Frizzy: visible frizz along shaft, flyaways, uneven texture',
   '  - Damaged: visible breakage, split ends, frayed ends, brittle appearance',
@@ -636,12 +695,12 @@ const instructions = [
   '- If you see split ends, say "visible split ends observed in close-up view"',
   '- If you see oily scalp, say "scalp appears oily with visible shine at roots"',
   '- If you see dryness, say "hair shaft appears dull with lack of natural shine"',
-  '- If you see healthy hair, say "hair appears healthy with good shine and sealed ends"',
+  '- If no concern is visible, say "no visible concerns were detected; the hair shows visible shine and sealed-looking ends"',
   'Be specific and factual. This field should read like observation notes, not generic statements.',
 
   // Summary
   'summary: write 2–3 sentences that:',
-  '1. Start with what you OBSERVE in the photos (e.g., "The uploaded photos show hair with visible shine and healthy-looking ends...")',
+  '1. Start with what you OBSERVE in the photos (e.g., "The uploaded photos show visible shine and sealed-looking ends...")',
   '2. Mention specific visible characteristics (texture, scalp condition, ends condition, shine/dullness)',
   '3. Connect observations to the detected condition',
   '4. End with "Final screening requires manual review."',
@@ -657,7 +716,7 @@ const instructions = [
   '2. If you observed DRY HAIR/DULL APPEARANCE → recommend deep conditioning, moisturizing products, reducing wash frequency',
   '3. If you observed SPLIT/DAMAGED ENDS → recommend trimming ends, protein treatments, reducing heat',
   '4. If you observed FRIZZ → recommend anti-frizz products, microfiber towel, humidity protection',
-  '5. If you observed HEALTHY HAIR → recommend maintenance routine, protective measures, monthly treatments',
+  '5. If NO VISIBLE CONCERN was detected → recommend a simple maintenance routine without medical or diagnostic claims',
   '6. If you observed CHEMICAL DAMAGE → recommend color-safe products, protein-moisture balance, recovery treatments',
   '7. If you observed SCALP FLAKING → recommend gentle scalp cleansing and neutral anti-dandruff ingredients where appropriate',
   '8. If visible lice or nit-like signs are clearly observed → recommend pausing donation and consulting a qualified health or scalp care professional before donation; do not suggest home diagnosis.',
@@ -692,25 +751,30 @@ const analysisInstructions = [
   'Do not use markdown.',
   'Do not wrap the JSON in code fences.',
   'Do not add explanatory text before or after the JSON.',
-  'Use only the current uploaded or captured hair photos as the main basis for the result. Use the questionnaire only as supporting context, not the main basis.',
+  'Follow this order strictly: (1) inspect donor photos independently, (2) use approved references only as visual examples, (3) determine visible characteristics, (4) only then read the donor self-assessment, (5) compare it with the visual findings, (6) return consistency information, and (7) return the structured Hair Analysis fields.',
+  'The donor self-assessment is self-reported information, not an answer key and not ground truth for visually observable categories. Never copy it into a detected field when the photos do not independently support it.',
+  'Use only the current uploaded or captured hair photos as the main basis for the result. Use the questionnaire only after visual inspection as supporting context.',
+  'For texture, independently choose Straight, Wavy, Curly, Coily, Mixed, or an undetermined result from visible pattern characteristics before comparing against hair_texture.',
+  'Approved database reference images demonstrate category characteristics only. Never require an exact match, compare identity, or treat the reference person as the donor.',
+  'Legacy visible_condition references labeled Healthy mean No Visible Concerns Detected; Unhealthy means Visible Concerns Detected. Never return Healthy or Unhealthy as a user-facing conclusion.',
   'Never reuse or copy prior saved results, prior recommendations, or generic template wording as the current result.',
   'History context, when present, is only for trend comparison and must never replace the current image observations.',
   'Treat each required image role separately and use the correct evidence from that view before deciding the final result.',
-  'Use a two-pass assessment: inspect and record each required view independently, then reconcile the six view notes into one internally consistent result before generating care guidance.',
-  'Use Front View Photo, Side Profile Photo, Right Side Photo, and Back Hair Photo together for donation length assessment from the lower cheek/neck or nape cut-start area to the lowest visible ends. Back Hair Photo should strengthen or correct the length estimate when it shows the lowest ends more clearly than front or side views. Hair Scalp is the main basis for visible scalp coverage, crown/part line density, flakes, oiliness, buildup, and root condition. Hair Ends Close-Up is the main basis for split ends and end damage.',
+  'Use a two-pass assessment: inspect and record each of the four required hair-focused views independently, then reconcile the view notes into one internally consistent result before generating care guidance.',
+  'Use Back Hair, Left Back/Side Hair, and Right Back/Side Hair together for visible donation-length assessment from the nape/cut-start area to the lowest visible ends. Scalp / Root Area is the basis for visible crown/part-line coverage, flake-like particles, oiliness, buildup, and root appearance.',
   'Before estimating length or generating recommendations, compare the required views using visible hair consistency only. Do not identify the person. Since photo validation already passed, do not reject the submission; return the closest conservative hair assessment.',
-  'For every provided required view, return one per_view_notes entry using the exact canonical label: Front View Photo, Side Profile Photo, Right Side Photo, Hair Scalp, Hair Ends Close-Up, or Back Hair Photo.',
+  'For every provided required view, return one per_view_notes entry using the exact canonical label: Back Hair, Left Back/Side Hair, Right Back/Side Hair, or Scalp / Root Area.',
   'Each per_view_notes entry must describe actual visible evidence from that specific image, not generic statements.',
   'Analyze visible hair condition, visible hair assessment, visible hair color, visible hair length estimate, donation suitability, and improvement recommendations.',
   'Be practical, honest, and evidence-based. Do not invent certainty when the image evidence is weak.',
-  'Analyze visible clues such as dryness, oiliness, dandruff-like flakes if visible, visible lice or nit-like signs if clearly visible, frizz, roughness, split or damaged ends, shine or dullness, density appearance, texture appearance, scalp visibility, visible color, and overall healthy or unhealthy appearance.',
+  'Analyze visible clues such as dryness, oiliness, visible flake-like particles, possible nit-like signs if clearly visible, frizz, roughness, breakage-looking ends, shine or dullness, density appearance, texture appearance, scalp visibility, and visible color.',
   'Also analyze visible scalp coverage, dandruff-like flakes, lice/nit-like signs, and user-reported hair fall for wellness/progress tracking: bald_spots_present, affected_regions, hair_density_score, shedding_level, visible_scalp_area, scalp_coverage_notes, dandruff_detected, dandruff_severity, dandruff_notes, lice_detected, lice_confidence, lice_notes, improvement_tracking_status, and improvement_recommendation.',
   'Do not give generic repeated recommendations unless the visible evidence truly supports them.',
   'Do not let the final result mainly focus on retaking photos, improving lighting, or capture quality. Mention those only briefly when they materially limit confidence.',
   'Use per_view_notes for factual view-specific observations that describe what is actually visible.',
   'Use visible_damage_notes for a concise note about visible damage, or state that no obvious visible damage is seen when appropriate.',
-  'detected_color: REQUIRED — always return a non-empty value. Inspect the photos and return the dominant visible hair color from: Black, Dark Brown, Brown, Light Brown, Blonde, Auburn, Red, Dyed, or Multiple Tones. Never return "Unclear" or an empty string because the photo set already passed validation.',
-  'Use detected_condition for the main visible condition. Prefer labels like Healthy, Dry, Oily, Damaged, Mixed Concerns, Frizzy, Dry and Damaged, Dry and Frizzy, or Chemically Treated.',
+  'detected_color: REQUIRED — always return a non-empty value. Inspect the photos and return the dominant visible hair color from: Black, Dark Brown, Brown, Light Brown, Blonde, Auburn, Red, Dyed, Multiple Tones, or Unable to determine. Never guess a color merely to avoid uncertainty.',
+  'Use detected_condition for a concise descriptive observation such as Balanced appearance, Dry-looking areas, Oily-looking roots, Visible damage, Mixed visible concerns, Frizz, or Chemically treated appearance. Never use Healthy or Unhealthy.',
   'Estimate visible donation length only. Donation length means the visible hanging length from the lower cheek/jawline/neck cut-start area to the lowest clearly visible hair end, not scalp-to-end or root-to-end length.',
   'Use the front, side, right-side, and back hair views together to assess visible cheek/neck or nape-to-ends donation length when those views are available.',
   'Use length_assessment to explain how the visible donation length was judged from the current images and to state any visibility limits honestly. Mention the lower cheek/neck start area, visible ends, and the body landmark used for approximation. Use inches only in this text.',
@@ -722,7 +786,7 @@ const analysisInstructions = [
   'Do not use confidence, damage, dandruff, lice, density, shedding, scalp coverage, or body landmarks as donation requirements unless they appear in the supplied database requirement context. They may still be reported as wellness observations.',
   'If the hair looks healthy but short, report the measured length accurately and tailor care guidance toward healthy growth and length retention without declaring eligibility.',
   'Questionnaire answers are required supporting context for wash frequency, itch, flakes, oiliness, dryness/roughness, hair fall, chemical history, heat use, and self-reported hair type. They must shape summary and recommendations without replacing photo evidence.',
-  'confidence_score must reflect image clarity, visibility of ends and full length, texture and scalp detail, consistency across views, and consistency with the questionnaire.',
+  'confidence_score must reflect image clarity, visibility of ends and full length, texture and scalp detail, and consistency across donor-photo views. A mismatch with self-assessment must not by itself lower visual confidence.',
   'Return shine_level, frizz_level, dryness_level, oiliness_level, and damage_level as integers from 1 to 10. These MUST reflect your actual photo observations and MUST be logically consistent with your summary, visible_damage_notes, and detected_condition.',
   'SHINE (positive metric): 1=hair is completely dull and matte, 4-5=moderate shine, 7-9=clearly shiny and lustrous, 10=extremely glossy. If you describe the hair as shiny, healthy, or lustrous anywhere in your response, shine_level MUST be ≥ 6. Do NOT return 1 for shiny-looking hair.',
   'FRIZZ (concern): 1=absolutely no frizz visible at all, 4-5=moderate frizz, 8-10=severe frizz. Use 1 ONLY when zero frizz is visible in any view.',
@@ -736,7 +800,7 @@ const analysisInstructions = [
   'Return exactly 3 recommendations when hair is visible enough to analyze.',
   'Recommendations should be specific to the observed condition, such as reducing heat exposure, improving scalp care, adjusting wash routine, improving moisture care, trimming damaged ends when appropriate, and avoiding harsh chemical processing.',
   'Each recommendation must address an observation supported by the current per_view_notes or a questionnaire answer that is consistent with those images. Never invent damage, dryness, flakes, lice, thinning, oiliness, or chemical treatment merely to produce three different steps.',
-  'If the visible hair is too short for donation, include guidance about length retention, healthy growth habits, or reducing breakage. If the hair is dry, recommendations must address dryness. If the hair appears healthy, recommendations must focus on maintenance rather than damage repair.',
+  'If the visible hair is too short for donation, include guidance about length retention or reducing breakage. If the hair looks dry, recommendations must address visible dryness. If no concern is visible, recommendations must focus on maintenance rather than damage repair.',
   'Do not use recommendation slots for camera, upload, lighting, retake, photo framing, or recheck instructions. Those belong before analysis, not in hair-care recommendations.',
   'Do not recommend or advertise products. Do not name brands, companies, stores, marketplaces, shopping links, product lines, countries, country-made products, or country-specific options. Mention only neutral ingredients that clearly match the observed concern, and skip ingredients when the recommendation is only about length, maintenance, retaking photos, or rechecking.',
   'If ingredients are mentioned, include a short caution that users with allergies, scalp irritation, or sensitivity should consult a qualified hair or scalp care professional before trying new ingredients.',
@@ -842,7 +906,7 @@ const evaluateCurrentHairObservations = async (
 const attachCurrentEligibility = (
   analysis: Record<string, unknown>,
   evaluation: Record<string, unknown>,
-) => {
+): Record<string, unknown> => {
   if (evaluation.configuration_error === true || typeof evaluation.eligible !== 'boolean') {
     throw new Error(DONATION_REQUIREMENTS_UNAVAILABLE_MESSAGE);
   }
@@ -913,6 +977,10 @@ const removeAdvertisedNames = (value: string) => {
 const normalizeViewLabel = (value: unknown) => {
   const normalized = normalizeString(value).toLowerCase();
   if (!normalized) return '';
+  if (normalized.includes('left back') || normalized === 'side_profile') return 'Left Back/Side Hair';
+  if (normalized.includes('right back') || normalized === 'right_side_profile') return 'Right Back/Side Hair';
+  if (normalized.includes('scalp') || normalized.includes('root area') || normalized.includes('crown')) return 'Scalp / Root Area';
+  if (normalized === 'back hair' || normalized === 'back_hair' || normalized.includes('back hair photo')) return 'Back Hair';
   if (normalized.includes('back hair') || normalized.includes('back view') || normalized === 'back' || normalized.includes('back')) {
     return 'Back Hair Photo';
   }
@@ -1004,8 +1072,9 @@ const normalizeConfidence = (value: unknown) => {
   return Math.max(0, Math.min(1, parsed));
 };
 
-const normalizeHairTexture = (value: unknown, questionnaireAnswers: Record<string, unknown> = {}) => {
-  const source = normalizeString(value) || normalizeString(questionnaireAnswers?.hair_texture);
+const normalizeHairTexture = (value: unknown) => {
+  // Self-assessment is comparison input, never a detected-texture fallback.
+  const source = normalizeString(value);
   const normalized = source.toLowerCase();
   if (normalized.includes('straight')) return 'Straight';
   if (normalized.includes('wavy') || normalized.includes('wave')) return 'Wavy';
@@ -1537,7 +1606,7 @@ const runFocusedLengthFallback = async ({
         'You are a focused hair length estimator for a hair donation app.',
         'Return valid JSON only.',
         'Your main job is to estimate visible donation length from the lower cheek/neck cut-start area to the lowest visible ends in the current images.',
-        'Use the front and side profile images for donation length. Use the Hair Scalp only to assess scalp/crown coverage and root/scalp condition.',
+        'Use Back Hair plus the Left and Right Back/Side Hair images for donation length. Use Scalp / Root Area only for visible root and scalp coverage observations.',
         'Set length_measurable=true only when loose or naturally hanging hair shows both the lower cheek/neck cut-start area and the lowest natural ends. Otherwise set length_measurable=false.',
         'If hair is tied back, clipped, folded into a bun, held by a tie/scrunchie, or its natural ends are hidden, return estimated_length=null and explain the obstruction in length_limit_reason. Never measure the distance to a clip, bun, or tied section.',
         'If length_measurable=true, return a conservative approximate estimated_length in centimeters for storage even when no ruler is present.',
@@ -1586,9 +1655,9 @@ const runFocusedLengthFallback = async ({
       estimated_length: estimatedLength,
       length_measurable: lengthMeasurable && estimatedLength != null,
       length_limit_reason: lengthLimitReason,
-      detected_color: normalizeString(focused?.detected_color) || 'Black',
-      detected_texture: normalizeString(focused?.detected_texture) || 'Straight',
-      detected_density: normalizeString(focused?.detected_density) || 'Medium',
+      detected_color: normalizeString(focused?.detected_color) || 'Unable to determine',
+      detected_texture: normalizeString(focused?.detected_texture) || 'Unable to determine',
+      detected_density: normalizeString(focused?.detected_density) || 'Unable to determine',
       detected_condition: normalizeString(focused?.detected_condition) || 'Needs manual hair review',
       visible_damage_notes: 'Hair is visible in the submitted photos. Detailed condition scoring should be confirmed during manual screening.',
       confidence_score: normalizeConfidence(focused?.confidence_score) ?? (estimatedLength != null ? 0.56 : 0.42),
@@ -1605,10 +1674,10 @@ const runFocusedLengthFallback = async ({
       scalp_coverage_notes: 'Hair and scalp view were submitted; coverage should be tracked again in the next scan for a stronger comparison.',
       dandruff_detected: false,
       dandruff_severity: 'none',
-      dandruff_notes: 'No visible dandruff-like flakes were confirmed in this low-confidence fallback.',
+      dandruff_notes: 'No visible scalp flaking was confirmed in this low-confidence fallback.',
       lice_detected: false,
       lice_confidence: 'none',
-      lice_notes: 'No visible lice or nit-like signs were confirmed in this low-confidence fallback.',
+      lice_notes: 'No visible nit-like signs were confirmed in this low-confidence fallback.',
       improvement_tracking_status: 'Needs improvement tracking',
       improvement_recommendation: 'Track scalp coverage and hair density over time, and use gentle care that avoids tight pulling or harsh handling.',
       decision: IMPROVE_STATUS,
@@ -1633,8 +1702,8 @@ const runFocusedLengthFallback = async ({
           priority_order: 1,
         },
         {
-          title: 'Use Side Profile for Length',
-          recommendation_text: 'The side profile should show the lower cheek or neck cut-start area and the lowest visible ends in one frame.',
+          title: 'Show Full Hanging Length',
+          recommendation_text: 'The back and back/side views should show the cut-start area and the lowest visible ends in one frame.',
           priority_order: 2,
         },
         {
@@ -1873,7 +1942,7 @@ const normalizeAnalysisPayload = (
   const normalizedMissingViews = normalizeMissingViews(analysis?.missing_views);
   const normalizedViewNotes = normalizePerViewNotes(analysis?.per_view_notes);
   const detectedColor = normalizeString(analysis?.detected_color);
-  const detectedTexture = normalizeHairTexture(analysis?.detected_texture, questionnaireAnswers);
+  const detectedTexture = normalizeHairTexture(analysis?.detected_texture);
   const detectedDensity = normalizeString(analysis?.detected_density);
   const detectedCondition = normalizeString(analysis?.detected_condition);
   const invalidImageReason = normalizeString(analysis?.invalid_image_reason);
@@ -2000,6 +2069,16 @@ const normalizeAnalysisPayload = (
     || 'Analysis completed';
   const finalImprovementRecommendation = improvementRecommendation;
   const finalDonationReadinessNote = donationReadinessNote;
+  const visibleConcerns = Array.isArray(analysis?.visible_concerns)
+    ? analysis.visible_concerns.map(normalizeString).filter(Boolean)
+    : [];
+  const visibleConditionStatus = normalizeString(analysis?.visible_condition_status) === 'Visible Concerns Detected'
+    || visibleConcerns.length > 0
+    || dandruffDetected
+    || drynessLevel >= 7
+    || damageLevel >= 7
+    ? 'Visible Concerns Detected'
+    : 'No Visible Concerns Detected';
 
   return {
     is_hair_detected: finalIsHairDetected,
@@ -2011,10 +2090,18 @@ const normalizeAnalysisPayload = (
     length_limit_reason: lengthMeasurable
       ? ''
       : lengthLimitReason || 'Hair was tied, clipped, covered, cropped, or did not show the naturally hanging lowest ends clearly enough for a reliable measurement.',
-    detected_color: detectedColor || 'Black',
-    detected_texture: detectedTexture || 'Straight',
-    detected_density: detectedDensity || 'Medium',
+    detected_color: detectedColor || 'Unable to determine',
+    detected_texture: detectedTexture || 'Unable to determine',
+    detected_density: detectedDensity || 'Unable to determine',
     detected_condition: detectedCondition || 'Needs manual hair review',
+    visible_condition_status: visibleConditionStatus,
+    visible_concerns: visibleConcerns,
+    assessment_consistency: Array.isArray(analysis?.assessment_consistency)
+      ? analysis.assessment_consistency
+      : [],
+    self_assessment_conflicts: Array.isArray(analysis?.self_assessment_conflicts)
+      ? analysis.self_assessment_conflicts
+      : [],
     chemical_treatment_detected: typeof analysis?.chemical_treatment_detected === 'boolean'
       ? analysis.chemical_treatment_detected
       : null,
@@ -2048,15 +2135,15 @@ const normalizeAnalysisPayload = (
     dandruff_severity: dandruffSeverity,
     dandruff_notes: dandruffNotes || (
       dandruffDetected
-        ? 'Dandruff-like flakes were observed in the uploaded scalp or root views.'
-        : 'No visible dandruff-like flakes were observed in the uploaded views.'
+        ? 'Visible flake-like particles were observed in the uploaded scalp or root views.'
+        : 'No visible flake-like particles were observed in the uploaded views.'
     ),
     lice_detected: liceDetected,
     lice_confidence: liceConfidence,
     lice_notes: liceNotes || (
       liceDetected
-        ? 'Visible lice or nit-like signs were observed; this screening is not a medical diagnosis.'
-        : 'No visible lice or nit-like signs were observed in the uploaded views.'
+        ? 'Possible nit-like signs were observed; this visible screening is not a diagnosis.'
+        : 'No possible nit-like signs were observed in the uploaded views.'
     ),
     improvement_tracking_status: finalImprovementTrackingStatus,
     improvement_recommendation: finalImprovementRecommendation,
@@ -2087,6 +2174,61 @@ const extractBase64Data = (dataUrl: string): string => {
 const extractMimeType = (dataUrl: string): string => {
   const match = dataUrl.match(/^data:([^;]+);base64,/);
   return match?.[1] || 'image/jpeg';
+};
+
+type ApprovedReferenceImage = {
+  title: string;
+  category: string;
+  value: string;
+  description: string;
+  mimeType: string;
+  base64: string;
+};
+
+const bytesToBase64 = (bytes: Uint8Array) => {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
+};
+
+const getActiveApprovedReferenceImages = async (): Promise<ApprovedReferenceImage[]> => {
+  const supabaseUrl = Deno.env.get('SUPABASE_URL') || '';
+  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
+  if (!supabaseUrl || !serviceRoleKey) return [];
+
+  const supabase = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false } });
+  const { data, error } = await supabase
+    .from('hair_analysis_reference_images')
+    .select('reference_category, reference_value, title, description, storage_bucket, storage_path')
+    .eq('is_active', true)
+    .eq('use_for_ai', true)
+    .order('sort_order', { ascending: true })
+    .limit(20);
+
+  if (error) {
+    console.warn('[analyze-hair-submission] approved references unavailable', { message: error.message });
+    return [];
+  }
+
+  const references = await Promise.all((data || []).map(async (row) => {
+    const { data: file, error: downloadError } = await supabase.storage
+      .from(String(row.storage_bucket || ''))
+      .download(String(row.storage_path || ''));
+    if (downloadError || !file || file.size > 5_242_880) return null;
+    return {
+      title: normalizeString(row.title),
+      category: normalizeString(row.reference_category),
+      value: normalizeString(row.reference_value),
+      description: normalizeString(row.description),
+      mimeType: file.type || 'image/jpeg',
+      base64: bytesToBase64(new Uint8Array(await file.arrayBuffer())),
+    };
+  }));
+
+  return references.filter((item): item is ApprovedReferenceImage => Boolean(item?.base64));
 };
 
 Deno.serve(async (request) => {
@@ -2136,6 +2278,7 @@ Deno.serve(async (request) => {
     }
 
     const validImages = images.filter((image) => typeof image?.dataUrl === 'string' && image.dataUrl.startsWith('data:'));
+    const approvedReferenceImages = await getActiveApprovedReferenceImages();
     const photosVerified = await verifyHairPhotoVerificationToken({
       token: normalizeString(complianceContext?.photo_verification_token),
       images,
@@ -2194,6 +2337,7 @@ Deno.serve(async (request) => {
       historyEntryCount: Array.isArray(historyContext?.entries) ? historyContext.entries.length : 0,
       hasOpenRouterKey,
       model,
+      approvedReferenceImageCount: approvedReferenceImages.length,
     });
 
     // Build text context
@@ -2213,7 +2357,7 @@ Deno.serve(async (request) => {
       'Before generating any output, carefully look at each photo for the following:',
       '- Environment: Is it well-lit? Is it dark/underexposed? Is there a person visible?',
       '- Background: Is there only one person? Are there distracting items behind the subject?',
-      '- Required angle: Is the Front View face-forward? Are the Side Profile and Right Side Photo actually side views? Does the Hair Scalp show the scalp/crown or part line clearly? Does Back Hair Photo show hair from behind when provided?',
+      '- Required angle: Does Back Hair show the loose full length from behind? Do Left Back/Side Hair and Right Back/Side Hair show opposite corresponding angles? Does Scalp / Root Area show the crown, roots, or part line clearly? A face is optional in every view.',
       '- Cross-view consistency: Do all provided photos appear to show the same current hair from one person? Check visible hair color, length, texture, density, ends, hairline/parting when visible, back-side fullness, and clothing/shoulder area when visible. Do not identify the person; only check whether the submission is visually consistent.',
       '- Accessories: Are glasses, sunglasses, masks, face shields, caps, hats, headbands, clips, pins, hair ties, scrunchies, scarves, headphones, hoods, hands, towels, or fabric visible on the face or blocking the hairline, shaft, length, or ends?',
       '- Hair authenticity screening: Look conservatively for visible wig, hairpiece, topper, or extension evidence such as a lace edge, wig cap, exposed track/weft, tape or bond, attachment seam, or abrupt unmatched density/texture. Do not infer artificial hair from styling, high density, straightening, curling, or color alone. Record only visible evidence in per_view_notes and lower confidence when roots or the hairline are obscured.',
@@ -2221,10 +2365,8 @@ Deno.serve(async (request) => {
       '- Score levels: shine, frizz, dryness, oiliness, damage from 1-10',
       'Use per_view_notes to record what you observe in each view.',
       '',
-      '=== STEP 2: STRUCTURED QUESTIONNAIRE CONTEXT (REQUIRED INTEGRATION) ===',
-      'Use questionnaire answers as required context for summary and recommendations.',
-      'Photos stay primary for visual findings, but recommendations must reflect relevant reported risks (itch, flakes, oiliness, dryness, hair fall, frequent heat, chemical treatment).',
-      formatQuestionnaireAnswers(questionnaireAnswers),
+      '=== STEP 2: COMPLETE THE INDEPENDENT VISUAL PASS ===',
+      'The donor self-assessment values are intentionally supplied after the donor and reference images. Decide the visible findings before reading them.',
       '',
       '=== STEP 3: PRIOR HAIR-CHECK HISTORY ===',
       formatHistoryContext(historyContext),
@@ -2239,7 +2381,7 @@ Deno.serve(async (request) => {
       'Based on what you see in the photos and the questionnaire context:',
       'The current result must come from the current uploaded photos only.',
       'Return one per_view_notes entry for every provided current image, including optional back-side and hair-ends views when present.',
-      'For the Hair Scalp image, carefully inspect the part line, roots, crown, and visible hair shafts for dandruff-like flakes, lice, and nits before finalizing. The final JSON must always include dandruff_detected, dandruff_severity, dandruff_notes, lice_detected, lice_confidence, and lice_notes.',
+      'For the Scalp / Root Area image, inspect the part line, roots, crown, and visible hair shafts for flake-like particles and possible nit-like signs before finalizing. Keep the legacy structured field names required by storage, but all user-facing notes must remain nonmedical.',
       'Dandruff/flakes and lice/nits are different findings. Dandruff/flakes: mark detected when visible white/yellow loose or irregular flake-like particles or buildup appear on the scalp/roots/part line. Lice/nits: mark detected only when insects or attached oval nit-like particles on hair shafts are clearly visible; otherwise use lice_confidence low/none with notes.',
       'Do not reject the photo set in this step. The photo set already passed validation, so return the closest conservative hair analysis and keep is_hair_detected=true.',
       'Recommendations must be about hair care, condition maintenance, length retention, scalp care, or visible damage. Do not put photo capture, retake, lighting, upload, framing, or recheck instructions in recommendations.',
@@ -2247,8 +2389,22 @@ Deno.serve(async (request) => {
       'Visible donation length must be at least the current database minimum hair length requirement from the lower cheek/neck cut-start area for donation eligibility.',
       'Report explicit treatment booleans accurately. The server, not the AI, will compare them with the current database requirements and set the final eligibility decision.',
       'Do not recommend or advertise products. Include neutral ingredients only when they clearly fit a visible concern: dryness, visible damage, frizz, visible flakes, oily roots, or chemically treated hair. Skip ingredients when the recommendation is only about length, maintenance, retaking photos, or rechecking. Do not include brand names, company names, store names, marketplaces, shopping links, advertised product names, countries, country-made products, or country-specific product options. If ingredients are mentioned, include a short caution that users with allergies, scalp irritation, or sensitivity should consult a qualified hair or scalp care professional before trying new ingredients.',
-      'Do not invent any donation requirement that is absent from the database context.',
-    ].join('\n');
+  'Do not invent any donation requirement that is absent from the database context.',
+  'VISIBLE-ONLY LANGUAGE RULE: Never diagnose disease or classify hair as healthy/unhealthy. Use exactly "No Visible Concerns Detected" or "Visible Concerns Detected" for visible_condition_status.',
+  'visible_concerns must contain only concise visible observations such as dry-looking areas, frizz, breakage-looking ends, oily-looking roots, visible flake-like particles, or nit-like particles. Use an empty array when none are visible.',
+  'After the independent visual pass, return one assessment_consistency entry for every visually checkable supplied answer. The active questionnaire fields are hair_texture, oily_after_wash, dandruff_or_flakes, and dry_or_rough. Also compare apparent density, color, or length only if the donor payload explicitly supplies a corresponding self-assessment; do not invent a self-assessment from an AI result or correction field.',
+  'Each assessment_consistency entry must preserve the self assessment and independent visual finding, state consistent, requires_confirmation, unable_to_determine, confidence from 0 to 1, a neutral explanation, and the relevant required view.',
+  'Set unable_to_determine=true, requires_confirmation=false, and do not create a conflict whenever the photo evidence is weak or the category cannot be confidently determined.',
+  'Return self_assessment_conflicts only for meaningful high-confidence differences that require donor confirmation. Do not flag minor wording differences, uncertain observations, or visually equivalent values.',
+  'Apply the same generic comparison process regardless of the selected value. Texture examples include Straight versus Curly, Wavy versus clearly Straight, Curly versus clearly Coily, and Coily versus Straight; adjacent patterns require especially clear high-confidence evidence.',
+  'For oiliness, compare no/sometimes/yes with the independent root observation and use neutral wording because appearance changes between washes. For visible flaking, compare the active no/a_little/a_lot answer with visible scalp flaking without diagnosing dandruff.',
+  'For visible condition, compare normal_balanced/dry/rough/oily with visible dryness, roughness, breakage-looking damage, or oiliness. Use No Visible Concerns Detected and Visible Concerns Detected rather than Healthy or Unhealthy.',
+  'If a real density self-assessment is supplied, call the visual result apparent density and require strong evidence for a meaningful difference. If a real color self-assessment is supplied, do not flag a mismatch under poor lighting, color cast, partial dye, or low confidence.',
+  'If a real numeric length self-assessment is supplied, treat small estimate differences such as 8 inches versus 7.9 inches as a match; only flag a clearly meaningful difference such as 18 inches versus about 8 inches.',
+  'For each conflict provide the answer key, original donor answer, visual finding, neutral explanation, relevant required view, and confidence from 0 to 1. Return an empty array when no review is needed.',
+  'Use "visible flaking" or "flake-like particles" in donor-facing text instead of diagnosing dandruff. Use "possible nit-like signs" instead of diagnosing lice.',
+  'Eligibility is separate from visual condition and must still be determined only from the current database wig requirements.',
+].join('\n');
 
     // Build multimodal content parts (text + images interleaved)
     const multimodalParts: Record<string, unknown>[] = [
@@ -2265,6 +2421,35 @@ Deno.serve(async (request) => {
           data: extractBase64Data(image.dataUrl || ''),
         },
       });
+    });
+
+    if (approvedReferenceImages.length) {
+      multimodalParts.push({
+        text: '=== APPROVED VISUAL REFERENCES ===\nThe following images are STAFF-APPROVED REFERENCE EXAMPLES, not donor photos. Compare category characteristics, never image identity or overall similarity. An exact photographic match is not required. For visible_condition only, interpret legacy Healthy as No Visible Concerns Detected and Unhealthy as Visible Concerns Detected.',
+      });
+      approvedReferenceImages.forEach((reference, index) => {
+        multimodalParts.push({
+          text: `Approved reference ${index + 1}: category=${reference.category}; value=${reference.value}; title=${reference.title}; guidance=${reference.description || 'visual calibration only'}`,
+        });
+        multimodalParts.push({
+          inlineData: { mimeType: reference.mimeType, data: reference.base64 },
+        });
+      });
+    } else {
+      multimodalParts.push({
+        text: 'No active staff-approved reference images are configured. Do not claim that this result was reference-image calibrated; rely on the donor photos and supplied requirement text only.',
+      });
+    }
+
+    multimodalParts.push({
+      text: [
+        '=== DONOR SELF-ASSESSMENT — READ ONLY AFTER THE VISUAL PASS ===',
+        'These answers describe what the donor reports. They are not ground truth for detected texture, color, density, oiliness, flaking, or visible condition.',
+        'Do not revise an independent visual finding merely to agree with an answer.',
+        formatQuestionnaireAnswers(questionnaireAnswers),
+        '',
+        'Now compare every supplied visually checkable answer with the already determined visual findings in this same request and produce assessment_consistency and self_assessment_conflicts. Do not make or imply a second AI request for individual categories.',
+      ].join('\n'),
     });
 
     const contents = [{ role: 'user', parts: multimodalParts }];
@@ -2345,9 +2530,9 @@ Deno.serve(async (request) => {
               notes: 'The AI provider was busy, so this view was saved for low-confidence progress tracking only.',
             })),
             estimated_length: 0,
-            detected_color: 'Black',
-            detected_texture: 'Straight',
-            detected_density: 'Medium',
+            detected_color: 'Unable to determine',
+            detected_texture: 'Unable to determine',
+            detected_density: 'Unable to determine',
             detected_condition: 'Needs manual hair review',
             visible_damage_notes: 'Hair is visible in the submitted photos. Detailed visible damage scoring should be confirmed during manual screening.',
             confidence_score: 0.25,
@@ -2364,10 +2549,10 @@ Deno.serve(async (request) => {
             scalp_coverage_notes: 'Scalp coverage is marked for progress tracking from the visible scalp and part-line areas.',
             dandruff_detected: false,
             dandruff_severity: 'none',
-            dandruff_notes: 'No visible dandruff-like flakes were confirmed because detailed provider analysis was unavailable.',
+            dandruff_notes: 'No visible scalp flaking was confirmed because detailed provider analysis was unavailable.',
             lice_detected: false,
             lice_confidence: 'none',
-            lice_notes: 'No visible lice or nit-like signs were confirmed because detailed provider analysis was unavailable.',
+            lice_notes: 'No visible nit-like signs were confirmed because detailed provider analysis was unavailable.',
             improvement_tracking_status: 'Needs improvement tracking',
             improvement_recommendation: 'Use gentle scalp care, avoid tight hairstyles, and track coverage or shedding changes over time.',
             decision: IMPROVE_STATUS,
@@ -2555,9 +2740,15 @@ Deno.serve(async (request) => {
       request,
       normalizedAnalysis,
     );
-    const analysis = attachCurrentEligibility(normalizedAnalysis, eligibilityEvaluation);
+    const analysis: Record<string, unknown> = {
+      ...attachCurrentEligibility(normalizedAnalysis, eligibilityEvaluation),
+      reference_image_context: {
+        status: approvedReferenceImages.length ? 'applied' : 'not_configured',
+        active_reference_count: approvedReferenceImages.length,
+      },
+    };
 
-    console.info('[analyze-hair-submission] google ai result ready', {
+    console.info('[analyze-hair-submission] combined AI result ready', {
       concernType,
       hasAnalysis: Boolean(analysis),
       isHairDetected: analysis?.is_hair_detected ?? null,

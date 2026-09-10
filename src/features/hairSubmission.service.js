@@ -586,13 +586,6 @@ export const saveHairSubmissionFlow = async ({
     const normalizedEstimatedLength = aiAnalysis?.estimated_length != null
       ? Number(aiAnalysis.estimated_length)
       : null;
-    const pickNonEmpty = (...values) => {
-      for (const value of values) {
-        const text = String(value ?? '').trim();
-        if (text) return text;
-      }
-      return null;
-    };
     const normalizedConfidenceScore = aiAnalysis?.confidence_score != null
       ? Number(aiAnalysis.confidence_score)
       : null;
@@ -693,18 +686,20 @@ export const saveHairSubmissionFlow = async ({
 
     const { data: screening, error: screeningError } = await HairSubmissionAPI.createAiScreening({
       submission_id: submission.submission_id,
-      estimated_length: declaredLength ?? (Number.isFinite(normalizedEstimatedLength) ? normalizedEstimatedLength : null),
-      detected_color: pickNonEmpty(confirmedValues.declaredColor, aiAnalysis.detected_color),
-      detected_texture: pickNonEmpty(confirmedValues.declaredTexture, aiAnalysis.detected_texture),
-      detected_density: pickNonEmpty(confirmedValues.declaredDensity, aiAnalysis.detected_density),
-      detected_condition: pickNonEmpty(confirmedValues.declaredCondition, aiAnalysis.detected_condition),
+      estimated_length: Number.isFinite(normalizedEstimatedLength) ? normalizedEstimatedLength : null,
+      // AI_Screenings must retain the visual observations. Donor edits belong
+      // to Hair_Submission_Details and Analysis_Result review metadata.
+      detected_color: aiAnalysis.detected_color || null,
+      detected_texture: aiAnalysis.detected_texture || null,
+      detected_density: aiAnalysis.detected_density || null,
+      detected_condition: aiAnalysis.detected_condition || null,
       visible_damage_notes: aiAnalysis.visible_damage_notes || null,
       confidence_score: resolveAiScreeningConfidenceForDb({
         confidenceScore: normalizedConfidenceScore,
-        estimatedLength: declaredLength ?? (Number.isFinite(normalizedEstimatedLength) ? normalizedEstimatedLength : null),
-        detectedColor: pickNonEmpty(confirmedValues.declaredColor, aiAnalysis.detected_color),
-        detectedTexture: pickNonEmpty(confirmedValues.declaredTexture, aiAnalysis.detected_texture),
-        detectedDensity: pickNonEmpty(confirmedValues.declaredDensity, aiAnalysis.detected_density),
+        estimatedLength: Number.isFinite(normalizedEstimatedLength) ? normalizedEstimatedLength : null,
+        detectedColor: aiAnalysis.detected_color,
+        detectedTexture: aiAnalysis.detected_texture,
+        detectedDensity: aiAnalysis.detected_density,
       }),
       shine_level: aiAnalysis.shine_level ?? null,
       frizz_level: aiAnalysis.frizz_level ?? null,
@@ -948,6 +943,7 @@ export const getHairAnalyzerContext = async (userId) => {
       { data: upcomingHaircutSchedules, error: haircutSchedulesError },
       { data: latestHaircutReservation, error: haircutReservationError },
       { data: latestCertificate, error: latestCertificateError },
+      { data: referenceImages, error: referenceImagesError },
     ] = await Promise.all([
       HairSubmissionAPI.fetchLatestDonationRequirement(),
       HairSubmissionAPI.fetchLatestHairSubmissionByUserId(userId),
@@ -955,6 +951,7 @@ export const getHairAnalyzerContext = async (userId) => {
       HairSubmissionAPI.fetchUpcomingHaircutSchedules(),
       HairSubmissionAPI.fetchLatestHaircutReservationByUserId(userId),
       HairSubmissionAPI.fetchLatestDonationCertificateByUserId(userId),
+      HairSubmissionAPI.fetchActiveHairAnalysisReferenceImages({ usage: 'ui' }),
     ]);
 
     if (donationRequirementError) {
@@ -975,6 +972,12 @@ export const getHairAnalyzerContext = async (userId) => {
     }
     if (latestCertificateError) {
       throw new Error(latestCertificateError.message || 'Unable to load your certificate status.');
+    }
+    if (referenceImagesError) {
+      logAppEvent('hair_submission.context', 'Approved Hair Check reference images could not be loaded.', {
+        userId,
+        message: referenceImagesError.message || 'Unknown reference image error.',
+      }, 'warn');
     }
 
     const { data: latestSubmissionDetail, error: latestDetailError } = latestSubmission?.submission_id
@@ -1004,6 +1007,7 @@ export const getHairAnalyzerContext = async (userId) => {
       latestCertificate,
       latestSubmission,
       latestSubmissionDetail,
+      referenceImages: referenceImages || [],
       error: null,
     };
   } catch (error) {
@@ -1015,6 +1019,7 @@ export const getHairAnalyzerContext = async (userId) => {
       latestCertificate: null,
       latestSubmission: null,
       latestSubmissionDetail: null,
+      referenceImages: [],
       error: error.message || 'Unable to load the hair analyzer context.',
     };
   }

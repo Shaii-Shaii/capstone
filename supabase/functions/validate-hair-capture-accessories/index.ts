@@ -2,6 +2,7 @@
 
 import { createJsonResponse, handleCorsPreflight } from '../_shared/cors.ts';
 import { createStructuredResponse, resolveOpenRouterHairVisionModel } from '../_shared/ai-vision.ts';
+import { createHairPhotoVerificationToken } from '../_shared/hair-photo-verification.ts';
 
 const accessoryCheckSchema = {
   type: 'object',
@@ -26,6 +27,10 @@ const accessoryCheckSchema = {
           type: 'array',
           items: { type: 'string' },
         },
+        view_correct: { type: 'boolean' },
+        observed_pose: { type: 'string' },
+        image_clear: { type: 'boolean' },
+        lighting_acceptable: { type: 'boolean' },
       },
       required: [
         'status',
@@ -36,6 +41,10 @@ const accessoryCheckSchema = {
         'hair_fully_visible',
         'hair_loose_and_down',
         'presentation_issues',
+        'view_correct',
+        'observed_pose',
+        'image_clear',
+        'lighting_acceptable',
       ],
     },
   },
@@ -59,22 +68,26 @@ const extractImageData = (dataUrl: string) => {
 };
 
 const instructions = [
-  'You are a strict accessory gate for one guided hair-screening camera frame.',
+  'You are a hair-visibility and photo-usability gate for one guided Hair Check frame.',
   'Return JSON only. Do not identify the person or infer sensitive traits.',
   '',
-  'Set status="accessory_detected" when any of these is visibly worn on the face or head, fastened to the hair, or covering hair: prescription eyeglasses, reading glasses, sunglasses, cap, hat, bonnet, wig cap, head wrap, scarf, hood, headband, hair clip, claw clip, pin, hair tie, scrunchie, ribbon, headphones, headset, earbuds, face mask, face shield, towel, or similar item.',
-  'Eyeglasses must always be reported even when they do not cover the hairline.',
-  'Every detected accessory is disallowed for this guided capture even when it does not block hair length.',
+  'Set status="accessory_detected" only when an item blocks the hair area required for this view: roots, shaft, natural hanging length, ends, scalp, crown, or part line.',
+  'Eyeglasses, earrings, face masks, and ordinary clothing are allowed when they do not cover required hair. A face is optional in every view.',
+  'Caps, coverings, clips, ties, buns, ponytails, hands, or fabric are blockers only when they hide or change the required visible hair area.',
   'Report each visible item using a short familiar name in detected_accessories.',
-  'Do not count earrings, necklaces, ordinary clothing below the neck, room objects, or background objects unless they cover or touch the required hair or face area.',
-  'Do not count the person\'s hand as an accessory, but use status="unclear" if a hand blocks the hair, scalp, or face needed for this view.',
-  'For scalp, hair-ends, and back-hair views, a missing face is expected. Inspect the visible head and hair for accessories.',
+  'Do not count room or background objects unless they obscure the required hair area.',
+  'Do not count the person\'s hand as an accessory, but use status="unclear" if it blocks the hair or scalp needed for this view.',
+  'A missing face is expected and must never cause a failure.',
   'Set hair_fully_visible=false when the hair area required by this view is cropped, covered, too dark, badly blurred, or hidden by the pose, hand, clothing, or another object.',
   'Set hair_loose_and_down=false if the hair is tied, pinned, clipped, braided into an updo, folded upward, placed in a bun or ponytail, or covered by a cap, hat, bonnet, scarf, or hood. For scalp and hair-ends close-ups, judge whether the visible hair is free of these restraints even if its full hanging length is outside the close-up.',
   'List short actionable problems such as "hair tied in ponytail", "cap covers hair", or "hair ends cropped" in presentation_issues.',
   'Use status="unclear" when blur, darkness, cropping, or obstruction prevents a reliable accessory decision.',
   'Use status="no_accessory" only after checking the entire visible head, face, and hair area.',
   'Set visual_screening_completed=true only when the decision is clear. Keep the reason to one short sentence.',
+  'Also validate this individual requested view for the correct capture area, framing, angle, clarity, and usable lighting.',
+  'Use view_correct=true only when the image actually shows the requested view named in the user prompt.',
+  'Set image_clear=false for strong blur or motion blur. Set lighting_acceptable=false when the required hair area is too dark, washed out, or strongly backlit.',
+  'observed_pose must briefly name the visible hair area, such as back_hair, left_back_side, right_back_side, scalp_root, or unclear.',
 ].join('\n');
 
 Deno.serve(async (request) => {
@@ -89,6 +102,7 @@ Deno.serve(async (request) => {
     const body = await request.json();
     const dataUrl = normalizeString(body?.image?.dataUrl);
     const image = extractImageData(dataUrl);
+    const viewKey = normalizeString(body?.view?.key);
     const viewLabel = normalizeString(body?.view?.label) || 'Hair photo';
 
     if (!image || !image.mimeType.startsWith('image/') || !image.data) {
@@ -148,10 +162,23 @@ Deno.serve(async (request) => {
     const presentationBlocked = !hairFullyVisible || !hairLooseAndDown || presentationIssues.length > 0;
     const visualScreeningCompleted = source.visual_screening_completed === true
       && ['no_accessory', 'accessory_detected'].includes(status);
+    const viewCorrect = source.view_correct === true;
+    const imageClear = source.image_clear === true;
+    const lightingAcceptable = source.lighting_acceptable === true;
     const confidenceValue = Number(source.confidence);
     const confidence = Number.isFinite(confidenceValue)
       ? Math.min(1, Math.max(0, confidenceValue))
       : 0;
+
+    const canCapture = visualScreeningCompleted
+      && !accessoryDetected
+      && !presentationBlocked
+      && viewCorrect
+      && imageClear
+      && lightingAcceptable;
+    const photoVerificationToken = canCapture
+      ? await createHairPhotoVerificationToken([{ dataUrl, viewKey, viewLabel }])
+      : null;
 
     return createJsonResponse({
       check: {
@@ -163,8 +190,13 @@ Deno.serve(async (request) => {
         hair_fully_visible: hairFullyVisible,
         hair_loose_and_down: hairLooseAndDown,
         presentation_issues: presentationIssues,
-        can_capture: visualScreeningCompleted && !accessoryDetected && !presentationBlocked,
+        view_correct: viewCorrect,
+        observed_pose: normalizeString(source.observed_pose) || 'unclear',
+        image_clear: imageClear,
+        lighting_acceptable: lightingAcceptable,
+        can_capture: canCapture,
       },
+      photo_verification_token: photoVerificationToken,
       diagnostics: result?.diagnostics || null,
     });
   } catch (error) {

@@ -103,8 +103,7 @@ Deno.serve(async (request) => {
 
   const payload = await request.json().catch(() => ({}));
   const localDate = normalizeLocalDate(payload?.localDate);
-  const dayStart = `${localDate} 00:00:00`;
-  const dayEnd = `${localDate} 23:59:59.999`;
+  const eventId = Number(payload?.eventId);
 
   console.info('[send-donor-hair-analysis-reminder] invoked', {
     localDate,
@@ -137,12 +136,37 @@ Deno.serve(async (request) => {
     return createJsonResponse({ message: 'The donor account does not have a registered email address.' }, 400);
   }
 
+  if (!Number.isInteger(eventId) || eventId <= 0) {
+    return createJsonResponse({ message: 'A registered upcoming event is required for this reminder.' }, 400);
+  }
+
+  const [registrationResult, eventResult] = await Promise.all([
+    supabase.from('Event_Attendees')
+      .select('Event_Attendee_ID')
+      .eq('User_ID', resolvedUserId)
+      .eq('Event_Request_ID', eventId)
+      .maybeSingle(),
+    supabase.from('Event_Requests')
+      .select('Event_Request_ID, Event_Name, Start_Date, Status')
+      .eq('Event_Request_ID', eventId)
+      .maybeSingle(),
+  ]);
+  if (registrationResult.error || !registrationResult.data || eventResult.error || !eventResult.data) {
+    return createJsonResponse({ message: 'The registered event could not be verified.' }, 403);
+  }
+  if (String(eventResult.data.Status || '').trim().toLowerCase() !== 'approved') {
+    return createJsonResponse({ sent: false, skipped: true, reason: 'event_not_active' });
+  }
+  const eventStartAt = new Date(eventResult.data.Start_Date || '').getTime();
+  const reminderWindowMs = 7 * 24 * 60 * 60 * 1000;
+  if (!Number.isFinite(eventStartAt) || eventStartAt < Date.now() || eventStartAt - Date.now() > reminderWindowMs) {
+    return createJsonResponse({ sent: false, skipped: true, reason: 'outside_event_reminder_window' });
+  }
+
   const screeningResult = await supabase
     .from('AI_Screenings')
     .select('AI_Screening_ID, Created_At')
     .eq('User_ID', resolvedUserId)
-    .gte('Created_At', dayStart)
-    .lte('Created_At', dayEnd)
     .order('Created_At', { ascending: false })
     .limit(1);
 
@@ -150,11 +174,12 @@ Deno.serve(async (request) => {
     return createJsonResponse({ message: screeningResult.error.message || 'Unable to check today\'s hair analysis.' }, 500);
   }
 
-  if ((screeningResult.data || []).length) {
+  const latestScreeningAt = new Date(screeningResult.data?.[0]?.Created_At || 0).getTime();
+  if (Number.isFinite(latestScreeningAt) && Date.now() < latestScreeningAt + (7 * 24 * 60 * 60 * 1000)) {
     return createJsonResponse({
       sent: false,
       skipped: true,
-      reason: 'analysis_already_completed_today',
+      reason: 'current_analysis_already_available',
     });
   }
 
@@ -164,8 +189,7 @@ Deno.serve(async (request) => {
     .eq('user_id', resolvedUserId)
     .eq('action', REMINDER_AUDIT_ACTION)
     .eq('status', 'success')
-    .gte('time', dayStart)
-    .lte('time', dayEnd)
+    .ilike('description', `%event ${eventId}%`)
     .order('time', { ascending: false })
     .limit(1);
 
@@ -177,7 +201,7 @@ Deno.serve(async (request) => {
     return createJsonResponse({
       sent: false,
       skipped: true,
-      reason: 'already_sent_today',
+      reason: 'already_sent_for_event',
     });
   }
 
@@ -192,6 +216,8 @@ Deno.serve(async (request) => {
       recipient: resolvedEmail,
       email: renderHairAnalysisReminderEmail({
         recipientName: 'Donor',
+        eventTitle: String(eventResult.data.Event_Name || payload?.eventTitle || 'your registered donation event'),
+        eventDate: new Intl.DateTimeFormat('en-PH', { dateStyle: 'long', timeStyle: 'short', timeZone: 'Asia/Manila' }).format(new Date(eventStartAt)),
         checkHairUrl: appUrl ? `${appUrl}/donor/donations` : '',
         logoUrl: String(Deno.env.get('DONIVRA_LOGO_URL') || ''),
       }),
@@ -215,7 +241,7 @@ Deno.serve(async (request) => {
     supabase,
     userId: resolvedUserId,
     userEmail: resolvedEmail,
-    description: `Hair analysis reminder email sent for ${localDate}.`,
+    description: `Hair analysis reminder email sent for event ${eventId} on ${localDate}.`,
     status: 'success',
   });
 

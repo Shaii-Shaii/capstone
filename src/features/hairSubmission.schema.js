@@ -20,7 +20,7 @@ const hairTextureChoices = ['Straight', 'Wavy', 'Curly', 'Coily'];
 const itchFrequencyChoices = ['never', 'sometimes', 'often'];
 const dandruffChoices = ['no', 'a_little', 'a_lot'];
 const quickOilinessChoices = ['no', 'sometimes', 'yes'];
-const hairConditionChoices = ['normal_balanced', 'dry', 'rough', 'oily', 'damaged', 'brittle', 'frizzy'];
+const hairConditionChoices = ['normal_balanced', 'dry', 'rough', 'oily'];
 const hairFallChoices = ['no', 'not_sure', 'yes'];
 const heatUseChoices = ['never', 'sometimes', 'often'];
 const recommendationFollowThroughChoices = ['yes_consistently', 'sometimes', 'not_yet'];
@@ -112,7 +112,7 @@ export const hairAnalyzerQuestionSchema = z.object({
   requireChoice('hairTexture', hairTextureChoices, 'Please choose your hair pattern.');
   requireChoice('washFrequency', washFrequencyChoices, 'Please choose how often you wash your hair.');
   requireChoice('scalpItch', itchFrequencyChoices, 'Please answer the scalp itch question.');
-  requireChoice('dandruffOrFlakes', dandruffChoices, 'Please answer the dandruff question.');
+  requireChoice('dandruffOrFlakes', dandruffChoices, 'Please answer the visible flaking question.');
   requireChoice('oilyAfterWash', quickOilinessChoices, 'Please answer the scalp oiliness question.');
   requireChoice('dryOrRough', hairConditionChoices, 'Please choose the best description of your hair condition.');
   requireChoice('hairFall', hairFallChoices, 'Please answer whether you have noticed increased hair breakage or hair fall recently.');

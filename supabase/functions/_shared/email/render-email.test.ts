@@ -67,6 +67,8 @@ Deno.test('patient wig request email uses patient wording and escapes request de
 Deno.test('hair analysis reminder uses the shared Donivra shell', () => {
   const email = renderHairAnalysisReminderEmail({
     recipientName: 'Donor',
+    eventTitle: 'Community Hair Drive',
+    eventDate: 'September 17, 2026, 9:00 AM',
     checkHairUrl: 'https://example.com/donor/donations',
   });
 
@@ -74,7 +76,8 @@ Deno.test('hair analysis reminder uses the shared Donivra shell', () => {
   assert(email.html.includes('HAIR CHECK REMINDER'), 'Reminder eyebrow is missing');
   assert(email.html.includes('DONIVRA'), 'Shared Donivra header is missing');
   assert(email.html.includes('Open CheckHair'), 'Reminder CTA is missing');
-  assert(email.plainText.includes('daily CheckHair update'), 'Reminder fallback is incomplete');
+  assert(email.plainText.includes('Community Hair Drive'), 'Registered event is missing');
+  assert(email.plainText.includes('Complete one current Hair Check'), 'Reminder fallback is incomplete');
 });
 
 Deno.test('generic notification uses shared HTML and escapes database content', () => {

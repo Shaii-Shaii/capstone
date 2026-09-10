@@ -6,32 +6,36 @@ export const renderHairAnalysisReminderEmail = ({
   recipientName,
   checkHairUrl = '',
   logoUrl = '',
+  eventTitle = 'your registered donation event',
+  eventDate = '',
 }: {
   recipientName: string;
   checkHairUrl?: string;
   logoUrl?: string;
+  eventTitle?: string;
+  eventDate?: string;
 }): RenderedEmail => {
-  const subject = 'Donivra: Complete Your Hair Check Today';
+  const subject = 'Donivra: Complete a Hair Check Before Your Event';
   const bodyHtml = [
-    renderEmailParagraph('You have not completed today\'s Donivra hair check yet.'),
+    renderEmailParagraph(`Your registered event, ${eventTitle}, is coming up${eventDate ? ` on ${eventDate}` : ''}.`),
     renderEmailStatusCard({
       eyebrow: 'Hair check reminder',
-      title: 'Your daily CheckHair update is waiting',
-      description: 'Upload your current hair photos to receive guidance based on today\'s images.',
+      title: 'Complete one current Hair Check before the event',
+      description: 'Upload four current hair-focused photos to receive an initial screening based on the active donation requirements.',
     }),
-    renderEmailAlertBox('Helpful reminder', 'This reminder is sent only when no hair analysis has been completed for the day.'),
+    renderEmailAlertBox('Initial screening only', 'The physical donated hair still receives final verification after it reaches the organization.'),
   ].join('');
   const bodyText = [
-    'You have not completed today\'s Donivra hair check yet.', '',
-    'Your daily CheckHair update is waiting',
-    'Upload your current hair photos to receive guidance based on today\'s images.', '',
-    'This reminder is sent only when no hair analysis has been completed for the day.',
+    `Your registered event, ${eventTitle}, is coming up${eventDate ? ` on ${eventDate}` : ''}.`, '',
+    'Complete one current Hair Check before the event.',
+    'Upload four current hair-focused photos to receive an initial screening based on the active donation requirements.', '',
+    'The physical donated hair still receives final verification after it reaches the organization.',
   ].join('\n');
   const layout = renderDonivraLayout({
     eyebrow: 'HAIR CHECK REMINDER',
     recipientName,
-    heading: 'Time for today\'s hair check',
-    previewText: 'Complete today\'s CheckHair analysis in Donivra.',
+    heading: 'Prepare for your donation event',
+    previewText: 'Complete one current Hair Check before your registered event.',
     bodyHtml,
     bodyText,
     ctaLabel: checkHairUrl ? 'Open CheckHair' : '',
