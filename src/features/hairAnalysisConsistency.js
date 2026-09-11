@@ -51,8 +51,8 @@ const CATEGORY_CONFIG = {
   apparent_density: {
     label: 'Apparent density',
     answerKeys: ['hairDensity', 'hair_density', 'declaredDensity', 'declared_density'],
-    relevantPhotoIndex: 3,
-    relevantView: 'Scalp / Root Area',
+    relevantPhotoIndex: 1,
+    relevantView: 'Left Back/Side Hair',
   },
   color: {
     label: 'Visible hair color',
@@ -417,7 +417,9 @@ export const buildHairAnalysisConsistencyResults = ({ answers = {}, analysis = {
       categoryLabel: config.label,
       answerKey,
       relevantPhotoIndex: config.relevantPhotoIndex,
-      relevantView: readable(reported?.relevant_view) || config.relevantView,
+      relevantView: category === 'apparent_density'
+        ? config.relevantView
+        : readable(reported?.relevant_view) || config.relevantView,
       originalAnswer,
       donorAnswer: answerLabel(answerKey, originalAnswer),
       visualFinding: finalStatus === 'unable_to_determine' ? 'Unable to determine' : evaluation.visualFinding,
@@ -496,5 +498,137 @@ export const buildConsistencyRecord = ({ answers = {}, analysis = {}, issues = [
       [conflict.category]: conflict.resolved_value,
     }), {}),
     result_policy: 'AI visual findings remain unchanged; donor confirmations are stored separately.',
+  };
+};
+
+export const hasKeptOriginalConsistencyAnswer = ({ issues = [], resolutions = {} } = {}) => (
+  issues.some((issue) => resolutions?.[issue.id] === 'keep_original_answer')
+);
+
+export const buildFinalReviewRequestContext = ({
+  answers = {},
+  initialAnalysis = {},
+  issues = [],
+  resolutions = {},
+} = {}) => {
+  const consistencyRecord = buildConsistencyRecord({
+    answers,
+    analysis: initialAnalysis,
+    issues,
+    resolutions,
+  });
+
+  return {
+    mode: 'final_reviewed_analysis',
+    original_pre_assessment: { ...answers },
+    initial_combined_analysis: { ...initialAnalysis },
+    initial_ai_visual_findings: consistencyRecord.ai_visible_findings,
+    consistency_results: consistencyRecord.category_results,
+    mismatch_records: consistencyRecord.conflicts,
+    donor_review_decisions: consistencyRecord.conflicts.map((conflict) => ({
+      category: conflict.category,
+      answer_key: conflict.answer_key,
+      original_self_assessment: conflict.original_self_assessment,
+      original_self_assessment_label: conflict.original_self_assessment_label,
+      ai_visual_finding: conflict.ai_visual_finding,
+      confidence: conflict.visual_confidence,
+      relevant_view: conflict.relevant_view,
+      resolution: conflict.resolution,
+      resolved_value: conflict.resolved_value,
+      resolution_source: conflict.resolution_source,
+    })),
+  };
+};
+
+const getVisualFindingForCategory = (analysis = {}, category = '') => {
+  const row = getReportedRow(category, analysis);
+  if (readable(row?.visual_finding)) return readable(row.visual_finding);
+  if (category === 'texture') return readable(analysis?.detected_texture);
+  if (category === 'apparent_density') return readable(analysis?.detected_density);
+  if (category === 'color') return readable(analysis?.detected_color);
+  if (category === 'visible_condition') return readable(analysis?.detected_condition);
+  if (category === 'visible_flaking') {
+    return analysis?.dandruff_detected === true
+      ? readable(analysis?.dandruff_notes) || 'Visible scalp flaking detected'
+      : 'No visible scalp flaking detected';
+  }
+  if (category === 'visible_oiliness') {
+    const oiliness = Number(analysis?.oiliness_level);
+    return Number.isFinite(oiliness) && oiliness >= 7
+      ? 'Visible oiliness near the roots'
+      : 'No obvious visible oiliness';
+  }
+  if (category === 'length') {
+    const lengthCm = Number(analysis?.estimated_length);
+    return Number.isFinite(lengthCm) && lengthCm > 0
+      ? `Approximately ${(lengthCm / CM_PER_INCH).toFixed(1)} inches`
+      : '';
+  }
+  return '';
+};
+
+export const buildFinalReviewedHairAnalysis = ({
+  answers = {},
+  initialAnalysis = {},
+  reviewedAnalysis = null,
+  issues = [],
+  resolutions = {},
+  reviewRequestPerformed = false,
+} = {}) => {
+  const finalVisualAnalysis = reviewedAnalysis && typeof reviewedAnalysis === 'object'
+    ? reviewedAnalysis
+    : initialAnalysis;
+  const consistencyRecord = buildConsistencyRecord({
+    answers,
+    analysis: initialAnalysis,
+    issues,
+    resolutions,
+  });
+  const initialLengthCm = Number(finalVisualAnalysis?.estimated_length);
+  const reviewedDetails = {
+    length_inches: Number.isFinite(initialLengthCm) && initialLengthCm > 0
+      ? Number((initialLengthCm / CM_PER_INCH).toFixed(1))
+      : null,
+    color: readable(finalVisualAnalysis?.detected_color),
+    texture: readable(finalVisualAnalysis?.detected_texture),
+    apparent_density: readable(finalVisualAnalysis?.detected_density),
+    condition: readable(finalVisualAnalysis?.detected_condition),
+    visible_oiliness: getVisualFindingForCategory(finalVisualAnalysis, 'visible_oiliness'),
+    visible_flaking: getVisualFindingForCategory(finalVisualAnalysis, 'visible_flaking'),
+  };
+
+  issues.forEach((issue) => {
+    const resolution = resolutions?.[issue.id];
+    if (!resolution) return;
+    const resolvedValue = resolution === 'keep_original_answer'
+      ? issue.donorAnswer || answerLabel(issue.answerKey, issue.originalAnswer)
+      : issue.visualFinding || getVisualFindingForCategory(finalVisualAnalysis, issue.category);
+
+    if (issue.category === 'texture') reviewedDetails.texture = resolvedValue;
+    if (issue.category === 'apparent_density') reviewedDetails.apparent_density = resolvedValue;
+    if (issue.category === 'color') reviewedDetails.color = resolvedValue;
+    if (issue.category === 'visible_condition') reviewedDetails.condition = resolvedValue;
+    if (issue.category === 'visible_oiliness') reviewedDetails.visible_oiliness = resolvedValue;
+    if (issue.category === 'visible_flaking') reviewedDetails.visible_flaking = resolvedValue;
+    if (issue.category === 'length') {
+      const numericLength = parseLengthInches(
+        resolution === 'keep_original_answer' ? issue.originalAnswer : resolvedValue,
+        issue.answerKey,
+      );
+      if (numericLength != null) reviewedDetails.length_inches = Number(numericLength.toFixed(1));
+    }
+  });
+
+  return {
+    ...finalVisualAnalysis,
+    analysis_phase: reviewRequestPerformed
+      ? 'final_reviewed_analysis'
+      : 'combined_analysis_reviewed_by_donor',
+    analysis_request_sequence: reviewRequestPerformed ? 6 : 5,
+    final_review_request_performed: Boolean(reviewRequestPerformed),
+    reviewed_details: reviewedDetails,
+    original_ai_visual_findings: consistencyRecord.ai_visible_findings,
+    assessment_review: consistencyRecord,
+    initial_combined_analysis: { ...initialAnalysis },
   };
 };

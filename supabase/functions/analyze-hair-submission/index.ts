@@ -469,6 +469,16 @@ type HistoryContext = {
   entries?: HistoryContextEntry[];
 };
 
+type FinalReviewContext = {
+  mode?: string;
+  original_pre_assessment?: Record<string, unknown>;
+  initial_combined_analysis?: Record<string, unknown>;
+  initial_ai_visual_findings?: Record<string, unknown>;
+  consistency_results?: Record<string, unknown>[];
+  mismatch_records?: Record<string, unknown>[];
+  donor_review_decisions?: Record<string, unknown>[];
+};
+
 const requiredViewDefinitions = [
   {
     key: 'back_hair',
@@ -2252,6 +2262,10 @@ Deno.serve(async (request) => {
     const historyContext = body?.history_context && typeof body.history_context === 'object'
       ? body.history_context as HistoryContext
       : null;
+    const reviewContext = body?.review_context && typeof body.review_context === 'object'
+      ? body.review_context as FinalReviewContext
+      : null;
+    const isFinalReviewRequest = reviewContext?.mode === 'final_reviewed_analysis';
 
     if (!images.length) {
       return createJsonResponse({
@@ -2338,11 +2352,13 @@ Deno.serve(async (request) => {
       hasOpenRouterKey,
       model,
       approvedReferenceImageCount: approvedReferenceImages.length,
+      analysisPhase: isFinalReviewRequest ? 'final_reviewed_analysis' : 'combined_analysis',
     });
 
     // Build text context
     const textContent = [
       '=== HAIR ANALYSIS REQUEST ===',
+      `analysis_phase: ${isFinalReviewRequest ? 'FINAL REVIEWED HAIR ANALYSIS (Request #6)' : 'COMBINED ANALYSIS AND CONSISTENCY CHECK (Request #5)'}`,
       `concern_type: ${concernType}`,
       `screening_intent: ${normalizeString(questionnaireAnswers?.screening_intent) || 'not provided'}`,
       `photo_compliance_acknowledged: ${complianceContext?.acknowledged === true ? 'yes' : 'no'}`,
@@ -2452,6 +2468,32 @@ Deno.serve(async (request) => {
       ].join('\n'),
     });
 
+    if (isFinalReviewRequest) {
+      multimodalParts.push({
+        text: [
+          '=== FINAL REVIEWED HAIR ANALYSIS — REQUEST #6 ===',
+          'This is the one optional final reviewed analysis after the donor completed every mismatch decision.',
+          'Reconcile the four current donor photos, staff-approved references, original pre-assessment, Request #5 visual analysis, every mismatch record, and every donor decision into one coherent final response.',
+          'The photos remain the source for visible findings. A donor decision to keep a self-reported value must not erase, soften, or reverse the independent AI visual evidence, visible_condition_status, visible_concerns, scalp observations, or per-view notes.',
+          'Keep self-reported/resolved values and AI visual observations conceptually separate. In the summary, clearly attribute a kept value to the donor when it differs from what is visible.',
+          'Re-evaluate all output modules together so the hair details, visible observations, scalp findings, care guidance, summary, and database-rule eligibility do not contradict one another.',
+          'Do not create another mismatch workflow. For assessment_consistency, preserve the original comparison evidence and mark requires_confirmation=false for decisions already resolved by the donor.',
+          'Do not invent future checks, diagnoses, reference matches, questionnaire answers, or missing events. Continue using observational, nonmedical language.',
+          'Final eligibility remains based only on the current database donation requirements and visible/treatment evidence, never on donor preference.',
+          '',
+          'FINAL REVIEW CONTEXT (structured application data):',
+          JSON.stringify({
+            original_pre_assessment: reviewContext?.original_pre_assessment || {},
+            initial_combined_analysis: reviewContext?.initial_combined_analysis || {},
+            initial_ai_visual_findings: reviewContext?.initial_ai_visual_findings || {},
+            consistency_results: Array.isArray(reviewContext?.consistency_results) ? reviewContext.consistency_results : [],
+            mismatch_records: Array.isArray(reviewContext?.mismatch_records) ? reviewContext.mismatch_records : [],
+            donor_review_decisions: Array.isArray(reviewContext?.donor_review_decisions) ? reviewContext.donor_review_decisions : [],
+          }),
+        ].join('\n'),
+      });
+    }
+
     const contents = [{ role: 'user', parts: multimodalParts }];
 
     if (multimodalParts.length <= 1) {
@@ -2464,6 +2506,7 @@ Deno.serve(async (request) => {
       imagePartCount: multimodalParts.filter((p) => 'inlineData' in p).length,
       hasQuestionnaireAnswers: Boolean(Object.keys(questionnaireAnswers).length),
       historyEntryCount: Array.isArray(historyContext?.entries) ? historyContext.entries.length : 0,
+      analysisPhase: isFinalReviewRequest ? 'final_reviewed_analysis' : 'combined_analysis',
     });
 
     let providerResult: { parsed: Record<string, unknown>; diagnostics: Record<string, unknown> };
@@ -2506,6 +2549,10 @@ Deno.serve(async (request) => {
         ].includes(providerErrorType);
 
         if (!recoverableProviderError) {
+          throw providerError;
+        }
+
+        if (isFinalReviewRequest) {
           throw providerError;
         }
 
@@ -2648,6 +2695,17 @@ Deno.serve(async (request) => {
         hasDetectedCondition: Boolean(normalizeString(rawAnalysis?.detected_condition)),
         recommendationCount: normalizeRecommendationsV2(rawAnalysis?.recommendations).length,
       });
+      if (isFinalReviewRequest) {
+        return createJsonResponse({
+          error: 'The AI provider returned an incomplete final reviewed analysis. Please try the final review again.',
+          edge_function_invoked: true,
+          provider: String(diagnostics.provider || 'openrouter'),
+          provider_request_attempted: diagnostics.provider_request_attempted ?? true,
+          provider_response_status: diagnostics.provider_response_status ?? null,
+          provider_parse_success: diagnostics.provider_parse_success ?? false,
+          error_type: 'insufficient_detail',
+        }, 502);
+      }
       const focusedFallbackAnalysis = await runFocusedLengthFallback({
         model,
         contents,
@@ -2680,7 +2738,7 @@ Deno.serve(async (request) => {
       || hasUnmeasurableLengthEvidence(rawLengthEvidence);
     const isEstimatedLengthMissing = normalizeNumber(rawAnalysis?.estimated_length) == null
       && !rawLengthUnmeasurable;
-    if (isEstimatedLengthMissing && !focusedLengthFallbackRan) {
+    if (isEstimatedLengthMissing && !focusedLengthFallbackRan && !isFinalReviewRequest) {
       console.warn('[analyze-hair-submission] estimated length missing; running focused length fallback', {
         concernType,
         hasSummary: Boolean(normalizeString(rawAnalysis?.summary)),
@@ -2742,6 +2800,8 @@ Deno.serve(async (request) => {
     );
     const analysis: Record<string, unknown> = {
       ...attachCurrentEligibility(normalizedAnalysis, eligibilityEvaluation),
+      analysis_phase: isFinalReviewRequest ? 'final_reviewed_analysis' : 'combined_analysis',
+      review_request_applied: isFinalReviewRequest,
       reference_image_context: {
         status: approvedReferenceImages.length ? 'applied' : 'not_configured',
         active_reference_count: approvedReferenceImages.length,
@@ -2758,6 +2818,7 @@ Deno.serve(async (request) => {
       estimatedLength: analysis?.estimated_length ?? null,
       hasLengthAssessment: Boolean(analysis?.length_assessment),
       focusedLengthFallbackRan,
+      analysisPhase: analysis.analysis_phase,
       recommendationCount: Array.isArray(analysis?.recommendations) ? analysis.recommendations.length : 0,
     });
 

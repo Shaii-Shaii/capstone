@@ -305,21 +305,22 @@ function HairAnalysisFloatingButton({ title, icon, onPress, showHairAnalysisIcon
           onPress={onPress}
           style={({ pressed }) => [styles.analysisFabButton, pressed ? styles.analysisFabPressed : null]}
         >
-          <View style={styles.analysisFabIconWrap}>
-            {showHairAnalysisIcon ? (
-              <Image source={hairAnalysisAiIcon} style={styles.analysisFabIconImage} resizeMode="contain" />
-            ) : (
-              <AppIcon name={icon} color={theme.colors.dashboardDonorFrom} size="sm" />
-            )}
-          </View>
-          <Text
-            numberOfLines={1}
-            adjustsFontSizeToFit
-            minimumFontScale={0.88}
-            style={styles.analysisFabText}
+          <LinearGradient
+            pointerEvents="none"
+            colors={['rgba(110, 13, 34, 0.94)', 'rgba(151, 30, 64, 0.92)']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.analysisFabButtonSurface}
           >
-            {title}
-          </Text>
+            <View style={styles.analysisFabIconWrap}>
+              {showHairAnalysisIcon ? (
+                <Image source={hairAnalysisAiIcon} style={styles.analysisFabIconImage} resizeMode="contain" />
+              ) : (
+                <AppIcon name={icon} color="#FFFFFF" size="sm" />
+              )}
+            </View>
+            <Text numberOfLines={2} style={styles.analysisFabText}>{title}</Text>
+          </LinearGradient>
         </Pressable>
       </View>
     </Animated.View>
@@ -672,7 +673,7 @@ function HairAnalysisHomeModule() {
             <Text style={[styles.errorText, { color: roles.bodyText }]}>{error}</Text>
           </View>
         ) : null}
-        <View style={styles.tabPanelStack}>
+        <View style={[styles.tabPanelStack, styles.tabPanelStackWithFloatingAction]}>
           <LinearGradient
             colors={[theme.colors.dashboardDonorFrom, theme.colors.dashboardDonorTo]}
             start={{ x: 0, y: 0 }}
@@ -849,37 +850,80 @@ function HairAnalysisHomeModule() {
                 />
 
                 {olderLogs.length ? (
-                  <View style={[styles.card, styles.recentLogCard, { borderColor: roles.defaultCardBorder, backgroundColor: roles.defaultCardBackground }]}>
-                    <View style={styles.recentLogList}>
-                      {olderLogs.map((entry, index) => {
-                        const assessment = getCanonicalHairAssessment(entry);
-                        const mood = getHairScreeningMood(entry);
-                        return (
-                          <Pressable
-                            key={entry.ai_screening_id || entry.created_at || index}
-                            accessibilityRole="button"
-                            accessibilityLabel={`Open result from ${formatRecentLogDate(entry.created_at, locale)}`}
-                            onPress={() => openLogDetailsForEntry(entry)}
-                            style={({ pressed }) => [
-                              styles.recentLogItem,
-                              { borderColor: roles.defaultCardBorder, backgroundColor: roles.pageBackground },
-                              pressed ? styles.cardPressed : null,
+                  <View style={styles.recentLogList}>
+                    {olderLogs.map((entry, index) => {
+                      const assessment = getCanonicalHairAssessment(entry);
+                      const mood = getHairScreeningMood(entry);
+                      const savedDecision = String(entry?.decision || '').trim();
+                      const normalizedDecision = savedDecision.toLowerCase();
+                      const savedIsEligible = Boolean(normalizedDecision)
+                        && !normalizedDecision.includes('not eligible')
+                        && !normalizedDecision.includes('ineligible')
+                        && (
+                          normalizedDecision.includes('eligible')
+                          || normalizedDecision.includes('can donate')
+                          || normalizedDecision.includes('ready for donation')
+                        );
+                      const savedResultTitle = savedDecision
+                        ? savedIsEligible
+                          ? t('analysis.eligible')
+                          : t('analysis.notEligible')
+                        : localizeAnalysisValue(assessment.label, t);
+                      return (
+                        <Pressable
+                          key={entry.ai_screening_id || entry.created_at || index}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Open result from ${formatRecentLogDate(entry.created_at, locale)}`}
+                          onPress={() => openLogDetailsForEntry(entry)}
+                          style={({ pressed }) => [pressed ? styles.cardPressed : null]}
+                        >
+                          <AppCard
+                            variant="outline"
+                            radius="md"
+                            padding="md"
+                            style={[
+                              styles.hairConditionCard,
+                              {
+                                borderColor: roles.defaultCardBorder,
+                                backgroundColor: roles.defaultCardBackground,
+                              },
                             ]}
                           >
-                            <View style={[styles.recentLogMoodIcon, { backgroundColor: mood.surface }]}>
-                              <MaterialCommunityIcons name={mood.icon} size={20} color={mood.color} />
+                            <Text style={[styles.hairConditionTitle, { color: roles.headingText }]}>
+                              {savedResultTitle}
+                            </Text>
+
+                            <View style={styles.hairConditionMetaRow}>
+                              <Text style={[styles.hairConditionDate, { color: roles.metaText }]}>
+                                {formatRecentLogDate(entry.created_at, locale)}
+                              </Text>
+                              <View style={[styles.hairConditionMoodInline, { backgroundColor: mood.surface }]}>
+                                <MaterialCommunityIcons name={mood.icon} size={16} color={mood.color} />
+                                <Text style={[styles.hairConditionMoodInlineText, { color: mood.color }]}>
+                                  {localizeAnalysisValue(mood.label, t)}
+                                </Text>
+                              </View>
                             </View>
-                            <View style={styles.recentLogMain}>
-                              <Text style={[styles.recentLogDate, { color: roles.metaText }]}>{formatRecentLogDate(entry.created_at, locale)}</Text>
-                              <Text numberOfLines={1} style={[styles.recentLogCondition, { color: roles.headingText }]}>{localizeAnalysisValue(assessment.label, t)}</Text>
+
+                            <View style={[styles.hairConditionDivider, { backgroundColor: roles.defaultCardBorder }]} />
+
+                            <View style={styles.hairConditionFooter}>
+                              <View style={styles.hairConditionActionCopy}>
+                                <Text style={[styles.hairConditionViewLabel, { color: roles.headingText }]}>
+                                  {t('analysis.viewDetails')}
+                                </Text>
+                                <Text style={[styles.hairConditionStatusText, { color: roles.metaText }]}>
+                                  {savedIsEligible
+                                    ? t('analysis.eligibleShort')
+                                    : t('analysis.reviewRequirements')}
+                                </Text>
+                              </View>
+                              <AppIcon name="chevronRight" size="sm" state="muted" color={roles.metaText} />
                             </View>
-                            <View style={[styles.recentLogMoodWrap, { backgroundColor: mood.surface }]}>
-                              <Text style={[styles.recentLogMoodText, { color: mood.color }]}>{localizeAnalysisValue(mood.label, t)}</Text>
-                            </View>
-                          </Pressable>
-                        );
-                      })}
-                    </View>
+                          </AppCard>
+                        </Pressable>
+                      );
+                    })}
                   </View>
                 ) : null}
               </View>
@@ -994,8 +1038,8 @@ const styles = StyleSheet.create({
   },
   analysisFabPosition: {
     position: 'absolute',
-    right: theme.spacing.lg,
-    bottom: 100,
+    right: theme.spacing.md,
+    bottom: 94,
     zIndex: 40,
     shadowColor: '#3B0711',
     shadowOffset: { width: 0, height: 6 },
@@ -1004,51 +1048,52 @@ const styles = StyleSheet.create({
     elevation: 9,
   },
   analysisFabSurface: {
-    width: 176,
-    minHeight: 84,
-    borderRadius: 20,
-    overflow: 'hidden',
-    backgroundColor: 'rgba(255, 248, 249, 0.9)',
-    borderWidth: 1,
-    borderColor: 'rgba(110, 13, 34, 0.16)',
+    width: 164,
+    minHeight: 60,
+    backgroundColor: 'transparent',
   },
   analysisFabButton: {
-    flex: 1,
     width: '100%',
-    minHeight: 84,
+    minHeight: 60,
+    borderRadius: theme.radius.pill,
+  },
+  analysisFabButtonSurface: {
+    width: '100%',
+    minHeight: 60,
+    borderRadius: theme.radius.pill,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 2,
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.sm,
+    gap: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: theme.spacing.xs,
   },
   analysisFabPressed: {
     opacity: 0.9,
     transform: [{ scale: 0.98 }],
   },
   analysisFabIconWrap: {
-    width: 42,
-    height: 42,
-    alignSelf: 'center',
+    width: 34,
+    height: 34,
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
+    borderRadius: theme.radius.full,
+    backgroundColor: 'rgba(255, 255, 255, 0.16)',
   },
   analysisFabIconImage: {
-    width: 38,
-    height: 38,
+    width: 30,
+    height: 30,
   },
   analysisFabText: {
-    width: '100%',
+    flex: 1,
+    minWidth: 0,
     fontFamily: theme.typography.fontFamily,
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: theme.typography.weights.bold,
-    color: theme.colors.dashboardDonorFrom,
-    textAlign: 'center',
-    lineHeight: 17,
-    textShadowColor: 'rgba(255, 255, 255, 0.65)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 2,
+    color: '#FFFFFF',
+    textAlign: 'left',
+    lineHeight: 16,
   },
   headerRow: {
     borderWidth: 1,
@@ -1119,6 +1164,9 @@ const styles = StyleSheet.create({
   },
   tabPanelStack: {
     gap: theme.spacing.xl,
+  },
+  tabPanelStackWithFloatingAction: {
+    paddingBottom: 142,
   },
   analysisSectionBlock: {
     gap: theme.spacing.sm,
@@ -1430,14 +1478,10 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: theme.typography.weights.bold,
   },
-  recentLogCard: {
-    gap: theme.spacing.sm,
-    borderRadius: 20,
-    ...theme.shadows.soft,
-  },
   hairConditionCard: {
-    gap: theme.spacing.xs,
+    gap: theme.spacing.sm,
     paddingVertical: theme.spacing.md,
+    paddingHorizontal: theme.spacing.md,
     borderRadius: 20,
     ...theme.shadows.soft,
   },
@@ -1503,16 +1547,20 @@ const styles = StyleSheet.create({
     gap: theme.spacing.sm,
   },
   hairConditionActionCopy: {
+    flex: 1,
+    minWidth: 0,
     gap: 1,
   },
   hairConditionMetaRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
+    flexWrap: 'wrap',
     gap: theme.spacing.sm,
   },
   hairConditionMoodInline: {
     minHeight: 30,
+    maxWidth: '100%',
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
@@ -1521,9 +1569,11 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
   },
   hairConditionMoodInlineText: {
+    flexShrink: 1,
     fontFamily: theme.typography.fontFamily,
     fontSize: 10,
     fontWeight: theme.typography.weights.bold,
+    lineHeight: 14,
   },
   hairConditionDivider: {
     height: StyleSheet.hairlineWidth,
@@ -1617,74 +1667,7 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
   recentLogList: {
-    gap: theme.spacing.xs,
-  },
-  recentLogItem: {
-    borderWidth: 1,
-    borderRadius: 16,
-    padding: theme.spacing.sm,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.spacing.sm,
-  },
-  recentLogMoodIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: theme.radius.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-  },
-  recentLogMain: {
-    flex: 1,
-    gap: 4,
-  },
-  recentLogTopRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: theme.spacing.xs,
-  },
-  recentLogDate: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: 11,
-    fontWeight: theme.typography.weights.semibold,
-  },
-  recentLogStatus: {
-    borderRadius: theme.radius.full,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-  },
-  recentLogStatusText: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: 10,
-    fontWeight: theme.typography.weights.bold,
-  },
-  recentLogCondition: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: 14,
-    fontWeight: theme.typography.weights.bold,
-    textTransform: 'capitalize',
-  },
-  recentLogRecommendation: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: 12,
-    lineHeight: 18,
-  },
-  recentLogMoodWrap: {
-    minHeight: 32,
-    maxWidth: 78,
-    borderRadius: theme.radius.pill,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 9,
-    paddingVertical: 5,
-  },
-  recentLogMoodText: {
-    fontFamily: theme.typography.fontFamily,
-    fontSize: 10,
-    fontWeight: theme.typography.weights.bold,
-    textAlign: 'center',
+    gap: theme.spacing.md,
   },
   healthRow: {
     flexDirection: 'row',

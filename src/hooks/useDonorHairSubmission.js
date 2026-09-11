@@ -814,6 +814,8 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
     historyContext = null,
     correctedDetails = null,
     allowPhotoQualityFallback = false,
+    reviewContext = null,
+    preserveCurrentAnalysis = false,
   } = {}) => {
     const hasPermission = await guardDonationPermission();
     if (!hasPermission) return { success: false, error: 'Donation permission is required before AI screening.' };
@@ -851,7 +853,7 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
     activeAnalysisRequestRef.current = requestId;
 
     setIsAnalyzing(true);
-    setAnalysis(null);
+    if (!preserveCurrentAnalysis) setAnalysis(null);
     setError(null);
     setSuccessMessage('');
 
@@ -868,6 +870,7 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
       questionKeys: Object.keys(questionnaireAnswers || {}),
       hasHistoryContext: Boolean(historyContext?.entries?.length),
       hasCorrectedDetails: Boolean(correctedDetails),
+      isFinalReviewRequest: reviewContext?.mode === 'final_reviewed_analysis',
       allowPhotoQualityFallback: Boolean(allowPhotoQualityFallback),
     });
 
@@ -900,6 +903,7 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
         historyContext: normalizedHistoryContext,
         correctedDetails: normalizedCorrectedDetails,
         allowPhotoQualityFallback,
+        reviewContext,
       });
     } catch (analysisError) {
       if (latestAnalysisRequestRef.current !== requestId || activeAnalysisRequestRef.current !== requestId) {
@@ -915,7 +919,7 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
       activeAnalysisRequestRef.current = null;
       setIsAnalyzing(false);
       const mappedError = mapAnalysisError(analysisError?.message || 'Hair analysis could not start right now. Please try again.');
-      setAnalysis(null);
+      if (!preserveCurrentAnalysis) setAnalysis(null);
       setError(mappedError);
       logAppEvent('donor_hair_submission.analysis', 'Donor hair analysis request crashed before returning a result.', {
         userId,
@@ -943,7 +947,7 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
     setIsAnalyzing(false);
 
     if (result.error) {
-      setAnalysis(null);
+      if (!preserveCurrentAnalysis) setAnalysis(null);
       const mappedError = mapAnalysisError(result.error, {
         errorType: result.errorType || null,
         retryAfterSeconds: result.retryAfterSeconds ?? null,
@@ -965,7 +969,7 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
       return { success: false, error: mappedError.message, mappedError };
     }
 
-    setAnalysis(result.analysis);
+    if (!preserveCurrentAnalysis) setAnalysis(result.analysis);
     setError(null);
     logAppEvent('donor_hair_submission.analysis', 'Hair analysis ready for rendering.', {
       userId,
@@ -1000,6 +1004,10 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
 
   const clearAnalysisError = useCallback(() => {
     setError(null);
+  }, []);
+
+  const replaceAnalysis = useCallback((nextAnalysis) => {
+    setAnalysis(nextAnalysis && typeof nextAnalysis === 'object' ? nextAnalysis : null);
   }, []);
 
   const submitSubmission = async (confirmedValues, options = {}) => {
@@ -1084,6 +1092,12 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
   };
 
   const resetFlow = () => {
+    const invalidatedRequestId = activeAnalysisRequestRef.current;
+    if (invalidatedRequestId) {
+      latestAnalysisRequestRef.current = Math.max(latestAnalysisRequestRef.current, invalidatedRequestId + 1);
+      activeAnalysisRequestRef.current = null;
+      setIsAnalyzing(false);
+    }
     setPhotos(createEmptyPhotoSlots());
     setAnalysis(null);
     setError(null);
@@ -1119,6 +1133,7 @@ export const useDonorHairSubmission = ({ userId, databaseUserId = null }) => {
     savePhotoAssetForSlot,
     removePhoto,
     analyzePhotos,
+    replaceAnalysis,
     submitSubmission,
     resetFlow,
     clearAnalysisError,

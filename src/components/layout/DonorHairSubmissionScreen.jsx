@@ -31,8 +31,11 @@ import {
 } from '../../features/hairSubmission.api';
 import { invalidateHairAnalysisHomeCache } from '../../features/hairAnalysisHomeCache';
 import {
+  buildFinalReviewedHairAnalysis,
+  buildFinalReviewRequestContext,
   buildConsistencyRecord,
   buildHairAnalysisConsistencyIssues,
+  hasKeptOriginalConsistencyAnswer,
 } from '../../features/hairAnalysisConsistency';
 import {
   formatHairAnalysisDateTime,
@@ -835,13 +838,29 @@ const getReviewDisplayValue = (value, fallback = 'For review') => {
   return normalized || fallback;
 };
 
-const buildReviewSummaryRows = (analysis = {}) => ([
-  ['Hair length', formatLengthLabel(analysis?.estimated_length)],
-  ['Color', getReviewDisplayValue(analysis?.detected_color)],
-  ['Texture', getReviewDisplayValue(analysis?.detected_texture)],
-  ['Apparent density', getReviewDisplayValue(analysis?.detected_density)],
-  ['AI visible observation', getReviewDisplayValue(analysis?.detected_condition)],
-]);
+const buildReviewSummaryRows = (analysis = {}) => {
+  const reviewedValues = buildHairReviewDefaultValues(analysis);
+  return [
+    ['Hair length', reviewedValues.declaredLength ? `${reviewedValues.declaredLength} inches` : 'For review'],
+    ['Color', getReviewDisplayValue(reviewedValues.declaredColor)],
+    ['Texture', getReviewDisplayValue(reviewedValues.declaredTexture)],
+    ['Apparent density', getReviewDisplayValue(reviewedValues.declaredDensity)],
+    ['Reviewed hair condition', getReviewDisplayValue(reviewedValues.declaredCondition)],
+    ['Visible observation', getReviewDisplayValue(analysis?.visible_condition_status)],
+  ];
+};
+
+const buildAiVisualObservationRows = (analysis = {}) => {
+  const findings = analysis?.original_ai_visual_findings;
+  if (!findings || typeof findings !== 'object') return [];
+  return [
+    ['Texture', getReviewDisplayValue(findings.detected_texture)],
+    ['Apparent density', getReviewDisplayValue(findings.detected_density)],
+    ['Color', getReviewDisplayValue(findings.detected_color)],
+    ['Visible condition', getReviewDisplayValue(findings.detected_condition)],
+    ['Visible flaking', findings.visible_flaking_detected ? 'Detected in photos' : 'Not detected in photos'],
+  ];
+};
 
 const buildReviewCorrectionRows = (values = {}, analysis = {}) => {
   const aiValues = buildHairReviewDefaultValues(analysis);
@@ -4500,6 +4519,10 @@ export function DonorHairSubmissionScreen() {
   const [consistencyIssues, setConsistencyIssues] = useState([]);
   const [consistencyIssueIndex, setConsistencyIssueIndex] = useState(0);
   const [consistencyResolutions, setConsistencyResolutions] = useState({});
+  const [requestFiveAnalysis, setRequestFiveAnalysis] = useState(null);
+  const [isFinalReviewRunning, setIsFinalReviewRunning] = useState(false);
+  const [finalReviewError, setFinalReviewError] = useState('');
+  const finalReviewInFlightRef = useRef(false);
   const { user, profile, resolvedTheme } = useAuth();
   const { width: viewportWidth } = useWindowDimensions();
   const roles = resolveThemeRoles(resolvedTheme);
@@ -4532,6 +4555,7 @@ export function DonorHairSubmissionScreen() {
     savePhotoAssetForSlot,
     removePhoto,
     analyzePhotos,
+    replaceAnalysis,
     submitSubmission,
     resetFlow,
     clearAnalysisError,
@@ -4832,6 +4856,9 @@ export function DonorHairSubmissionScreen() {
     clearAnalysisError();
     setTransientErrorNotice(null);
     setRetryCountdownSeconds(0);
+    setRequestFiveAnalysis(null);
+    setFinalReviewError('');
+    setIsFinalReviewRunning(false);
 
     logAppEvent('donor_hair_submission.analysis_retry', 'Stale donor hair analysis state cleared before retry.', {
       userId: user?.id || null,
@@ -4858,9 +4885,22 @@ export function DonorHairSubmissionScreen() {
           answers: currentAnswers,
           analysis: result.analysis,
         });
+        setRequestFiveAnalysis(result.analysis);
+        setFinalReviewError('');
+        setIsFinalReviewRunning(false);
         setConsistencyIssues(issues);
         setConsistencyIssueIndex(0);
         setConsistencyResolutions({});
+        if (!issues.length) {
+          replaceAnalysis(buildFinalReviewedHairAnalysis({
+            answers: currentAnswers,
+            initialAnalysis: result.analysis,
+            reviewedAnalysis: result.analysis,
+            issues: [],
+            resolutions: {},
+            reviewRequestPerformed: false,
+          }));
+        }
       }
       return result;
     } finally {
@@ -4875,11 +4915,82 @@ export function DonorHairSubmissionScreen() {
     getCurrentQuestionnaireAnswers,
     error?.retryUntil,
     photoPreflightState?.verificationToken,
+    replaceAnalysis,
     savedHistory.latestScreening?.created_at,
     user?.id,
     weeklyScanLimit.isLocked,
     weeklyScanLimit.message,
     weeklyScanLimit.nextScanDate,
+  ]);
+
+  const runFinalReviewedAnalysis = React.useCallback(async (resolvedDecisions = consistencyResolutions) => {
+    const initialAnalysis = requestFiveAnalysis || analysis;
+    if (!initialAnalysis || finalReviewInFlightRef.current) return;
+
+    const currentAnswers = getCurrentQuestionnaireAnswers();
+    const reviewContext = buildFinalReviewRequestContext({
+      answers: currentAnswers,
+      initialAnalysis,
+      issues: consistencyIssues,
+      resolutions: resolvedDecisions,
+    });
+
+    finalReviewInFlightRef.current = true;
+    setIsFinalReviewRunning(true);
+    setFinalReviewError('');
+    clearAnalysisError();
+
+    try {
+      const result = await analyzePhotos({
+        questionnaireAnswers: { ...currentAnswers },
+        complianceContext: {
+          acknowledged: Boolean(complianceAcknowledged),
+          photoVerificationToken: photoPreflightState?.verificationToken || null,
+        },
+        historyContext: buildAnalysisHistoryContext(analysisHistory),
+        reviewContext,
+        preserveCurrentAnalysis: true,
+      });
+
+      if (result?.stale || result?.skipped) return;
+
+      if (!result?.success || !result.analysis) {
+        setFinalReviewError(
+          result?.error || 'The final reviewed analysis could not be completed. Please try again.',
+        );
+        clearAnalysisError();
+        return;
+      }
+
+      replaceAnalysis(buildFinalReviewedHairAnalysis({
+        answers: currentAnswers,
+        initialAnalysis,
+        reviewedAnalysis: result.analysis,
+        issues: consistencyIssues,
+        resolutions: resolvedDecisions,
+        reviewRequestPerformed: true,
+      }));
+    } catch (reviewError) {
+      setFinalReviewError(
+        reviewError?.message || 'The final reviewed analysis could not be completed. Please try again.',
+      );
+      clearAnalysisError();
+    } finally {
+      finalReviewInFlightRef.current = false;
+      setIsFinalReviewRunning(false);
+    }
+  }, [
+    analysis,
+    analysisHistory,
+    analyzePhotos,
+    clearAnalysisError,
+    complianceAcknowledged,
+    consistencyIssues,
+    consistencyResolutions,
+    getCurrentQuestionnaireAnswers,
+    photoPreflightState?.verificationToken,
+    replaceAnalysis,
+    requestFiveAnalysis,
   ]);
 
   const loadAnalysisHistory = React.useCallback(async ({ silent = false } = {}) => {
@@ -5053,6 +5164,12 @@ export function DonorHairSubmissionScreen() {
     setAnalysisReviewValues(buildHairReviewDefaultValues(null));
     setIsEditingAnalysisReview(false);
     setResultConfirmationMode('pending');
+    setConsistencyIssues([]);
+    setConsistencyIssueIndex(0);
+    setConsistencyResolutions({});
+    setRequestFiveAnalysis(null);
+    setFinalReviewError('');
+    setIsFinalReviewRunning(false);
   }, [clearCaptureValidationState, complianceForm, questionForm, questionnaireMode, resetFlow]);
 
   const requestAnalyzerExit = React.useCallback(() => {
@@ -5203,9 +5320,9 @@ export function DonorHairSubmissionScreen() {
     const donationAlignedAnalysis = buildDonationAlignedAnalysis(analysis, donationAssessment);
     const currentAnswers = getCurrentQuestionnaireAnswers();
     const confirmedReviewValues = buildHumanReviewValuesForSave(analysisReviewValues, donationAlignedAnalysis);
-    const consistencyRecord = buildConsistencyRecord({
+    const consistencyRecord = donationAlignedAnalysis?.assessment_review || buildConsistencyRecord({
       answers: currentAnswers,
-      analysis: donationAlignedAnalysis,
+      analysis: requestFiveAnalysis || donationAlignedAnalysis,
       issues: consistencyIssues,
       resolutions: consistencyResolutions,
     });
@@ -5263,6 +5380,9 @@ export function DonorHairSubmissionScreen() {
       setConsistencyIssues([]);
       setConsistencyIssueIndex(0);
       setConsistencyResolutions({});
+      setRequestFiveAnalysis(null);
+      setFinalReviewError('');
+      setIsFinalReviewRunning(false);
       allowAnalyzerExitRef.current = true;
       setIsAnalyzerActive(false);
       router.replace('/donor/donations');
@@ -6212,6 +6332,9 @@ export function DonorHairSubmissionScreen() {
     setConsistencyIssues([]);
     setConsistencyIssueIndex(0);
     setConsistencyResolutions({});
+    setRequestFiveAnalysis(null);
+    setFinalReviewError('');
+    setIsFinalReviewRunning(false);
     setPhotoIndex(0);
     setQuestionIndex(0);
     setStepIndex(0);
@@ -6219,7 +6342,13 @@ export function DonorHairSubmissionScreen() {
   };
 
   const renderResultActionDock = () => {
-    if (stepIndex !== 3 || !analysis || consistencyIssueIndex < consistencyIssues.length) return null;
+    if (
+      stepIndex !== 3
+      || !analysis
+      || consistencyIssueIndex < consistencyIssues.length
+      || isFinalReviewRunning
+      || Boolean(finalReviewError)
+    ) return null;
     const donationAssessment = buildDonationAssessment({ analysis, donationRequirement });
 
     return (
@@ -6631,14 +6760,96 @@ export function DonorHairSubmissionScreen() {
         );
       case 3:
         if (analysis) {
+          if (isFinalReviewRunning) {
+            return (
+              <View style={styles.consistencyReviewPanel}>
+                <LinearGradient
+                  colors={[theme.colors.palette.wine900, theme.colors.palette.wine700]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.consistencyReviewHeader}
+                >
+                  <View style={styles.consistencyReviewHeaderCopy}>
+                    <Text style={styles.consistencyReviewEyebrow}>FINAL REVIEWED HAIR ANALYSIS</Text>
+                    <Text style={styles.consistencyReviewTitle}>Preparing your reviewed result</Text>
+                  </View>
+                </LinearGradient>
+                <LinearGradient
+                  colors={[theme.colors.backgroundPrimary, theme.colors.brandPrimaryMuted]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.consistencyIssueCard}
+                >
+                  <ActivityIndicator size="large" color={theme.colors.brandPrimary} />
+                  <Text style={styles.consistencyReviewBody}>
+                    We are reconciling all four photos, the original photo findings, and your confirmed choices into one consistent result.
+                  </Text>
+                </LinearGradient>
+              </View>
+            );
+          }
+
+          if (finalReviewError) {
+            return (
+              <View style={styles.consistencyReviewPanel}>
+                <LinearGradient
+                  colors={[theme.colors.palette.wine900, theme.colors.palette.wine700]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.consistencyReviewHeader}
+                >
+                  <View style={styles.consistencyReviewHeaderCopy}>
+                    <Text style={styles.consistencyReviewEyebrow}>ASSESSMENT REVIEW</Text>
+                    <Text style={styles.consistencyReviewTitle}>Final review needs another try</Text>
+                  </View>
+                </LinearGradient>
+                <View style={styles.consistencyReviewIntro}>
+                  <Text style={styles.consistencyReviewBody}>{finalReviewError}</Text>
+                </View>
+                <View style={styles.consistencyActions}>
+                  <AppButton
+                    title="Try final review again"
+                    leading={<MaterialCommunityIcons name="refresh" size={18} color={theme.colors.textOnBrand} />}
+                    onPress={() => runFinalReviewedAnalysis(consistencyResolutions)}
+                    fullWidth
+                  />
+                </View>
+              </View>
+            );
+          }
+
           const consistencyIssue = consistencyIssues[consistencyIssueIndex] || null;
           if (consistencyIssue) {
             const resolveConsistencyIssue = (resolution) => {
-              setConsistencyResolutions((current) => ({ ...current, [consistencyIssue.id]: resolution }));
+              const nextResolutions = {
+                ...consistencyResolutions,
+                [consistencyIssue.id]: resolution,
+              };
+              const nextIssueIndex = consistencyIssueIndex + 1;
+              setConsistencyResolutions(nextResolutions);
               setAnalysisReviewValues((current) => (
                 applyConsistencyResolutionToReviewValues(current, consistencyIssue, resolution)
               ));
-              setConsistencyIssueIndex((current) => current + 1);
+              setConsistencyIssueIndex(nextIssueIndex);
+
+              if (nextIssueIndex >= consistencyIssues.length) {
+                const initialAnalysis = requestFiveAnalysis || analysis;
+                if (hasKeptOriginalConsistencyAnswer({
+                  issues: consistencyIssues,
+                  resolutions: nextResolutions,
+                })) {
+                  runFinalReviewedAnalysis(nextResolutions);
+                } else {
+                  replaceAnalysis(buildFinalReviewedHairAnalysis({
+                    answers: getCurrentQuestionnaireAnswers(),
+                    initialAnalysis,
+                    reviewedAnalysis: initialAnalysis,
+                    issues: consistencyIssues,
+                    resolutions: nextResolutions,
+                    reviewRequestPerformed: false,
+                  }));
+                }
+              }
             };
             const issueNumber = consistencyIssueIndex + 1;
             const issueCount = consistencyIssues.length;
@@ -6721,6 +6932,9 @@ export function DonorHairSubmissionScreen() {
                       setConsistencyIssues([]);
                       setConsistencyIssueIndex(0);
                       setConsistencyResolutions({});
+                      setRequestFiveAnalysis(null);
+                      setFinalReviewError('');
+                      setIsFinalReviewRunning(false);
                       setPhotoPreflightState(null);
                       photoPreflightKeyRef.current = '';
                       invalidateCaptureValidation(slotIndex);
@@ -6756,9 +6970,14 @@ export function DonorHairSubmissionScreen() {
           });
           const questionnaireGuidanceNote = String(displayAnalysis?.history_assessment || '').trim();
           const reviewSummaryRows = buildReviewSummaryRows(displayAnalysis);
+          const aiVisualObservationRows = buildAiVisualObservationRows(displayAnalysis);
           const reviewCorrectionRows = buildReviewCorrectionRows(analysisReviewValues, displayAnalysis);
           const reviewedConsistencyItems = consistencyIssues
             .filter((issue) => Boolean(consistencyResolutions[issue.id]));
+          const reviewedOilinessIssue = reviewedConsistencyItems
+            .find((issue) => issue.category === 'visible_oiliness');
+          const reviewedFlakingIssue = reviewedConsistencyItems
+            .find((issue) => issue.category === 'visible_flaking');
           const resultConditionLabel = getReviewDisplayValue(
             displayAnalysis?.detected_condition || analysisReviewValues.declaredCondition
           );
@@ -6946,8 +7165,8 @@ export function DonorHairSubmissionScreen() {
                     <View style={styles.resultDetailAccent} />
                     <View style={styles.resultSectionHeader}>
                       <View style={styles.resultDetailHeaderCopy}>
-                        <Text style={styles.resultSectionTitle}>Review analysis details</Text>
-                        <Text style={styles.resultSectionHint}>AI visual findings. Any edit is saved separately as your correction.</Text>
+                        <Text style={styles.resultSectionTitle}>Reviewed hair details</Text>
+                        <Text style={styles.resultSectionHint}>Final values after photo analysis and your assessment review.</Text>
                       </View>
                       <Pressable
                         onPress={() => setIsEditingAnalysisReview((current) => !current)}
@@ -6986,6 +7205,17 @@ export function DonorHairSubmissionScreen() {
                             ))}
                           </View>
                         ) : null}
+                        {aiVisualObservationRows.length ? (
+                          <View style={styles.consistencyResultSummary}>
+                            <Text style={styles.consistencyResultSummaryTitle}>AI visual observations</Text>
+                            {aiVisualObservationRows.map(([label, value]) => (
+                              <View key={label} style={styles.consistencyResultSummaryRow}>
+                                <MaterialCommunityIcons name="eye-outline" size={17} color={theme.colors.brandPrimary} />
+                                <Text style={styles.consistencyResultSummaryText}>{label}: {value}</Text>
+                              </View>
+                            ))}
+                          </View>
+                        ) : null}
                         {reviewedConsistencyItems.length ? (
                           <View style={styles.consistencyResultSummary}>
                             <Text style={styles.consistencyResultSummaryTitle}>Assessment reviewed</Text>
@@ -7000,8 +7230,8 @@ export function DonorHairSubmissionScreen() {
                                   />
                                   <Text style={styles.consistencyResultSummaryText}>
                                     {keptOriginal
-                                      ? `${issue.categoryLabel}: you kept ${issue.donorAnswer}; the photo finding remains ${issue.visualFinding}.`
-                                      : `${issue.categoryLabel}: you selected the photo finding, ${issue.visualFinding}.`}
+                                      ? `${issue.categoryLabel}. Confirmed by you: ${issue.donorAnswer}. Photo analysis originally suggested: ${issue.visualFinding}.`
+                                      : `${issue.categoryLabel}. Confirmed by you: ${issue.visualFinding}. This matches the photo analysis.`}
                                   </Text>
                                 </View>
                               );
@@ -7140,6 +7370,28 @@ export function DonorHairSubmissionScreen() {
                       </View>
                     </View>
                     <View style={styles.assessmentRows}>
+                      {reviewedOilinessIssue ? (
+                        <View style={styles.assessmentRow}>
+                          <Text style={styles.assessmentLabel}>Your confirmed oiliness response</Text>
+                          <Text style={styles.assessmentValue}>
+                            {displayAnalysis?.reviewed_details?.visible_oiliness || reviewedOilinessIssue.visualFinding}
+                          </Text>
+                        </View>
+                      ) : null}
+                      {reviewedOilinessIssue ? (
+                        <View style={styles.assessmentRow}>
+                          <Text style={styles.assessmentLabel}>Photo oiliness observation</Text>
+                          <Text style={styles.assessmentValue}>{reviewedOilinessIssue.visualFinding}</Text>
+                        </View>
+                      ) : null}
+                      {reviewedFlakingIssue ? (
+                        <View style={styles.assessmentRow}>
+                          <Text style={styles.assessmentLabel}>Your confirmed flaking response</Text>
+                          <Text style={styles.assessmentValue}>
+                            {displayAnalysis?.reviewed_details?.visible_flaking || reviewedFlakingIssue.visualFinding}
+                          </Text>
+                        </View>
+                      ) : null}
                       <View style={styles.assessmentRow}>
                         <Text style={styles.assessmentLabel}>Visible scalp flaking</Text>
                         <Text style={styles.assessmentValue}>{formatDetectedLabel(displayAnalysis.dandruff_detected)}</Text>

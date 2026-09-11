@@ -193,6 +193,35 @@ const getEventLocationLabel = (event = null) => (
   || 'Location to be announced'
 );
 
+const getSavedReviewedDetails = (screening = {}) => {
+  const analysisResult = screening?.analysis_result && typeof screening.analysis_result === 'object'
+    ? screening.analysis_result
+    : {};
+  const reviewedDetails = analysisResult?.reviewed_details || screening?.reviewed_details;
+  if (reviewedDetails && typeof reviewedDetails === 'object') return reviewedDetails;
+
+  const legacyValues = analysisResult?.user_reviewed_details?.values;
+  if (!legacyValues || typeof legacyValues !== 'object') return {};
+  return {
+    length_inches: legacyValues.declaredLength || null,
+    color: legacyValues.declaredColor || '',
+    texture: legacyValues.declaredTexture || '',
+    apparent_density: legacyValues.declaredDensity || '',
+    condition: legacyValues.declaredCondition || '',
+  };
+};
+
+const getSavedAssessmentReview = (screening = {}) => {
+  const analysisResult = screening?.analysis_result && typeof screening.analysis_result === 'object'
+    ? screening.analysis_result
+    : {};
+  const review = analysisResult?.assessment_review
+    || analysisResult?.self_assessment_consistency
+    || screening?.assessment_review
+    || screening?.self_assessment_consistency;
+  return review && typeof review === 'object' ? review : {};
+};
+
 const getInsightIcon = (value = '') => {
   const normalized = String(value || '').toLowerCase();
   if (/length|inch|trim|ends?/.test(normalized)) return 'ruler';
@@ -419,6 +448,19 @@ export function HairLogDetailModal({
         ? 'Ineligible'
         : 'Not evaluated';
   const hasScreening = Boolean(screening);
+  const reviewedDetails = getSavedReviewedDetails(screening);
+  const savedAssessmentReview = getSavedAssessmentReview(screening);
+  const savedReviewRows = (Array.isArray(savedAssessmentReview?.conflicts)
+    ? savedAssessmentReview.conflicts
+    : [])
+    .filter((conflict) => conflict?.resolution && conflict.resolution !== 'not_reviewed')
+    .map((conflict) => ({
+      key: conflict.id || conflict.category,
+      category: conflict.category,
+      label: String(conflict.category || 'reviewed detail').replace(/_/g, ' '),
+      confirmed: conflict.resolved_value || conflict.original_self_assessment_label || conflict.original_self_assessment,
+      visual: conflict.ai_visual_finding || 'Not determined',
+    }));
   const assessment = hasScreening
     ? getCanonicalHairAssessment(screening)
     : { label: 'Registered event', needsCare: false };
@@ -444,6 +486,7 @@ export function HairLogDetailModal({
     || screening?.lice_notes
     || screening?.summary
     || screening?.visible_damage_notes
+    || Object.keys(reviewedDetails).length
   );
   const savedPhotoRows = allImages.filter((image) => getStoredHairImagePath(image));
   const photoItems = savedPhotoRows
@@ -465,16 +508,25 @@ export function HairLogDetailModal({
     || (hasScreening && assessment.needsCare
       ? 'Analysis continued with user-approved photos after validation warning. The result is low-confidence and should not be used for donation approval.'
       : 'Use this scan as a baseline and compare the next check for changes.');
+  const reviewedLengthLabel = reviewedDetails?.length_inches != null
+    && Number(reviewedDetails.length_inches) > 0
+    ? `${Number(reviewedDetails.length_inches).toFixed(1)} inches`
+    : formatEstimatedLengthInches(screening);
+  const reviewedOiliness = savedReviewRows.find((row) => row.category === 'visible_oiliness');
+  const reviewedFlaking = savedReviewRows.find((row) => row.category === 'visible_flaking');
   const assessmentMetrics = [
     { label: 'Visible condition', value: assessment.label || 'Not detected', icon: 'head-heart-outline', wide: true },
+    reviewedDetails?.condition
+      ? { label: 'Reviewed hair condition', value: reviewedDetails.condition, icon: 'account-check-outline', wide: true }
+      : null,
     { label: 'Current eligibility', value: currentEligibilityLabel, icon: 'content-cut', wide: true },
     currentEligibility?.reason
       ? { label: 'Current requirement result', value: currentEligibility.reason, icon: 'information-outline', wide: true }
       : null,
-    { label: 'Length', value: formatEstimatedLengthInches(screening), icon: 'ruler' },
-    { label: 'Color', value: screening?.detected_color || 'Not detected', icon: 'palette' },
-    { label: 'Texture', value: screening?.detected_texture || 'Not detected', icon: 'waves' },
-    { label: 'Density', value: screening?.detected_density || 'Not detected', icon: 'head-dots-horizontal-outline' },
+    { label: 'Length', value: reviewedLengthLabel, icon: 'ruler' },
+    { label: 'Color', value: reviewedDetails?.color || screening?.detected_color || 'Not detected', icon: 'palette' },
+    { label: 'Texture', value: reviewedDetails?.texture || screening?.detected_texture || 'Not detected', icon: 'waves' },
+    { label: 'Density', value: reviewedDetails?.apparent_density || screening?.detected_density || 'Not detected', icon: 'head-dots-horizontal-outline' },
     { label: 'Density score', value: formatDensityScore(screening?.hair_density_score), icon: 'head-check-outline' },
     { label: 'Visible scalp', value: screening?.visible_scalp_area || 'Not detected', icon: 'head-outline' },
     {
@@ -486,6 +538,15 @@ export function HairLogDetailModal({
     },
     { label: 'Shedding', value: screening?.shedding_level || 'Not detected', icon: 'head-minus-outline' },
     { label: 'Visible scalp flaking', value: formatDetectedLabel(screening?.dandruff_detected), icon: 'head-snowflake-outline' },
+    reviewedFlaking
+      ? { label: 'Your confirmed flaking response', value: reviewedFlaking.confirmed, icon: 'account-check-outline', wide: true }
+      : null,
+    reviewedOiliness
+      ? { label: 'Your confirmed oiliness response', value: reviewedOiliness.confirmed, icon: 'account-check-outline', wide: true }
+      : null,
+    reviewedOiliness
+      ? { label: 'Photo oiliness observation', value: reviewedOiliness.visual, icon: 'eye-outline', wide: true }
+      : null,
     { label: 'Flaking visibility', value: screening?.dandruff_severity || 'None', icon: 'snowflake-alert' },
     { label: 'Possible nit-like signs', value: formatDetectedLabel(screening?.lice_detected), icon: 'shield-bug-outline' },
     { label: 'Visual confidence', value: screening?.lice_confidence || 'None', icon: 'shield-check-outline' },
@@ -880,7 +941,7 @@ export function HairLogDetailModal({
             {hasScreening && hasAssessmentDetails ? (
               <>
                 <SectionTitleRow
-                  title="Hair assessment"
+                  title={Object.keys(reviewedDetails).length ? 'Reviewed hair details' : 'Hair assessment'}
                   icon="clipboard-pulse-outline"
                   color={pageColor(roles.headingText)}
                   iconColor={pageColor(roles.metaText)}
@@ -912,6 +973,30 @@ export function HairLogDetailModal({
                       />
                     ))}
                   </View>
+                  {savedReviewRows.length ? (
+                    <View style={[styles.savedAssessmentReview, {
+                      backgroundColor: roles.supportCardBackground,
+                      borderColor: roles.defaultCardBorder,
+                    }]}
+                    >
+                      <View style={styles.savedAssessmentReviewHeader}>
+                        <View style={[styles.savedAssessmentReviewIcon, { backgroundColor: roles.iconPrimarySurface }]}>
+                          <MaterialCommunityIcons name="account-check-outline" size={19} color={roles.iconPrimaryColor} />
+                        </View>
+                        <View style={styles.savedAssessmentReviewHeaderCopy}>
+                          <Text style={[styles.savedAssessmentReviewTitle, { color: pageColor(roles.headingText) }]}>Assessment review</Text>
+                          <Text style={[styles.savedAssessmentReviewHint, { color: pageColor(roles.metaText) }]}>Your confirmation and the original photo finding are both preserved.</Text>
+                        </View>
+                      </View>
+                      {savedReviewRows.map((row) => (
+                        <View key={row.key} style={[styles.savedAssessmentReviewRow, { borderTopColor: roles.defaultCardBorder }]}>
+                          <Text style={[styles.savedAssessmentReviewCategory, { color: roles.iconPrimaryColor }]}>{row.label}</Text>
+                          <Text style={[styles.savedAssessmentReviewValue, { color: pageColor(roles.headingText) }]}>Confirmed by you: {row.confirmed}</Text>
+                          <Text style={[styles.savedAssessmentReviewVisual, { color: pageColor(roles.bodyText) }]}>Photo analysis originally suggested: {row.visual}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  ) : null}
                 </View>
               </>
             ) : null}
@@ -1731,6 +1816,61 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamily,
     fontSize: 12,
     lineHeight: 18,
+  },
+  savedAssessmentReview: {
+    borderWidth: 1,
+    borderRadius: 18,
+    padding: theme.spacing.md,
+    gap: theme.spacing.sm,
+  },
+  savedAssessmentReviewHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  savedAssessmentReviewIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  savedAssessmentReviewHeaderCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  savedAssessmentReviewTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.body,
+    fontWeight: theme.typography.weights.bold,
+  },
+  savedAssessmentReviewHint: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    lineHeight: 16,
+  },
+  savedAssessmentReviewRow: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingTop: theme.spacing.sm,
+    gap: 3,
+  },
+  savedAssessmentReviewCategory: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 10,
+    fontWeight: theme.typography.weights.bold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  savedAssessmentReviewValue: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.bodySm,
+    fontWeight: theme.typography.weights.semibold,
+  },
+  savedAssessmentReviewVisual: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    lineHeight: 17,
   },
   metricGrid: {
     flexDirection: 'row',

@@ -205,13 +205,16 @@ export const hairReviewSchema = z.object({
 });
 
 export const buildHairReviewDefaultValues = (analysis, answers = {}) => ({
-  declaredLength: analysis?.estimated_length != null && Number(analysis.estimated_length) > 0
-    ? String((Number(analysis.estimated_length) / 2.54).toFixed(1))
-    : '',
-  declaredColor: analysis?.detected_color || '',
-  declaredTexture: analysis?.detected_texture || '',
-  declaredDensity: analysis?.detected_density || '',
-  declaredCondition: analysis?.detected_condition || '',
+  declaredLength: analysis?.reviewed_details?.length_inches != null
+    && Number(analysis.reviewed_details.length_inches) > 0
+    ? String(analysis.reviewed_details.length_inches)
+    : analysis?.estimated_length != null && Number(analysis.estimated_length) > 0
+      ? String((Number(analysis.estimated_length) / 2.54).toFixed(1))
+      : '',
+  declaredColor: analysis?.reviewed_details?.color || analysis?.detected_color || '',
+  declaredTexture: analysis?.reviewed_details?.texture || analysis?.detected_texture || '',
+  declaredDensity: analysis?.reviewed_details?.apparent_density || analysis?.detected_density || '',
+  declaredCondition: analysis?.reviewed_details?.condition || analysis?.detected_condition || '',
   detailNotes: analysis?.visible_damage_notes || '',
 });
 

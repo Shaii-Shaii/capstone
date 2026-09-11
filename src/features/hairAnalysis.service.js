@@ -224,6 +224,8 @@ const normalizeAnalysis = (data, donationRequirementContext = null) => {
     donation_readiness_note: data?.donation_readiness_note || '',
     history_assessment: data?.history_assessment || '',
     recommendations: normalizeRecommendations(data?.recommendations || []),
+    analysis_phase: data?.analysis_phase || 'combined_analysis',
+    review_request_applied: data?.review_request_applied === true,
   };
 };
 
@@ -588,6 +590,7 @@ export const analyzeHairPhotos = async ({
   historyContext = null,
   correctedDetails = null,
   allowPhotoQualityFallback = false,
+  reviewContext = null,
 }) => {
   try {
     if (!images?.length) {
@@ -701,6 +704,23 @@ export const analyzeHairPhotos = async ({
             density: correctedDetails.density || '',
           }
         : null,
+      review_context: reviewContext?.mode === 'final_reviewed_analysis'
+        ? {
+            mode: 'final_reviewed_analysis',
+            original_pre_assessment: reviewContext.original_pre_assessment || {},
+            initial_combined_analysis: reviewContext.initial_combined_analysis || {},
+            initial_ai_visual_findings: reviewContext.initial_ai_visual_findings || {},
+            consistency_results: Array.isArray(reviewContext.consistency_results)
+              ? reviewContext.consistency_results
+              : [],
+            mismatch_records: Array.isArray(reviewContext.mismatch_records)
+              ? reviewContext.mismatch_records
+              : [],
+            donor_review_decisions: Array.isArray(reviewContext.donor_review_decisions)
+              ? reviewContext.donor_review_decisions
+              : [],
+          }
+        : null,
     };
 
     logAppEvent('hairAnalysis.invoke', 'Invoking hair analysis edge function.', {
@@ -710,6 +730,7 @@ export const analyzeHairPhotos = async ({
       hasSubmissionContext: Boolean(payload.submission_context?.submission_id),
       hasHistoryContext: Boolean(payload.history_context?.entries?.length),
       hasCorrectedDetails: Boolean(payload.corrected_details),
+      isFinalReviewRequest: payload.review_context?.mode === 'final_reviewed_analysis',
       questionKeys: Object.keys(payload.questionnaire_answers || {}),
       imageCount: payload.images.length,
       imageViews: payload.images.map((image) => image.viewLabel || image.viewKey).filter(Boolean),
@@ -718,7 +739,10 @@ export const analyzeHairPhotos = async ({
     });
 
     let functionResult = null;
-    for (let attempt = 1; attempt <= HAIR_ANALYSIS_MAX_INVOKE_ATTEMPTS; attempt += 1) {
+    const analysisInvokeMaxAttempts = payload.review_context?.mode === 'final_reviewed_analysis'
+      ? 1
+      : HAIR_ANALYSIS_MAX_INVOKE_ATTEMPTS;
+    for (let attempt = 1; attempt <= analysisInvokeMaxAttempts; attempt += 1) {
       functionResult = await invokeEdgeFunction(hairAnalysisFunctionName, {
         body: payload,
       });
@@ -748,7 +772,7 @@ export const analyzeHairPhotos = async ({
         isRetryableProviderBusyError
         || isRetryableProviderOutputFailure
       )
-        && attempt < HAIR_ANALYSIS_MAX_INVOKE_ATTEMPTS;
+        && attempt < analysisInvokeMaxAttempts;
 
       logAppEvent('hairAnalysis.invoke', 'Hair analysis edge invoke failed before a usable result was returned.', {
         functionName: hairAnalysisFunctionName,
@@ -762,7 +786,7 @@ export const analyzeHairPhotos = async ({
         providerNativeFinishReason: errorPayload?.provider_native_finish_reason || null,
         errorType: normalizedErrorType || null,
         attempt,
-        maxAttempts: HAIR_ANALYSIS_MAX_INVOKE_ATTEMPTS,
+        maxAttempts: analysisInvokeMaxAttempts,
         willRetry: canRetry,
       }, 'warn');
 
@@ -799,7 +823,7 @@ export const analyzeHairPhotos = async ({
         logAppEvent('hairAnalysis.invoke', 'Retrying hair analysis after a retryable provider response.', {
           functionName: hairAnalysisFunctionName,
           attempt,
-          maxAttempts: HAIR_ANALYSIS_MAX_INVOKE_ATTEMPTS,
+          maxAttempts: analysisInvokeMaxAttempts,
           retryDelayMs,
           retryAfterSeconds: retryAfterSeconds ?? null,
           providerResponseStatus,

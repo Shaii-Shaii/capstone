@@ -1,6 +1,7 @@
 import React from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { DashboardLayout } from './DashboardLayout';
 import { DashboardHeaderSurface } from './DashboardHeaderSurface';
@@ -38,23 +39,32 @@ const getStatusColors = (status, roles) => {
   return { text: roles.iconPrimaryColor, background: roles.iconPrimarySurface };
 };
 
-function DetailAction({ icon, label, roles, onPress }) {
+function DetailAction({ icon, label, hint, onPress }) {
   return (
     <Pressable
       onPress={onPress}
       accessibilityRole="button"
       accessibilityLabel={label}
-      style={({ pressed }) => [
-        styles.detailAction,
-        {
-          backgroundColor: roles.primaryActionBackground,
-          opacity: pressed ? 0.86 : 1,
-        },
-      ]}
+      accessibilityHint={hint}
+      style={({ pressed }) => [styles.detailActionPressable, pressed ? styles.detailActionPressed : null]}
     >
-      <MaterialCommunityIcons name={icon} size={20} color={theme.colors.textOnBrand} />
-      <Text style={styles.detailActionText}>{label}</Text>
-      <MaterialCommunityIcons name="arrow-right" size={20} color={theme.colors.textOnBrand} />
+      <LinearGradient
+        colors={[theme.colors.palette.wine900, theme.colors.palette.wine700]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.detailAction}
+      >
+        <View style={styles.detailActionIcon}>
+          <MaterialCommunityIcons name={icon} size={22} color={theme.colors.textOnBrand} />
+        </View>
+        <View style={styles.detailActionCopy}>
+          <Text style={styles.detailActionText}>{label}</Text>
+          {hint ? <Text style={styles.detailActionHint}>{hint}</Text> : null}
+        </View>
+        <View style={styles.detailActionArrow}>
+          <MaterialCommunityIcons name="arrow-right" size={20} color={theme.colors.textOnBrand} />
+        </View>
+      </LinearGradient>
     </Pressable>
   );
 }
@@ -257,7 +267,7 @@ export function DonorActivityDetailsScreen() {
               <DetailAction
                 icon="creation-outline"
                 label="View saved Hair Analysis"
-                roles={roles}
+                hint="Open your complete saved result"
                 onPress={() => router.push({
                   pathname: '/donor/hair-check-details',
                   params: { screeningId: String(activity.screening_id) },
@@ -268,7 +278,7 @@ export function DonorActivityDetailsScreen() {
               <DetailAction
                 icon="certificate-outline"
                 label="View donation certificate"
-                roles={roles}
+                hint="Open the issued certificate"
                 onPress={() => router.push({
                   pathname: '/donor/achievements',
                   params: { certificateId: String(activity.certificate_id) },
@@ -489,22 +499,59 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     paddingVertical: theme.spacing.lg,
   },
+  detailActionPressable: {
+    width: '100%',
+    borderRadius: 20,
+    ...theme.shadows.card,
+  },
+  detailActionPressed: {
+    opacity: 0.88,
+    transform: [{ scale: 0.985 }],
+  },
   detailAction: {
-    minHeight: 54,
-    borderRadius: 18,
-    paddingHorizontal: theme.spacing.lg,
+    width: '100%',
+    minHeight: 72,
+    borderRadius: 20,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.md,
     flexDirection: 'row',
     alignItems: 'center',
+    gap: theme.spacing.md,
+    overflow: 'hidden',
+  },
+  detailActionIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 15,
+    alignItems: 'center',
     justifyContent: 'center',
-    gap: theme.spacing.sm,
-    ...theme.shadows.soft,
+    backgroundColor: 'rgba(255, 255, 255, 0.16)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.24)',
+  },
+  detailActionCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
   },
   detailActionText: {
-    flex: 1,
     color: theme.colors.textOnBrand,
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.semantic.body,
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyLg,
     fontWeight: theme.typography.weights.bold,
-    textAlign: 'center',
+  },
+  detailActionHint: {
+    color: theme.colors.textHeroMuted,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.semantic.caption,
+    lineHeight: 16,
+  },
+  detailActionArrow: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.14)',
   },
 });
