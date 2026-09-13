@@ -505,7 +505,10 @@ const normalizeAiScreeningInsertPayload = (payload = {}) => {
     ...payload,
     estimated_length: estimatedLength,
     detected_color: screeningStringOrDefault(payload?.detected_color, 'Unable to determine'),
-    detected_texture: screeningStringOrDefault(payload?.detected_texture, 'Unable to determine'),
+    detected_texture: screeningStringOrDefault(
+      payload?.hair_pattern || payload?.detected_texture,
+      'Unable to determine'
+    ),
     detected_density: screeningStringOrDefault(payload?.detected_density, 'Unable to determine'),
     detected_condition: screeningStringOrDefault(payload?.detected_condition, 'Needs manual hair review'),
     shedding_level: normalizeSheddingLevelForDb(payload?.shedding_level),

@@ -4,7 +4,6 @@ import {
   createHairPhotoVerificationToken,
   verifyHairPhotoVerificationToken,
 } from '../_shared/hair-photo-verification.ts';
-import { compareFacesWithCompreFace, isCompreFaceConfigured } from '../_shared/compreface-comparison.ts';
 
 const validationSchema = {
   type: 'object',
@@ -51,7 +50,7 @@ const validationSchema = {
               view_correct: { type: 'boolean' },
               observed_pose: {
                 type: 'string',
-                enum: ['back_hair', 'left_back_side', 'right_back_side', 'scalp_root', 'unclear'],
+                enum: ['front', 'left_profile', 'right_profile', 'back_hair', 'scalp_root', 'unclear'],
               },
               pose_correct: { type: 'boolean' },
               same_subject_status: {
@@ -91,32 +90,37 @@ type HairValidationImage = {
 };
 
 const canonicalViewAliases: Record<string, string> = {
-  'back hair': 'Back Hair',
-  back_hair: 'Back Hair',
-  'left back/side hair': 'Left Back/Side Hair',
-  side_profile: 'Left Back/Side Hair',
-  'right back/side hair': 'Right Back/Side Hair',
-  right_side_profile: 'Right Back/Side Hair',
-  'scalp / root area': 'Scalp / Root Area',
-  hair_scalp: 'Scalp / Root Area',
-  'front view photo': 'Front View Photo',
-  front_view: 'Front View Photo',
-  'full hair length photo': 'Front View Photo',
-  'side profile photo': 'Side Profile Photo',
-  'side view photo': 'Side Profile Photo',
-  'left side photo': 'Side Profile Photo',
-  'right side photo': 'Side Profile Photo',
+  'front hair / face view': 'Front Hair / Face View',
+  'front view photo': 'Front Hair / Face View',
+  front_view: 'Front Hair / Face View',
+  'full hair length photo': 'Front Hair / Face View',
+  'left side hair view': 'Left Side Hair View',
+  'left back/side hair': 'Left Side Hair View',
+  'side profile photo': 'Left Side Hair View',
+  'side view photo': 'Left Side Hair View',
+  'left side photo': 'Left Side Hair View',
+  side_profile: 'Left Side Hair View',
+  'right side hair view': 'Right Side Hair View',
+  'right back/side hair': 'Right Side Hair View',
+  'right side photo': 'Right Side Hair View',
+  right_side_profile: 'Right Side Hair View',
+  'back hair view': 'Back Hair View',
+  'back hair': 'Back Hair View',
+  'back hair photo': 'Back Hair View',
+  'back view photo': 'Back Hair View',
+  back_hair: 'Back Hair View',
+  'scalp / root view': 'Scalp / Root View',
+  'scalp / root area': 'Scalp / Root View',
+  hair_scalp: 'Scalp / Root View',
   'hair ends close-up': 'Hair Ends Close-Up',
   'hair ends close up': 'Hair Ends Close-Up',
   'hair ends': 'Hair Ends Close-Up',
   hair_ends_close_up: 'Hair Ends Close-Up',
-  'back hair photo': 'Back Hair Photo',
-  'back view photo': 'Back Hair Photo',
-  side_view: 'Side Profile Photo',
-  'hair scalp': 'Hair Scalp',
-  'photo of the scalp': 'Hair Scalp',
-  'scalp photo': 'Hair Scalp',
-  'scalp view': 'Hair Scalp',
+  side_view: 'Left Side Hair View',
+  'hair scalp': 'Scalp / Root View',
+  'photo of the scalp': 'Scalp / Root View',
+  'scalp photo': 'Scalp / Root View',
+  'scalp view': 'Scalp / Root View',
 };
 
 const normalizeString = (value: unknown) => (
@@ -126,27 +130,13 @@ const normalizeString = (value: unknown) => (
 const normalizeViewLabel = (value: unknown) => {
   const normalized = normalizeString(value).toLowerCase();
   if (!normalized) return '';
-  if (normalized.includes('left back') || normalized === 'side_profile') return 'Left Back/Side Hair';
-  if (normalized.includes('right back') || normalized === 'right_side_profile') return 'Right Back/Side Hair';
-  if (normalized.includes('scalp') || normalized.includes('root area') || normalized.includes('crown')) return 'Scalp / Root Area';
-  if (normalized === 'back hair' || normalized === 'back_hair' || normalized.includes('back hair photo')) return 'Back Hair';
-  if (normalized.includes('back hair') || normalized.includes('back view') || normalized === 'back' || normalized.includes('back')) {
-    return 'Back Hair Photo';
-  }
+  if (normalized.includes('front') || normalized === 'front_view') return 'Front Hair / Face View';
+  if (normalized.includes('left') || normalized === 'side_profile') return 'Left Side Hair View';
+  if (normalized.includes('right') || normalized === 'right_side_profile') return 'Right Side Hair View';
+  if (normalized.includes('scalp') || normalized.includes('root') || normalized.includes('crown')) return 'Scalp / Root View';
+  if (normalized.includes('back') || normalized === 'back_hair') return 'Back Hair View';
   if (normalized.includes('hair ends') || normalized.includes('ends close')) {
     return 'Hair Ends Close-Up';
-  }
-  if (normalized.includes('hair scalp') || normalized.includes('scalp') || normalized.includes('crown')) {
-    return 'Hair Scalp';
-  }
-  if (normalized.includes('front view') || normalized === 'front' || normalized.includes('front')) {
-    return 'Front View Photo';
-  }
-  if (normalized.includes('right side') || normalized.includes('right_side')) {
-    return 'Right Side Photo';
-  }
-  if (normalized.includes('side profile') || normalized.includes('side view') || normalized.includes('left side') || normalized.includes('right side') || normalized.includes('side')) {
-    return 'Side Profile Photo';
   }
   return canonicalViewAliases[normalized] || normalizeString(value);
 };
@@ -202,7 +192,13 @@ const selectCanonicalValidationImage = (
   canonicalLabel = '',
 ) => images.find((image) => normalizeViewLabel(image?.viewLabel || image?.viewKey) === canonicalLabel);
 
-const requiredValidationViewLabels = ['Back Hair', 'Left Back/Side Hair', 'Right Back/Side Hair', 'Scalp / Root Area'];
+const requiredValidationViewLabels = [
+  'Front Hair / Face View',
+  'Left Side Hair View',
+  'Right Side Hair View',
+  'Back Hair View',
+  'Scalp / Root View',
+];
 const optionalValidationViewLabels: string[] = [];
 
 const buildCanonicalValidationImages = (images: HairValidationImage[] = []) => ([
@@ -220,13 +216,13 @@ const buildCanonicalValidationImages = (images: HairValidationImage[] = []) => (
     .filter(({ image }) => Boolean(image?.dataUrl)),
 ]);
 
-const faceVisibleViewLabels: string[] = [];
-const hairOnlyViewLabels = [...requiredValidationViewLabels];
+const faceVisibleViewLabels = ['Front Hair / Face View', 'Left Side Hair View', 'Right Side Hair View'];
 const expectedPoseByViewLabel: Record<string, string> = {
-  'Back Hair': 'back_hair',
-  'Left Back/Side Hair': 'left_back_side',
-  'Right Back/Side Hair': 'right_back_side',
-  'Scalp / Root Area': 'scalp_root',
+  'Front Hair / Face View': 'front',
+  'Left Side Hair View': 'left_profile',
+  'Right Side Hair View': 'right_profile',
+  'Back Hair View': 'back_hair',
+  'Scalp / Root View': 'scalp_root',
   'Front View Photo': 'front',
   'Side Profile Photo': 'left_profile',
   'Right Side Photo': 'right_profile',
@@ -236,10 +232,11 @@ const expectedPoseByViewLabel: Record<string, string> = {
 };
 
 const friendlyPoseByViewLabel: Record<string, string> = {
-  'Back Hair': 'full back-hair view',
-  'Left Back/Side Hair': 'left back/side hair view',
-  'Right Back/Side Hair': 'right back/side hair view',
-  'Scalp / Root Area': 'scalp and root view',
+  'Front Hair / Face View': 'front-facing hair and face view',
+  'Left Side Hair View': 'left-side hair profile',
+  'Right Side Hair View': 'right-side hair profile',
+  'Back Hair View': 'full back-hair view',
+  'Scalp / Root View': 'scalp and root view',
   'Front View Photo': 'front-facing view',
   'Side Profile Photo': 'left-side profile',
   'Right Side Photo': 'right-side profile',
@@ -315,170 +312,24 @@ const normalizePerViewChecks = (value: unknown, suppliedLabels: string[]) => {
   });
 };
 
-const runCompreFaceComparison = async (
-  validationImages: Array<{ label: string; image?: HairValidationImage }>,
-) => {
-  if (!isCompreFaceConfigured()) {
-    return {
-      status: 'not_configured',
-      required: false,
-      failed_views: [] as string[],
-      comparisons: [] as Array<Record<string, unknown>>,
-      message: '',
-    };
-  }
-
-  const imagesByLabel = new Map(
-    validationImages
-      .filter(({ image }) => Boolean(image?.dataUrl))
-      .map(({ label, image }) => [label, image as HairValidationImage]),
-  );
-  const pairs = [
-    ['Front View Photo', 'Side Profile Photo'],
-    ['Front View Photo', 'Right Side Photo'],
-    ['Side Profile Photo', 'Right Side Photo'],
-  ] as const;
-
-  try {
-    const comparisons = await Promise.all(pairs.map(async ([sourceLabel, targetLabel]) => {
-      const source = imagesByLabel.get(sourceLabel);
-      const target = imagesByLabel.get(targetLabel);
-      if (!source?.dataUrl || !target?.dataUrl) {
-        return {
-          source_view: sourceLabel,
-          target_view: targetLabel,
-          status: 'unclear',
-          similarity: null,
-          reason: 'A face-visible view is missing.',
-        };
-      }
-      const result = await compareFacesWithCompreFace({
-        sourceDataUrl: source.dataUrl,
-        targetDataUrl: target.dataUrl,
-      });
-      return {
-        source_view: sourceLabel,
-        target_view: targetLabel,
-        ...result,
-      };
-    }));
-    const statusFor = (left: string, right: string) => comparisons.find((comparison) => (
-      (comparison.source_view === left && comparison.target_view === right)
-      || (comparison.source_view === right && comparison.target_view === left)
-    ))?.status;
-    const frontLeft = statusFor('Front View Photo', 'Side Profile Photo');
-    const frontRight = statusFor('Front View Photo', 'Right Side Photo');
-    const leftRight = statusFor('Side Profile Photo', 'Right Side Photo');
-    const failedViews = new Set<string>();
-
-    if (frontLeft === 'mismatch' && frontRight === 'match' && leftRight === 'mismatch') {
-      failedViews.add('Side Profile Photo');
-    } else if (frontLeft === 'mismatch' && frontRight === 'mismatch' && leftRight === 'match') {
-      failedViews.add('Front View Photo');
-    } else if (frontLeft === 'match' && frontRight === 'mismatch' && leftRight === 'mismatch') {
-      failedViews.add('Right Side Photo');
-    }
-
-    if (failedViews.size) {
-      return {
-        status: 'mismatch',
-        required: true,
-        failed_views: [...failedViews],
-        comparisons,
-        message: 'One face-visible photo does not match the other captured views.',
-      };
-    }
-
-    if (comparisons.every((comparison) => comparison.status === 'match')) {
-      return {
-        status: 'verified',
-        required: true,
-        failed_views: [] as string[],
-        comparisons,
-        message: 'Face-visible photos match within this capture session.',
-      };
-    }
-
-    return {
-      status: 'unclear',
-      required: true,
-      failed_views: faceVisibleViewLabels,
-      comparisons,
-      message: 'We could not confidently match all face-visible photos. Please retake the highlighted views.',
-    };
-  } catch (error) {
-    console.error('[validate-hair-photo-set] CompreFace comparison unavailable', {
-      message: error instanceof Error ? error.message : String(error || ''),
-    });
-    return {
-      status: 'unavailable',
-      required: true,
-      failed_views: [] as string[],
-      comparisons: [] as Array<Record<string, unknown>>,
-      message: 'Face matching is temporarily unavailable. Please try the photo check again.',
-    };
-  }
-};
-
-const instructions = [
-  'You validate hair-screening photos before a separate hair analysis step.',
-  'Return JSON only.',
-  'Do not identify or name the person. Compare only whether face-visible photos appear to show the same subject in this one photo set. Do not infer age, ethnicity, or other sensitive traits.',
-  'Only decide whether the submitted photo set is acceptable for hair analysis.',
-  '',
-  'Rules:',
-  '1. There must be exactly one visible subject in front and side views.',
-  '2. Front View Photo must be face-forward and show the current hair clearly. Set observed_pose="front" and pose_correct=true only when the face is substantially centered rather than turned to either side.',
-  '3. Side Profile Photo is the LEFT-SIDE capture slot. It must show a clear left-side head turn/profile with the hair length visible. Set observed_pose="left_profile" and pose_correct=true only for the requested left side.',
-  '3A. Right Side Photo is the RIGHT-SIDE capture slot. It must show a clear right-side head turn/profile with the hair length visible. Set observed_pose="right_profile" and pose_correct=true only for the requested right side.',
-  '3B. The two side photos must show opposite head directions. Reject the exact incorrect slot when both side images show the same direction, a front-facing pose, the wrong requested side, or too little turn to establish the side.',
-  '3C. Do not accept a horizontally mirrored duplicate as the opposite side. Compare hair parting, accessories, background details, and image content for signs that one side image was copied or mirrored.',
-  '4. Hair Scalp must show the scalp/crown/top part clearly with the hair parted enough to assess visible scalp coverage, density, flakes, oiliness, or buildup. It must not be a random hair photo or a watermarked stock-like image.',
-  '5. Back Hair Photo, Right Side Photo, and Hair Ends Close-Up are optional supporting views for older clients. When present, they must visually match the same current hair using hair color, texture, density, length, ends, and shoulder/clothing cues when visible.',
-  '6. Compare Front View Photo, Side Profile Photo, and Right Side Photo pair by pair. If two views clearly match and one differs from both, mark only that outlier as same_subject_status="mismatch". Do not blame Hair Scalp for a mismatch between face-visible views.',
-  '6A. All provided views must visually match as one submission using current hair color, texture, density, hairline/parting when visible, clothing/shoulder area when visible, back-side fullness, and overall framing. Do not require the face to be visible in Hair Scalp, Hair Ends Close-Up, or Back Hair Photo.',
-  '6B. For Hair Scalp, Hair Ends Close-Up, and Back Hair Photo, same_subject_status means whether the visible current hair is consistent with the front and side views. Use match only when the visible hair cues are compatible, mismatch when they clearly conflict or show unrelated hair, and unclear when there is not enough usable hair to compare.',
-  '6C. A different room, background, camera distance, lighting, or clothing alone is not proof of a different subject. Base a mismatch on the visible face for face views or multiple incompatible current-hair cues for hair-only views.',
-  '6D. Treat a photo of another screen, printed photo, stock image, gallery screenshot, or image containing a separate unrelated person as a mismatch and set view_correct=false for that exact view.',
-  '7. For Hair Scalp, accept a top/crown/part-line image even when the face is cropped or the subject is looking down. Compare it to front/side only by current hair cues, not facial identity.',
-  '8. Accept normal pose changes between front, side, and back views. Do not reject only because the face angle, cheek shape, lighting, or framing changes between required views.',
-  '9. Reject mixed submissions only when the hair clearly belongs to a different person or different current hair, such as obviously different color/texture/density or an unrelated stock/model image.',
-  '10. Reject if there is a visible watermark, stock-photo text, unrelated background model image, or obvious downloaded/reference image.',
-  '11. Check every view for every visible accessory: glasses, sunglasses, caps, hats, headbands, clips, pins, hair ties, scrunchies, scarves, hoods, headphones, masks, face shields, hands, towels, or fabric. Every visible head, face, or hair accessory is disallowed, even when it does not block hair length. Add each item to accessory_findings with blocks_required_hair=true.',
-  '11A. Ordinary eyeglasses are not an exception. Set blocks_required_hair=true, accessories_detected=true, is_acceptable=false, and fail the affected view whenever glasses or another accessory is visible.',
-  '11B. Hair tied or folded upward with a claw clip, hair clip, pin, tie, scrunchie, bun, or ponytail is not usable for donation-length analysis because the natural hanging ends are hidden. Set blocks_required_hair=true, accessories_detected=true, is_acceptable=false, and fail every affected length view.',
-  '12. Screen conservatively for possible wigs, hairpieces, toppers, or extensions. Look only for visible evidence such as a lace edge, wig cap, lifted or unnaturally uniform hairline, exposed wefts/tracks, tape or bonded extension points, abrupt unmatched density/texture, or attachment seams. Do not flag natural hair merely because it is dense, styled, straightened, curled, or colored.',
-  '13. Set hair_authenticity_status="possible_wig_or_extensions" only when visible evidence is reasonably clear. Use "unclear" when the roots, hairline, or attachment areas cannot be assessed. Use "likely_natural" when the visible views are consistent and no artificial-hair attachment signs are seen.',
-  '14. Set accessories_detected=true whenever at least one accessory is visible. Describe the items in accessory_notes and add their affected view labels to failed_views.',
-  '15. A blocking accessory or possible wig/extensions must make is_acceptable=false so the user can retake without obstructions or receive manual verification.',
-  '',
-  'Always return all schema fields and one per_view_checks entry for every supplied image using its exact canonical label.',
-  'For each supplied image, return observed_pose and pose_correct. The required mapping is Front View Photo=front, Side Profile Photo=left_profile, Right Side Photo=right_profile, Hair Scalp=scalp, Hair Ends Close-Up=hair_ends, and Back Hair Photo=back_hair.',
-  'For every supplied view, same_subject_status must be match, mismatch, or unclear. Never use not_applicable when an image was supplied.',
-  'Use confidence from 0 to 1 for each per-view consistency decision. Do not report match below 0.60 confidence; use unclear and set view_correct=false instead.',
-  'Set view_correct=false for a wrong angle, unrelated image, blocking accessory, unclear required hair area, or subject mismatch. Keep notes short and specific.',
-  'Put concise visible findings such as "glasses visible but hairline clear", "headband blocks hairline", or "possible lace edge" in appearance_flags.',
-  'Set visual_screening_completed=true after checking all supplied images against the accessory and hair-authenticity rules.',
-  'If any rule fails, set is_acceptable=false, give one concise user-facing reason, and list failed view labels.',
-].join('\n');
-
 const hairFocusedValidationInstructions = [
-  'You validate four donor Hair Check photos before a separate visible hair analysis.',
-  'Return JSON only and never identify the person or infer sensitive traits.',
-  'The required views are Back Hair, Left Back/Side Hair, Right Back/Side Hair, and Scalp / Root Area.',
-  'A face is optional in every view. Do not require, compare, recognize, or match faces.',
+  'You validate five donor Hair Check photos before a separate visible hair analysis.',
+  'Return JSON only. This is a Session Photo Consistency check, not biometric identity verification. Never identify the person or infer sensitive traits.',
+  'The required views are Front Hair / Face View, Left Side Hair View, Right Side Hair View, Back Hair View, and Scalp / Root View.',
+  'Front must contain one usable frontal person view with the face/head, front hairline, and front hair sufficiently visible.',
+  'Left and Right Side must show the requested profile orientation and visible hair. Do not reject a side view merely because hair partly covers facial features.',
+  'A face is not required in Back Hair or Scalp / Root. Use visible hair continuity for those views and use same_subject_status=unclear when evidence is insufficient.',
   'Check usability only: the requested hair area must be present, sharp enough, bright enough, not overexposed, and not replaced by an unrelated or stock image.',
   'Back Hair must show loose hair from roots through the lowest visible ends.',
-  'Left Back/Side Hair and Right Back/Side Hair must show the corresponding opposite back/side angles with roots, length, and ends visible.',
-  'Scalp / Root Area must show a clear crown, part line, or root area. The face may be fully cropped.',
-  'Compare only non-identifying current-hair cues across views: color, texture, length, density, parting, and length. Different rooms or lighting alone are not a mismatch.',
-  'Do not reject a natural hair type, color, texture, density, visible concern, or possible donation ineligibility. Those belong to the later analysis.',
+  'Scalp / Root must show a clear crown, part line, or root area. The face may be fully cropped.',
+  'Compare session continuity using front/profile appearance where visible plus Hair Pattern, color, length, density, hairline, parting, roots, and general hairstyle. Different angles, rooms, lighting, or apparent shape alone are not mismatches.',
+  'Do not reject a natural Hair Pattern, color, density, visible concern, or possible donation ineligibility. Those belong to the later analysis.',
   'Accessories only block a view when they cover the required roots, shaft, length, ends, or scalp area. Eyeglasses and ordinary clothing are not blockers.',
   'Hair may be moved gently for the scalp view. For length views, reject a bun, ponytail, clip, covering, or pose that hides the natural hanging length or ends.',
-  'Use observed_pose exactly as follows: Back Hair=back_hair, Left Back/Side Hair=left_back_side, Right Back/Side Hair=right_back_side, Scalp / Root Area=scalp_root.',
+  'Use observed_pose exactly as follows: Front Hair / Face View=front, Left Side Hair View=left_profile, Right Side Hair View=right_profile, Back Hair View=back_hair, Scalp / Root View=scalp_root.',
   'Return one per_view_checks item for every supplied image. Mark only the affected view failed so the donor retakes only that photo.',
-  'Use same_subject_status=match when current-hair cues are compatible, mismatch only for clear conflicts/unrelated images, and unclear when the photo is unusable.',
-  'Set visual_screening_completed=true only after all four views were inspected. Keep all notes concise and actionable.',
+  'Use same_subject_status=match when continuity cues are compatible, mismatch only for strong clear conflicts or unrelated images, and unclear when evidence is insufficient.',
+  'Set visual_screening_completed=true only after all five views were inspected. Keep all notes concise and actionable.',
 ].join('\n');
 
 Deno.serve(async (request) => {
@@ -551,13 +402,7 @@ Deno.serve(async (request) => {
       const perViewChecks = validationImages.map(({ label }) => ({
         view_label: label,
         view_correct: true,
-        observed_pose: label === 'Back Hair'
-          ? 'back_hair'
-          : label === 'Left Back/Side Hair'
-            ? 'left_back_side'
-            : label === 'Right Back/Side Hair'
-              ? 'right_back_side'
-              : 'scalp_root',
+        observed_pose: expectedPoseByViewLabel[label] || 'unclear',
         pose_correct: true,
         same_subject_status: 'match',
         confidence: 1,
@@ -573,7 +418,7 @@ Deno.serve(async (request) => {
       return createJsonResponse({
         validation: {
           is_acceptable: true,
-          reason: 'All four individually validated photos are ready for combined hair analysis.',
+          reason: 'All five individually validated photos are ready for combined Hair Analysis.',
           failed_views: [],
           accessories_detected: false,
           accessory_notes: '',
@@ -595,7 +440,7 @@ Deno.serve(async (request) => {
           required: false,
           failed_views: [],
           comparisons: [],
-          message: 'Face matching is not used for hair-focused captures.',
+          message: 'Session consistency is evaluated during the combined Hair Analysis without storing biometric templates.',
         },
         diagnostics: { provider_request_attempted: false, validation_mode: 'signed_individual_receipts' },
       });
@@ -648,7 +493,7 @@ Deno.serve(async (request) => {
       });
     const faceComparison = {
       status: 'not_required', required: false, failed_views: [] as string[], comparisons: [],
-      message: 'Face matching is not used for hair-focused captures.',
+      message: 'Session consistency is evaluated during the combined Hair Analysis without storing biometric templates.',
     };
 
     const parsed = result?.parsed && typeof result.parsed === 'object'
@@ -712,7 +557,7 @@ Deno.serve(async (request) => {
           ...check,
           view_correct: false,
           same_subject_status: 'mismatch',
-          note: 'This face-visible photo does not match the other captured views.',
+          note: 'This face-visible photo looks inconsistent with the other captured views.',
         };
       }
       if (faceComparison.status === 'verified' && faceVisibleViewLabels.includes(check.view_label)) {
@@ -720,11 +565,9 @@ Deno.serve(async (request) => {
       }
       return check;
     });
-    const suppliedHairOnlyViewLabels = hairOnlyViewLabels.filter((viewLabel) => suppliedLabels.includes(viewLabel));
-    const supportingHairViewsPassed = suppliedHairOnlyViewLabels.every((viewLabel) => (
-      normalizedPerViewChecks.find((check) => check.view_label === viewLabel)?.same_subject_status === 'match'
+    const sameSubjectVerified = normalizedPerViewChecks.every((check) => (
+      check.same_subject_status !== 'mismatch'
     ));
-    const sameSubjectVerified = supportingHairViewsPassed;
     const reportedFailedViews = Array.isArray(validationSource.failed_views)
       ? validationSource.failed_views.map(normalizeViewLabel).filter(Boolean)
       : [];
@@ -732,7 +575,7 @@ Deno.serve(async (request) => {
       ...reportedFailedViews,
       ...normalizedPerViewChecks.filter((check) => !check.view_correct).map((check) => check.view_label),
       ...normalizedPerViewChecks
-        .filter((check) => check.same_subject_status !== 'match')
+        .filter((check) => check.same_subject_status === 'mismatch')
         .map((check) => check.view_label),
       ...blockingAccessories.map((finding) => finding.view_label),
       ...faceComparison.failed_views,
@@ -744,9 +587,6 @@ Deno.serve(async (request) => {
       ...mismatchedViews.filter((viewLabel) => faceVisibleViewLabels.includes(viewLabel)),
       ...faceComparison.failed_views.filter((viewLabel) => faceVisibleViewLabels.includes(viewLabel)),
     ])];
-    const unclearConsistencyViews = normalizedPerViewChecks
-      .filter((check) => !['match', 'mismatch'].includes(check.same_subject_status))
-      .map((check) => check.view_label);
     const allViewsCorrect = normalizedPerViewChecks.length === suppliedLabels.length
       && normalizedPerViewChecks.every((check) => check.view_correct);
     const visualScreeningCompleted = validationSource.visual_screening_completed === true
@@ -773,10 +613,8 @@ Deno.serve(async (request) => {
           : accessoriesDetected
             ? normalizeString(validationSource.accessory_notes) || 'An accessory covers part of the hair needed for analysis. Please remove it and retake the highlighted photo.'
             : mismatchedViews.length
-              ? 'One or more captured photos do not match the same current hair set. Please retake the highlighted views.'
-              : unclearConsistencyViews.length
-                ? 'We could not confirm that every captured photo belongs to the same current hair set. Please retake the highlighted views clearly.'
-            : reason || 'The photos do not look ready for analysis. Please retake the affected views.';
+              ? 'One or more captured photos look inconsistent with this Hair Analysis session. Please retake the highlighted views.'
+              : reason || 'The photos do not look ready for analysis. Please retake the affected views.';
     const normalizedValidation = {
       is_acceptable: strictlyVerified,
       reason: normalizedReason,

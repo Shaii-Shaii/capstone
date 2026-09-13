@@ -30,10 +30,11 @@ const buildMissingPhotoDetails = ({ photos = [], requiredViews = [] } = {}) => (
 const hasRequiredViewSet = (requiredViews = []) => {
   const keys = requiredViews.map(normalizeViewKey);
   return (
-    keys.length === 4
+    keys.length === 5
+    && keys.some((key) => key.includes('front'))
     && keys.some((key) => key.includes('back'))
-    && keys.some((key) => key.includes('side_profile') || key.includes('left back'))
-    && keys.some((key) => key.includes('right_side_profile') || key.includes('right back'))
+    && keys.some((key) => key.includes('side_profile') || key.includes('left side'))
+    && keys.some((key) => key.includes('right_side_profile') || key.includes('right side'))
     && keys.some((key) => key.includes('scalp') || key.includes('root'))
   );
 };
@@ -381,7 +382,7 @@ export const validateHairPhotosBeforeAnalysis = async ({ photos = [], requiredVi
       skipped: false,
       hardBlock: true,
       title: 'Photo Setup Needed',
-      message: 'Use the four required views: Back Hair, Left Back/Side Hair, Right Back/Side Hair, and Scalp / Root Area.',
+      message: 'Use the five required views: Front, Left Side, Right Side, Back Hair, and Scalp / Root.',
       details: [],
       validationMode: 'local',
     };

@@ -25,6 +25,7 @@ import {
   formatHairAnalysisDateTime,
   getHairAnalysisAvailability,
 } from '../../src/features/hairAnalysisAvailability';
+import { fetchLatestHairAnalysisComparison } from '../../src/features/hairAnalysisComparison.service';
 import { buildProfileCompletionMeta } from '../../src/features/profile/services/profile.service';
 import {
   getCanonicalHairAssessment,
@@ -238,6 +239,18 @@ const buildHairCalendarCells = (cursorDate, markedDateKeys = new Set(), selected
   });
 };
 
+const formatComparisonDate = (value, locale = 'en-US') => {
+  if (!value) return 'Date unavailable';
+  const parsedDate = new Date(value);
+  if (Number.isNaN(parsedDate.getTime())) return 'Date unavailable';
+  return new Intl.DateTimeFormat(locale, {
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+    timeZone: 'Asia/Manila',
+  }).format(parsedDate);
+};
+
 const buildHairWeekCells = (cursorDate, markedDateKeys = new Set(), selectedDateKey = '') => {
   const weekStart = new Date(cursorDate);
   weekStart.setHours(12, 0, 0, 0);
@@ -335,11 +348,14 @@ function HairAnalysisHomeModule() {
   const locale = language === 'fil' ? 'fil-PH' : 'en-US';
   const cachedHome = getCachedHairAnalysisHomeData(user?.id);
   const cachedScreenings = Array.isArray(cachedHome?.screenings) ? cachedHome.screenings : [];
+  const cachedComparison = cachedHome?.comparison || null;
   const cacheMatchesUser = Boolean(cachedHome && Array.isArray(cachedHome?.screenings));
   const screeningsRef = React.useRef(cachedScreenings);
+  const comparisonRef = React.useRef(cachedComparison);
   const [isLoading, setIsLoading] = React.useState(!cacheMatchesUser);
   const [error, setError] = React.useState('');
   const [screenings, setScreenings] = React.useState(cachedScreenings);
+  const [comparison, setComparison] = React.useState(cachedComparison);
   const [isFirstCheckPromptVisible, setIsFirstCheckPromptVisible] = React.useState(false);
   const [isProfileCompletionPromptVisible, setIsProfileCompletionPromptVisible] = React.useState(false);
   const [firstCheckPromptDismissed, setFirstCheckPromptDismissed] = React.useState(false);
@@ -393,6 +409,7 @@ function HairAnalysisHomeModule() {
 
     if (!user?.id) {
       setScreenings([]);
+      setComparison(null);
       setIsLoading(false);
       return;
     }
@@ -409,6 +426,9 @@ function HairAnalysisHomeModule() {
       })[0] || null;
     const eligibilityResult = latestResultScreening?.ai_screening_id
       ? await fetchCurrentHairEligibility(latestResultScreening.ai_screening_id)
+      : { data: null, error: null };
+    const comparisonResult = (Array.isArray(result.data) ? result.data : []).length >= 2
+      ? await fetchLatestHairAnalysisComparison()
       : { data: null, error: null };
 
     if (analysisLoadRequestRef.current !== requestId) return;
@@ -435,9 +455,19 @@ function HairAnalysisHomeModule() {
           ? eligibilityResult.data
           : null,
       }));
-    setCachedHairAnalysisHomeData(user.id, { screenings: normalized });
+    const cachedPairStillCurrent = Number(comparisonRef.current?.currentScreeningId) === Number(normalized[0]?.ai_screening_id)
+      && Number(comparisonRef.current?.previousScreeningId) === Number(normalized[1]?.ai_screening_id);
+    const resolvedComparison = comparisonResult.error
+      ? cachedPairStillCurrent ? comparisonRef.current : null
+      : comparisonResult.data;
+    setCachedHairAnalysisHomeData(user.id, {
+      screenings: normalized,
+      comparison: resolvedComparison,
+    });
     screeningsRef.current = normalized;
+    comparisonRef.current = resolvedComparison;
     setScreenings(normalized);
+    setComparison(resolvedComparison);
     setIsLoading(false);
   }, [profile?.user_id, user?.id]);
 
@@ -463,6 +493,13 @@ function HairAnalysisHomeModule() {
   const recentLogs = React.useMemo(() => screenings.slice(0, 5), [screenings]);
   const olderLogs = React.useMemo(() => recentLogs.slice(1), [recentLogs]);
   const hasRecentLogs = recentLogs.length > 0;
+  const comparisonPrevious = comparison?.details?.previous || null;
+  const comparisonLatest = comparison?.details?.latest || null;
+  const shouldShowComparison = Boolean(
+    screenings.length >= 2
+    && comparison
+    && comparison.generationStatus !== 'pending'
+  );
   const screeningsByDate = React.useMemo(() => {
     const grouped = new Map();
     screenings.forEach((entry) => {
@@ -508,7 +545,10 @@ function HairAnalysisHomeModule() {
   );
   const todayCondition = localizeAnalysisValue(latestAssessment.label, t);
   const lengthLabel = getLengthLabel(latestScreening);
-  const textureLabel = localizeAnalysisValue(latestScreening?.detected_texture || 'N/A', t);
+  const textureLabel = localizeAnalysisValue(
+    latestScreening?.hair_pattern || latestScreening?.detected_texture || 'N/A',
+    t
+  );
   const scalpLabel = latestScreening ? todayCondition : 'N/A';
   const moistureLabel = localizeAnalysisValue(getMoistureLabel(latestScreening), t);
   const healthRangeLabel = latestScreening
@@ -714,6 +754,60 @@ function HairAnalysisHomeModule() {
             </View>
 
           </LinearGradient>
+
+          {shouldShowComparison ? (
+            <LinearGradient
+              colors={[theme.colors.backgroundPrimary, theme.colors.brandPrimaryMuted]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={[styles.progressComparisonCard, { borderColor: roles.defaultCardBorder }]}
+            >
+              <View style={styles.progressComparisonHeader}>
+                <View style={[styles.progressComparisonIcon, { backgroundColor: roles.iconPrimarySurface }]}>
+                  <MaterialCommunityIcons name="chart-timeline-variant-shimmer" size={21} color={roles.primaryActionBackground} />
+                </View>
+                <View style={styles.progressComparisonHeaderCopy}>
+                  <Text style={[styles.progressComparisonEyebrow, { color: roles.primaryActionBackground }]}>HAIR ANALYSIS PROGRESS</Text>
+                  <Text style={[styles.progressComparisonTitle, { color: roles.headingText }]}>Compared with your last analysis</Text>
+                </View>
+              </View>
+
+              <View style={styles.progressComparisonDates}>
+                <View style={styles.progressComparisonDateColumn}>
+                  <Text style={[styles.progressComparisonDateLabel, { color: roles.metaText }]}>Previous</Text>
+                  <Text style={[styles.progressComparisonDateValue, { color: roles.headingText }]}>
+                    {formatComparisonDate(comparisonPrevious?.completed_at || screenings[1]?.created_at, locale)}
+                  </Text>
+                </View>
+                <MaterialCommunityIcons name="arrow-right" size={18} color={roles.primaryActionBackground} />
+                <View style={styles.progressComparisonDateColumn}>
+                  <Text style={[styles.progressComparisonDateLabel, { color: roles.metaText }]}>Latest</Text>
+                  <Text style={[styles.progressComparisonDateValue, { color: roles.headingText }]}>
+                    {formatComparisonDate(comparisonLatest?.completed_at || screenings[0]?.created_at, locale)}
+                  </Text>
+                </View>
+              </View>
+
+              <Text style={[styles.progressComparisonSummary, { color: roles.bodyText }]}>
+                {comparison.summary}
+              </Text>
+
+              <View style={styles.progressComparisonStatuses}>
+                <View style={[styles.progressComparisonStatus, { backgroundColor: roles.defaultCardBackground }]}>
+                  <Text style={[styles.progressComparisonStatusLabel, { color: roles.metaText }]}>Previous</Text>
+                  <Text style={[styles.progressComparisonStatusValue, { color: roles.headingText }]}>
+                    {comparisonPrevious?.visible_condition_status || localizeAnalysisValue(getCanonicalHairAssessment(screenings[1]).label, t)}
+                  </Text>
+                </View>
+                <View style={[styles.progressComparisonStatus, { backgroundColor: roles.defaultCardBackground }]}>
+                  <Text style={[styles.progressComparisonStatusLabel, { color: roles.metaText }]}>Latest</Text>
+                  <Text style={[styles.progressComparisonStatusValue, { color: roles.headingText }]}>
+                    {comparisonLatest?.visible_condition_status || localizeAnalysisValue(getCanonicalHairAssessment(screenings[0]).label, t)}
+                  </Text>
+                </View>
+              </View>
+            </LinearGradient>
+          ) : null}
 
           <View style={styles.analysisSectionBlock}>
             <View style={styles.analysisSectionHeaderRow}>
@@ -1668,6 +1762,94 @@ const styles = StyleSheet.create({
   },
   recentLogList: {
     gap: theme.spacing.md,
+  },
+  progressComparisonCard: {
+    borderWidth: 1,
+    borderRadius: 22,
+    padding: theme.spacing.md,
+    gap: theme.spacing.md,
+    overflow: 'hidden',
+    ...theme.shadows.soft,
+  },
+  progressComparisonHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  progressComparisonIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: theme.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  progressComparisonHeaderCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  progressComparisonEyebrow: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 10,
+    fontWeight: theme.typography.weights.bold,
+    letterSpacing: 0.8,
+  },
+  progressComparisonTitle: {
+    fontFamily: theme.typography.fontFamilyDisplay,
+    fontSize: theme.typography.semantic.bodyMd,
+    fontWeight: theme.typography.weights.bold,
+    lineHeight: 22,
+  },
+  progressComparisonDates: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  progressComparisonDateColumn: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  progressComparisonDateLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 10,
+    fontWeight: theme.typography.weights.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  progressComparisonDateValue: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 12,
+    fontWeight: theme.typography.weights.bold,
+    lineHeight: 17,
+  },
+  progressComparisonSummary: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 13,
+    lineHeight: 20,
+  },
+  progressComparisonStatuses: {
+    flexDirection: 'row',
+    gap: theme.spacing.sm,
+  },
+  progressComparisonStatus: {
+    flex: 1,
+    minWidth: 0,
+    borderRadius: theme.radius.md,
+    padding: theme.spacing.sm,
+    gap: 3,
+  },
+  progressComparisonStatusLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 10,
+    fontWeight: theme.typography.weights.semibold,
+    textTransform: 'uppercase',
+  },
+  progressComparisonStatusValue: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: 11,
+    fontWeight: theme.typography.weights.bold,
+    lineHeight: 16,
   },
   healthRow: {
     flexDirection: 'row',

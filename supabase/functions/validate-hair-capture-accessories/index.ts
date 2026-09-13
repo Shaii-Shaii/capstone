@@ -69,15 +69,17 @@ const extractImageData = (dataUrl: string) => {
 
 const instructions = [
   'You are a hair-visibility and photo-usability gate for one guided Hair Check frame.',
-  'Return JSON only. Do not identify the person or infer sensitive traits.',
+  'Return JSON only. This is photo usability validation, not identity verification. Do not identify the person or infer sensitive traits.',
   '',
   'Set status="accessory_detected" only when an item blocks the hair area required for this view: roots, shaft, natural hanging length, ends, scalp, crown, or part line.',
-  'Eyeglasses, earrings, face masks, and ordinary clothing are allowed when they do not cover required hair. A face is optional in every view.',
+  'Eyeglasses, earrings, face masks, and ordinary clothing are allowed when they do not cover required hair.',
   'Caps, coverings, clips, ties, buns, ponytails, hands, or fabric are blockers only when they hide or change the required visible hair area.',
   'Report each visible item using a short familiar name in detected_accessories.',
   'Do not count room or background objects unless they obscure the required hair area.',
   'Do not count the person\'s hand as an accessory, but use status="unclear" if it blocks the hair or scalp needed for this view.',
-  'A missing face is expected and must never cause a failure.',
+  'For front_view, require one usable frontal person view with the face/head, front hairline, and front hair visible. The face should be substantially forward rather than turned sideways.',
+  'For side_profile and right_side_profile, require the requested side/profile orientation and visible hair, but do not fail merely because hair partly covers facial features.',
+  'For back_hair and hair_scalp, a missing face is expected and must never cause a failure.',
   'Set hair_fully_visible=false when the hair area required by this view is cropped, covered, too dark, badly blurred, or hidden by the pose, hand, clothing, or another object.',
   'Set hair_loose_and_down=false if the hair is tied, pinned, clipped, braided into an updo, folded upward, placed in a bun or ponytail, or covered by a cap, hat, bonnet, scarf, or hood. For scalp and hair-ends close-ups, judge whether the visible hair is free of these restraints even if its full hanging length is outside the close-up.',
   'List short actionable problems such as "hair tied in ponytail", "cap covers hair", or "hair ends cropped" in presentation_issues.',
@@ -87,7 +89,7 @@ const instructions = [
   'Also validate this individual requested view for the correct capture area, framing, angle, clarity, and usable lighting.',
   'Use view_correct=true only when the image actually shows the requested view named in the user prompt.',
   'Set image_clear=false for strong blur or motion blur. Set lighting_acceptable=false when the required hair area is too dark, washed out, or strongly backlit.',
-  'observed_pose must briefly name the visible hair area, such as back_hair, left_back_side, right_back_side, scalp_root, or unclear.',
+  'observed_pose must use front, left_profile, right_profile, back_hair, scalp_root, or unclear according to the requested view.',
 ].join('\n');
 
 Deno.serve(async (request) => {
@@ -136,7 +138,7 @@ Deno.serve(async (request) => {
       contents: [{
         role: 'user',
         parts: [
-          { text: `Check this ${viewLabel} frame for visible accessories before it can be accepted.` },
+          { text: `Check this ${viewLabel} frame (view key: ${viewKey || 'unknown'}) for correct pose, framing, visibility, lighting, clarity, and blocking accessories before it can be accepted.` },
           {
             inlineData: {
               mimeType: image.mimeType,

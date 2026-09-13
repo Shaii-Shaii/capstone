@@ -6,7 +6,7 @@ const LENGTH_ABSOLUTE_TOLERANCE_INCHES = 1;
 const LENGTH_RELATIVE_TOLERANCE = 0.15;
 const CM_PER_INCH = 2.54;
 
-const TEXTURE_ORDER = ['straight', 'wavy', 'curly', 'coily'];
+const HAIR_PATTERN_ORDER = ['straight', 'wavy', 'curly', 'coily'];
 const DENSITY_ORDER = ['light', 'medium', 'thick', 'dense'];
 const UNDETERMINED_PATTERN = /^(?:unable to determine|cannot be determined|cannot determine|undetermined|unclear|unknown|not visible|not enough information|needs manual (?:hair )?review|n\/a|none)?$/i;
 
@@ -25,51 +25,52 @@ const isDetermined = (value) => Boolean(readable(value)) && !UNDETERMINED_PATTER
 
 const CATEGORY_CONFIG = {
   texture: {
-    label: 'Hair texture',
+    label: 'Hair Pattern',
     answerKeys: ['hairTexture', 'hair_texture'],
     relevantPhotoIndex: 0,
-    relevantView: 'Back Hair',
+    relevantView: 'Front Hair / Face View',
   },
   visible_oiliness: {
     label: 'Visible oiliness',
     answerKeys: ['oilyAfterWash', 'oily_after_wash'],
-    relevantPhotoIndex: 3,
-    relevantView: 'Scalp / Root Area',
+    relevantPhotoIndex: 4,
+    relevantView: 'Scalp / Root View',
   },
   visible_flaking: {
     label: 'Visible scalp flaking',
     answerKeys: ['dandruffOrFlakes', 'dandruff_or_flakes'],
-    relevantPhotoIndex: 3,
-    relevantView: 'Scalp / Root Area',
+    relevantPhotoIndex: 4,
+    relevantView: 'Scalp / Root View',
   },
   visible_condition: {
     label: 'Visible hair condition',
     answerKeys: ['dryOrRough', 'dry_or_rough'],
-    relevantPhotoIndex: 0,
-    relevantView: 'Back Hair',
+    relevantPhotoIndex: 3,
+    relevantView: 'Back Hair View',
   },
   apparent_density: {
     label: 'Apparent density',
     answerKeys: ['hairDensity', 'hair_density', 'declaredDensity', 'declared_density'],
     relevantPhotoIndex: 1,
-    relevantView: 'Left Back/Side Hair',
+    relevantView: 'Left Side Hair View',
   },
   color: {
     label: 'Visible hair color',
     answerKeys: ['hairColor', 'hair_color', 'declaredColor', 'declared_color'],
     relevantPhotoIndex: 0,
-    relevantView: 'Back Hair',
+    relevantView: 'Front Hair / Face View',
   },
   length: {
     label: 'Visible hair length',
     answerKeys: ['hairLength', 'hair_length', 'declaredLength', 'declared_length'],
-    relevantPhotoIndex: 0,
-    relevantView: 'Back Hair',
+    relevantPhotoIndex: 3,
+    relevantView: 'Back Hair View',
   },
 };
 
 const CATEGORY_ALIASES = {
   texture: 'texture',
+  hair_pattern: 'texture',
   hair_texture: 'texture',
   hairtexture: 'texture',
   oiliness: 'visible_oiliness',
@@ -234,13 +235,13 @@ const result = (status, visualFinding, explanation = '', minimumConfidence = HAI
 
 const evaluateTexture = ({ selfValue, analysis }) => {
   const selfTexture = normalizeTexture(selfValue);
-  const visualTexture = normalizeTexture(analysis?.detected_texture || getReportedRow('texture', analysis)?.visual_finding);
+  const visualTexture = normalizeTexture(analysis?.hair_pattern || analysis?.detected_texture || getReportedRow('texture', analysis)?.visual_finding);
   if (!selfTexture || !visualTexture || visualTexture === 'Mixed') {
     return result('unable_to_determine', 'Unable to determine', 'The current views do not show one clear hair pattern reliably enough to compare.');
   }
   if (selfTexture === visualTexture) return result('match', visualTexture);
-  const selfIndex = TEXTURE_ORDER.indexOf(selfTexture.toLowerCase());
-  const visualIndex = TEXTURE_ORDER.indexOf(visualTexture.toLowerCase());
+  const selfIndex = HAIR_PATTERN_ORDER.indexOf(selfTexture.toLowerCase());
+  const visualIndex = HAIR_PATTERN_ORDER.indexOf(visualTexture.toLowerCase());
   const distance = Math.abs(selfIndex - visualIndex);
   return result(
     'mismatch',
@@ -475,7 +476,8 @@ export const buildConsistencyRecord = ({ answers = {}, analysis = {}, issues = [
     ai_visible_findings: {
       estimated_length: analysis?.estimated_length ?? null,
       detected_color: analysis?.detected_color || '',
-      detected_texture: analysis?.detected_texture || '',
+      hair_pattern: analysis?.hair_pattern || analysis?.detected_texture || '',
+      detected_texture: analysis?.detected_texture || analysis?.hair_pattern || '',
       detected_density: analysis?.detected_density || '',
       detected_condition: analysis?.detected_condition || '',
       visible_condition_status: analysis?.visible_condition_status || '',
@@ -543,7 +545,7 @@ export const buildFinalReviewRequestContext = ({
 const getVisualFindingForCategory = (analysis = {}, category = '') => {
   const row = getReportedRow(category, analysis);
   if (readable(row?.visual_finding)) return readable(row.visual_finding);
-  if (category === 'texture') return readable(analysis?.detected_texture);
+  if (category === 'texture') return readable(analysis?.hair_pattern || analysis?.detected_texture);
   if (category === 'apparent_density') return readable(analysis?.detected_density);
   if (category === 'color') return readable(analysis?.detected_color);
   if (category === 'visible_condition') return readable(analysis?.detected_condition);
@@ -590,7 +592,9 @@ export const buildFinalReviewedHairAnalysis = ({
       ? Number((initialLengthCm / CM_PER_INCH).toFixed(1))
       : null,
     color: readable(finalVisualAnalysis?.detected_color),
-    texture: readable(finalVisualAnalysis?.detected_texture),
+    hair_pattern: readable(finalVisualAnalysis?.hair_pattern || finalVisualAnalysis?.detected_texture),
+    // Retain the legacy key for database and logistics compatibility.
+    texture: readable(finalVisualAnalysis?.hair_pattern || finalVisualAnalysis?.detected_texture),
     apparent_density: readable(finalVisualAnalysis?.detected_density),
     condition: readable(finalVisualAnalysis?.detected_condition),
     visible_oiliness: getVisualFindingForCategory(finalVisualAnalysis, 'visible_oiliness'),
@@ -604,7 +608,10 @@ export const buildFinalReviewedHairAnalysis = ({
       ? issue.donorAnswer || answerLabel(issue.answerKey, issue.originalAnswer)
       : issue.visualFinding || getVisualFindingForCategory(finalVisualAnalysis, issue.category);
 
-    if (issue.category === 'texture') reviewedDetails.texture = resolvedValue;
+    if (issue.category === 'texture') {
+      reviewedDetails.hair_pattern = resolvedValue;
+      reviewedDetails.texture = resolvedValue;
+    }
     if (issue.category === 'apparent_density') reviewedDetails.apparent_density = resolvedValue;
     if (issue.category === 'color') reviewedDetails.color = resolvedValue;
     if (issue.category === 'visible_condition') reviewedDetails.condition = resolvedValue;
@@ -624,7 +631,7 @@ export const buildFinalReviewedHairAnalysis = ({
     analysis_phase: reviewRequestPerformed
       ? 'final_reviewed_analysis'
       : 'combined_analysis_reviewed_by_donor',
-    analysis_request_sequence: reviewRequestPerformed ? 6 : 5,
+    analysis_request_sequence: reviewRequestPerformed ? 7 : 6,
     final_review_request_performed: Boolean(reviewRequestPerformed),
     reviewed_details: reviewedDetails,
     original_ai_visual_findings: consistencyRecord.ai_visible_findings,

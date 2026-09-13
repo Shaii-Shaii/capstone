@@ -121,7 +121,7 @@ try {
   nativeFaceCameraLoadError = nativeFaceCameraLoadError || error?.message || 'Worklets Core module could not be loaded.';
 }
 
-const HAIR_TEXTURE_REVIEW_OPTIONS = ['Straight', 'Wavy', 'Curly', 'Coily'];
+const HAIR_PATTERN_REVIEW_OPTIONS = ['Straight', 'Wavy', 'Curly', 'Coily'];
 const HAIR_DENSITY_REVIEW_OPTIONS = ['Light', 'Medium', 'Thick', 'Dense'];
 
 const QUESTION_TRANSITION_FADE_MS = 180;
@@ -194,6 +194,32 @@ const buildRetakeSlotIndexes = ({ validation = null, requiredViews = [] }) => {
   return retakeIndexes;
 };
 
+const buildCaptureConsistencyRetake = ({ analysis = null, requiredViews = [] }) => {
+  const captureConsistency = analysis?.capture_consistency;
+  if (!captureConsistency || captureConsistency.status !== 'possible_mismatch') return null;
+
+  const suspectViews = Array.isArray(captureConsistency.suspect_views)
+    ? captureConsistency.suspect_views.filter(Boolean)
+    : [];
+  const retakeIndexes = buildRetakeSlotIndexes({
+    validation: {
+      ok: false,
+      title: 'Session Photo Consistency',
+      message: captureConsistency.reason || '',
+      details: suspectViews.map((view) => ({ viewLabel: view, error: captureConsistency.reason || '' })),
+    },
+    requiredViews,
+  });
+  const slotIndex = [...retakeIndexes][0];
+  if (!Number.isInteger(slotIndex)) return null;
+
+  return {
+    slotIndex,
+    title: "Let's check one of your photos",
+    message: `One submitted view looks noticeably different from the rest of your Hair Analysis photos. Please retake ${requiredViews[slotIndex]?.label || 'the indicated photo'} so the analysis is more consistent.`,
+  };
+};
+
 const isAnswered = (question, answers = {}) => {
   const value = answers?.[question?.key];
 
@@ -246,10 +272,8 @@ const getRequiredSideDirection = (view = {}) => {
   const key = String(view?.key || '').trim().toLowerCase();
   const label = String(view?.label || '').trim().toLowerCase();
 
-  // The direction is the way the donor must turn, not the side of hair being
-  // photographed. Turning right exposes the left back/side, and vice versa.
-  if (key === 'side_profile' || label.includes('left')) return 'right';
-  if (key === 'right_side_profile' || label.includes('right')) return 'left';
+  if (key === 'side_profile' || label.includes('left')) return 'left';
+  if (key === 'right_side_profile' || label.includes('right')) return 'right';
   return '';
 };
 const isHairScalpView = (view = {}) => {
@@ -267,9 +291,12 @@ const isBackHairView = (view = {}) => {
   return value.includes('back');
 };
 
-// Only the two guided side views require enough of the face/profile to verify
-// that the donor turned in the requested direction.
-const requiresFaceVerification = (view = {}) => isSideProfileView(view);
+// Front and side views use live pose guidance. This is a capture-consistency
+// aid for the current session, not biometric identity verification.
+const requiresFaceVerification = (view = {}) => (
+  isSideProfileView(view)
+  || String(view?.key || view?.label || '').toLowerCase().includes('front')
+);
 
 const getViewCaptureLabel = (view = {}) => {
   const value = String(view?.key || view?.label || '').toLowerCase();
@@ -843,7 +870,7 @@ const buildReviewSummaryRows = (analysis = {}) => {
   return [
     ['Hair length', reviewedValues.declaredLength ? `${reviewedValues.declaredLength} inches` : 'For review'],
     ['Color', getReviewDisplayValue(reviewedValues.declaredColor)],
-    ['Texture', getReviewDisplayValue(reviewedValues.declaredTexture)],
+    ['Hair Pattern', getReviewDisplayValue(reviewedValues.declaredTexture)],
     ['Apparent density', getReviewDisplayValue(reviewedValues.declaredDensity)],
     ['Reviewed hair condition', getReviewDisplayValue(reviewedValues.declaredCondition)],
     ['Visible observation', getReviewDisplayValue(analysis?.visible_condition_status)],
@@ -854,7 +881,7 @@ const buildAiVisualObservationRows = (analysis = {}) => {
   const findings = analysis?.original_ai_visual_findings;
   if (!findings || typeof findings !== 'object') return [];
   return [
-    ['Texture', getReviewDisplayValue(findings.detected_texture)],
+    ['Hair Pattern', getReviewDisplayValue(findings.hair_pattern || findings.detected_texture)],
     ['Apparent density', getReviewDisplayValue(findings.detected_density)],
     ['Color', getReviewDisplayValue(findings.detected_color)],
     ['Visible condition', getReviewDisplayValue(findings.detected_condition)],
@@ -867,7 +894,7 @@ const buildReviewCorrectionRows = (values = {}, analysis = {}) => {
   const fields = [
     ['Hair length', values.declaredLength, aiValues.declaredLength, ' inches'],
     ['Color', values.declaredColor, aiValues.declaredColor, ''],
-    ['Texture', values.declaredTexture, aiValues.declaredTexture, ''],
+    ['Hair Pattern', values.declaredTexture, aiValues.declaredTexture, ''],
     ['Apparent density', values.declaredDensity, aiValues.declaredDensity, ''],
     ['Visible condition', values.declaredCondition, aiValues.declaredCondition, ''],
   ];
@@ -1813,7 +1840,7 @@ function DonationRequirementsIntroModal({
                       <MaterialCommunityIcons name="waves" size={20} color={theme.colors.brandPrimary} />
                     </View>
                     <View style={styles.requirementsIntroRequirementCopy}>
-                      <Text style={styles.requirementsIntroRequirementLabel}>{isFilipino ? 'Texture ng buhok' : 'Hair texture'}</Text>
+                      <Text style={styles.requirementsIntroRequirementLabel}>{isFilipino ? 'Pattern ng buhok' : 'Hair Pattern'}</Text>
                       <Text style={styles.requirementsIntroRequirementValue}>{textureRequirement}</Text>
                     </View>
                   </View>
@@ -2993,7 +3020,7 @@ function PreAnalysisPhotoReview({
   const validationModalTitle = hasAllowedAccessories
     ? 'Accessory accepted'
     : differentFacesDetected
-      ? 'Photos do not match'
+      ? "Let's check your photos"
       : validationRetryable
         ? 'Photo check unavailable'
         : accessoriesDetected === true
@@ -3004,7 +3031,7 @@ function PreAnalysisPhotoReview({
   const validationModalMessage = hasAllowedAccessories
     ? `The accessory check found ${acceptedAccessoryLabel.toLowerCase()}${acceptedAccessoryViewLabel}, and it does not cover the hair needed for analysis, so you can continue.`
     : differentFacesDetected
-      ? `The photo check found that ${faceMismatchViewText} may show a different person, so please retake the highlighted views with the same person.`
+      ? `${faceMismatchViewText} looks noticeably different from the rest of this Hair Analysis session. Please retake the highlighted view so the photo set is more consistent.`
       : validationRetryable
         ? 'Your photos are saved, but we could not verify them right now, so please try the photo check again.'
         : accessoriesDetected === true
@@ -3392,7 +3419,7 @@ function AnalysisLoadingSplash({ resolvedTheme, photos = [] }) {
           </Animated.View>
           <View style={styles.analysisScanHeaderText}>
           <Text style={styles.analysisSplashTitle}>Analyzing hair</Text>
-            <Text style={styles.analysisSplashText}>Reviewing your four hair-focused photos to prepare a clear result.</Text>
+            <Text style={styles.analysisSplashText}>Reviewing your five Hair Analysis photos to prepare a clear result.</Text>
           </View>
         </View>
       </View>
@@ -3704,12 +3731,12 @@ const QUESTION_MATTER_COPY = {
   },
   scalpItch: {
     default: 'Scalp itch helps the AI understand whether visible redness, flakes, or scalp irritation may be affecting hair condition.',
-    never: 'No itch suggests fewer scalp irritation signals, so the AI can focus more on length, ends, texture, and visible damage.',
+    never: 'No itch suggests fewer scalp irritation signals, so the AI can focus more on length, ends, Hair Pattern, and visible damage.',
     sometimes: 'Occasional itch may point to dryness, buildup, or sensitivity, so the AI checks the scalp and flakes more carefully.',
     often: 'Frequent itch can signal scalp irritation or buildup, which matters because poor scalp condition can affect donation readiness.',
   },
   dandruffOrFlakes: {
-    default: 'Dandruff or flakes help the AI separate scalp buildup from hair texture, shine, and dryness in the photos.',
+    default: 'Visible flakes help the AI separate scalp buildup from Hair Pattern, shine, and dryness in the photos.',
     no: 'This helps the AI compare your answer with any visible flake-like particles without making a diagnosis.',
     a_little: 'A little visible flaking helps the AI interpret the scalp/root photo more carefully.',
     a_lot: 'A lot of flakes can signal scalp buildup or irritation, which may require care before donation review.',
@@ -3733,7 +3760,7 @@ const QUESTION_MATTER_COPY = {
   },
   heatUse: {
     default: 'Heat use helps the AI judge whether dryness, frizz, split ends, or dullness may come from styling damage.',
-    never: 'No heat use lowers the chance that visible dryness or frizz is heat-related, so the AI weighs natural texture more.',
+    never: 'No heat use lowers the chance that visible dryness or frizz is heat-related, so the AI weighs the natural Hair Pattern more.',
     sometimes: 'Occasional heat use may affect ends, so the AI checks for mild dryness, frizz, or breakage near the tips.',
     often: 'Frequent heat use can damage ends and reduce donation quality, so the AI looks more closely for dryness and breakage.',
   },
@@ -3745,7 +3772,7 @@ const QUESTION_MATTER_COPY = {
   },
   hairConditionProgress: {
     default: 'Your own progress report gives the AI context before comparing today\'s photos with your last scan.',
-    better: 'Feeling improvement helps the AI check whether photos also show better shine, smoother texture, or healthier ends.',
+    better: 'Feeling improvement helps the AI check whether photos also show better shine, a smoother surface, or less-frayed ends.',
     same: 'If it feels the same, the AI compares today\'s scan carefully for small changes in length, dryness, and damage.',
     worse: 'Feeling worse matters because the AI looks for new dryness, frizz, flakes, hair fall, or visible damage.',
     not_sure: 'Not sure tells the AI to rely more heavily on the current photos and saved history instead of subjective progress.',
@@ -3761,7 +3788,7 @@ const QUESTION_MATTER_COPY = {
     default: 'Hair condition helps the AI interpret whether today\'s look reflects a balanced, dry, rough, or oily appearance.',
     normal_balanced: 'Normal or balanced hair gives the AI a cleaner baseline for checking shine, softness, and visible strand health.',
     dry: 'Dry hair can make ends look dull or frizzy, so the AI checks whether moisture loss is affecting the scan.',
-    rough: 'Rough hair can point to friction, dryness, or surface damage, which affects how the AI reads texture and ends.',
+    rough: 'Rough hair can point to friction, dryness, or surface damage, which affects how the AI reads the Hair Pattern and ends.',
     oily: 'Oily hair can make strands look heavier or shinier, so the AI checks whether scalp oil is affecting the scan.',
   },
   noticedChanges: {
@@ -3770,7 +3797,7 @@ const QUESTION_MATTER_COPY = {
     less_oiliness: 'Less oiliness helps the AI judge whether scalp shine and heaviness improved since the last scan.',
     less_hair_fall: 'Less hair fall helps the AI compare density and scalp visibility with your previous result.',
     less_dandruff: 'Less visible flaking helps the AI compare whether flake-like particles or buildup are less visible now.',
-    softer_hair: 'Softer hair helps the AI look for smoother texture, better shine, and fewer rough-looking areas.',
+    softer_hair: 'Softer hair helps the AI look for a smoother surface, better shine, and fewer rough-looking areas.',
     no_major_change: 'No major change tells the AI to expect a similar result and focus on small differences in length or ends.',
     got_worse: 'Worse condition tells the AI to look for new dryness, flakes, frizz, breakage, or scalp concerns.',
   },
@@ -3801,7 +3828,7 @@ const QUESTION_MATTER_COPY = {
   },
   healthierNow: {
     default: 'This helps the AI compare your own impression with visible changes in the photos.',
-    yes: 'If you notice fewer concerns, the AI checks for visible changes such as shine, smoother texture, and less fraying.',
+    yes: 'If you notice fewer concerns, the AI checks for visible changes such as shine, a smoother surface, and less fraying.',
     no: 'If you still notice concerns, the AI compares them with visible dryness, frizz, flakes, or damage.',
     not_sure: 'Not sure tells the AI to rely more on the photo evidence and saved history before judging progress.',
   },
@@ -3845,16 +3872,16 @@ const getChoiceDetailText = (questionKey, value, language = 'en') => {
 const getQuestionMatterText = (question, answers = {}, language = 'en') => {
   if (language === 'fil') {
     return FILIPINO_QUESTION_MATTER_COPY[question?.key]
-      || 'Nagbibigay ang sagot mo ng konteksto sa pagsusuri ng haba, texture, pagkatuyo, anit, at nakikitang pinsala.';
+      || 'Nagbibigay ang sagot mo ng konteksto sa pagsusuri ng haba, pattern, pagkatuyo, anit, at nakikitang pinsala.';
   }
 
   if (!question?.key) {
-    return 'Your answers help the AI compare your photos with donation readiness rules before it checks length, texture, dryness, and visible damage.';
+    return 'Your answers help the AI compare your photos with donation readiness rules before it checks length, Hair Pattern, dryness, and visible damage.';
   }
 
   const copyByAnswer = QUESTION_MATTER_COPY[question.key];
   if (!copyByAnswer) {
-    return 'Your answer gives the AI context for checking hair length, texture, dryness, scalp condition, and visible damage.';
+    return 'Your answer gives the AI context for checking hair length, Hair Pattern, dryness, scalp condition, and visible damage.';
   }
 
   const answerValue = answers?.[question.key];
@@ -4519,7 +4546,7 @@ export function DonorHairSubmissionScreen() {
   const [consistencyIssues, setConsistencyIssues] = useState([]);
   const [consistencyIssueIndex, setConsistencyIssueIndex] = useState(0);
   const [consistencyResolutions, setConsistencyResolutions] = useState({});
-  const [requestFiveAnalysis, setRequestFiveAnalysis] = useState(null);
+  const [combinedAnalysis, setCombinedAnalysis] = useState(null);
   const [isFinalReviewRunning, setIsFinalReviewRunning] = useState(false);
   const [finalReviewError, setFinalReviewError] = useState('');
   const finalReviewInFlightRef = useRef(false);
@@ -4856,7 +4883,7 @@ export function DonorHairSubmissionScreen() {
     clearAnalysisError();
     setTransientErrorNotice(null);
     setRetryCountdownSeconds(0);
-    setRequestFiveAnalysis(null);
+    setCombinedAnalysis(null);
     setFinalReviewError('');
     setIsFinalReviewRunning(false);
 
@@ -4881,11 +4908,36 @@ export function DonorHairSubmissionScreen() {
         allowPhotoQualityFallback: Boolean(options.allowPhotoQualityFallback),
       });
       if (result?.success && result.analysis) {
+        const captureConsistencyRetake = buildCaptureConsistencyRetake({
+          analysis: result.analysis,
+          requiredViews,
+        });
+        if (captureConsistencyRetake) {
+          const { slotIndex, title, message } = captureConsistencyRetake;
+          replaceAnalysis(null);
+          setCombinedAnalysis(null);
+          setConsistencyIssues([]);
+          setConsistencyIssueIndex(0);
+          setConsistencyResolutions({});
+          setPhotoPreflightState(null);
+          photoPreflightKeyRef.current = '';
+          invalidateCaptureValidation(slotIndex);
+          removePhoto(slotIndex);
+          setPhotoIndex(slotIndex);
+          setStepIndex(2);
+          setAccessoryCheckNotice({ title, message, blocked: true, slotIndex });
+          return {
+            success: false,
+            captureConsistencyRetake: true,
+            slotIndex,
+          };
+        }
+
         const issues = buildHairAnalysisConsistencyIssues({
           answers: currentAnswers,
           analysis: result.analysis,
         });
-        setRequestFiveAnalysis(result.analysis);
+        setCombinedAnalysis(result.analysis);
         setFinalReviewError('');
         setIsFinalReviewRunning(false);
         setConsistencyIssues(issues);
@@ -4914,8 +4966,11 @@ export function DonorHairSubmissionScreen() {
     error?.title,
     getCurrentQuestionnaireAnswers,
     error?.retryUntil,
+    invalidateCaptureValidation,
     photoPreflightState?.verificationToken,
+    removePhoto,
     replaceAnalysis,
+    requiredViews,
     savedHistory.latestScreening?.created_at,
     user?.id,
     weeklyScanLimit.isLocked,
@@ -4924,7 +4979,7 @@ export function DonorHairSubmissionScreen() {
   ]);
 
   const runFinalReviewedAnalysis = React.useCallback(async (resolvedDecisions = consistencyResolutions) => {
-    const initialAnalysis = requestFiveAnalysis || analysis;
+    const initialAnalysis = combinedAnalysis || analysis;
     if (!initialAnalysis || finalReviewInFlightRef.current) return;
 
     const currentAnswers = getCurrentQuestionnaireAnswers();
@@ -4990,7 +5045,7 @@ export function DonorHairSubmissionScreen() {
     getCurrentQuestionnaireAnswers,
     photoPreflightState?.verificationToken,
     replaceAnalysis,
-    requestFiveAnalysis,
+    combinedAnalysis,
   ]);
 
   const loadAnalysisHistory = React.useCallback(async ({ silent = false } = {}) => {
@@ -5068,7 +5123,7 @@ export function DonorHairSubmissionScreen() {
 
     setAnalysisReviewValues({
       ...defaults,
-      declaredTexture: normalizeReviewOption(defaults.declaredTexture, HAIR_TEXTURE_REVIEW_OPTIONS) || defaults.declaredTexture,
+      declaredTexture: normalizeReviewOption(defaults.declaredTexture, HAIR_PATTERN_REVIEW_OPTIONS) || defaults.declaredTexture,
       declaredDensity: normalizeReviewOption(defaults.declaredDensity, HAIR_DENSITY_REVIEW_OPTIONS) || defaults.declaredDensity,
     });
     setIsEditingAnalysisReview(false);
@@ -5167,7 +5222,7 @@ export function DonorHairSubmissionScreen() {
     setConsistencyIssues([]);
     setConsistencyIssueIndex(0);
     setConsistencyResolutions({});
-    setRequestFiveAnalysis(null);
+    setCombinedAnalysis(null);
     setFinalReviewError('');
     setIsFinalReviewRunning(false);
   }, [clearCaptureValidationState, complianceForm, questionForm, questionnaireMode, resetFlow]);
@@ -5322,7 +5377,7 @@ export function DonorHairSubmissionScreen() {
     const confirmedReviewValues = buildHumanReviewValuesForSave(analysisReviewValues, donationAlignedAnalysis);
     const consistencyRecord = donationAlignedAnalysis?.assessment_review || buildConsistencyRecord({
       answers: currentAnswers,
-      analysis: requestFiveAnalysis || donationAlignedAnalysis,
+      analysis: combinedAnalysis || donationAlignedAnalysis,
       issues: consistencyIssues,
       resolutions: consistencyResolutions,
     });
@@ -5380,7 +5435,7 @@ export function DonorHairSubmissionScreen() {
       setConsistencyIssues([]);
       setConsistencyIssueIndex(0);
       setConsistencyResolutions({});
-      setRequestFiveAnalysis(null);
+      setCombinedAnalysis(null);
       setFinalReviewError('');
       setIsFinalReviewRunning(false);
       allowAnalyzerExitRef.current = true;
@@ -6332,7 +6387,7 @@ export function DonorHairSubmissionScreen() {
     setConsistencyIssues([]);
     setConsistencyIssueIndex(0);
     setConsistencyResolutions({});
-    setRequestFiveAnalysis(null);
+    setCombinedAnalysis(null);
     setFinalReviewError('');
     setIsFinalReviewRunning(false);
     setPhotoIndex(0);
@@ -6607,7 +6662,7 @@ export function DonorHairSubmissionScreen() {
             { label: 'Treatment history', value: bleachValue, icon: 'flask-outline' },
             { label: 'Heat styling', value: heatValue, icon: 'weather-sunny' },
             { label: 'Hair length', value: lengthAnswer, icon: 'ruler' },
-            { label: 'Hair texture', value: textureAnswer, icon: 'waves' },
+            { label: 'Hair Pattern', value: textureAnswer, icon: 'waves' },
           ];
           const scanTips = [
             'Use bright, even light so your hair details are clear.',
@@ -6636,7 +6691,7 @@ export function DonorHairSubmissionScreen() {
                   <Text style={styles.readinessEyebrow}>PHOTO CHECK</Text>
                   <Text style={styles.readinessTitle}>Your guided scan is ready</Text>
                   <Text style={styles.readinessBody}>
-                    Check your answers, then capture four clear, hair-focused views.
+                    Check your answers, then capture five clear Hair Analysis views.
                   </Text>
                 </View>
               </View>
@@ -6782,7 +6837,7 @@ export function DonorHairSubmissionScreen() {
                 >
                   <ActivityIndicator size="large" color={theme.colors.brandPrimary} />
                   <Text style={styles.consistencyReviewBody}>
-                    We are reconciling all four photos, the original photo findings, and your confirmed choices into one consistent result.
+                    We are reconciling all five photos, the original photo findings, and your confirmed choices into one consistent result.
                   </Text>
                 </LinearGradient>
               </View>
@@ -6833,7 +6888,7 @@ export function DonorHairSubmissionScreen() {
               setConsistencyIssueIndex(nextIssueIndex);
 
               if (nextIssueIndex >= consistencyIssues.length) {
-                const initialAnalysis = requestFiveAnalysis || analysis;
+                const initialAnalysis = combinedAnalysis || analysis;
                 if (hasKeptOriginalConsistencyAnswer({
                   issues: consistencyIssues,
                   resolutions: nextResolutions,
@@ -6932,7 +6987,7 @@ export function DonorHairSubmissionScreen() {
                       setConsistencyIssues([]);
                       setConsistencyIssueIndex(0);
                       setConsistencyResolutions({});
-                      setRequestFiveAnalysis(null);
+                      setCombinedAnalysis(null);
                       setFinalReviewError('');
                       setIsFinalReviewRunning(false);
                       setPhotoPreflightState(null);
@@ -7265,10 +7320,10 @@ export function DonorHairSubmissionScreen() {
                           />
                         </View>
                         <View style={styles.correctionFieldGroup}>
-                          <Text style={styles.correctionFieldLabel}>Texture</Text>
+                          <Text style={styles.correctionFieldLabel}>Hair Pattern</Text>
                           <ReviewOptionChips
                             value={analysisReviewValues.declaredTexture}
-                            options={HAIR_TEXTURE_REVIEW_OPTIONS}
+                            options={HAIR_PATTERN_REVIEW_OPTIONS}
                             onChange={(nextValue) => setAnalysisReviewValues((current) => ({
                               ...current,
                               declaredTexture: nextValue,

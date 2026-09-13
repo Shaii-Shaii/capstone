@@ -457,7 +457,9 @@ export function HairLogDetailModal({
     .map((conflict) => ({
       key: conflict.id || conflict.category,
       category: conflict.category,
-      label: String(conflict.category || 'reviewed detail').replace(/_/g, ' '),
+      label: ['texture', 'hair_pattern'].includes(String(conflict.category || '').toLowerCase())
+        ? 'Hair Pattern'
+        : String(conflict.category || 'reviewed detail').replace(/_/g, ' '),
       confirmed: conflict.resolved_value || conflict.original_self_assessment_label || conflict.original_self_assessment,
       visual: conflict.ai_visual_finding || 'Not determined',
     }));
@@ -475,6 +477,7 @@ export function HairLogDetailModal({
   const hasAssessmentDetails = Boolean(
     screening?.estimated_length != null
     || screening?.detected_color
+    || screening?.hair_pattern
     || screening?.detected_texture
     || screening?.detected_density
     || screening?.bald_spots_present === true
@@ -525,7 +528,7 @@ export function HairLogDetailModal({
       : null,
     { label: 'Length', value: reviewedLengthLabel, icon: 'ruler' },
     { label: 'Color', value: reviewedDetails?.color || screening?.detected_color || 'Not detected', icon: 'palette' },
-    { label: 'Texture', value: reviewedDetails?.texture || screening?.detected_texture || 'Not detected', icon: 'waves' },
+    { label: 'Hair Pattern', value: reviewedDetails?.hair_pattern || reviewedDetails?.texture || screening?.hair_pattern || screening?.detected_texture || 'Not detected', icon: 'waves' },
     { label: 'Density', value: reviewedDetails?.apparent_density || screening?.detected_density || 'Not detected', icon: 'head-dots-horizontal-outline' },
     { label: 'Density score', value: formatDensityScore(screening?.hair_density_score), icon: 'head-check-outline' },
     { label: 'Visible scalp', value: screening?.visible_scalp_area || 'Not detected', icon: 'head-outline' },

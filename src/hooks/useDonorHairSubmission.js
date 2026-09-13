@@ -272,7 +272,7 @@ const mapAnalysisError = (message = '', extras = {}) => {
   }
 
   if (normalized.includes('not clear') || normalized.includes('unclear') || normalized.includes('blur')) {
-    return createErrorState('Photos not clear, please re-capture', 'Hold the camera steady, use bright light, and keep the back hair, both back/side views, and scalp/root area clear.');
+    return createErrorState('Photos not clear, please re-capture', 'Hold the camera steady, use bright light, and keep the Front, Left Side, Right Side, Back Hair, and Scalp / Root views clear.');
   }
 
   if (
@@ -297,7 +297,7 @@ const mapAnalysisError = (message = '', extras = {}) => {
     || normalized.includes('mismatched hair')
     || normalized.includes('mixed hair')
   ) {
-    return createErrorState('Photos Do Not Match', 'The required photos do not look consistent. Please retake all views with the same person and the same current hair.');
+    return createErrorState('Photos Need Another Look', 'One or more required views look inconsistent with this Hair Analysis session. Please retake the highlighted photos with your current hair clearly visible.');
   }
 
   if (

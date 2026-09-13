@@ -198,7 +198,7 @@ export const hairReviewSchema = z.object({
     message: 'Length must be a number',
   }),
   declaredColor: z.string().trim().optional().or(z.literal('')),
-  declaredTexture: z.string().trim().min(2, 'Texture is required'),
+  declaredTexture: z.string().trim().min(2, 'Hair Pattern is required'),
   declaredDensity: z.string().trim().min(2, 'Density is required'),
   declaredCondition: z.string().trim().min(2, 'Condition is required'),
   detailNotes: z.string().trim().max(400, 'Notes are too long').optional().or(z.literal('')),
@@ -212,7 +212,7 @@ export const buildHairReviewDefaultValues = (analysis, answers = {}) => ({
       ? String((Number(analysis.estimated_length) / 2.54).toFixed(1))
       : '',
   declaredColor: analysis?.reviewed_details?.color || analysis?.detected_color || '',
-  declaredTexture: analysis?.reviewed_details?.texture || analysis?.detected_texture || '',
+  declaredTexture: analysis?.reviewed_details?.hair_pattern || analysis?.reviewed_details?.texture || analysis?.hair_pattern || analysis?.detected_texture || '',
   declaredDensity: analysis?.reviewed_details?.apparent_density || analysis?.detected_density || '',
   declaredCondition: analysis?.reviewed_details?.condition || analysis?.detected_condition || '',
   detailNotes: analysis?.visible_damage_notes || '',
@@ -226,7 +226,7 @@ export const hairResultCorrectionSchema = z.object({
     message: 'Length must be a valid number greater than zero',
   }),
   correctedLengthUnit: z.enum(['in']),
-  correctedTexture: z.string().trim().min(2, 'Texture is required'),
+  correctedTexture: z.string().trim().min(2, 'Hair Pattern is required'),
   correctedDensity: z.string().trim().min(2, 'Density is required'),
 });
 
@@ -235,6 +235,6 @@ export const buildHairResultCorrectionDefaultValues = (analysis) => ({
     ? String((Number(analysis.estimated_length) / 2.54).toFixed(1))
     : '',
   correctedLengthUnit: 'in',
-  correctedTexture: analysis?.detected_texture || '',
+  correctedTexture: analysis?.hair_pattern || analysis?.detected_texture || '',
   correctedDensity: analysis?.detected_density || '',
 });

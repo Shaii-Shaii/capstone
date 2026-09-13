@@ -99,6 +99,22 @@ const normalizeStringArray = (source = []) => (
     : ['none']
 );
 
+const normalizeCaptureConsistency = (value = null) => {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const status = ['consistent', 'possible_mismatch', 'unable_to_determine']
+    .includes(String(source.status || '').trim().toLowerCase())
+    ? String(source.status).trim().toLowerCase()
+    : 'unable_to_determine';
+  return {
+    status,
+    confidence: Math.max(0, Math.min(1, Number(source.confidence) || 0)),
+    suspect_views: Array.isArray(source.suspect_views)
+      ? source.suspect_views.map((item) => String(item || '').trim()).filter(Boolean)
+      : [],
+    reason: String(source.reason || '').trim(),
+  };
+};
+
 const toNumberOrDefault = (value, fallback) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -165,7 +181,9 @@ const normalizeAnalysis = (data, donationRequirementContext = null) => {
     length_measurable: data?.length_measurable !== false && resolveEstimatedLengthCm(data) != null,
     length_limit_reason: data?.length_limit_reason || '',
     detected_color: data?.detected_color || 'Unable to determine',
-    detected_texture: data?.detected_texture || 'Unable to determine',
+    hair_pattern: data?.hair_pattern || data?.detected_texture || 'Unable to determine',
+    // Keep the legacy value for existing database columns and donation services.
+    detected_texture: data?.detected_texture || data?.hair_pattern || 'Unable to determine',
     detected_density: data?.detected_density || 'Unable to determine',
     detected_condition: data?.detected_condition || 'Needs manual hair review',
     visible_condition_status: visibleConditionStatus,
@@ -179,6 +197,7 @@ const normalizeAnalysis = (data, donationRequirementContext = null) => {
     reference_image_context: data?.reference_image_context && typeof data.reference_image_context === 'object'
       ? data.reference_image_context
       : { status: 'not_configured', active_reference_count: 0 },
+    capture_consistency: normalizeCaptureConsistency(data?.capture_consistency),
     chemical_treatment_detected: data?.chemical_treatment_detected === true,
     colored_hair_detected: data?.colored_hair_detected === true,
     bleached_hair_detected: data?.bleached_hair_detected === true,
@@ -233,6 +252,7 @@ const hasStructuredAnalysisContent = (analysis) => Boolean(
   analysis?.summary
   || analysis?.decision
   || analysis?.detected_color
+  || analysis?.hair_pattern
   || analysis?.detected_texture
   || analysis?.detected_density
   || analysis?.detected_condition
@@ -248,7 +268,7 @@ const isLowDetailPlaceholderAnalysis = (analysis = {}) => {
 
   const weakCoreSignals = [
     isUnclearToken(analysis?.detected_color),
-    isUnclearToken(analysis?.detected_texture),
+    isUnclearToken(analysis?.hair_pattern || analysis?.detected_texture),
     isUnclearToken(analysis?.detected_density),
     detectedCondition.includes('low-confidence'),
   ].filter(Boolean).length;
@@ -414,6 +434,7 @@ const buildLowConfidenceFallbackAnalysis = ({ images = [], message = '' } = {}) 
     })),
     estimated_length: 0,
     detected_color: 'Unable to determine',
+    hair_pattern: 'Unable to determine',
     detected_texture: 'Unable to determine',
     detected_density: 'Unable to determine',
     detected_condition: 'Needs manual hair review',
